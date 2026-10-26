@@ -234,6 +234,7 @@ impl GrpcCodeModeHost {
         let request = WaitRequest {
             cell_id: CellId::new(request.cell_id),
             yield_time_ms: request.yield_time_ms,
+            max_output_tokens: None,
         };
         let outcome = tokio::select! {
             biased;

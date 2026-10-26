@@ -176,6 +176,7 @@ async fn stdio_callbacks_preserve_context_across_overlapping_yielded_cells() {
                 WaitRequest {
                     cell_id,
                     yield_time_ms: 5_000,
+                    max_output_tokens: None,
                 },
                 /*preempt*/ None,
             )

@@ -127,6 +127,7 @@ async fn handshake_and_multiple_session_lifecycles_are_ordered() {
                 request: HostRequest::OpenSession {
                     session_id: session_id(id),
                     cell_execution_limits: None,
+                    output_truncation: None,
                 },
             })
             .await
@@ -198,6 +199,7 @@ async fn disconnect_cancels_a_backpressured_host_writer() {
             request: HostRequest::OpenSession {
                 session_id: session_id("backpressured-session"),
                 cell_execution_limits: None,
+                output_truncation: None,
             },
         })
         .await
@@ -339,6 +341,7 @@ async fn incompatible_or_invalid_handshake_is_rejected() {
             request: HostRequest::OpenSession {
                 session_id: session_id("session-1"),
                 cell_execution_limits: None,
+                output_truncation: None,
             },
         })
         .await
@@ -405,6 +408,7 @@ async fn session_id_cannot_be_reused_after_shutdown() {
             HostRequest::OpenSession {
                 session_id: id.clone(),
                 cell_execution_limits: None,
+                output_truncation: None,
             },
         ),
         (
@@ -433,6 +437,7 @@ async fn session_id_cannot_be_reused_after_shutdown() {
             request: HostRequest::OpenSession {
                 session_id: id,
                 cell_execution_limits: None,
+                output_truncation: None,
             },
         })
         .await
@@ -556,7 +561,7 @@ async fn execute_request_id_remains_active_until_initial_response() {
     state
         .session(&session_id)
         .expect("session")
-        .terminate(cell_id.into())
+        .terminate(codex_code_mode_protocol::CellId::from(cell_id).into())
         .await
         .expect("terminate cell");
     state.disconnect().await;

@@ -382,6 +382,7 @@ impl HostState {
             HostRequest::OpenSession {
                 session_id,
                 cell_execution_limits,
+                ..
             } => {
                 let result = CodeModeSessionCellExecutionLimits::try_from(
                     cell_execution_limits.unwrap_or_default(),
@@ -452,6 +453,7 @@ impl HostState {
             HostRequest::Wait {
                 session_id,
                 request,
+                ..
             } => {
                 let result = match self.session(&session_id) {
                     Ok(session) => {
@@ -476,15 +478,20 @@ impl HostState {
             HostRequest::Terminate {
                 session_id,
                 cell_id,
+                ..
             } => {
                 let result = match self.session(&session_id) {
-                    Ok(session) => session.terminate(cell_id.into()).await.and_then(|outcome| {
-                        let outcome = outcome.with_code_mode_host_duration(received_at.elapsed());
-                        Ok(HostResponse::WaitCompleted {
-                            outcome: WireWaitOutcome::try_from(outcome)
-                                .map_err(|error| error.to_string())?,
-                        })
-                    }),
+                    Ok(session) => session
+                        .terminate(codex_code_mode_protocol::CellId::from(cell_id).into())
+                        .await
+                        .and_then(|outcome| {
+                            let outcome =
+                                outcome.with_code_mode_host_duration(received_at.elapsed());
+                            Ok(HostResponse::WaitCompleted {
+                                outcome: WireWaitOutcome::try_from(outcome)
+                                    .map_err(|error| error.to_string())?,
+                            })
+                        }),
                     Err(err) => Err(err),
                 };
                 self.respond(request_id, result);

@@ -140,6 +140,7 @@ impl CodeModeWaitHandler {
                             codex_code_mode::WaitRequest {
                                 cell_id: cell_id.clone(),
                                 yield_time_ms: args.yield_time_ms,
+                                max_output_tokens: None,
                             },
                             step_context.preempt.clone(),
                         )

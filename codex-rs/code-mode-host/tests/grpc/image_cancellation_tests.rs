@@ -57,7 +57,7 @@ try { image(value); } catch { text(calls); }
         .await
         .context("getter did not signal startup")?;
 
-    let result = timeout(Duration::from_secs(1), session.terminate(id.clone()))
+    let result = timeout(Duration::from_secs(1), session.terminate(id.clone().into()))
         .await
         .context("workload did not stop within the cancellation deadline")?
         .map_err(anyhow::Error::msg)?;

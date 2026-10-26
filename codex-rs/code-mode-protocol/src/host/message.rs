@@ -15,6 +15,7 @@ use super::SupportedProtocolVersions;
 use super::WireCellId;
 use super::WireExecuteRequest;
 use super::WireNestedToolCall;
+use super::WireOutputTruncation;
 use super::WireRuntimeResponse;
 use super::WireSessionCellExecutionLimits;
 use super::WireWaitOutcome;
@@ -186,6 +187,10 @@ pub enum HostRequest {
         session_id: SessionId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cell_execution_limits: Option<WireSessionCellExecutionLimits>,
+        /// Sent only when output truncation support was agreed at connection hello.
+        /// Omission preserves the legacy session behavior and wire shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_truncation: Option<WireOutputTruncation>,
     },
     #[serde(rename = "session/execute")]
     Execute {
@@ -196,11 +201,15 @@ pub enum HostRequest {
     Wait {
         session_id: SessionId,
         request: WireWaitRequest,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_output_tokens: Option<usize>,
     },
     #[serde(rename = "session/terminate")]
     Terminate {
         session_id: SessionId,
         cell_id: WireCellId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_output_tokens: Option<usize>,
     },
     #[serde(rename = "session/shutdown")]
     ShutdownSession { session_id: SessionId },

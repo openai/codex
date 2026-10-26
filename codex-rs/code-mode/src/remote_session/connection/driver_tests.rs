@@ -237,6 +237,7 @@ async fn old_host_does_not_receive_yield_frames() {
                 WaitRequest {
                     cell_id: CellId::new("1".to_string()),
                     yield_time_ms: 60_000,
+                    max_output_tokens: None,
                 },
                 Some(signal),
             )
@@ -311,6 +312,7 @@ async fn open_session_includes_nondefault_cell_execution_limits() {
                     max_yield_time_ms: Some(250),
                     max_heap_size_bytes: Some(16 * 1024 * 1024),
                 }),
+                output_truncation: None,
             },
         }
     );
@@ -1275,6 +1277,7 @@ async fn mismatched_wait_response_fails_connection() {
             request: WaitRequest {
                 cell_id: CellId::new("1".to_string()),
                 yield_time_ms: 1,
+                max_output_tokens: None,
             },
             caller_cancellation: CancellationToken::new(),
             yield_signal: None,
@@ -1379,6 +1382,7 @@ async fn remote_wait_accepts_durations_longer_than_five_minutes() {
             request: WaitRequest {
                 cell_id: CellId::new("1".to_string()),
                 yield_time_ms: 300_001,
+                max_output_tokens: None,
             },
             caller_cancellation: CancellationToken::new(),
             yield_signal: None,
@@ -1448,6 +1452,7 @@ async fn queued_remote_wait_times_out_and_invalidates_the_connection() {
                 WaitRequest {
                     cell_id: CellId::new("1".to_string()),
                     yield_time_ms: 1,
+                    max_output_tokens: None,
                 },
                 /*yield_signal*/ None,
             )
@@ -1534,6 +1539,7 @@ async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
             request: WaitRequest {
                 cell_id: CellId::new("1".to_string()),
                 yield_time_ms: 60_000,
+                max_output_tokens: None,
             },
             caller_cancellation: first_cancellation.clone(),
             yield_signal: None,
@@ -1553,6 +1559,7 @@ async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
             request: WaitRequest {
                 cell_id: CellId::new("1".to_string()),
                 yield_time_ms: 1,
+                max_output_tokens: None,
             },
             caller_cancellation: CancellationToken::new(),
             yield_signal: None,
@@ -2005,6 +2012,7 @@ async fn aborting_driver_marks_connection_dead_and_closes_cells() {
             request: WaitRequest {
                 cell_id: CellId::new("1".to_string()),
                 yield_time_ms: 60_000,
+                max_output_tokens: None,
             },
             caller_cancellation: CancellationToken::new(),
             yield_signal: None,

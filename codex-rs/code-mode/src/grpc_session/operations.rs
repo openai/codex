@@ -313,6 +313,7 @@ impl SessionInner {
             cell_id: expected_cell_id.as_str().to_string(),
             wait_id: wait_id.clone(),
             yield_time_ms: request.yield_time_ms,
+            max_output_tokens: None,
         };
         let mut client = self.client();
         let watcher = preempt.map(|signal| {
@@ -368,6 +369,7 @@ impl SessionInner {
             client.terminate(self.request(grpc::TerminateRequest {
                 session_id: self.id.clone(),
                 cell_id: cell_id.as_str().to_string(),
+                max_output_tokens: None,
             })),
         )
         .await?;

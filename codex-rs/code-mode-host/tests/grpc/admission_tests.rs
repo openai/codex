@@ -228,6 +228,7 @@ async fn routing_metadata_is_scoped_to_each_session_on_a_shared_provider() -> Re
                 WaitRequest {
                     cell_id: id.clone(),
                     yield_time_ms: 1,
+                    max_output_tokens: None,
                 },
                 /*preempt*/ None,
             )
@@ -237,7 +238,10 @@ async fn routing_metadata_is_scoped_to_each_session_on_a_shared_provider() -> Re
             outcome,
             WaitOutcome::LiveCell(RuntimeResponse::Yielded { .. })
         ));
-        session.terminate(id).await.map_err(anyhow::Error::msg)?;
+        session
+            .terminate(id.into())
+            .await
+            .map_err(anyhow::Error::msg)?;
     }
     for session in [&parent, &child] {
         execute(

@@ -242,7 +242,7 @@ async fn terminates_helpers_waiting_for_unsettled_inputs() {
         assert_eq!(
             tokio::time::timeout(
                 Duration::from_secs(/*secs*/ 5),
-                session.terminate(cell_id.clone())
+                session.terminate(cell_id.clone().into())
             )
             .await
             .expect("termination timed out")

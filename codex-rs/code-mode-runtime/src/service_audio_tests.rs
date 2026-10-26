@@ -149,6 +149,7 @@ async fn audio_helper_bounds_wav_data_and_preserves_outputs_after_yield() {
     let actual = service
         .wait(
             WaitRequest {
+                max_output_tokens: None,
                 cell_id: cell_id("1"),
                 yield_time_ms: 60_000,
             },

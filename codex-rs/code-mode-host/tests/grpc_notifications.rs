@@ -225,6 +225,7 @@ async fn completed_waits_drain_pending_notifications_before_returning() -> Resul
                 WaitRequest {
                     cell_id: cell_id("1"),
                     yield_time_ms: 5_000,
+                    max_output_tokens: None,
                 },
                 /*preempt*/ None,
             )
@@ -292,7 +293,7 @@ async fn termination_cancels_pending_notifications() -> Result<()> {
         }
     );
     let actual = session
-        .terminate(cell_id("1"))
+        .terminate(cell_id("1").into())
         .await
         .map_err(anyhow::Error::msg)?;
     assert_eq!(

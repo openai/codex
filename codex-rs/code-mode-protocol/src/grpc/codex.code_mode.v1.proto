@@ -45,6 +45,14 @@ service CodeModeHost {
 
 message OpenSessionRequest {
   optional SessionCellExecutionLimits cell_execution_limits = 1;
+  // Absent preserves the legacy client-side truncation behavior.
+  optional OutputTruncation output_truncation = 2;
+}
+
+enum OutputTruncation {
+  OUTPUT_TRUNCATION_UNSPECIFIED = 0;
+  OUTPUT_TRUNCATION_CLIENT = 1;
+  OUTPUT_TRUNCATION_SERVER = 2;
 }
 
 message SessionCellExecutionLimits {
@@ -64,6 +72,8 @@ message SessionEvent {
 
 message SessionOpened {
   string session_id = 1;
+  // Absent (including from an older host) means the client owns truncation.
+  optional OutputTruncation output_truncation = 2;
 }
 
 message CloseSessionRequest {
@@ -182,6 +192,8 @@ message WaitRequest {
   string cell_id = 2;
   string wait_id = 3;
   uint64 yield_time_ms = 4;
+  // Only set for a session that selected server-side output truncation.
+  optional uint64 max_output_tokens = 5;
 }
 
 message WaitResponse {
@@ -211,6 +223,8 @@ message YieldObservationResponse {}
 message TerminateRequest {
   string session_id = 1;
   string cell_id = 2;
+  // The terminating observation has its own output budget.
+  optional uint64 max_output_tokens = 3;
 }
 
 message ExecutionOutcome {

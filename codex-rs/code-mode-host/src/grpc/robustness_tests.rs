@@ -255,6 +255,7 @@ async fn session_closure_cancels_pending_termination() {
     let termination = host.terminate(Request::new(proto::TerminateRequest {
         session_id,
         cell_id,
+        max_output_tokens: None,
     }));
     tokio::pin!(termination);
     assert!(termination.as_mut().now_or_never().is_none());

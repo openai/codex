@@ -124,6 +124,7 @@ impl GrpcHostState {
             .try_send(Ok(proto::SessionEvent {
                 event: Some(proto::session_event::Event::Opened(proto::SessionOpened {
                     session_id: id.to_string(),
+                    output_truncation: None,
                 })),
             }))
             .map_err(|_| Status::internal("failed to publish the opened code-mode session"))?;
@@ -263,7 +264,7 @@ impl GrpcSession {
             _ = self.closed.cancelled() => {
                 Err(Status::cancelled("code-mode session is closed"))
             }
-            result = self.runtime.terminate(cell_id) => {
+            result = self.runtime.terminate(cell_id.into()) => {
                 result.map_err(Status::failed_precondition)
             }
         }

@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
@@ -15,6 +14,7 @@ use codex_code_mode_protocol::CodeModeSessionProviderFuture;
 use codex_code_mode_protocol::CodeModeSessionResultFuture;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::StartedCell;
+use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::host::SessionId;
@@ -286,9 +286,12 @@ impl ProcessOwnedCodeModeSession {
             .await
     }
 
-    pub async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
+    pub async fn terminate(&self, request: TerminateRequest) -> Result<WaitOutcome, String> {
         let binding = self.connection().await?;
-        binding.connection.terminate(binding.remote, cell_id).await
+        binding
+            .connection
+            .terminate(binding.remote, request.cell_id)
+            .await
     }
 
     pub async fn shutdown(&self) -> Result<(), String> {
@@ -549,8 +552,11 @@ impl CodeModeSession for ProcessOwnedCodeModeSession {
         Box::pin(ProcessOwnedCodeModeSession::wait(self, request, preempt))
     }
 
-    fn terminate<'a>(&'a self, cell_id: CellId) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
-        Box::pin(ProcessOwnedCodeModeSession::terminate(self, cell_id))
+    fn terminate<'a>(
+        &'a self,
+        request: TerminateRequest,
+    ) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+        Box::pin(ProcessOwnedCodeModeSession::terminate(self, request))
     }
 
     fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {

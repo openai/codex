@@ -29,6 +29,26 @@ pub struct ExecuteRequest {
 pub struct WaitRequest {
     pub cell_id: CellId,
     pub yield_time_ms: u64,
+    /// Limit for this observation in Server mode; ignored in Client mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerminateRequest {
+    pub cell_id: CellId,
+    /// Limit for the final observation in Server mode; ignored in Client mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<usize>,
+}
+
+impl From<CellId> for TerminateRequest {
+    fn from(cell_id: CellId) -> Self {
+        Self {
+            cell_id,
+            max_output_tokens: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

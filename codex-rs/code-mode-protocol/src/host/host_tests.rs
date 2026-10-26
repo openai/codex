@@ -27,6 +27,7 @@ use super::WireContentItem;
 use super::WireExecuteRequest;
 use super::WireImageDetail;
 use super::WireNestedToolCall;
+use super::WireOutputTruncation;
 use super::WireResult;
 use super::WireRuntimeResponse;
 use super::WireSessionCellExecutionLimits;
@@ -249,6 +250,7 @@ fn open_session_serializes_optional_cell_execution_limits() {
                 max_yield_time_ms: Some(250),
                 max_heap_size_bytes: Some(16 * 1024 * 1024),
             }),
+            output_truncation: None,
         },
         json!({
             "method": "session/open",
@@ -304,8 +306,22 @@ fn client_to_host_v1_variants_are_pinned() {
             HostRequest::OpenSession {
                 session_id: session_id(),
                 cell_execution_limits: None,
+                output_truncation: None,
             },
             json!({ "method": "session/open", "sessionId": "session-1" }),
+        ),
+        (
+            request_id(/*value*/ 10),
+            HostRequest::OpenSession {
+                session_id: session_id(),
+                cell_execution_limits: None,
+                output_truncation: Some(WireOutputTruncation::Server),
+            },
+            json!({
+                "method": "session/open",
+                "sessionId": "session-1",
+                "outputTruncation": "server",
+            }),
         ),
         (
             request_id(/*value*/ 2),
@@ -353,6 +369,7 @@ fn client_to_host_v1_variants_are_pinned() {
                     cell_id: cell_id("cell-1"),
                     yield_time_ms: 50,
                 },
+                max_output_tokens: None,
             },
             json!({
                 "method": "session/wait",
@@ -365,6 +382,7 @@ fn client_to_host_v1_variants_are_pinned() {
             HostRequest::Terminate {
                 session_id: session_id(),
                 cell_id: cell_id("cell-1"),
+                max_output_tokens: None,
             },
             json!({
                 "method": "session/terminate",

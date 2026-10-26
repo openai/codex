@@ -17,6 +17,7 @@ use codex_code_mode_protocol::CodeModeSessionProviderFuture;
 use codex_code_mode_protocol::CodeModeSessionResultFuture;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::StartedCell;
+use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::grpc;
@@ -119,6 +120,7 @@ impl GrpcCodeModeSessionProvider {
             loop {
                 let mut request = tonic::Request::new(grpc::OpenSessionRequest {
                     cell_execution_limits,
+                    output_truncation: None,
                 });
                 inject_span_traceparent(&mut request, &open_session_span);
                 let result = async {
@@ -269,8 +271,11 @@ impl CodeModeSession for GrpcCodeModeSession {
         Box::pin(self.inner.wait(request, preempt))
     }
 
-    fn terminate<'a>(&'a self, cell_id: CellId) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
-        Box::pin(self.inner.terminate(cell_id))
+    fn terminate<'a>(
+        &'a self,
+        request: TerminateRequest,
+    ) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+        Box::pin(self.inner.terminate(request.cell_id))
     }
 
     fn shutdown<'a>(&'a self) -> CodeModeSessionResultFuture<'a, ()> {

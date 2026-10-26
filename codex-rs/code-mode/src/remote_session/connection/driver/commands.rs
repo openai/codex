@@ -112,6 +112,7 @@ impl ConnectionDriver {
                 session_id: session.id.clone(),
                 cell_execution_limits: (limits != WireSessionCellExecutionLimits::default())
                     .then_some(limits),
+                output_truncation: None,
             },
         };
         let frame = match EncodedFrame::encode(&message) {
@@ -251,6 +252,7 @@ impl ConnectionDriver {
             HostRequest::Wait {
                 session_id: session.id.clone(),
                 request,
+                max_output_tokens: None,
             },
             PendingRequest::Wait {
                 session,
@@ -284,6 +286,7 @@ impl ConnectionDriver {
             HostRequest::Terminate {
                 session_id: session.id.clone(),
                 cell_id,
+                max_output_tokens: None,
             },
             PendingRequest::Terminate {
                 session,

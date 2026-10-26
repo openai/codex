@@ -158,7 +158,7 @@ impl CodeModeService {
         &self,
         cell_id: CellId,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session().await?.terminate(cell_id).await
+        self.session().await?.terminate(cell_id.into()).await
     }
 
     pub(crate) async fn interrupt_active_cells(&self) {
@@ -170,7 +170,7 @@ impl CodeModeService {
                 .active_cell_ids()
                 .into_iter()
                 .map(|cell_id| async move {
-                    if let Err(error) = session.terminate(cell_id.clone()).await {
+                    if let Err(error) = session.terminate(cell_id.clone().into()).await {
                         tracing::warn!(%cell_id, %error, "failed to terminate interrupted code-mode cell");
                     }
                 }),
