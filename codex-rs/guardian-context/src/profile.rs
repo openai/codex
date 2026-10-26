@@ -316,10 +316,8 @@ fn prepare_sync_content<'a>(
         TranscriptContent::Record(record) => record.text(),
         TranscriptContent::AgentMessage(_) => {
             // Native ciphertext stays whole, or leaves an omission at the same position.
-            let limit = codex_protocol::protocol::TruncationPolicy::Tokens(
-                limits.message_tokens.min(/*other*/ 9_000),
-            )
-            .byte_budget();
+            let limit = codex_protocol::protocol::TruncationPolicy::Tokens(limits.message_tokens)
+                .byte_budget();
             return if entry.original_bytes > limit {
                 std::borrow::Cow::Owned(TranscriptContent::Text(
                     crate::transcript::TRANSCRIPT_OMISSION_NOTICE.to_owned(),

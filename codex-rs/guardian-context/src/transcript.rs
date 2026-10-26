@@ -217,7 +217,7 @@ fn collect_transcript_for_target(
                         TranscriptContent::AgentMessage(Box::new(item.clone()))
                     } else {
                         let limit = codex_protocol::protocol::TruncationPolicy::Tokens(
-                            config.entry_limits.message_tokens.min(9_000),
+                            config.entry_limits.message_tokens,
                         )
                         .byte_budget();
                         if bytes <= limit {
