@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_features::Feature;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AdditionalContextEntry;
@@ -18,6 +19,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::collections::BTreeMap;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -158,8 +160,10 @@ async fn external_context_like_user_text_remains_a_user_message_item() -> Result
     Ok(())
 }
 
+#[test_case::test_case(false; "messages")]
+#[test_case::test_case(true; "tool_outputs")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn additional_context_trust_controls_message_role() -> Result<()> {
+async fn additional_context_trust_controls_message_role(tool_outputs: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -169,8 +173,14 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
     )
     .await;
     let test = test_codex()
-        .with_config(|config| config.include_environment_context = false)
-        .build(&server)
+        .with_config(move |config| {
+            config.include_environment_context = false;
+            config
+                .features
+                .set_enabled(Feature::UntrustedAsToolOutput, tool_outputs)
+                .expect("test config should allow feature update");
+        })
+        .build_with_auto_env(&server)
         .await?;
 
     test.codex
@@ -212,13 +222,37 @@ async fn additional_context_trust_controls_message_role() -> Result<()> {
         developer_context_texts,
         vec!["<automation_info>run one</automation_info>"]
     );
-    assert_eq!(
-        request.message_input_texts("user"),
-        vec![
-            "<external_browser_info>tab one</external_browser_info>",
-            "inspect context",
-        ]
-    );
+    if tool_outputs {
+        assert_eq!(request.message_input_texts("user"), vec!["inspect context"]);
+        let outputs = request.inputs_of_type("function_call_output");
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|output| (
+                    output["name"].clone(),
+                    output["namespace"].clone(),
+                    output["output"].clone(),
+                    output.get("call_id").cloned(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![(
+                json!("browser_info"),
+                json!("agent"),
+                json!("tab one"),
+                None
+            )],
+        );
+        assert!(request.inputs_of_type("function_call").is_empty());
+    } else {
+        assert_eq!(
+            request.message_input_texts("user"),
+            vec![
+                "<external_browser_info>tab one</external_browser_info>",
+                "inspect context"
+            ],
+        );
+        assert!(request.inputs_of_type("function_call_output").is_empty());
+    }
 
     Ok(())
 }
@@ -307,8 +341,12 @@ async fn additional_context_is_deduplicated_between_turns_while_retained(
     Ok(())
 }
 
+#[test_case::test_case(false; "messages")]
+#[test_case::test_case(true; "tool_outputs")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn additional_context_removes_one_value_while_adding_another() -> Result<()> {
+async fn additional_context_removes_one_value_while_adding_another(
+    tool_outputs: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -328,8 +366,14 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
     )
     .await;
     let test = test_codex()
-        .with_config(|config| config.include_environment_context = false)
-        .build(&server)
+        .with_config(move |config| {
+            config.include_environment_context = false;
+            config
+                .features
+                .set_enabled(Feature::UntrustedAsToolOutput, tool_outputs)
+                .expect("test config should allow feature update");
+        })
+        .build_with_auto_env(&server)
         .await?;
 
     test.codex
@@ -426,6 +470,37 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
     })
     .await;
 
+    if tool_outputs {
+        for (request, expected_outputs, expected_users) in [
+            (
+                first_request.single_request(),
+                vec!["run one", "tab one"],
+                vec!["first turn"],
+            ),
+            (
+                second_request.single_request(),
+                vec!["run one", "tab one", "pty one"],
+                vec!["first turn", "second turn"],
+            ),
+            (
+                third_request.single_request(),
+                vec!["run one", "tab one", "pty one", "tab one"],
+                vec!["first turn", "second turn", "third turn"],
+            ),
+        ] {
+            let outputs = request.inputs_of_type("function_call_output");
+            assert_eq!(
+                outputs
+                    .iter()
+                    .map(|output| output["output"].as_str().expect("text output"))
+                    .collect::<Vec<_>>(),
+                expected_outputs,
+            );
+            assert_eq!(request.message_input_texts("user"), expected_users);
+        }
+        return Ok(());
+    }
+
     assert_eq!(
         first_request.single_request().message_input_texts("user"),
         vec![
@@ -460,8 +535,12 @@ async fn additional_context_removes_one_value_while_adding_another() -> Result<(
     Ok(())
 }
 
+#[test_case::test_case(false; "messages")]
+#[test_case::test_case(true; "tool_outputs")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn additional_context_values_are_truncated_before_model_input() -> Result<()> {
+async fn additional_context_values_are_truncated_before_model_input(
+    tool_outputs: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     const MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES: usize = 5 * 1024;
@@ -473,8 +552,14 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
     )
     .await;
     let test = test_codex()
-        .with_config(|config| config.include_environment_context = false)
-        .build(&server)
+        .with_config(move |config| {
+            config.include_environment_context = false;
+            config
+                .features
+                .set_enabled(Feature::UntrustedAsToolOutput, tool_outputs)
+                .expect("test config should allow feature update");
+        })
+        .build_with_auto_env(&server)
         .await?;
     let long_browser_value = format!("browser-head-{}browser-tail", "b".repeat(40_000));
     let long_automation_value = format!("automation-head-{}automation-tail", "a".repeat(40_000));
@@ -533,6 +618,71 @@ async fn additional_context_values_are_truncated_before_model_input() -> Result<
         "application additional context was not capped before model input: {} bytes",
         automation_text.len()
     );
+
+    if tool_outputs {
+        assert_eq!(
+            request.message_input_texts("user"),
+            vec!["summarize context"]
+        );
+        let outputs = request.inputs_of_type("function_call_output");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0]["name"], "browser_info");
+        assert_eq!(outputs[0]["namespace"], "agent");
+        let body = outputs[0]["output"].as_str().expect("text output");
+        assert!(body.starts_with(&format!("browser-head-{}", "b".repeat(1024))));
+        assert!(body.ends_with("browser-tail"));
+        assert!(body.contains("tokens truncated"));
+        assert!(body.len() <= MAX_EXPECTED_EXTERNAL_CONTEXT_TEXT_BYTES);
+        let mut changed_middle = long_browser_value.clone();
+        changed_middle.replace_range(20_000..20_001, "c");
+        let changed_prefix = changed_middle.replacen("browser-head", "browser-view", 1);
+        for (value, expected_count) in [(changed_middle, 1), (changed_prefix, 2)] {
+            let next = mount_sse_once(&server, sse(vec![ev_completed("updated-context")])).await;
+            test.codex
+                .start_or_steer_turn(
+                    TurnInputRequest::user_input(vec![UserInput::Text {
+                        text: "check updated context".to_owned(),
+                        text_elements: Vec::new(),
+                    }])
+                    .with_additional_context(BTreeMap::from([
+                        (
+                            "automation_info".to_owned(),
+                            AdditionalContextEntry {
+                                name: None,
+                                value: long_automation_value.clone(),
+                                kind: AdditionalContextKind::Application,
+                            },
+                        ),
+                        (
+                            "browser_info".to_owned(),
+                            AdditionalContextEntry {
+                                name: None,
+                                value,
+                                kind: AdditionalContextKind::Untrusted,
+                            },
+                        ),
+                    ])),
+                )
+                .await?;
+            wait_for_event_match(&test.codex, |event| {
+                matches!(event, EventMsg::TurnComplete(_)).then_some(())
+            })
+            .await;
+            let next = next.single_request();
+            let outputs = next.inputs_of_type("function_call_output");
+            assert_eq!(outputs.len(), expected_count);
+            assert_eq!(outputs[0]["output"], body);
+            if expected_count == 2 {
+                assert!(
+                    outputs[1]["output"]
+                        .as_str()
+                        .expect("text output")
+                        .starts_with("browser-view")
+                );
+            }
+        }
+        return Ok(());
+    }
 
     let user_texts = request.message_input_texts("user");
     let [external_text, user_text] = user_texts.as_slice() else {

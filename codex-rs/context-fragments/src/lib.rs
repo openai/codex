@@ -6,6 +6,7 @@ mod fragment;
 mod recap_prompt;
 
 pub use additional_context::AdditionalContextDeveloperFragment;
+pub use additional_context::AdditionalContextToolOutput;
 pub use additional_context::AdditionalContextUserFragment;
 pub use annotated_content::AnnotatedContent;
 pub use annotated_content::message_from_parts;

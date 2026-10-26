@@ -790,13 +790,17 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
     Ok(())
 }
 
-#[test_case::test_case(Some("browser"); "named_context")]
-#[test_case::test_case(Some("a"); "minimum_length")]
-#[test_case::test_case(Some("browser_2"); "digits_and_underscore")]
-#[test_case::test_case(Some(&"a".repeat(64)); "maximum_length")]
-#[test_case::test_case(None; "legacy_caller")]
+#[test_case::test_case(false, Some("browser"); "disabled")]
+#[test_case::test_case(true, Some("browser"); "named_output")]
+#[test_case::test_case(true, Some("a"); "minimum_length")]
+#[test_case::test_case(true, Some("browser_2"); "digits_and_underscore")]
+#[test_case::test_case(true, Some(&"a".repeat(64)); "maximum_length")]
+#[test_case::test_case(true, None; "legacy_caller")]
 #[tokio::test]
-async fn turn_start_additional_context_flows_to_model_input(name: Option<&str>) -> Result<()> {
+async fn turn_start_additional_context_flows_to_model_input(
+    tool_outputs: bool,
+    name: Option<&str>,
+) -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -811,6 +815,10 @@ async fn turn_start_additional_context_flows_to_model_input(name: Option<&str>) 
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            config: Some(HashMap::from([(
+                "features.untrusted_as_tool_output".to_owned(),
+                json!(tool_outputs),
+            )])),
             ..Default::default()
         })
         .await?;
@@ -863,6 +871,9 @@ async fn turn_start_additional_context_flows_to_model_input(name: Option<&str>) 
     if name.is_none() {
         entry.remove("name");
     }
+    // Unknown wire fields cannot override the harness-owned namespace.
+    entry.insert("namespace".to_owned(), json!("other"));
+
     let mut malformed_params = params.clone();
     malformed_params["additionalContext"]["custom_source"]["name"] = json!("agent.browser");
     let rejected_request = mcp
@@ -882,6 +893,21 @@ async fn turn_start_additional_context_flows_to_model_input(name: Option<&str>) 
         }
     );
 
+    let capped_name = "A".repeat(128);
+    let long_key = format!("!{capped_name}z");
+    let unnamed_sources: &[(&str, &str)] = if tool_outputs && name.is_none() {
+        &[
+            ("Browser Tab/\té-_2", "Browser_Tab_2"),
+            ("Browser_Tab_2", "Browser_Tab_2"),
+            (&long_key, &capped_name),
+            ("!?", "untrusted_content"),
+        ]
+    } else {
+        &[]
+    };
+    for &(key, _) in unnamed_sources {
+        params["additionalContext"][key] = json!({"kind": "untrusted", "value": key});
+    }
     let request_id = mcp.send_request("turn/start", Some(params)).await?;
     let _: TurnStartResponse = mcp.read_response(request_id).await?;
     timeout(
@@ -910,11 +936,37 @@ async fn turn_start_additional_context_flows_to_model_input(name: Option<&str>) 
         .collect::<Vec<_>>();
     assert!(!texts.contains(&"rejected input"));
     assert!(!texts.contains(&"<application>rejected context</application>"));
-    assert!(
-        body.to_string()
-            .contains("<external_custom_source>source value</external_custom_source>")
-    );
-    assert!(!body.to_string().contains("function_call_output"));
+    if tool_outputs {
+        let outputs = input
+            .iter()
+            .filter(|item| item["type"] == "function_call_output")
+            .map(|item| {
+                (
+                    item["name"].clone(),
+                    item["namespace"].clone(),
+                    item["output"].clone(),
+                    item.get("call_id").cloned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outputs.len(), 1 + unnamed_sources.len());
+        for (value, expected_name) in
+            std::iter::once(("source value", name.unwrap_or("custom_source")))
+                .chain(unnamed_sources.iter().copied())
+        {
+            assert!(
+                outputs.contains(&(json!(expected_name), json!("agent"), json!(value), None)),
+                "missing agent.{expected_name} output for {value:?}: {outputs:?}"
+            );
+        }
+        assert!(!body.to_string().contains("<external_custom_source>"));
+    } else {
+        assert!(
+            body.to_string()
+                .contains("<external_custom_source>source value</external_custom_source>")
+        );
+        assert!(!body.to_string().contains("function_call_output"));
+    }
 
     Ok(())
 }

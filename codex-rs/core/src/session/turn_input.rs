@@ -23,6 +23,7 @@ use crate::WithTurnExtensionData;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianSenderMessages;
 use crate::state::ActiveTurn;
+use crate::state::AdditionalContextFormat;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use codex_features::Feature;
@@ -939,9 +940,14 @@ async fn merge_additional_context_input(
     session: &Session,
     additional_context: BTreeMap<String, AdditionalContextEntry>,
 ) -> Vec<TurnInput> {
+    let format = if session.enabled(Feature::UntrustedAsToolOutput) {
+        AdditionalContextFormat::ToolOutputs
+    } else {
+        AdditionalContextFormat::Messages
+    };
     let additional_context_input = {
         let mut state = session.state.lock().await;
-        state.additional_context.merge(additional_context)
+        state.additional_context.merge(additional_context, format)
     };
     additional_context_input
         .into_iter()

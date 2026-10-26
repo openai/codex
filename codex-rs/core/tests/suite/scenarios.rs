@@ -50,6 +50,8 @@ use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 #[cfg(not(target_os = "windows"))]
@@ -315,6 +317,131 @@ fn configure_scenario_catalog(config: &mut Config) {
     .with_cloud_config_binding(stack.cloud_config_binding().cloned());
     config.model_catalog = Some(bundled_models_response().expect("bundled model catalog"));
     config.cloud_skill_enabled = false;
+}
+
+#[test_case::test_case(false; "messages")]
+#[test_case::test_case(true; "tool_outputs")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn additional_context_tool_outputs(tool_outputs: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(move |config| {
+            configure_scenario_catalog(config);
+            config.include_environment_context = false;
+            config
+                .features
+                .set_enabled(Feature::UntrustedAsToolOutput, tool_outputs)
+                .expect("test config should allow feature update");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        (0..4)
+            .map(|index| sse(vec![ev_completed(&format!("response-{index}"))]))
+            .collect(),
+    )
+    .await;
+
+    for (prompt, name, value) in [
+        (
+            "Summarize the selected document.",
+            Some("browser"),
+            "The launch is on Monday.",
+        ),
+        (
+            "The same document is now open in the editor.",
+            Some("editor"),
+            "The launch is on Monday.",
+        ),
+        (
+            "Check the date again.",
+            Some("editor"),
+            "The launch is on Monday.",
+        ),
+        (
+            "Summarize the updated document.",
+            None,
+            "The launch is on Tuesday.",
+        ),
+    ] {
+        test.codex
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![text(prompt)]).with_additional_context(
+                    std::collections::BTreeMap::from([
+                        (
+                            "selection".to_owned(),
+                            AdditionalContextEntry {
+                                value: value.to_owned(),
+                                kind: AdditionalContextKind::Untrusted,
+                                name: name.map(str::to_owned),
+                            },
+                        ),
+                        (
+                            "application".to_owned(),
+                            AdditionalContextEntry::new(
+                                "Keep the answer brief.".to_owned(),
+                                AdditionalContextKind::Application,
+                            ),
+                        ),
+                    ]),
+                ),
+            )
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 4);
+    if tool_outputs {
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.inputs_of_type("function_call_output").len())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 2, 3]
+        );
+        assert_eq!(requests[3].message_input_texts("user").len(), 4);
+        let input = requests[0].input();
+        let context_index = input
+            .iter()
+            .position(|item| item["type"] == "function_call_output")
+            .expect("context output");
+        let user_index = input
+            .iter()
+            .position(|item| item["role"] == "user")
+            .expect("user message");
+        assert!(context_index < user_index);
+    } else {
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.inputs_of_type("function_call_output").is_empty())
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.message_input_texts("user").len())
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 6]
+        );
+    }
+    insta::assert_snapshot!(
+        if tool_outputs {
+            "additional_context_tool_outputs"
+        } else {
+            "additional_context_legacy_messages"
+        },
+        context_snapshot::format_request_history_snapshot(
+            "Named context changes are appended before the user; unchanged values are deduplicated.",
+            &requests,
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

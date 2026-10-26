@@ -252,8 +252,10 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(false; "legacy_context")]
+#[test_case::test_case(true; "named_context")]
 #[tokio::test]
-async fn turn_steer_returns_active_turn_id() -> Result<()> {
+async fn turn_steer_returns_active_turn_id(tool_outputs: bool) -> Result<()> {
     // TODO(anp): Remove after the active-turn fixture can run in the selected remote environment.
     skip_if_remote!(
         Ok(()),
@@ -301,6 +303,10 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            config: Some(HashMap::from([(
+                "features.untrusted_as_tool_output".to_owned(),
+                serde_json::json!(tool_outputs),
+            )])),
             ..Default::default()
         })
         .await?;
@@ -339,7 +345,14 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
                 }],
                 responsesapi_client_metadata: None,
                 responsesapi_client_metadata_patch: None,
-                additional_context: None,
+                additional_context: Some(HashMap::from([(
+                    "browser_info".to_owned(),
+                    AdditionalContextEntry {
+                        value: "tab one".to_owned(),
+                        kind: AdditionalContextKind::Untrusted,
+                        name: Some("browser".to_owned()),
+                    },
+                )])),
                 expected_turn_id: turn.id.clone(),
             },
         })
@@ -392,6 +405,44 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("recorded requests")?;
+    let body = requests
+        .iter()
+        .rfind(|request| request.url.path().ends_with("/responses"))
+        .context("model request after steering")?
+        .body_json::<Value>()?;
+    let input = body["input"].as_array().context("input array")?;
+    let context_index = if tool_outputs {
+        input.iter().position(|item| {
+            item["type"] == "function_call_output"
+                && item["namespace"] == "agent"
+                && item["name"] == "browser"
+                && item["output"] == "tab one"
+        })
+    } else {
+        input.iter().position(|item| {
+            item["content"].as_array().is_some_and(|content| {
+                content.iter().any(|part| {
+                    part["text"] == "<external_browser_info>tab one</external_browser_info>"
+                })
+            })
+        })
+    }
+    .context("steered context")?;
+    let user_index = input
+        .iter()
+        .position(|item| {
+            item["role"] == "user"
+                && item["content"]
+                    .as_array()
+                    .is_some_and(|content| content.iter().any(|part| part["text"] == "steer"))
+        })
+        .context("steered user input")?;
+    assert!(context_index < user_index);
 
     Ok(())
 }

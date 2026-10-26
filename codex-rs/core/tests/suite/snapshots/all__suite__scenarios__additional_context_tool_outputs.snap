@@ -1,0 +1,28 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Named context changes are appended before the user; unchanged values are deduplicated.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Named context changes are appended before the user; unchanged values are deduplicated.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/developer:
+    <application>Keep the answer brief.</application>
+03:function_call_output/agent.browser:The launch is on Monday.
+04:message/user:
+    Summarize the selected document.
+-- request 2 (turn) --
+05:function_call_output/agent.editor:The launch is on Monday.
+06:message/user:
+    The same document is now open in the editor.
+-- request 3 (turn) --
+07:message/user:
+    Check the date again.
+-- request 4 (turn) --
+08:function_call_output/agent.selection:The launch is on Tuesday.
+09:message/user:
+    Summarize the updated document.
