@@ -5,6 +5,7 @@
 //! thread-local event methods here avoids repeatedly plumbing `thread_id`
 //! through session code.
 
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
@@ -21,6 +22,7 @@ use crate::CodeCellTraceContext;
 use crate::CodexTurnId;
 use crate::CompactionId;
 use crate::CompactionTraceContext;
+use crate::ExecutionStatus;
 use crate::InferenceTraceContext;
 use crate::McpCallTraceContext;
 use crate::RawPayloadKind;
@@ -245,6 +247,40 @@ impl ThreadTraceContext {
             return;
         };
         context.append_with_context_best_effort(codex_turn_id.into(), payload);
+    }
+
+    /// Records the full MCP backend result before callbacks, sanitization, or UI truncation.
+    /// The dispatch trace separately records the result returned to the caller.
+    pub fn record_mcp_tool_result(
+        &self,
+        codex_turn_id: &str,
+        tool_call_id: &str,
+        result: &Result<CallToolResult, String>,
+    ) {
+        let ThreadTraceContextState::Enabled(context) = &self.state else {
+            return;
+        };
+        #[derive(Serialize)]
+        struct Payload<'a> {
+            result: &'a Result<CallToolResult, String>,
+        }
+        let Some(runtime_payload) = context
+            .write_json_payload_best_effort(RawPayloadKind::ToolRuntimeEvent, &Payload { result })
+        else {
+            return;
+        };
+        context.append_with_context_best_effort(
+            codex_turn_id.to_owned(),
+            RawTraceEventPayload::ToolCallRuntimeEnded {
+                tool_call_id: tool_call_id.to_owned(),
+                status: if result.is_ok() {
+                    ExecutionStatus::Completed
+                } else {
+                    ExecutionStatus::Failed
+                },
+                runtime_payload,
+            },
+        );
     }
 
     /// Records the exec actually selected by stdin, since its process handle can be reused.

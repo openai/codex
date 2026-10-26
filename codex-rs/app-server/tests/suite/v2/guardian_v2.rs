@@ -1003,9 +1003,15 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             Some(thread_id)
         }
     };
+    let traces = TempDir::new()?;
+    let trace_root = matches!(review_outcome, ReviewOutcome::Deny)
+        .then(|| traces.path().to_str().expect("trace root path"));
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OTEL_METRIC_EXPORT_INTERVAL", Some("25"))])
+        .with_env_overrides(&[
+            ("OTEL_METRIC_EXPORT_INTERVAL", Some("25")),
+            ("CODEX_ROLLOUT_TRACE_ROOT", trace_root),
+        ])
         .build_initialized_with_timeout(TIMEOUT)
         .await?;
     let thread = match lifecycle {
@@ -2066,6 +2072,37 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         })
         .await?;
         timeout(TIMEOUT, app_server.shutdown_gracefully()).await??;
+        if matches!(review_outcome, ReviewOutcome::Deny) {
+            // Denied calls have no backend response, but their runtime result must
+            // still be available to trace consumers alongside executed calls.
+            let mut denied_results = Vec::new();
+            for entry in std::fs::read_dir(traces.path())? {
+                let bundle = entry?.path();
+                for line in std::fs::read_to_string(bundle.join("trace.jsonl"))?.lines() {
+                    let event: Value = serde_json::from_str(line)?;
+                    let payload = &event["payload"];
+                    if event["thread_id"] == reviewed_thread_id
+                        && payload["type"] == "tool_call_runtime_ended"
+                        && payload["tool_call_id"] == "guardian-action-0"
+                    {
+                        assert_eq!(payload["status"], "failed");
+                        let path = payload["runtime_payload"]["path"]
+                            .as_str()
+                            .expect("MCP runtime payload path");
+                        let result: Value =
+                            serde_json::from_reader(std::fs::File::open(bundle.join(path))?)?;
+                        denied_results.push(result);
+                    }
+                }
+            }
+            assert_eq!(denied_results.len(), 1);
+            assert!(
+                denied_results[0]["result"]["Err"]
+                    .as_str()
+                    .expect("denied MCP result")
+                    .contains("The destination is not authorized.")
+            );
+        }
         let reviewer_id = responses_state
             .guardian_requests
             .lock()

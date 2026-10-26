@@ -143,8 +143,12 @@ impl TraceWriter {
 
 fn write_json_file(path: &Path, value: &impl Serialize) -> Result<()> {
     let file = File::create(path).with_context(|| format!("create {}", path.display()))?;
-    serde_json::to_writer_pretty(file, value)
-        .with_context(|| format!("write JSON {}", path.display()))
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer_pretty(&mut writer, value)
+        .with_context(|| format!("write JSON {}", path.display()))?;
+    writer
+        .flush()
+        .with_context(|| format!("flush JSON {}", path.display()))
 }
 
 pub(crate) fn unix_time_ms() -> i64 {

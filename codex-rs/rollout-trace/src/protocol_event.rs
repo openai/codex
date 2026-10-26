@@ -2,9 +2,9 @@
 //!
 //! The session layer already emits protocol events for turn lifecycle, terminal
 //! sessions, patch application, MCP calls, and collaboration tools. Rollout
-//! tracing reuses those observations instead of adding another set of hooks in
-//! `codex-core`: this module translates the protocol surface into the smaller
-//! trace vocabulary and keeps the mapping isolated inside `codex-rollout-trace`.
+//! tracing reuses those observations where they preserve the original payload.
+//! MCP results are recorded before protocol-event truncation instead. This module
+//! translates protocol events into the smaller trace vocabulary.
 //!
 //! The long explicit `EventMsg` matches are intentional. Most protocol events
 //! are not trace runtime boundaries, but spelling them out makes new protocol
@@ -17,7 +17,6 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::McpToolCallBeginEvent;
-use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus;
@@ -116,7 +115,6 @@ pub(crate) enum ToolRuntimePayload<'a> {
     PatchApplyBegin(&'a PatchApplyBeginEvent),
     PatchApplyEnd(&'a PatchApplyEndEvent),
     McpToolCallBegin(&'a McpToolCallBeginEvent),
-    McpToolCallEnd(&'a McpToolCallEndEvent),
     CollabAgentSpawnBegin(&'a codex_protocol::protocol::CollabAgentSpawnBeginEvent),
     CollabAgentSpawnEnd(&'a codex_protocol::protocol::CollabAgentSpawnEndEvent),
     CollabAgentInteractionBegin(&'a codex_protocol::protocol::CollabAgentInteractionBeginEvent),
@@ -143,7 +141,6 @@ impl Serialize for ToolRuntimePayload<'_> {
             ToolRuntimePayload::PatchApplyBegin(event) => event.serialize(serializer),
             ToolRuntimePayload::PatchApplyEnd(event) => event.serialize(serializer),
             ToolRuntimePayload::McpToolCallBegin(event) => event.serialize(serializer),
-            ToolRuntimePayload::McpToolCallEnd(event) => event.serialize(serializer),
             ToolRuntimePayload::CollabAgentSpawnBegin(event) => event.serialize(serializer),
             ToolRuntimePayload::CollabAgentSpawnEnd(event) => event.serialize(serializer),
             ToolRuntimePayload::CollabAgentInteractionBegin(event) => event.serialize(serializer),
@@ -316,15 +313,8 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
             },
             payload: ToolRuntimePayload::McpToolCallBegin(event),
         }),
-        EventMsg::McpToolCallEnd(event) => Some(ToolRuntimeTraceEvent::Ended {
-            tool_call_id: &event.call_id,
-            status: if event.result.is_ok() {
-                ExecutionStatus::Completed
-            } else {
-                ExecutionStatus::Failed
-            },
-            payload: ToolRuntimePayload::McpToolCallEnd(event),
-        }),
+        // The full backend result is recorded before this UI event can truncate it.
+        EventMsg::McpToolCallEnd(_) => None,
         EventMsg::CollabAgentSpawnBegin(event) => Some(ToolRuntimeTraceEvent::Started {
             tool_call_id: &event.call_id,
             kind: ToolCallKind::SpawnAgent,

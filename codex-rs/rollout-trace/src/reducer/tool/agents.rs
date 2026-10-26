@@ -133,6 +133,10 @@ impl TraceReducer {
         runtime_payload: &RawPayloadRef,
     ) -> Result<()> {
         let kind = self.rollout.tool_calls[tool_call_id].kind.clone();
+        // MCP results are opaque evidence; they cannot describe agent interactions.
+        if matches!(kind, ToolCallKind::Mcp { .. }) {
+            return Ok(());
+        }
         let runtime_payload_json = self.read_payload_json(runtime_payload)?;
         if runtime_payload_json.get("agent_thread_id").is_some() {
             let payload: SubAgentActivityEvent = serde_json::from_value(runtime_payload_json)?;

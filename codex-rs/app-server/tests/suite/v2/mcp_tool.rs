@@ -999,6 +999,7 @@ async fn mcp_server_tool_call_forwards_url_elicitation() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_tool_call_completion_notification_contains_truncated_large_result() -> Result<()> {
+    let traces = TempDir::new()?;
     let call_id = "call-large-mcp";
     let namespace = format!("mcp__{TEST_SERVER_NAME}");
     let responses = vec![
@@ -1028,6 +1029,7 @@ async fn mcp_tool_call_completion_notification_contains_truncated_large_result()
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("CODEX_ROLLOUT_TRACE_ROOT", traces.path().to_str())])
         .build_initialized()
         .await?;
     let ThreadStartResponse { thread, .. } = mcp
@@ -1104,6 +1106,47 @@ async fn mcp_tool_call_completion_notification_contains_truncated_large_result()
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    assert!(mcp.shutdown_gracefully().await?.success());
+
+    // The UI receives a truncated result, but the trace retains the original
+    // content and metadata, including audio removed during model sanitization.
+    let bundles = std::fs::read_dir(traces.path())?.collect::<std::io::Result<Vec<_>>>()?;
+    assert_eq!(bundles.len(), 1);
+    let bundle = bundles[0].path();
+    let events = std::fs::read_to_string(bundle.join("trace.jsonl"))?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let completions: Vec<_> = events
+        .iter()
+        .map(|event| &event["payload"])
+        .filter(|event| {
+            event["type"] == "tool_call_runtime_ended" && event["tool_call_id"] == call_id
+        })
+        .collect();
+    assert_eq!(completions.len(), 1);
+    let payload_path = completions[0]["runtime_payload"]["path"]
+        .as_str()
+        .expect("MCP runtime payload path");
+    let payload: serde_json::Value =
+        serde_json::from_reader(std::fs::File::open(bundle.join(payload_path))?)?;
+    let expected = json!({
+        "content": [
+            {"type": "text", "text": "large-mcp-content-".repeat(DEFAULT_OUTPUT_BYTES_CAP / 8)},
+            {"type": "audio", "data": "UklGRg==", "mimeType": "audio/wav"}
+        ],
+        "structuredContent": {"large": "structured-value-".repeat(DEFAULT_OUTPUT_BYTES_CAP / 8)},
+        "isError": false,
+        "_meta": {
+            "calledBy": "mcp-app",
+        }
+    });
+    // Avoid constructing a text diff of the intentionally oversized response.
+    assert!(
+        payload["result"]["Ok"] == expected,
+        "trace did not retain the full MCP response"
+    );
 
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
@@ -1443,7 +1486,10 @@ impl ServerHandler for ToolAppsMcpServer {
             let mut result = CallToolResult::structured(json!({
                 "large": "structured-value-".repeat(DEFAULT_OUTPUT_BYTES_CAP / 8),
             }));
-            result.content = vec![ContentBlock::text(large_text)];
+            result.content = vec![
+                ContentBlock::text(large_text),
+                ContentBlock::audio("UklGRg==", "audio/wav"),
+            ];
             result.meta = Some(meta);
             return Ok(result.into());
         }
