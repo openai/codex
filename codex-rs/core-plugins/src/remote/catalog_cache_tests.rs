@@ -62,15 +62,16 @@ fn global_catalog_cache_reuses_legacy_cache_file() {
         "schema_version": REMOTE_PLUGIN_CATALOG_DISK_CACHE_SCHEMA_VERSION,
         "plugins": [],
     });
-    let contents = serde_json::to_string_pretty(&legacy_cache).expect("serialize legacy cache");
-    codex_utils_path::write_atomically(&legacy_cache_path, &contents).expect("write legacy cache");
+    codex_utils_path::write_atomically(&legacy_cache_path, &legacy_cache.to_string())
+        .expect("write legacy cache");
 
-    let cached = load_cached_directory_plugins(
+    let cached = load_cached_directory_plugins::<RemotePluginDirectoryItem>(
         codex_home.path(),
         &config,
         &auth,
         RemotePluginScope::Global,
         /*collection*/ None,
+        RemotePluginCatalogCacheMode::PreferCache,
     )
     .expect("load legacy global cache");
     assert!(cached.plugins.is_empty());
@@ -84,11 +85,90 @@ fn global_catalog_cache_reuses_legacy_cache_file() {
         /*collection*/ None,
         &[],
     );
-    let refreshed_cache: RemotePluginCatalogDiskCache = serde_json::from_slice(
-        &std::fs::read(&legacy_cache_path).expect("read refreshed legacy cache"),
-    )
-    .expect("parse refreshed legacy cache");
-    assert!(refreshed_cache.fetched_at.is_some());
+    assert!(has_cached_directory_plugins(
+        codex_home.path(),
+        &config,
+        &auth,
+        RemotePluginScope::Global,
+        RemotePluginCatalogCacheMode::PreferFreshCache,
+    ));
+}
+
+#[test]
+fn freshness_probe_defers_plugin_validation_until_full_read() {
+    let codex_home = tempfile::tempdir().expect("create codex home");
+    let config = RemotePluginServiceConfig::new(
+        "https://chatgpt.com/backend-api".to_string(),
+        crate::test_support::test_http_client_factory(),
+        /*product_sku*/ None,
+    );
+    let auth = CodexAuth::Headers(AuthHeaders::new(http::HeaderMap::new()));
+    let scope = RemotePluginScope::Global;
+    let key = RemotePluginCatalogCacheKey::new(&config, &auth, scope, /*collection*/ None)
+        .expect("global cache key");
+    let path = cache_path(codex_home.path(), &key);
+    let probe = |mode| has_cached_directory_plugins(codex_home.path(), &config, &auth, scope, mode);
+    let version = REMOTE_PLUGIN_CATALOG_DISK_CACHE_SCHEMA_VERSION;
+    let now = serde_json::to_string(&Utc::now()).expect("serialize timestamp");
+    let expired_at = "2000-01-01T00:00:00Z";
+    let padding = " ".repeat(512);
+    for contents in [
+        serde_json::json!({"schema_version": version + 1, "plugins": []}).to_string(),
+        serde_json::json!({"schema_version": version}).to_string(),
+        serde_json::json!({"schema_version": version, "plugins": {}}).to_string(),
+        format!(r#"{{"schema_version":{version},"plugins":[{{"#),
+        format!(r#"{{"schema_version":{version},"fetched_at":{now},"plugins":[{padding}"#),
+        format!(
+            r#"{{"details":{{"fetched_at":"{expired_at}"}},"schema_version":{version},"plugins":[{padding}"#
+        ),
+        format!(
+            r#"{{"schema_version":{version},"fetched_at":"{expired_at}","fetched_at":{now},"plugins":[{padding}"#
+        ),
+        format!(
+            r#"{{"schema_version":{version},"fetched_at":"{expired_at}","plugins":{{}}}}{padding}"#
+        ),
+    ] {
+        codex_utils_path::write_atomically(&path, &contents).expect("write invalid cache");
+        assert!(
+            !probe(RemotePluginCatalogCacheMode::PreferFreshCache),
+            "{contents}"
+        );
+        assert!(!path.exists());
+    }
+
+    let expired = format!(
+        r#"{{"note":"[","fetched\u005fat":"{expired_at}","schema_version":{version},"plugins":[{padding}"#
+    );
+    codex_utils_path::write_atomically(&path, &expired).expect("write expired cache");
+    assert!(!probe(RemotePluginCatalogCacheMode::PreferFreshCache));
+    assert!(path.exists());
+    assert!(!probe(RemotePluginCatalogCacheMode::PreferCache));
+    assert!(!path.exists());
+
+    let reordered =
+        format!(r#"{{"plugins":[{padding}],"schema_version":{version},"fetched_at":{now}}}"#);
+    codex_utils_path::write_atomically(&path, &reordered).expect("write reordered cache");
+    assert!(probe(RemotePluginCatalogCacheMode::PreferFreshCache));
+
+    let contents = serde_json::json!({
+        "schema_version": version,
+        "fetched_at": Utc::now(),
+        "plugins": [{}],
+    });
+    codex_utils_path::write_atomically(&path, &contents.to_string()).expect("write invalid plugin");
+    assert!(probe(RemotePluginCatalogCacheMode::PreferFreshCache));
+    assert!(
+        load_cached_directory_plugins::<RemotePluginDirectoryItem>(
+            codex_home.path(),
+            &config,
+            &auth,
+            scope,
+            /*collection*/ None,
+            RemotePluginCatalogCacheMode::PreferCache,
+        )
+        .is_none()
+    );
+    assert!(!path.exists());
 }
 
 #[test]
@@ -110,12 +190,13 @@ fn header_auth_does_not_cache_private_catalogs_without_a_stable_identity() {
         &[],
     );
     assert!(
-        load_cached_directory_plugins(
+        load_cached_directory_plugins::<RemotePluginDirectoryItem>(
             codex_home.path(),
             &config,
             &auth,
             RemotePluginScope::Global,
             /*collection*/ None,
+            RemotePluginCatalogCacheMode::PreferCache,
         )
         .is_some()
     );
@@ -144,19 +225,20 @@ fn header_auth_does_not_cache_private_catalogs_without_a_stable_identity() {
         let insecure_cache = RemotePluginCatalogDiskCache {
             schema_version: REMOTE_PLUGIN_CATALOG_DISK_CACHE_SCHEMA_VERSION,
             fetched_at: Some(Utc::now()),
-            plugins: Vec::new(),
+            plugins: Vec::<RemotePluginDirectoryItem>::new(),
         };
         let contents = serde_json::to_string_pretty(&insecure_cache).expect("serialize cache");
         codex_utils_path::write_atomically(&insecure_cache_path, &contents)
             .expect("write insecure cache");
 
         assert!(
-            load_cached_directory_plugins(
+            load_cached_directory_plugins::<RemotePluginDirectoryItem>(
                 codex_home.path(),
                 &config,
                 &auth,
                 scope,
                 /*collection*/ None,
+                RemotePluginCatalogCacheMode::PreferCache,
             )
             .is_none()
         );

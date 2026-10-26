@@ -541,8 +541,6 @@ enum RemoteInstalledPluginScope {
 }
 
 impl RemotePluginScope {
-    const CATALOG_CACHE_SCOPES: [Self; 3] = [Self::Global, Self::User, Self::Workspace];
-
     fn api_value(self) -> &'static str {
         match self {
             Self::Global => "GLOBAL",
@@ -1155,32 +1153,35 @@ pub(crate) fn has_fresh_cached_remote_plugin_catalog(
     let Ok(auth) = ensure_chatgpt_auth(auth) else {
         return false;
     };
-    catalog_cache::load_cached_directory_plugins(
-        codex_home, config, auth, scope, /*collection*/ None,
+    catalog_cache::has_cached_directory_plugins(
+        codex_home,
+        config,
+        auth,
+        scope,
+        RemotePluginCatalogCacheMode::PreferFreshCache,
     )
-    .is_some_and(|cached| {
-        matches!(
-            cached.freshness,
-            catalog_cache::RemotePluginCatalogCacheFreshness::Fresh
-        )
-    })
 }
 
 pub(crate) fn cached_remote_plugin_catalog_scopes(
     codex_home: &Path,
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+    scopes: &[RemotePluginScope],
 ) -> BTreeSet<RemotePluginScope> {
     let Ok(auth) = ensure_chatgpt_auth(auth) else {
         return BTreeSet::new();
     };
-    RemotePluginScope::CATALOG_CACHE_SCOPES
-        .into_iter()
+    scopes
+        .iter()
+        .copied()
         .filter(|scope| {
-            catalog_cache::load_cached_directory_plugins(
-                codex_home, config, auth, *scope, /*collection*/ None,
+            catalog_cache::has_cached_directory_plugins(
+                codex_home,
+                config,
+                auth,
+                *scope,
+                RemotePluginCatalogCacheMode::PreferCache,
             )
-            .is_some()
         })
         .collect()
 }
@@ -1196,6 +1197,7 @@ pub fn cached_global_remote_discoverable_plugins(
         auth,
         RemotePluginScope::Global,
         /*collection*/ None,
+        RemotePluginCatalogCacheMode::PreferCache,
     )
     .map(|cached| cached.plugins)
     .unwrap_or_default()
@@ -2097,13 +2099,10 @@ async fn fetch_directory_plugins_for_scope_with_cache(
     collection: Option<&str>,
     cache_mode: RemotePluginCatalogCacheMode,
 ) -> Result<DirectoryPluginsFetchOutcome, RemotePluginCatalogError> {
-    if cache_mode != RemotePluginCatalogCacheMode::ForceRefetch
-        && let Some(codex_home) = codex_home
+    if let Some(codex_home) = codex_home
         && let Some(cached) = catalog_cache::load_cached_directory_plugins(
-            codex_home, config, auth, scope, collection,
+            codex_home, config, auth, scope, collection, cache_mode,
         )
-        && (cache_mode == RemotePluginCatalogCacheMode::PreferCache
-            || cached.freshness == catalog_cache::RemotePluginCatalogCacheFreshness::Fresh)
     {
         return Ok(DirectoryPluginsFetchOutcome {
             plugins: cached.plugins,

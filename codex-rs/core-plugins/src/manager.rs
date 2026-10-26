@@ -2983,15 +2983,20 @@ impl PluginsManager {
                 if !prefetch_discovery {
                     return;
                 }
+                let scopes_to_probe: &[RemotePluginScope] =
+                    if config_for_remote_sync.remote_plugin_enabled {
+                        &[RemotePluginScope::User, RemotePluginScope::Workspace]
+                    } else {
+                        &[RemotePluginScope::Workspace]
+                    };
                 let mut scopes = crate::remote::cached_remote_plugin_catalog_scopes(
                     manager.codex_home.as_path(),
                     &remote_plugin_service_config(&config_for_remote_sync),
                     auth.as_ref(),
+                    scopes_to_probe,
                 );
                 if config_for_remote_sync.remote_plugin_enabled {
                     scopes.insert(RemotePluginScope::Global);
-                } else {
-                    scopes.retain(|scope| *scope == RemotePluginScope::Workspace);
                 }
                 manager.maybe_start_remote_catalog_cache_refresh(
                     &config_for_remote_sync,
