@@ -3,6 +3,7 @@ use codex_config::ConfigLayerStack;
 use codex_core::ForkSnapshot;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApprovalMessages;
@@ -10,6 +11,7 @@ use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::PermissionMessages;
 use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -24,6 +26,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -39,6 +42,39 @@ fn permissions_texts(request: &ResponsesRequest) -> Vec<String> {
         .filter(|text| text.contains("<permissions instructions>"))
         .map(|text| text.replace("\r\n", "\n"))
         .collect()
+}
+
+fn permissions_annotations(
+    request: &ResponsesRequest,
+) -> Vec<(serde_json::Value, serde_json::Value, serde_json::Value)> {
+    request
+        .input()
+        .into_iter()
+        .flat_map(|item| {
+            item["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter(|(_, content)| {
+                    content["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("<permissions instructions>"))
+                })
+                .map(|(index, _)| {
+                    (
+                        item["role"].clone(),
+                        item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                            [index]
+                            .clone(),
+                        item["internal_chat_message_metadata_passthrough"]["content_item_metadata"]
+                            [index]
+                            .clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
 }
 
 fn model_with_approval_messages(
@@ -261,6 +297,7 @@ async fn catalog_permission_message_is_sent_initially_and_after_model_change() -
             approved_prefixes: None,
             writable_root: None,
             writable_roots: None,
+            ..Default::default()
         },
     );
     let second = model_with_permission_messages(
@@ -272,6 +309,7 @@ async fn catalog_permission_message_is_sent_initially_and_after_model_change() -
             approved_prefixes: None,
             writable_root: None,
             writable_roots: None,
+            ..Default::default()
         },
     );
     let mut builder = test_codex()
@@ -340,6 +378,7 @@ async fn empty_catalog_permission_message_preserves_approval_instructions() -> R
             approved_prefixes: None,
             writable_root: None,
             writable_roots: None,
+            ..Default::default()
         },
     );
     let mut builder = test_codex()
@@ -757,14 +796,19 @@ const WORKSPACE_PERMISSIONS_PREFIX: &str = concat!(
 
 #[test_case(
     1,
-    PermissionMessages::default(),
-    " The writable root is {roots}.";
+    PermissionMessages {
+        denied_reads: Some("## Catalog denied reads\n{{ denied_reads }}\nCatalog footer.".to_string()),
+        ..Default::default()
+    },
+    " The writable root is {roots}.",
+    "## Catalog denied reads\n{facts}\nCatalog footer.";
     "default singular"
 )]
 #[test_case(
     2,
     PermissionMessages::default(),
-    " The writable roots are {roots}.";
+    " The writable roots are {roots}.",
+    "## Denied filesystem reads\n{facts}";
     "default plural"
 )]
 #[test_case(
@@ -772,9 +816,11 @@ const WORKSPACE_PERMISSIONS_PREFIX: &str = concat!(
     PermissionMessages {
         writable_root: Some("Catalog single: {{ roots }}!".to_string()),
         writable_roots: Some("Catalog plural: {{ roots }}!".to_string()),
+        denied_reads: Some("## Catalog denied reads\n{{ denied_reads }}\nCatalog footer.".to_string()),
         ..Default::default()
     },
-    "Catalog single: {roots}!";
+    "Catalog single: {roots}!",
+    "## Catalog denied reads\n{facts}\nCatalog footer.";
     "override singular"
 )]
 #[test_case(
@@ -782,9 +828,11 @@ const WORKSPACE_PERMISSIONS_PREFIX: &str = concat!(
     PermissionMessages {
         writable_root: Some("Catalog single: {{ roots }}!".to_string()),
         writable_roots: Some("Catalog plural: {{ roots }}!".to_string()),
+        denied_reads: Some("## Catalog denied reads\n{{ denied_reads }}\nCatalog footer.".to_string()),
         ..Default::default()
     },
-    "Catalog plural: {roots}!";
+    "Catalog plural: {roots}!",
+    "## Catalog denied reads\n{facts}\nCatalog footer.";
     "override plural"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -792,6 +840,7 @@ async fn permissions_message_includes_writable_roots(
     root_count: usize,
     permissions: PermissionMessages,
     expected_root_sentence: &str,
+    expected_denied_read_section: &str,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -825,9 +874,23 @@ async fn permissions_message_includes_writable_roots(
             denied_root.clone().into(),
             FileSystemAccessMode::Deny,
         ));
+        let denied_glob = writable_root
+            .join("**/secrets/*.key")
+            .to_string_lossy()
+            .into_owned();
+        file_system.entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: denied_glob.clone(),
+            },
+            FileSystemAccessMode::Deny,
+        ));
         let denied_root = denied_root.to_string_lossy();
+        let facts = format!(
+            "The active permission profile denies reading these paths/globs. Do not request escalation or additional permissions to read them; these denials are policy restrictions.\n- path `{denied_root}`\n- glob `{denied_glob}`"
+        );
         format!(
-            "\n## Denied filesystem reads\nThe active permission profile denies reading these paths/globs. Do not request escalation or additional permissions to read them; these denials are policy restrictions.\n- path `{denied_root}`"
+            "\n{}",
+            expected_denied_read_section.replace("{facts}", &facts)
         )
     };
     let permission_profile =
@@ -873,37 +936,9 @@ async fn permissions_message_includes_writable_roots(
     let expected = format!(
         "{WORKSPACE_PERMISSIONS_PREFIX}{root_sentence}{denied_reads}\n</permissions instructions>"
     );
-    assert_eq!(permissions_texts(&request), vec![expected.clone()]);
-    let annotated_permissions = request
-        .input()
-        .into_iter()
-        .flat_map(|item| {
-            item["content"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .enumerate()
-                .filter(|(_, content)| {
-                    content["text"]
-                        .as_str()
-                        .is_some_and(|text| text.replace("\r\n", "\n") == expected)
-                })
-                .map(|(index, _)| {
-                    (
-                        item["role"].clone(),
-                        item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
-                            [index]
-                            .clone(),
-                        item["internal_chat_message_metadata_passthrough"]["content_item_metadata"]
-                            [index]
-                            .clone(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    assert_eq!(permissions_texts(&request), vec![expected]);
     assert_eq!(
-        annotated_permissions,
+        permissions_annotations(&request),
         vec![(
             json!("developer"),
             json!("permissions.instructions"),
@@ -913,8 +948,15 @@ async fn permissions_message_includes_writable_roots(
     Ok(())
 }
 
-pub(super) async fn catalog_writable_roots_model_change_requests() -> Result<Vec<ResponsesRequest>>
-{
+#[derive(Clone, Copy)]
+pub(super) enum PermissionPathScenario {
+    OmittedPaths,
+    DeniedReads,
+}
+
+pub(super) async fn catalog_permission_paths_model_change_requests(
+    scenario: PermissionPathScenario,
+) -> Result<Vec<ResponsesRequest>> {
     let server = start_mock_server().await;
     let req1 = mount_sse_once(
         &server,
@@ -923,29 +965,47 @@ pub(super) async fn catalog_writable_roots_model_change_requests() -> Result<Vec
     .await;
     let first_slug = "catalog-writable-roots-a";
     let second_slug = "catalog-writable-roots-b";
-    let models = [
-        (
-            first_slug,
-            "The writable root for model A is {{ roots }}.",
-            "Wrong A plural: {{ roots }}.",
-        ),
-        (
-            second_slug,
-            "The writable root for model B is {{ roots }}.",
-            "Wrong B plural: {{ roots }}.",
-        ),
-    ]
-    .into_iter()
-    .map(|(slug, single, plural)| {
-        model_with_permission_messages(
-            slug,
-            serde_json::from_value(json!({"writable_root": single, "writable_roots": plural}))
+    let models = [(first_slug, "Model A"), (second_slug, "Model B")]
+        .into_iter()
+        .map(|(slug, label)| {
+            let mut model = model_with_permission_messages(
+                slug,
+                serde_json::from_value(json!({
+                    "writable_root": format!("Wrong {label} single: {{{{ roots }}}}."),
+                    "writable_roots": format!("{label} roots: {{{{ roots }}}}."),
+                    "omitted_paths": format!("{label} omitted paths:"),
+                    "denied_reads": format!("{label} denied reads:\n{{{{ denied_reads }}}}"),
+                }))
                 .expect("valid catalog permission messages"),
-        )
-    })
-    .collect();
+            );
+            model.use_responses_lite = true;
+            model
+        })
+        .collect();
+    let include_denied_reads = matches!(scenario, PermissionPathScenario::DeniedReads);
     let mut builder = test_codex()
         .with_model(first_slug)
+        .with_workspace_setup(move |cwd, fs| async move {
+            if include_denied_reads {
+                for path in [
+                    "catalog-root-000/writable",
+                    "catalog-root-001/writable",
+                    "catalog-denied",
+                    "catalog-secrets",
+                ] {
+                    fs.create_directory(
+                        &executor_path_uri(cwd.join(path))?,
+                        CreateDirectoryOptions {
+                            recursive: true,
+                            follow_symlinks: true,
+                        },
+                        /*sandbox*/ None,
+                    )
+                    .await?;
+                }
+            }
+            Ok(())
+        })
         .with_config(move |config| {
             config.base_instructions = Some("Help with the workspace.".to_string());
             // Match the canonical writable root so snapshot normalization recognizes the cwd.
@@ -956,13 +1016,50 @@ pub(super) async fn catalog_writable_roots_model_change_requests() -> Result<Vec
                     .expect("canonical workspace path should be absolute");
             }
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            // Keep oversized presentation facts out of the denied-read case: filesystem
+            // helpers enforce those policies, and Seatbelt expands every denied ancestor.
+            let suffix = match scenario {
+                PermissionPathScenario::DeniedReads => "writable".to_string(),
+                PermissionPathScenario::OmittedPaths => vec!["x".repeat(175); 105].join("/"),
+            };
+            let cwd = executor_path_uri(&config.cwd).expect("executor cwd URI");
+            let roots = (0..2)
+                .map(|index| {
+                    cwd.join(&format!("catalog-root-{index:03}/{suffix}"))
+                        .expect("executor writable root URI")
+                })
+                .collect::<Vec<_>>();
+            let mut file_system = PermissionProfile::workspace_write_with_path_uris(
+                &roots,
+                NetworkSandboxPolicy::Restricted,
+                /*exclude_tmpdir_env_var*/ true,
+                /*exclude_slash_tmp*/ true,
+            )
+            .file_system_sandbox_policy();
+            if include_denied_reads {
+                file_system.entries.extend([
+                    FileSystemSandboxEntry::new(
+                        cwd.join("catalog-denied")
+                            .expect("executor denied path URI")
+                            .into(),
+                        FileSystemAccessMode::Deny,
+                    ),
+                    FileSystemSandboxEntry::new(
+                        FileSystemPath::GlobPattern {
+                            pattern: cwd
+                                .join("catalog-secrets/*.key")
+                                .expect("executor denied glob URI")
+                                .inferred_native_path_string(),
+                        },
+                        FileSystemAccessMode::Deny,
+                    ),
+                ]);
+            }
             config
                 .permissions
-                .set_permission_profile(PermissionProfile::workspace_write_with(
-                    &[],
+                .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                    &file_system,
                     NetworkSandboxPolicy::Restricted,
-                    /*exclude_tmpdir_env_var*/ true,
-                    /*exclude_slash_tmp*/ true,
                 ))
                 .expect("workspace-write profile should be allowed");
             config.workspace_roots = vec![config.cwd.clone()];
@@ -994,27 +1091,54 @@ pub(super) async fn catalog_writable_roots_model_change_requests() -> Result<Vec
     )
     .await;
     submit_text_turn(&test, "Continue without changing permissions.").await?;
-    let writable_root = test
-        .fs()
-        .canonicalize(&test.workspace_path_uri("")?, /*sandbox*/ None)
-        .await?
-        .inferred_native_path_string();
     let requests = vec![
         req1.single_request(),
         req2.single_request(),
         req3.single_request(),
     ];
-    let first = format!(
-        "{WORKSPACE_PERMISSIONS_PREFIX}The writable root for model A is `{writable_root}`.\n</permissions instructions>"
-    );
-    let second = format!(
-        "{WORKSPACE_PERMISSIONS_PREFIX}The writable root for model B is `{writable_root}`.\n</permissions instructions>"
-    );
-    assert_eq!(permissions_texts(&requests[0]), vec![first.clone()]);
+    let first = permissions_texts(&requests[0]);
+    assert_eq!(first.len(), 1);
+    let first = first[0].clone();
+    assert!(first.contains("\nModel A roots: "));
+    assert!(first.contains("catalog-root-000"));
+    assert_eq!(first.contains("catalog-root-001"), include_denied_reads);
+    if include_denied_reads {
+        let cwd = executor_path_uri(&test.config.cwd)?;
+        let denied_path = cwd.join("catalog-denied")?.inferred_native_path_string();
+        let denied_glob = cwd
+            .join("catalog-secrets/*.key")?
+            .inferred_native_path_string();
+        assert!(first.ends_with(&format!(
+            "\nModel A denied reads:\nThe active permission profile denies reading these paths/globs. Do not request escalation or additional permissions to read them; these denials are policy restrictions.\n- path `{denied_path}`\n- glob `{denied_glob}`\n</permissions instructions>"
+        )));
+    } else {
+        assert!(first.ends_with(concat!(
+            "Model A omitted paths:\n",
+            "Additional permission paths/globs are omitted. All restrictions still apply; do not use escalation or additional permissions to bypass omitted read denials.\n",
+            "</permissions instructions>",
+        )));
+    }
+    let second = first.replace("Model A", "Model B");
     assert_eq!(permissions_texts(&requests[1]), vec![first, second]);
     assert_eq!(
         permissions_texts(&requests[2]),
         permissions_texts(&requests[1])
     );
+    for (request, count) in requests.iter().zip([1, 2, 2]) {
+        assert_eq!(
+            permissions_annotations(request),
+            vec![
+                (
+                    json!("developer"),
+                    json!("permissions.instructions"),
+                    json!({"provenance": {"type": "harness", "hook": false}}),
+                );
+                count
+            ],
+        );
+    }
+    for pair in requests.windows(2) {
+        assert!(pair[1].input().starts_with(&pair[0].input()));
+    }
     Ok(requests)
 }

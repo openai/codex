@@ -811,6 +811,15 @@ pub struct PermissionMessages {
     /// Missing, null, empty, invalid, or oversized templates use the bundled sentence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writable_roots: Option<String>,
+    /// Optional presentation before the harness-owned omission and no-bypass warning.
+    /// Empty, invalid, or oversized text uses the bundled warning without a lead-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted_paths: Option<String>,
+    /// Presentation with exactly one `{{ denied_reads }}` placeholder for the
+    /// harness-owned denial explanation, no-escalation rule, and path/glob list.
+    /// Empty, invalid, or oversized templates use the bundled presentation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denied_reads: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -1344,11 +1353,13 @@ mod tests {
     }
 
     #[test]
-    fn writable_root_messages_preserve_sparse_wire_values() {
+    fn permission_path_messages_preserve_sparse_wire_values() {
         for input in [
             serde_json::json!({}),
             serde_json::json!({"writable_root": null, "writable_roots": null}),
             serde_json::json!({"writable_root": "", "writable_roots": "Roots: {{ roots }}."}),
+            serde_json::json!({"omitted_paths": null, "denied_reads": null}),
+            serde_json::json!({"omitted_paths": "", "denied_reads": "Blocked:\n{{ denied_reads }}"}),
         ] {
             let messages: PermissionMessages = serde_json::from_value(input.clone()).unwrap();
             let mut expected = serde_json::json!({
@@ -1356,7 +1367,12 @@ mod tests {
                 "workspace_write": null,
                 "read_only": null,
             });
-            for key in ["writable_root", "writable_roots"] {
+            for key in [
+                "writable_root",
+                "writable_roots",
+                "omitted_paths",
+                "denied_reads",
+            ] {
                 if let Some(value) = input.get(key).filter(|value| !value.is_null()) {
                     expected[key] = value.clone();
                 }

@@ -1,5 +1,6 @@
 //! Multi-turn Astra scenarios snapshot the model-visible request history of shipped features.
 
+use super::permissions_messages::PermissionPathScenario;
 use codex_protocol_test_support::ContentItemTestExt;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -2684,17 +2685,65 @@ async fn model_catalog_refresh_preserves_tools_and_history() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(PermissionPathScenario::OmittedPaths; "omitted_paths")]
+#[test_case::test_case(PermissionPathScenario::DeniedReads; "denied_reads")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn catalog_writable_roots_follow_selected_model() -> Result<()> {
+async fn catalog_permission_paths_follow_selected_model(
+    scenario: PermissionPathScenario,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if matches!(scenario, PermissionPathScenario::DeniedReads) {
+        core_test_support::skip_if_target_windows!(
+            Ok(()),
+            "Windows restricted-token sandbox cannot enforce deny-read policies"
+        );
+    }
     let requests =
-        super::permissions_messages::catalog_writable_roots_model_change_requests().await?;
-    let snapshot = context_snapshot::format_request_history_snapshot(
-        "Catalog writable-root wording follows the selected model, appending changed permissions once while preserving prior input.",
-        &requests,
-        &ContextSnapshotOptions::default().include_request_settings(),
+        super::permissions_messages::catalog_permission_paths_model_change_requests(scenario)
+            .await?;
+    let mut bodies = requests
+        .iter()
+        .map(core_test_support::responses::ResponsesRequest::body_json)
+        .collect::<Vec<_>>();
+    // Keep the complete history, but collapse the large platform-specific fixture path lists
+    // before snapshot hashing. The helper verifies selected roots, denial facts, and omission.
+    let roots = regex_lite::Regex::new(r"(?m)^(Model [AB] roots: ).*$")?;
+    let filesystem = regex_lite::Regex::new(r"<filesystem>.*</filesystem>")?;
+    for body in &mut bodies {
+        for item in body["input"].as_array_mut().expect("request input") {
+            for content in item["content"].as_array_mut().into_iter().flatten() {
+                if let Some(text) = content["text"].as_str() {
+                    let text = roots.replace_all(text, "${1}<BOUNDED_ROOT_LIST>.");
+                    content["text"] = filesystem
+                        .replace_all(
+                            &text,
+                            "<filesystem><LARGE_PERMISSION_PATH_FIXTURE/></filesystem>",
+                        )
+                        .into_owned()
+                        .into();
+                }
+            }
+        }
+    }
+    let entries = bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
+    let (snapshot_name, description) = match scenario {
+        PermissionPathScenario::OmittedPaths => (
+            "catalog_writable_roots_follow_selected_model",
+            "Catalog root and omitted-path wording follows the selected model, appending changed permissions once while preserving prior input and the mandatory omission warning.",
+        ),
+        PermissionPathScenario::DeniedReads => (
+            "catalog_denied_reads_follow_selected_model",
+            "Catalog denied-read wording follows the selected model, appending changed permissions once while preserving prior input, denial facts, and mandatory policy warnings.",
+        ),
+    };
+    insta::assert_snapshot!(
+        snapshot_name,
+        context_snapshot::format_context_snapshot(
+            description,
+            &entries,
+            &ContextSnapshotOptions::default().include_request_settings(),
+        )
     );
-    insta::assert_snapshot!(snapshot);
     Ok(())
 }
 

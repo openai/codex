@@ -24,11 +24,15 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
 use codex_utils_template::Template;
+use path_warnings::OMITTED_PERMISSION_PATHS;
+use path_warnings::denied_reads_text;
+use path_warnings::omitted_paths_text;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::LazyLock;
 use writable_roots::writable_roots_text;
 
+mod path_warnings;
 mod writable_roots;
 
 const REQUEST_PERMISSION_RULE: &str =
@@ -41,7 +45,6 @@ const GRANULAR_PROMPTED_CATEGORIES: &str =
 const GRANULAR_REJECTED_CATEGORIES: &str =
     "These approval categories are automatically rejected instead of prompting the user:";
 const MAX_PERMISSION_PATH_BYTES: usize = 32 * 1024;
-const OMITTED_PERMISSION_PATHS: &str = "Additional permission paths/globs are omitted. All restrictions still apply; do not use escalation or additional permissions to bypass omitted read denials.";
 
 static DANGER_FULL_ACCESS: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(DANGER_FULL_ACCESS_TEMPLATE.trim_end())
@@ -147,11 +150,14 @@ impl PermissionsInstructions {
         {
             append_section(&mut text, &writable_roots);
         }
-        if let Some(denied_reads) = denied_reads_text(&denied_read_paths, &denied_read_globs) {
+        let path_messages = approval_context.permission_messages;
+        if let Some(denied_reads) =
+            denied_reads_text(&denied_read_paths, &denied_read_globs, path_messages)
+        {
             append_section(&mut text, &denied_reads);
         }
         if paths_omitted {
-            append_section(&mut text, OMITTED_PERMISSION_PATHS);
+            append_section(&mut text, &omitted_paths_text(path_messages));
         }
         if !text.ends_with('\n') {
             text.push('\n');
@@ -380,22 +386,6 @@ fn sandbox_text(
             .render([("network_access", network_access.as_str())])
             .unwrap_or_else(|err| panic!("sandbox template must render: {err}")),
     }
-}
-
-fn denied_reads_text(paths: &[String], globs: &[String]) -> Option<String> {
-    let mut entries = paths
-        .iter()
-        .map(|root| format!("- path `{root}`"))
-        .collect::<Vec<_>>();
-    entries.extend(globs.iter().map(|glob| format!("- glob `{glob}`")));
-    if entries.is_empty() {
-        return None;
-    }
-
-    Some(format!(
-        "## Denied filesystem reads\nThe active permission profile denies reading these paths/globs. Do not request escalation or additional permissions to read them; these denials are policy restrictions.\n{}",
-        entries.join("\n")
-    ))
 }
 
 fn approved_command_prefixes_text(prefixes: &[Vec<String>], template: &str) -> Option<String> {

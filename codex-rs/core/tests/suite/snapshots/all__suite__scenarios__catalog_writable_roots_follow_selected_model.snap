@@ -1,87 +1,103 @@
 ---
 source: core/tests/suite/scenarios.rs
-expression: snapshot
+expression: "context_snapshot::format_context_snapshot(description, &entries,\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
-Scenario: Catalog writable-root wording follows the selected model, appending changed permissions once while preserving prior input.
+Scenario: Catalog root and omitted-path wording follows the selected model, appending changed permissions once while preserving prior input and the mandatory omission warning.
 
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
   model: "catalog-writable-roots-a"
-  parallel_tool_calls: true
+  parallel_tool_calls: false
   prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
-  reasoning: {"summary":"auto"}
+  reasoning: {"context":"all_turns","summary":"auto"}
   store: false
   stream: true
   tool_choice: "auto"
-  tools (6; hash=3201044466fc72a5):
-    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
-    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
-    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
-    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
-    - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
-      - function/close_agent
-      - function/resume_agent
-      - function/send_input
-      - function/spawn_agent
-      - function/wait_agent
-    - web_search; hash=b24567c220fd75ba
--- request 1 (turn) --
-00:message/developer:
-    Help with the workspace.
+-- request 1 (request) --
+00:additional_tools/developer (2; hash=4c702e756cd52226):
+        - namespace/functions; hash=ce01915b77cef9ee
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/view_image
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
 01:message/developer:
+    Help with the workspace.
+02:message/developer:
     <permissions instructions>
     Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: T...ries requires approval. Network access is restricted. [hash=99963de5837f6638]
     Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
-    The writable root for model A is `<CWD>`.
+    Model A roots: <BOUNDED_ROOT_LIST>.
+    Model A omitted paths:
+    Additional permission paths/globs are omitted. All restrictions still apply; do not use escalation or additional permissions to bypass omitted read denials.
     </permissions instructions>
-02:message/user:
+03:message/user:
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
       <current_date><CURRENT_DATE></current_date>
       <timezone><HOST_TIMEZONE></timezone>
-      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=8d38f7686fcb5f7d]
+      <filesystem><LARGE_PERMISSION_PATH_FIXTURE/></filesystem>
     </environment_context>
-03:message/user:
+04:message/user:
     Inspect the writable workspace.
 
 ## Window 2 (after request 1)
 Settings: relative to window 1
   model: "catalog-writable-roots-b"
--- request 2 (turn) --
-00:message/developer:
-    Help with the workspace.
+-- request 2 (request) --
+00:additional_tools/developer (2; hash=4c702e756cd52226):
+        - namespace/functions; hash=ce01915b77cef9ee
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/view_image
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
 01:message/developer:
+    Help with the workspace.
+02:message/developer:
     <permissions instructions>
     Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: T...ries requires approval. Network access is restricted. [hash=99963de5837f6638]
     Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
-    The writable root for model A is `<CWD>`.
+    Model A roots: <BOUNDED_ROOT_LIST>.
+    Model A omitted paths:
+    Additional permission paths/globs are omitted. All restrictions still apply; do not use escalation or additional permissions to bypass omitted read denials.
     </permissions instructions>
-02:message/user:
+03:message/user:
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
       <current_date><CURRENT_DATE></current_date>
       <timezone><HOST_TIMEZONE></timezone>
-      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=8d38f7686fcb5f7d]
+      <filesystem><LARGE_PERMISSION_PATH_FIXTURE/></filesystem>
     </environment_context>
-03:message/user:
+04:message/user:
     Inspect the writable workspace.
-04:message/developer:
-    <model_switch>
-    The user was previously using a different model. Please continue the conversation according to the following instructions:
-
-    Help with the workspace.
-    </model_switch>
 05:message/developer:
+    <model_instructions>
+    The current model is catalog-writable-roots-b.
+    </model_instructions>
+06:message/developer:
     <permissions instructions>
     Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: T...ries requires approval. Network access is restricted. [hash=99963de5837f6638]
     Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
-    The writable root for model B is `<CWD>`.
+    Model B roots: <BOUNDED_ROOT_LIST>.
+    Model B omitted paths:
+    Additional permission paths/globs are omitted. All restrictions still apply; do not use escalation or additional permissions to bypass omitted read denials.
     </permissions instructions>
-06:message/user:
-    Continue with the selected model.
--- request 3 (turn) --
 07:message/user:
+    Continue with the selected model.
+-- request 3 (request) --
+08:message/user:
     Continue without changing permissions.

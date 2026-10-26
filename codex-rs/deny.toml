@@ -327,6 +327,8 @@ allow-git = [
     # CONNECT request handling needs this pinned H3 revision until released.
     "https://github.com/hyperium/h3",
     "https://github.com/juberti-oai/rust-sdks.git",
+    # i18n-config's pinned upstream fix removes the unmaintained basic-toml dependency.
+    "https://github.com/kellpossible/cargo-i18n",
     "https://github.com/microsoft/mxc",
     "https://github.com/modelcontextprotocol/rust-sdk",
     "https://github.com/openai-oss-forks/crossterm",
