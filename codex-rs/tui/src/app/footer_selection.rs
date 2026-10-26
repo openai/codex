@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::clipboard_copy::CopyFormat;
+use crate::keymap::ListAction;
 use crate::rendered_selection::RegionAction;
 use crate::rendered_selection::RenderedSelection;
 use crate::transcript_view::ViewAction;
@@ -13,10 +14,12 @@ impl App {
         tui: &mut tui::Tui,
         event: &TuiEvent,
     ) -> Result<bool> {
+        let warning_active = self.chat_widget.keymap_contexts().is_warnings();
         if !tui.is_owned_screen()
             || self.overlay.is_some()
-            || !self.chat_widget.no_modal_or_popup_active()
-            || self.chat_widget.is_external_writer_view()
+            || (!warning_active
+                && (!self.chat_widget.no_modal_or_popup_active()
+                    || self.chat_widget.is_external_writer_view()))
         {
             *self.chat_widget.rendered_selection.borrow_mut() = RenderedSelection::default();
             return Ok(false);
@@ -29,6 +32,16 @@ impl App {
         }
         let action = {
             let mut selection = self.chat_widget.rendered_selection.borrow_mut();
+            if warning_active
+                && let TuiEvent::Key(key) = event
+                && matches!(
+                    self.keymap.list.action_for(*key),
+                    Some(ListAction::PageUp | ListAction::PageDown)
+                )
+            {
+                selection.clear();
+                return Ok(false);
+            }
             selection.view.copy_on_select = self
                 .local_settings
                 .copy_on_select(&codex_terminal_detection::terminal_info());
@@ -40,6 +53,9 @@ impl App {
         let Some(action) = action else {
             return Ok(false);
         };
+        if warning_active {
+            self.chat_widget.record_warning_activity();
+        }
         self.cancel_pending_key_chord();
         match action {
             RegionAction::Click(mouse) => {

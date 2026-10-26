@@ -77,15 +77,10 @@ impl TextArea {
 
     /// Consume events at the edges too, but only detach from the caret if the viewport moves.
     pub(crate) fn scroll_mouse(&self, event: MouseEvent, state: &mut TextAreaState) -> bool {
-        let rows = match event.kind {
-            MouseEventKind::ScrollUp => -3,
-            MouseEventKind::ScrollDown => 3,
-            _ => return false,
-        };
-        if !event.modifiers.is_empty() || !self.contains_mouse(event) {
-            return false;
-        }
         let area = self.rendered_area.get();
+        let Some(rows) = crate::bottom_pane::scroll_state::wheel_rows_in(event, area) else {
+            return false;
+        };
         let lines = self.wrapped_lines(area.width);
         let total = u16::try_from(lines.len()).unwrap_or(u16::MAX);
         if total <= area.height {

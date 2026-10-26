@@ -3,7 +3,9 @@
 use crate::history_cell::HistoryCell;
 use crate::history_cell::WarningEntry;
 use crate::history_cell::WarningId;
+use crate::transcript_view::TextLayout;
 use crate::tui::TuiEvent;
+use ratatui::layout::Rect;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -51,7 +53,19 @@ fn fallback_model_metadata_warning_slug(message: &str) -> Option<&str> {
 }
 
 impl super::ChatWidget {
+    pub(crate) fn take_warning_body(&self) -> Option<(Rect, TextLayout, usize)> {
+        let view = self.bottom_pane.active_warning()?;
+        let (layout, offset) = view.body_layout.take()?;
+        Some((view.body_area.get(), layout, offset))
+    }
+
+    pub(crate) fn record_warning_activity(&mut self) {
+        self.bottom_pane
+            .record_composer_activity_at(std::time::Instant::now());
+    }
+
     pub(crate) fn open_warnings(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+        *self.rendered_selection.borrow_mut() = Default::default();
         self.empty_state_animation.borrow_mut().pause_clock();
         let entries = self.warning_display_state.visible_entries(cells);
         let daemon_restart_hint_at = self
@@ -116,8 +130,17 @@ impl super::ChatWidget {
             )
         {
             // Chord routing may consume this key before it reaches the warning panel.
-            self.bottom_pane
-                .record_composer_activity_at(std::time::Instant::now());
+            self.record_warning_activity();
+        }
+        if let TuiEvent::Mouse(mouse) = event
+            && self
+                .bottom_pane
+                .active_warning()
+                .is_some_and(|view| view.scroll_mouse(*mouse))
+        {
+            self.record_warning_activity();
+            self.request_redraw();
+            return true;
         }
         if let TuiEvent::Mouse(mouse) = event
             && mouse.kind

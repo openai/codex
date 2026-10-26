@@ -330,6 +330,10 @@ impl App {
             .filter(|_| chat_widget.no_modal_or_popup_active());
             feedback_tick =
                 view.render_composer_gap(follow_area, composer_hint.as_ref(), frame.buffer, now);
+            chat_widget
+                .rendered_selection
+                .borrow_mut()
+                .register_layout(chat_widget.take_warning_body());
             if let Some((_, tip)) = &turn_tip
                 && let Some(area) = tip.rendered.get()
             {

@@ -14,7 +14,7 @@ local daemon: false
 
 
 
-  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning · ↓ scroll
+  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning
 
 local daemon: true
   Warnings · 1 of 2 · Startup
@@ -28,4 +28,4 @@ local daemon: true
 
 
 
-  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning · ↓ scroll
+  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning

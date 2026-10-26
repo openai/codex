@@ -62,6 +62,31 @@ fn copying_wrapped_text_preserves_only_hard_newlines() {
 }
 
 #[test]
+fn scrolled_plaintext_selection_matches_painted_tab_and_word_boundaries() {
+    let layout = TextLayout::new(
+        vec![
+            "hidden".into(),
+            "  A\tBCD".into(),
+            "These few words will unfortunately not wrap nicely.".into(),
+        ],
+        /*width*/ 15,
+    );
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 15, /*height*/ 3,
+    );
+    let mut buffer = Buffer::empty(area);
+    layout.render(area, &mut buffer, /*start_row*/ 1);
+    assert_eq!(buffer[(8, 0)].symbol(), "B");
+    assert_eq!(buffer[(0, 2)].symbol(), "w");
+
+    let visible = layout.visible_plaintext(/*start*/ 1, area.height);
+    let start = visible.position_at(/*row*/ 0, /*column*/ 2);
+    let end = visible.position_at(/*row*/ 2, /*column*/ 4);
+    assert_eq!(&visible.text()[start..end], "A\tBCD\nThese few words will");
+    assert_eq!(visible.text(), "  A\tBCD\nThese few words will");
+}
+
+#[test]
 fn hit_testing_uses_graphemes_and_does_not_select_padding() {
     let layout = TextLayout::new(vec!["a界e\u{301}👩‍💻".into()], /*width*/ 12);
     assert_eq!(

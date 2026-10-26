@@ -1,6 +1,5 @@
 ---
 source: tui/src/app/warning_notice_tests.rs
-assertion_line: 116
 expression: screen(&tui)
 ---
 
@@ -26,4 +25,4 @@ expression: screen(&tui)
 
 
 
-  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning · ↓ scroll
+  k keep & next · esc dismiss & close · ⌃o copy · ←/→ warning

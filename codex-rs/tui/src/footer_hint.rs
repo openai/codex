@@ -4,6 +4,23 @@
 use crate::style::secondary_text_style;
 use ratatui::style::Styled;
 use ratatui::text::Line;
+
+/// Show the configured scroll keys for directions with rows beyond the viewport.
+pub(crate) fn scroll_keys(
+    offset: usize,
+    max_offset: usize,
+    up: Option<String>,
+    down: Option<String>,
+) -> Option<String> {
+    match (
+        up.filter(|_| offset > 0),
+        down.filter(|_| offset < max_offset),
+    ) {
+        (Some(up), Some(down)) => Some(format!("{up}/{down}")),
+        (up, down) => up.or(down),
+    }
+}
+
 /// A complete hint uses the same styled content for measurement and rendering.
 pub(crate) fn shortcut(keys: &str, label: &str) -> Line<'static> {
     let mut spans = crate::key_hint::key_label_spans(keys);

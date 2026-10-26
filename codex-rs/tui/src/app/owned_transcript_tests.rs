@@ -1927,10 +1927,10 @@ async fn footer_selection_defers_warning_clicks_and_preserves_the_draft() -> Res
     let size = tui.terminal.size()?;
     app.chat_widget
         .apply_external_edit("draft stays here".into());
-    app.insert_history_cell(
-        &mut tui,
-        Box::new(history_cell::new_warning_event("Example warning".into())),
-    );
+    let url = "https://docs.example.invalid/troubleshooting/mcp/oauth/sign-in/this-is-a-long-reference-for-terminal-copy";
+    let padding = "\n".repeat(8);
+    let message = format!("Example warning\n{url}\nNext line{padding}Last line");
+    app.insert_history_cell(&mut tui, Box::new(history_cell::new_warning_event(message)));
     app.render_owned_transcript(&mut tui, size)?;
     let draft = app.chat_widget.capture_thread_input_state();
     let cursor = tui.terminal.last_known_cursor_pos;
@@ -1979,6 +1979,28 @@ async fn footer_selection_defers_warning_clicks_and_preserves_the_draft() -> Res
         assert!(app.handle_rendered_selection_event(&mut tui, &event)?);
     }
     assert!(app.chat_widget.keymap_contexts().is_warnings());
+    app.render_owned_transcript(&mut tui, size)?;
+    let body = app.chat_widget.rendered_selection.borrow().areas[0];
+    assert!(
+        !app.handle_rendered_selection_event(&mut tui, &mouse(Down(Left), body.x, body.y - 1))?
+    );
+    let end_row = row_containing(&tui, "Next line");
+    for event in [
+        mouse(Down(Left), body.x, body.y + 1),
+        mouse(Drag(Left), body.x + 4, end_row),
+        mouse(Up(Left), body.x + 4, end_row),
+    ] {
+        assert!(app.handle_rendered_selection_event(&mut tui, &event)?);
+    }
+    let mut selection = app.chat_widget.rendered_selection.borrow_mut();
+    let crate::rendered_selection::RenderedSelection { view, cells, .. } = &mut *selection;
+    assert_eq!(view.selected_text(cells), Some(format!("{url}\nNext")));
+    drop(selection);
+    let page = KeyCode::PageDown.into();
+    assert!(!app.handle_rendered_selection_event(&mut tui, &TuiEvent::Key(page))?);
+    app.chat_widget.handle_key_event(page);
+    app.render_owned_transcript(&mut tui, size)?;
+    assert!((body.y..body.bottom()).contains(&row_containing(&tui, "Last line")));
     tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }

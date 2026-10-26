@@ -1,4 +1,20 @@
 use crate::keymap::ListAction;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
+use ratatui::layout::Position;
+use ratatui::layout::Rect;
+
+/// An unmodified wheel tick moves three rows within the painted region.
+pub(super) fn wheel_rows_in(event: MouseEvent, area: Rect) -> Option<i16> {
+    if !event.modifiers.is_empty() || !area.contains(Position::new(event.column, event.row)) {
+        return None;
+    }
+    match event.kind {
+        MouseEventKind::ScrollUp => Some(-3),
+        MouseEventKind::ScrollDown => Some(3),
+        _ => None,
+    }
+}
 
 /// Generic scroll/selection state for a vertical list menu.
 ///
