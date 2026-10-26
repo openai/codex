@@ -98,6 +98,7 @@ type LegacyFragmentMatcher = dyn Fn(&str, &str) -> bool + Send + Sync;
 #[derive(Clone)]
 pub struct WorldStateSectionContribution {
     id: &'static str,
+    window_prefix: bool,
     render_diff: Arc<RenderDiff>,
     matches_legacy_fragment: Arc<LegacyFragmentMatcher>,
     matches_retained_fragment: Option<Arc<LegacyFragmentMatcher>>,
@@ -118,6 +119,7 @@ impl WorldStateSectionContribution {
     ) -> Self {
         Self {
             id,
+            window_prefix: false,
             render_diff: Arc::new(render_diff),
             matches_legacy_fragment: Arc::new(|_, _| false),
             matches_retained_fragment: None,
@@ -130,6 +132,20 @@ impl WorldStateSectionContribution {
     ) -> Self {
         self.matches_legacy_fragment = Arc::new(matcher);
         self
+    }
+
+    /// Render this section's developer fragments as separate messages before retained
+    /// history when the harness builds a window (including after compaction). Changes
+    /// within an existing window are still appended as ordinary history updates.
+    /// Fragments with any other role are not rendered, including in history updates.
+    /// The producer still owns content size bounds; prefix placement does not truncate.
+    pub fn with_window_prefix(mut self) -> Self {
+        self.window_prefix = true;
+        self
+    }
+
+    pub fn is_window_prefix(&self) -> bool {
+        self.window_prefix
     }
 
     /// Requires a matching model-visible fragment whenever a persisted snapshot is reused.

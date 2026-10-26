@@ -271,6 +271,55 @@ fn compacted_user_message<'a>(text: &str, original: &'a ResponseItem) -> Compact
     }
 }
 
+#[tokio::test]
+async fn extension_window_prefix_precedes_retained_turns_and_is_not_repeated() {
+    use codex_extension_api::PreviousWorldStateSection;
+    use codex_extension_api::RenderedWorldStateFragment;
+    use codex_extension_api::WorldStateSectionContribution;
+
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let step = StepContext::for_test(Arc::new(turn));
+    let mut world = WorldState::default();
+    world.add_extension_section(
+        WorldStateSectionContribution::new("example", |previous| {
+            let fragment = (!matches!(previous, PreviousWorldStateSection::Known(_))).then(|| {
+                RenderedWorldStateFragment::new(
+                    "developer",
+                    ("<example>", "</example>"),
+                    codex_protocol::models::input_text("active policy"),
+                )
+            });
+            (Some(json!("active policy")), fragment)
+        })
+        .with_window_prefix()
+        .with_retained_fragment_matcher(|role, text| {
+            role == "developer" && text == "<example>active policy</example>"
+        }),
+    );
+    let retained = vec![user_message("earlier turn"), user_message("latest turn")];
+    let (replacement, snapshot) =
+        build_compaction_replacement_history(&session, &step, &world, annotated(retained.clone()))
+            .await;
+    let items = raw(replacement);
+    let ResponseItem::Message { role, content, .. } = &items[0] else {
+        panic!("expected a separate developer prefix");
+    };
+    assert_eq!(role, "developer");
+    assert_eq!(
+        content,
+        &[codex_protocol::models::input_text(
+            "<example>active policy</example>"
+        )]
+    );
+    assert_eq!(items[1], retained[0]);
+    assert!(
+        world
+            .render_history_diff(Some(&snapshot), &items)
+            .1
+            .is_empty()
+    );
+}
+
 #[test]
 fn content_items_to_text_joins_non_empty_segments() {
     let items = vec![

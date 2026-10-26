@@ -247,11 +247,20 @@ impl ErasedWorldStateSection for ExtensionWorldStateSection {
         });
         let updates = fragment
             .into_iter()
+            .filter(|fragment| !self.0.is_window_prefix() || fragment.role() == "developer")
             .map(|fragment| {
-                WorldStateUpdate::fragment(WorldStateContextFragment {
+                let update = WorldStateUpdate::fragment(WorldStateContextFragment {
                     fragment,
                     content_kind: ContentItemKind(format!("{}.instructions", self.0.id())),
-                })
+                });
+                if self.0.is_window_prefix() {
+                    WorldStateUpdate {
+                        placement: Placement::Prefix,
+                        ..update
+                    }
+                } else {
+                    update
+                }
             })
             .collect();
         (snapshot, updates)
