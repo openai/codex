@@ -63,9 +63,9 @@ pub(crate) async fn compose_auth(
         .map_err(|error| codex_api::map_api_error(error.into()))?
         .contains_key(&name)
     {
-        return Err(CodexErr::InvalidRequest(
-            "gateway OAuth conflicts with primary auth headers".into(),
-        ));
+        return Err(CodexErr::InvalidRequest(format!(
+            "The model provider already sets the {name} header. Choose a different header or cookie in gateway_oauth.delivery for the gateway token."
+        )));
     }
     resolved.auth = Arc::new(CombinedAuth {
         primary: resolved.auth,
@@ -111,26 +111,29 @@ struct CombinedAuth {
     value: HeaderValue,
 }
 
+impl CombinedAuth {
+    fn insert_gateway_header(&self, headers: &mut HeaderMap) -> std::result::Result<(), AuthError> {
+        if headers.contains_key(&self.name) {
+            return Err(AuthError::Build(format!(
+                "The request already sets the {} header. Choose a different header or cookie in gateway_oauth.delivery for the gateway token.",
+                self.name
+            )));
+        }
+        headers.insert(self.name.clone(), self.value.clone());
+        Ok(())
+    }
+}
+
 impl AuthProvider for CombinedAuth {
     fn add_auth_headers(&self, headers: &mut HeaderMap) -> std::result::Result<(), AuthError> {
         self.primary.add_auth_headers(headers)?;
-        headers
-            .entry(self.name.clone())
-            .or_insert(self.value.clone());
-        Ok(())
+        self.insert_gateway_header(headers)
     }
 
     fn apply_auth(&self, request: codex_http_client::Request) -> AuthProviderFuture<'_> {
         Box::pin(async move {
             let mut request = self.primary.apply_auth(request).await?;
-            if request.headers.contains_key(&self.name) {
-                return Err(AuthError::Build(
-                    "gateway OAuth conflicts with request headers".into(),
-                ));
-            }
-            request
-                .headers
-                .insert(self.name.clone(), self.value.clone());
+            self.insert_gateway_header(&mut request.headers)?;
             Ok(request)
         })
     }
@@ -138,12 +141,7 @@ impl AuthProvider for CombinedAuth {
     fn apply_auth_headers(&self, headers: HeaderMap) -> AuthHeadersFuture<'_> {
         Box::pin(async move {
             let mut headers = self.primary.apply_auth_headers(headers).await?;
-            if headers.contains_key(&self.name) {
-                return Err(AuthError::Build(
-                    "gateway OAuth conflicts with request headers".into(),
-                ));
-            }
-            headers.insert(self.name.clone(), self.value.clone());
+            self.insert_gateway_header(&mut headers)?;
             Ok(headers)
         })
     }

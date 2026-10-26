@@ -52,7 +52,6 @@ fn rejects_unsafe_endpoints_and_delivery_collisions() {
         assert!(!error.contains(url));
     }
     for name in [
-        "Authorization",
         "HOST",
         "x-openai-actor-authorization",
         "content-length",
@@ -76,4 +75,46 @@ fn rejects_unsafe_endpoints_and_delivery_collisions() {
         "COOKIE_ENV".into(),
     )]));
     assert!(cookie.validate().is_err());
+}
+
+#[test]
+fn gateway_bearer_requires_the_model_catalog_to_share_its_origin() {
+    let other = "https://gateway.example.test:8443/catalog";
+    let mut info = provider("");
+    info.model_catalog_url = Some(other.into());
+    assert!(
+        info.validate()
+            .unwrap_err()
+            .contains("same scheme, host, and port as base_url")
+    );
+
+    info.model_catalog_url = Some("https://gateway.example.test:443/custom/catalog".into());
+    assert_eq!(info.validate(), Ok(()));
+
+    let mut legacy = provider("delivery = { kind = 'header', name = 'x-gateway-auth' }");
+    legacy.model_catalog_url = Some(other.into());
+    assert_eq!(legacy.validate(), Ok(()));
+}
+
+#[test]
+fn omitted_delivery_rejects_an_existing_provider_bearer() {
+    let mut info = provider("");
+    assert_eq!(info.validate(), Ok(()));
+    info.requires_openai_auth = true;
+    assert!(
+        info.validate()
+            .unwrap_err()
+            .contains("gateway_oauth.delivery")
+    );
+    info.requires_openai_auth = false;
+    info.env_key = Some("PROVIDER_API_KEY".into());
+    assert!(
+        info.validate()
+            .unwrap_err()
+            .contains("gateway_oauth.delivery")
+    );
+
+    let mut explicit = provider("delivery = { kind = 'header', name = 'x-gateway-auth' }");
+    explicit.env_key = info.env_key;
+    assert_eq!(explicit.validate(), Ok(()));
 }

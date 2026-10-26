@@ -1968,7 +1968,17 @@
           "type": "string"
         },
         "delivery": {
-          "$ref": "#/definitions/GatewayOAuthDelivery"
+          "allOf": [
+            {
+              "$ref": "#/definitions/GatewayOAuthDelivery"
+            }
+          ],
+          "default": {
+            "kind": "header",
+            "name": "Authorization",
+            "scheme": "Bearer"
+          },
+          "description": "Omit to send the gateway token via the Authorization header"
         },
         "redirect_port": {
           "format": "uint16",
@@ -1992,7 +2002,6 @@
       "required": [
         "authorization_url",
         "client_id",
-        "delivery",
         "token_url"
       ],
       "type": "object"
