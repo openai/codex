@@ -778,14 +778,9 @@ async fn sample_blocks_mcp_execution_without_changing_parent_tools(
     let prefix = parent["input"].as_array().expect("parent input");
     let sample_input = sample["input"].as_array().expect("sample input");
     assert_eq!(&sample_input[..prefix.len()], prefix);
-    let removes_mcp = disable_mcp && incremental_tools;
-    assert_eq!(
-        sample_input[prefix.len()..].iter().any(|item| {
-            let text = item.to_string();
-            text.contains("namespaces are no longer available") && text.contains("mcp__sample_test")
-        }),
-        removes_mcp
-    );
+    assert!(!sample_input[prefix.len()..].iter().any(|item| {
+        item["type"] == "additional_tools" || item.to_string().contains("no longer available")
+    }));
     assert_eq!(sample, comparable_request(requests[3].body_json()));
     assert_eq!(
         requests[2].body_json()["tools"],

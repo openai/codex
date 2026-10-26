@@ -165,7 +165,9 @@ impl Session {
         let extension_metrics = super::extension_metrics::from_session_telemetry(
             step_context.session_telemetry.clone(),
         );
-        if incremental_tools {
+        let preserve_parent_tool_declarations =
+            !new_window && self.preserve_parent_tool_declarations();
+        if incremental_tools && !preserve_parent_tool_declarations {
             let specs = step_context.tool_router.model_visible_specs();
             let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
             world_state.add_section(TopLevelToolsState::new(
