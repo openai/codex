@@ -1,10 +1,15 @@
 use anyhow::Result;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::config::AgentRoleConfig;
+use codex_core::config::Config;
 use codex_core::config::CurrentTimeReminderConfig;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_models_manager::bundled_models_response;
@@ -22,12 +27,14 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_skills_extension::SkillsExtensionConfig;
 use codex_thread_store::LoadThreadHistoryParams;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
@@ -51,6 +58,7 @@ use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -61,6 +69,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use test_case::test_case;
@@ -2189,75 +2198,96 @@ async fn spawned_agent_uses_summary_support_for_final_model(
     Ok(())
 }
 
+async fn spawn_v2_child_and_capture_requests(
+    builder: TestCodexBuilder,
+) -> Result<(ResponsesRequest, ResponsesRequest)> {
+    let server = start_mock_server().await;
+    let test = builder
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("enable collab");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable V2 spawn");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mut spawn = ev_function_call_with_namespace(
+        SPAWN_CALL_ID,
+        MULTI_AGENT_V2_NAMESPACE,
+        "spawn_agent",
+        &json!({ "message": CHILD_PROMPT, "task_name": "worker" }).to_string(),
+    );
+    spawn["item"]["encrypted_function_args"] = json!([]);
+    // The parent and child may request their final answers in either order.
+    let finish_turn = |id| {
+        sse(vec![
+            ev_response_created(id),
+            ev_assistant_message(id, "Done."),
+            ev_completed(id),
+        ])
+    };
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("spawn"),
+                spawn,
+                ev_completed("spawn"),
+            ]),
+            finish_turn("done-1"),
+            finish_turn("done-2"),
+        ],
+    )
+    .await;
+
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let child_id = created_threads.try_recv().expect("spawn created a child");
+    let child = test.thread_manager.get_thread(child_id).await?;
+    wait_for_event(child.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let mut requests = responses.requests().into_iter();
+    let parent_request = requests.next().expect("parent's initial request");
+    let child_request = requests
+        .find(|request| request.header("thread-id") == Some(child_id.to_string()))
+        .expect("request from the spawned child");
+    Ok((parent_request, child_request))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawned_multi_agent_v2_child_inherits_parent_developer_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let spawn_args = serde_json::to_string(&json!({
-        "message": CHILD_PROMPT,
-        "task_name": "worker",
-    }))?;
-    mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
-        sse(vec![
-            ev_response_created("resp-turn1-1"),
-            ev_function_call_with_namespace(
-                SPAWN_CALL_ID,
-                MULTI_AGENT_V1_NAMESPACE,
-                "spawn_agent",
-                &spawn_args,
-            ),
-            ev_completed("resp-turn1-1"),
-        ]),
-    )
-    .await;
-
-    let child_request_log = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
-        },
-        sse(vec![
-            ev_response_created("resp-child-1"),
-            ev_completed("resp-child-1"),
-        ]),
-    )
-    .await;
-
-    let _turn1_followup = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
-        sse(vec![
-            ev_response_created("resp-turn1-2"),
-            ev_assistant_message("msg-turn1-2", "parent done"),
-            ev_completed("resp-turn1-2"),
-        ]),
-    )
-    .await;
-
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::MultiAgentV2)
-            .expect("test config should allow feature update");
-        config.developer_instructions = Some("Parent developer instructions.".to_string());
+    const INSTRUCTIONS: &str = "Parent developer instructions.";
+    let builder = test_codex().with_config(|config| {
+        config.developer_instructions = Some(INSTRUCTIONS.to_string());
     });
-    let test = builder.build(&server).await?;
-
-    test.submit_turn(TURN_1_PROMPT).await?;
-
-    let child_requests = wait_for_requests(&child_request_log).await?;
-    let child_request = child_requests
-        .last()
-        .expect("child request log should capture at least one request");
-    assert!(child_request.body_contains_text("Parent developer instructions."));
-    assert!(child_request.body_contains_text(CHILD_PROMPT));
+    let (_, child_request) = spawn_v2_child_and_capture_requests(builder).await?;
+    assert!(
+        child_request
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| text.contains(INSTRUCTIONS))
+    );
+    let task = child_request
+        .inputs_of_type("agent_message")
+        .into_iter()
+        .find(|item| item["recipient"] == "/root/worker")
+        .expect("task addressed to the child");
+    let content = task["content"].as_array().expect("task content");
+    assert!(content.iter().any(|part| {
+        part["type"] == "input_text"
+            && part["text"]
+                .as_str()
+                .is_some_and(|text| text.contains(CHILD_PROMPT))
+    }));
 
     Ok(())
 }
@@ -3287,82 +3317,52 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn(
     Ok(())
 }
 
+#[test_case(true; "enabled")]
+#[test_case(false; "disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Result<()> {
+async fn skill_instructions_in_parent_and_spawned_child(include_instructions: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let spawn_args = serde_json::to_string(&json!({
-        "message": CHILD_PROMPT,
-        "task_name": "worker",
-    }))?;
-    let spawn_turn = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
-        sse(vec![
-            ev_response_created("resp-turn1-1"),
-            ev_function_call_with_namespace(
-                SPAWN_CALL_ID,
-                MULTI_AGENT_V1_NAMESPACE,
-                "spawn_agent",
-                &spawn_args,
-            ),
-            ev_completed("resp-turn1-1"),
-        ]),
-    )
-    .await;
-
-    let child_request_log = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
-        },
-        sse(vec![
-            ev_response_created("resp-child-1"),
-            ev_completed("resp-child-1"),
-        ]),
-    )
-    .await;
-
-    let _turn1_followup = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
-        sse(vec![
-            ev_response_created("resp-turn1-2"),
-            ev_assistant_message("msg-turn1-2", "parent done"),
-            ev_completed("resp-turn1-2"),
-        ]),
-    )
-    .await;
-
-    let mut builder = test_codex()
+    let mut extensions = ExtensionRegistryBuilder::new();
+    codex_skills_extension::install(&mut extensions, |config: &Config| SkillsExtensionConfig {
+        include_instructions: config.include_skill_instructions,
+        max_context_tokens: config.skill_max_context_tokens,
+        bundled_skills_enabled: false,
+        cloud_skill_enabled: false,
+        shadow_selection_enabled: false,
+    });
+    let builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_pre_build_hook(|home| {
             write_home_skill(home, "demo", "demo-skill", "demo skill").expect("write home skill");
         })
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Collab)
-                .expect("test config should allow feature update");
-            config
-                .features
-                .enable(Feature::MultiAgentV2)
-                .expect("test config should allow feature update");
-            config.include_skill_instructions = false;
+        .with_config(move |config| {
+            config.include_skill_instructions = include_instructions;
+            // Discover only the fixture's skill, independently of the user's ~/.agents/skills.
+            config.config_layer_stack = ConfigLayerStack::new(
+                vec![ConfigLayerEntry::new(
+                    ConfigLayerSource::System {
+                        file: config.codex_home.join("config.toml"),
+                    },
+                    toml::Table::new().into(),
+                )],
+                Default::default(),
+                Default::default(),
+            )
+            .expect("valid test config layer");
         });
-    let test = builder.build(&server).await?;
-
-    test.submit_turn(TURN_1_PROMPT).await?;
-    let parent_request = spawn_turn.single_request();
-    assert!(!parent_request.body_contains_text("<skills_instructions>"));
-    assert!(!parent_request.body_contains_text("demo-skill"));
-
-    let child_requests = wait_for_requests(&child_request_log).await?;
-    let child_request = child_requests
-        .last()
-        .expect("child request log should capture at least one request");
-    assert!(!child_request.body_contains_text("<skills_instructions>"));
-    assert!(!child_request.body_contains_text("demo-skill"));
+    let (parent_request, child_request) = spawn_v2_child_and_capture_requests(builder).await?;
+    for request in [parent_request, child_request] {
+        if include_instructions {
+            assert!(request.message_input_texts("developer").iter().any(|text| {
+                text.contains(SKILLS_INSTRUCTIONS_OPEN_TAG)
+                    && text.contains("- demo-skill: demo skill")
+            }));
+        } else {
+            assert!(!request.body_contains_text(SKILLS_INSTRUCTIONS_OPEN_TAG));
+            assert!(!request.body_contains_text("demo-skill"));
+        }
+    }
 
     Ok(())
 }
