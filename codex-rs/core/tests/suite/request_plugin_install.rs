@@ -5,6 +5,8 @@ use anyhow::Result;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_connectors::ConnectorDirectoryCacheContext;
+use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
@@ -759,7 +761,43 @@ async fn unavailable_recommendations_preserve_legacy_workflow(
         ],
     )
     .await;
-    let test = build_test(&server, &apps_server).await?;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let mut builder = test_codex()
+        .with_auth(auth.clone())
+        .with_pre_build_hook(|home| {
+            std::fs::write(
+                home.join("config.toml"),
+                "[apps.calendar]\nenabled = false\n",
+            )
+            .expect("write disabled calendar app");
+        })
+        .with_config(move |config| {
+            configure_apps_without_search_tool(config, &apps_server.chatgpt_base_url);
+            config.tool_suggest.discoverables.extend(
+                [CALENDAR_CONNECTOR_ID, "connector_missing"].map(|id| ToolSuggestDiscoverable {
+                    kind: ToolSuggestDiscoverableType::Connector,
+                    id: id.to_string(),
+                }),
+            );
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let cache_key = ConnectorDirectoryCacheKey::new(
+        server.uri(),
+        auth.get_account_id(),
+        auth.get_chatgpt_user_id(),
+        auth.is_workspace_account(),
+    );
+    let client = codex_login::default_client::create_client();
+    codex_connectors::list_all_connectors_with_options(
+        ConnectorDirectoryCacheContext::new(test.home.path().to_path_buf(), cache_key),
+        auth.is_workspace_account(),
+        /*force_refetch*/ true,
+        |path| {
+            let request = client.get(format!("{}{path}", server.uri()));
+            async move { Ok(request.send().await?.json().await?) }
+        },
+    )
+    .await?;
     test.submit_turn_with_approval_and_permission_profile(
         "list tools",
         AskForApproval::Never,
@@ -781,11 +819,29 @@ async fn unavailable_recommendations_preserve_legacy_workflow(
         .function_call_output_text(call_id)
         .expect("list tool output");
     let output: Value = serde_json::from_str(&output)?;
-    assert!(output["tools"].as_array().is_some_and(|tools| {
-        tools
-            .iter()
-            .any(|tool| tool["id"] == DISCOVERABLE_GMAIL_ID && tool["tool_type"] == "connector")
-    }));
+    assert_eq!(
+        output["tools"],
+        json!([
+            {
+                "id": DISCOVERABLE_GMAIL_ID,
+                "name": "Gmail",
+                "description": "Find and summarize email threads.",
+                "tool_type": "connector",
+                "has_skills": false,
+                "mcp_server_names": [],
+                "app_connector_ids": []
+            },
+            {
+                "id": "connector_missing",
+                "name": "connector_missing",
+                "description": null,
+                "tool_type": "connector",
+                "has_skills": false,
+                "mcp_server_names": [],
+                "app_connector_ids": []
+            }
+        ])
+    );
     Ok(())
 }
 
