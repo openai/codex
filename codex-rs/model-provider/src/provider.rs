@@ -1414,6 +1414,7 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
         assert_eq!(uncached_catalog, catalog);
         for slug in [
             "openai.gpt-6.1-sol",
+            "openai.gpt-6.1-terra",
             "openai.gpt-6-sol",
             "openai.gpt-6-luna",
             "openai.gpt-5.6-sol",
@@ -1446,6 +1447,7 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
             vec![
                 ("openai.gpt-6.1-sol", "GPT-6.1 Sol"),
                 ("openai.gpt-6-astra", "GPT-6-Astra"),
+                ("openai.gpt-6.1-terra", "GPT-6.1 Terra"),
                 ("openai.gpt-6-sol", "GPT-6 Sol"),
                 ("openai.gpt-6-luna", "GPT-6 Luna"),
                 ("openai.gpt-5.6-sol", "GPT-5.6 Sol"),
@@ -1469,6 +1471,7 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
             vec![
                 "openai.gpt-6.1-sol",
                 "openai.gpt-6-astra",
+                "openai.gpt-6.1-terra",
                 "openai.gpt-6-sol",
                 "openai.gpt-6-luna",
                 "openai.gpt-5.6-sol",
