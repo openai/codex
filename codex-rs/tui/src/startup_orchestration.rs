@@ -65,6 +65,7 @@ pub(super) async fn run_main_inner(
         .take_auto_review_config_overrides(&mut cli.config_overrides);
 
     // Map the legacy --search flag to the canonical web_search mode.
+    let overrides_before_search = cli.config_overrides.raw_overrides.len();
     if cli.web_search {
         cli.config_overrides
             .raw_overrides
@@ -221,6 +222,14 @@ pub(super) async fn run_main_inner(
         std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
     );
     let reuse_implicit_local_daemon = daemon_exclusion.is_none();
+    let search_forces_embedded = cli.web_search
+        && daemon_startup::config_exclusion(
+            &cli_kv_overrides[..overrides_before_search],
+            &launch_loader_overrides,
+            strict_config,
+            cli.bypass_hook_trust,
+        )
+        .is_none();
     let search_only_config_override = !workload_identity_selected
         && cli.web_search
         && startup_preflight::has_only_search_config_override(&cli_kv_overrides)
@@ -750,6 +759,7 @@ pub(super) async fn run_main_inner(
             },
         ),
     ]);
+    let selected_local_daemon = matches!(app_server_target, AppServerTarget::LocalDaemon { .. });
     // Record the first connection attempt's actual mode, including embedded fallback; never reconnects.
     let launch_telemetry = move |target: &AppServerTarget, connected: bool| {
         let Some(metrics) = metrics else {
@@ -790,6 +800,43 @@ pub(super) async fn run_main_inner(
             ("multiplexer", multiplexer),
         ]);
         let _ = metrics.counter("codex.tui.start", /*inc*/ 1, &launch_tags);
+        if app_server_mode == "in_process" {
+            let reason = match daemon_exclusion {
+                _ if elevated_warning.is_some() => "windows_elevated",
+                Some("--no-daemon") => "explicit_no_daemon",
+                Some("--profile") => "profile",
+                Some("--oss") => "oss",
+                Some("--strict-config") => "strict_config",
+                Some("--dangerously-bypass-hook-trust") => "bypass_hook_trust",
+                Some("workload identity") => "workload_identity",
+                Some("executor selection (CODEX_EXEC_SERVER_URL)") => "exec_server_url",
+                Some("custom configuration loader") => "custom_config_loader",
+                Some(
+                    "command-line configuration overrides (-c, --enable, --disable, or --search)",
+                ) => {
+                    if search_forces_embedded {
+                        "search"
+                    } else {
+                        "config_override"
+                    }
+                }
+                Some("Bedrock sign-in") => "bedrock_sign_in",
+                Some(daemon_startup::WSL_DRVFS_EXCLUSION) => "wsl_drvfs",
+                Some("this Windows launcher") => "windows_detach_restricted",
+                Some("daemon feature settings") => "daemon_compatibility",
+                None if selection_reason == "auto_start_disabled" => {
+                    "auto_start_disabled_no_daemon"
+                }
+                None if selected_local_daemon => "daemon_connection_failed",
+                None if selection_reason == "agents" => "agents_no_daemon_discovered",
+                Some(_) | None => "unclassified",
+            };
+            let _ = metrics.counter(
+                "codex.tui.embedded_start",
+                /*inc*/ 1,
+                &[("reason", reason)],
+            );
+        }
         launch_tags.retain(|(key, _)| !matches!(*key, "terminal_columns" | "terminal_rows"));
         launch_tags
     };
