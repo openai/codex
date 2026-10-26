@@ -58,6 +58,13 @@ def _engine_repository_impl(ctx):
         stripPrefix = ctx.attr.strip_prefix,
     )
     inventory = _upstream_filegroups(ctx.read("BUILD.bazel"))
+
+    # MSVC and GNU Windows require different x64 stack scanners. Keep that one
+    # choice in our graph while taking all other membership from the V8 pin.
+    msvc_scanner = '"src/heap/base/asm/x64/push_registers_masm.asm"'
+    if inventory.count(msvc_scanner) != 1:
+        fail("V8 source import: expected one x64 MSVC scanner input; review the Windows stack selector")
+    inventory = inventory.replace(msvc_scanner, '":windows_x64_stack_assembly"')
     template = ctx.read(ctx.attr._engine_build)
     if template.count(_INVENTORY_SLOT) != 1:
         fail("Codex V8 BUILD template must contain exactly one upstream filegroup slot")

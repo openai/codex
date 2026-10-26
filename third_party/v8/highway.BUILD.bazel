@@ -31,8 +31,21 @@ config_setting(
 )
 
 config_setting(
-    name = "compiler_clangcl",
+    name = "compiler_lexan",
     flag_values = {"@bazel_tools//tools/cpp:compiler": "lexan"},
+)
+
+config_setting(
+    name = "compiler_clang_cl",
+    flag_values = {"@bazel_tools//tools/cpp:compiler": "clang-cl"},
+)
+
+selects.config_setting_group(
+    name = "compiler_clangcl",
+    match_any = [
+        ":compiler_clang_cl",
+        ":compiler_lexan",
+    ],
 )
 
 config_setting(

@@ -2,14 +2,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-load("@@//third_party/v8:engine_rules.bzl", "v8_fixed_source_features")
+load("@@//third_party/v8:engine_rules.bzl", "v8_build_config", "v8_fixed_source_features")
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load(
     "@v8//:bazel/defs.bzl",
     "v8_binary",
-    "v8_build_config",
     "v8_config",
     "v8_flag",
     "v8_library",
@@ -25,7 +24,7 @@ exports_files(["bazel/requirements.txt"])
 
 # Codex V8 source policy. Only ABI, runtime and target CPU vary, selected by
 # artifact profiles. CPU selection lives in bazel/config.
-# Upstream experiments, profiling and debug flags use their pinned 15.2 defaults.
+# Platform feature choices preserve the published Bazel Unix and GN MSVC builds.
 # ICU and no-ICU remain separate targets for the engine and its generators.
 v8_flag(name = "v8_enable_sandbox")
 
@@ -115,13 +114,11 @@ v8_config(
     conditional_defines = {"v8_enable_sandbox": "V8_ENABLE_SANDBOX"},
     defines = [
         "V8_DEPRECATION_WARNINGS",
-        "V8_IMMINENT_DEPRECATION_WARNINGS",
         "V8_ENABLE_LAZY_SOURCE_POSITIONS",
         "V8_ENABLE_TURBOFAN",
         "V8_ENABLE_WEBASSEMBLY",
         "V8_ENABLE_UNDEFINED_DOUBLE",
         "V8_USE_HOST_CPU_ARM_FEATURES",
-        "V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP=64",
     ] + [
         "GOOGLE3",
         "V8_ADVANCED_BIGINT_ALGORITHMS",
@@ -131,6 +128,18 @@ v8_config(
         "V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA",
         "V8_TLS_USED_IN_LIBRARY",
     ] + select({
+        # The published MSVC artifacts used GN's CppGC queue and Wasm fuzzers.
+        # Keep these choices in the owned policy, including snapshot generators.
+        "@@//third_party/v8:platform_windows_msvc": [
+            "V8_CPPGC_MICROTASK_QUEUE",
+            "V8_WASM_RANDOM_FUZZERS",
+            "V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP=0",
+        ],
+        "//conditions:default": [
+            "V8_IMMINENT_DEPRECATION_WARNINGS",
+            "V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP=64",
+        ],
+    }) + select({
         "@v8//bazel/config:is_debug": [
             "DEBUG",
             "V8_ENABLE_CHECKS",
@@ -287,10 +296,19 @@ alias(
 
 alias(
     name = "is_v8_wasm_random_fuzzers",
-    actual = ":disabled_pinned_source_feature",
+    actual = "@@//third_party/v8:platform_windows_msvc",
 )
 
 # @CODEX_V8_UPSTREAM_FILEGROUPS@
+
+filegroup(
+    name = "windows_x64_stack_assembly",
+    # The import preserves upstream MASM; only GNU builds use our GAS source.
+    srcs = select({
+        "@@//third_party/v8:platform_windows_msvc": ["src/heap/base/asm/x64/push_registers_masm.asm"],
+        "//conditions:default": ["@@//third_party/v8:push_registers_gnullvm.S"],
+    }),
+)
 
 alias(
     name = "lib_dragonbox",
@@ -425,7 +443,9 @@ genrule(
         "src/inspector/protocol/Schema.cpp",
         "src/inspector/protocol/Schema.h",
     ],
-    cmd = "INSPECTOR_PROTOCOL_DIR=$$(dirname $(execpath third_party/inspector_protocol/code_generator.py)); \
+    cmd = select({
+        "@@//third_party/v8:platform_windows_msvc": "$(execpath :code_generator) --jinja_dir . --inspector_protocol_dir $$(dirname $(execpath third_party/inspector_protocol/code_generator.py)) --config $(location :src/inspector/inspector_protocol_config.json) --config_value protocol.path=$(location :include/js_protocol.pdl) --config_value crdtp.dir=third_party/inspector_protocol/crdtp --output_base $(@D)/src/inspector",
+        "//conditions:default": "INSPECTOR_PROTOCOL_DIR=$$(dirname $(execpath third_party/inspector_protocol/code_generator.py)); \
            PYTHONPATH=$$INSPECTOR_PROTOCOL_DIR:external/rules_python++pip+v8_python_deps_311_jinja2/site-packages:external/rules_python++pip+v8_python_deps_311_markupsafe/site-packages:$${PYTHONPATH-} \
            $(execpath @rules_python//python/bin:python) $(execpath third_party/inspector_protocol/code_generator.py) --jinja_dir . \
            --inspector_protocol_dir $$INSPECTOR_PROTOCOL_DIR \
@@ -433,12 +453,16 @@ genrule(
            --config_value protocol.path=$(location :include/js_protocol.pdl) \
            --config_value crdtp.dir=third_party/inspector_protocol/crdtp \
            --output_base $(@D)/src/inspector",
+    }),
     message = "Generating inspector files",
-    tools = [
-        "@rules_python//python/bin:python",
-        requirement("jinja2"),
-        requirement("markupsafe"),
-    ],
+    tools = select({
+        "@@//third_party/v8:platform_windows_msvc": [":code_generator"],
+        "//conditions:default": [
+            "@rules_python//python/bin:python",
+            requirement("jinja2"),
+            requirement("markupsafe"),
+        ],
+    }),
 )
 
 filegroup(
@@ -753,20 +777,31 @@ v8_binary(
         ":mksnapshot_files",
     ] + [],
     copts = ["-Wno-implicit-fallthrough"],
-    icu_deps = [":icu/v8_libshared"],
-    icu_srcs = [
-        ":icu/generated_torque_initializers",
-        ":icu/v8_initializers_files",
-    ],
     # Match GN's mksnapshot `disable_icf` config. If the linker folds distinct
     # external-reference helpers together while producing the snapshot, the
     # final embedder binary may not fold the same pair and startup
     # deserialization will reject the snapshot.
     # GN also increases the x64 Windows stack reserve because constructing the
     # snapshot overflows the linker's 1 MiB default.
+    # The MSVC toolchain adds /OPT:ICF after user linkopts in opt mode.
+    # Disable that feature so the snapshot remains usable in debug embedders.
+    features = select({
+        "@@//third_party/v8:platform_windows_msvc": ["-smaller_binary"],
+        "//conditions:default": [],
+    }),
+    icu_deps = [":icu/v8_libshared"],
+    icu_srcs = [
+        ":icu/generated_torque_initializers",
+        ":icu/v8_initializers_files",
+    ],
     linkopts = select({
         "@v8//bazel/config:is_android": ["-llog"],
         "@v8//bazel/config:is_macos": ["-Wl,-no_deduplicate"],
+        "@@//third_party/v8:platform_windows_msvc": [
+            "/OPT:NOICF",
+            "/OPT:REF",
+            "/STACK:2097152",
+        ],
         "@v8//bazel/config:is_windows": [
             "-Wl,/OPT:NOICF",
             "-Wl,/STACK:2097152",
@@ -930,4 +965,12 @@ py_test(
         # Disable sanitizers, as they don't work in general in V8.
         "nosan",
     ],
+)
+
+# V8's existing converter builds snapshot assembly as C++ for clang-cl.
+py_binary(
+    name = "native_windows_inline_asm",
+    srcs = ["tools/snapshot/asm_to_inline_asm.py"],
+    main = "tools/snapshot/asm_to_inline_asm.py",
+    tags = ["manual"],
 )

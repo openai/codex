@@ -1,4 +1,4 @@
-load("@llvm//toolchain/runtimes:cc_runtime_library.bzl", "cc_runtime_stage0_library")
+load("@//third_party/v8:libcxx_rules.bzl", "libcxx_library")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
@@ -79,9 +79,12 @@ cc_library(
     includes = ["src"],
 )
 
-cc_runtime_stage0_library(
+libcxx_library(
     name = "libcxx",
     srcs = LIBCXX_SRCS + select({
+        "@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [
+            "src/filesystem/filesystem_clock.cpp",
+        ],
         ":is_linux": [
             "src/filesystem/directory_entry.cpp",
             "src/filesystem/filesystem_clock.cpp",
@@ -95,32 +98,54 @@ cc_runtime_stage0_library(
         ],
         "//conditions:default": [],
     }),
-    copts = [
-        "-fexceptions",
-        "-frtti",
-        "-fstrict-aliasing",
-        "-fvisibility=hidden",
-        "-fvisibility-inlines-hidden",
-        "-nostdinc++",
-        "-std=c++23",
-        "-Wno-nullability-completeness",
-        "-Wno-unused-parameter",
-        "-Wundef",
-    ] + select({
+    copts = select({
+        "@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [
+            "/EHsc",
+            "/GR",
+            "/std:c++latest",
+            "/Zc:__cplusplus",
+            "/clang:-fstrict-aliasing",
+            "/clang:-Wno-nullability-completeness",
+            "/clang:-Wno-unused-parameter",
+            "/clang:-Wundef",
+            # libc++ uses the Microsoft exception implementation with /MT.
+            "/clang:-Xclang",
+            "/clang:--dependent-lib=libcpmt",
+            "/wd4005",
+        ],
+        "//conditions:default": [
+            "-fexceptions",
+            "-frtti",
+            "-fstrict-aliasing",
+            "-fvisibility=hidden",
+            "-fvisibility-inlines-hidden",
+            "-nostdinc++",
+            "-std=c++23",
+            "-Wno-nullability-completeness",
+            "-Wno-unused-parameter",
+            "-Wundef",
+        ],
+    }) + select({
+        "@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [],
         ":is_windows": ["-Wno-macro-redefined"],
         "//conditions:default": ["-fPIC"],
     }),
     defines = [
         "CR_LIBCXX_REVISION=b16984ce99c702355a5b2b4c52574e82cec41fb9",
-        "LIBCXX_BUILDING_LIBCXXABI",
         "LIBC_NAMESPACE=__llvm_libc_cr",
         "_LIBCPP_BUILDING_LIBRARY",
         "_LIBCPP_CONSTINIT=constinit",
         "_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
         "_LIBCPP_INSTRUMENTED_WITH_ASAN=0",
-        "_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
     ] + select({
+        # The Windows build uses the Microsoft ABI, never Itanium libc++abi.
+        "@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [],
+        "//conditions:default": [
+            "LIBCXX_BUILDING_LIBCXXABI",
+            "_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        ],
+    }) + select({
         "@llvm//platforms/config:musl": [
             # Chromium's checked-in __config_site uses this switch to enable
             # libc++'s musl-specific configuration.
@@ -128,6 +153,7 @@ cc_runtime_stage0_library(
         ],
         "//conditions:default": [],
     }) + select({
+        "@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [],
         ":is_windows": [
             "NTDDI_VERSION=NTDDI_WIN7",
             "WINVER=_WIN32_WINNT_WIN7",
@@ -138,9 +164,11 @@ cc_runtime_stage0_library(
     implementation_deps = [
         ":headers",
         ":internal_headers",
-        "@rusty_v8_libcxxabi//:headers",
         "@rusty_v8_llvm_libc//:headers",
     ] + select({
+        "@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [],
+        "//conditions:default": ["@rusty_v8_libcxxabi//:headers"],
+    }) + select({
         ":is_linux": [
             "@@llvm++kernel_headers+kernel_headers//:kernel_headers",
         ],
@@ -155,4 +183,12 @@ cc_runtime_stage0_library(
         "//conditions:default": [],
     }),
     includes = ["src"],
+    local_defines = select({
+        "@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [
+            "NTDDI_VERSION=NTDDI_WIN7",
+            "WINVER=_WIN32_WINNT_WIN7",
+            "_WIN32_WINNT=_WIN32_WINNT_WIN7",
+        ],
+        "//conditions:default": [],
+    }),
 )

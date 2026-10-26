@@ -19,9 +19,20 @@ exports_files([
     "fp16.BUILD.bazel",
     "highway.BUILD.bazel",
     "icu.BUILD.bazel",
+    "libcxx_rules.bzl",
+    "native_windows.bzl",
+    "push_registers_gnullvm.S",
     "simdutf.BUILD.bazel",
     "v8_defs.patch",
 ])
+
+config_setting(
+    name = "platform_windows_msvc",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:msvc",
+    ],
+)
 
 config_setting(
     name = "platform_aarch64_unknown_linux_musl",
@@ -43,6 +54,17 @@ config_setting(
 
 config_setting(
     name = "use_rusty_v8_custom_libcxx",
+    flag_values = {
+        "@v8//:v8_use_rusty_v8_custom_libcxx": "True",
+    },
+)
+
+config_setting(
+    name = "use_rusty_v8_custom_libcxx_native_windows",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:msvc",
+    ],
     flag_values = {
         "@v8//:v8_use_rusty_v8_custom_libcxx": "True",
     },
@@ -208,9 +230,20 @@ alias(
     }),
 )
 
-V8_COPTS = ["-std=c++20"]
+V8_COPTS = select({
+    ":platform_windows_msvc": [
+        "/std:c++20",
+        "/Zc:__cplusplus",
+    ],
+    "//conditions:default": ["-std=c++20"],
+})
 
 V8_CUSTOM_LIBCXX_COPTS = select({
+    ":use_rusty_v8_custom_libcxx_native_windows": [
+        "/D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
+        "/D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+        "/D_LIBCPP_INSTRUMENTED_WITH_ASAN=0",
+    ],
     ":use_rusty_v8_custom_libcxx": [
         "-nostdinc++",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
@@ -239,19 +272,19 @@ cc_library(
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
-    deps = [
-        "@rusty_v8_libcxx//:headers",
-        "@rusty_v8_libcxxabi//:headers",
-    ],
+    deps = ["@rusty_v8_libcxx//:headers"] + select({
+        ":use_rusty_v8_custom_libcxx_native_windows": [],
+        "//conditions:default": ["@rusty_v8_libcxxabi//:headers"],
+    }),
 )
 
 cc_library(
     name = "rusty_v8_custom_libcxx_runtime",
     visibility = ["//visibility:public"],
-    deps = [
-        "@rusty_v8_libcxx//:libcxx",
-        "@rusty_v8_libcxxabi//:libcxxabi",
-    ],
+    deps = ["@rusty_v8_libcxx//:libcxx"] + select({
+        ":use_rusty_v8_custom_libcxx_native_windows": [],
+        "//conditions:default": ["@rusty_v8_libcxxabi//:libcxxabi"],
+    }),
 )
 
 genrule(
@@ -311,6 +344,80 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+)
+
+alias(
+    name = "native_windows_compiler_builtins",
+    actual = "@v8_native_windows_llvm//:builtins",
+    tags = ["manual"],
+    target_compatible_with = select({
+        ":platform_windows_msvc": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+# Compile the pinned Chromium libc++ into V8 with the Microsoft CRT.
+cc_static_library(
+    name = "v8_152_2_0_native_windows_objects",
+    features = V8_STATIC_LIBRARY_FEATURES,
+    tags = ["manual"],
+    target_compatible_with = select({
+        ":platform_windows_msvc": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":rusty_v8_custom_libcxx_runtime",
+        ":v8_152_2_0_binding",
+    ],
+)
+
+# cc_static_library only collects object files, not prebuilt libraries.
+# The Rust build script receives one .lib without Bazel's CcInfo/linkdeps, so
+# merge compiler-rt into the staged artifact explicitly.
+genrule(
+    name = "v8_152_2_0_native_windows_library",
+    srcs = [
+        ":v8_152_2_0_native_windows_objects",
+        "@v8_native_windows_llvm//:builtins_archive",
+    ],
+    outs = ["rusty_v8_native_windows.lib"],
+    cmd_bat = '""$(location @v8_native_windows_llvm//:llvm-lib)" /NOLOGO /OUT:"$@" "$(location :v8_152_2_0_native_windows_objects)" "$(location @v8_native_windows_llvm//:builtins_archive)""',
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:msvc",
+    ],
+    tools = ["@v8_native_windows_llvm//:llvm-lib"],
+)
+
+[
+    v8_artifact_files(
+        name = "v8_152_2_0_%s_pc_windows_msvc_bazel" % arch,
+        srcs = [":v8_152_2_0_native_windows_library"],
+        profile = "sandbox_release",
+        tags = ["manual"],
+        target_compatible_with = [
+            "@platforms//cpu:%s" % arch,
+            "@platforms//os:windows",
+            "@llvm//constraints/windows/abi:msvc",
+        ],
+        v8_cpu = cpu,
+    )
+    for arch, cpu in [
+        ("x86_64", "x64"),
+        ("aarch64", "arm64"),
+    ]
+]
+
+# Producer selectors never fall back to published inputs. Keep them separate
+# from the consumer aliases so a version upgrade can build before publishing.
+alias(
+    name = "rusty_v8_native_windows_archive_for_target",
+    actual = select({
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":v8_152_2_0_aarch64_pc_windows_msvc_bazel",
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":v8_152_2_0_x86_64_pc_windows_msvc_bazel",
+    }),
+    tags = ["manual"],
 )
 
 cc_static_library(

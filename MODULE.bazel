@@ -151,6 +151,14 @@ bazel_dep(name = "rules_cc", version = "0.2.18")
 cc_configure = use_extension("@rules_cc//cc:extensions.bzl", "cc_configure_extension")
 use_repo(cc_configure, "local_config_cc")
 
+single_version_override(
+    module_name = "rules_cc",
+    patch_strip = 1,
+    patches = [
+        "//patches:rules_cc_windows_native_llvm.patch",
+    ],
+)
+
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "aws-lc", version = "5.1.0.bcr.1")
@@ -844,6 +852,17 @@ pip.parse(
     ],
 )
 use_repo(pip, "v8_python_deps")
+
+native_windows_llvm = use_repo_rule("//third_party/v8:native_windows.bzl", "native_windows_llvm")
+
+native_windows_llvm(name = "v8_native_windows_llvm")
+
+native_windows_cc = use_repo_rule("//third_party/v8:native_windows.bzl", "native_windows_cc")
+
+native_windows_cc(
+    name = "v8_native_windows_cc",
+    native_llvm = "@v8_native_windows_llvm//:BUILD.bazel",
+)
 
 v8_dependencies = use_extension("//third_party/v8:dependencies.bzl", "dependencies")
 use_repo(

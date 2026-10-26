@@ -130,10 +130,43 @@ This depends on libc++'s shared exception-object ABI; updates to either libc++
 revision must keep the native GNU link/runtime checks passing. The Bazel pair targets above still point directly to source
 targets so a new release or canary never depends on an older published copy.
 
-MSVC is not part of the Bazel-produced matrix yet. The repository's current
-hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
-it cannot truthfully reproduce upstream's `*-pc-windows-msvc` archives until we
-add a real MSVC-targeting C++ toolchain to the Bazel graph.
+Native Windows x64 and ARM64 hosts can build sandbox archives with pinned
+clang-cl and the installed Microsoft SDK using
+`//third_party/v8:v8_152_2_0_x86_64_pc_windows_msvc_bazel` and
+`//third_party/v8:v8_152_2_0_aarch64_pc_windows_msvc_bazel`.
+`//third_party/v8:rusty_v8_native_windows_archive_for_target` selects these source
+outputs directly. These targets bundle Chromium libc++ and compiler builtins,
+and fix pointer compression and sandboxing to the published Windows contract.
+The owned engine policy also preserves the GN MSVC defaults for GC-managed
+microtask queues, random Wasm module generation, disabled imminent-deprecation
+warnings, and external TypedArray backing stores. Other source targets retain
+the published Unix policy, including a 64-byte inline TypedArray threshold.
+These are fixed platform choices, not additional developer build switches.
+Matching generated Rust bindings, consumer selection, and publishing integration
+are added separately; existing MSVC consumers continue using the prebuilt pair.
+
+Use a native Visual Studio Developer PowerShell with the C++ tools and Windows
+SDK available. The SDK supplies headers, libraries, `dumpbin.exe`, and the
+assembler. From the repo root, build the archive for that host:
+
+```powershell
+bazel build --config=ci-windows-msvc `
+  --host_platform=//:local_windows_msvc --platforms=//:local_windows_msvc `
+  //third_party/v8:rusty_v8_native_windows_archive_for_target
+```
+
+Bazel fetches and verifies LLVM 22.1.8 for the host, the same major and patch
+version as the libclang that generates bindings. The V8 artifact profile selects
+clang-cl, lld-link, llvm-lib and compiler-rt only for its Windows MSVC source
+archive and bindings, together with the installed SDK. Other C++ dependencies
+in the same `ci-windows-msvc` build keep the installed MSVC compiler. Selecting
+the explicit source target is the opt-in; no whole-build V8 compiler flag is
+needed.
+
+This is a native Windows build, not an x64-to-ARM64 or remote Linux build:
+V8's snapshot generator must execute on the target architecture. The repository
+inputs pinned in #4009 are MSVC/SDK files, not a registered clang-cl toolchain;
+making them replace the installed SDK is the separate hermetic MSVC migration.
 
 Release and CI Cargo builds for Darwin and Linux use `RUSTY_V8_ARCHIVE` plus a
 downloaded `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release
@@ -146,7 +179,7 @@ the exact resolved `v8` crate version in `codex-rs/Cargo.lock`.
 
 ## Source dependency ownership
 
-The Darwin, Linux GNU/musl and Windows GNU source targets consume Codex-owned
+The Darwin, Linux GNU/musl and Windows source targets consume Codex-owned
 Abseil, Highway, simdutf, ICU, fast_float, dragonbox and fp16 repositories.
 `dependencies.bzl` declares the pinned imports; the `*.BUILD.bazel` overlays
 here declare the targets V8 uses. Abseil, Highway and simdutf apply their C++ runtime

@@ -6,6 +6,11 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 
 # ICU must use the same C++ runtime as the V8 artifact and its host generators.
 _ICU_V8_COPTS = select({
+    "@@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [
+        "/D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
+        "/D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE",
+        "/D_LIBCPP_INSTRUMENTED_WITH_ASAN=0",
+    ],
     "@@//third_party/v8:use_rusty_v8_custom_libcxx": [
         "-nostdinc++",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
@@ -15,6 +20,18 @@ _ICU_V8_COPTS = select({
     ],
     "//conditions:default": [],
 })
+
+_ICU_MSVC_COPTS = [
+    "/wd4005",
+    "/wd4068",
+    "/wd4267",
+    "/utf-8",
+]
+
+_ICU_LIBRARY_COPTS = select({
+    "@@//third_party/v8:platform_windows_msvc": _ICU_MSVC_COPTS,
+    "//conditions:default": ["-Wno-deprecated-declarations"],
+}) + _ICU_V8_COPTS
 
 _ICU_V8_RUNTIME_DEPS = select({
     "@@//third_party/v8:use_rusty_v8_custom_libcxx": [
@@ -36,7 +53,7 @@ cc_library(
         "source/common/**/*.h",
         "source/common/**/*.cpp",
     ]),
-    copts = ["-Wno-deprecated-declarations"] + _ICU_V8_COPTS,
+    copts = _ICU_LIBRARY_COPTS,
     data = [":icudata"],
     defines = [
         "HAVE_DLOPEN=0",
@@ -76,7 +93,7 @@ cc_library(
         "source/i18n/**/*.h",
         "source/i18n/**/*.cpp",
     ]),
-    copts = ["-Wno-deprecated-declarations"] + _ICU_V8_COPTS,
+    copts = _ICU_LIBRARY_COPTS,
     local_defines = [
         "U_I18N_IMPLEMENTATION",
     ],
@@ -95,6 +112,7 @@ cc_library(
         "source/i18n/unicode/*.h",
     ]),
     copts = select({
+        "@@//third_party/v8:platform_windows_msvc": _ICU_MSVC_COPTS,
         "@platforms//os:windows": [
             "-Wno-deprecated-declarations",
         ],

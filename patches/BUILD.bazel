@@ -1,4 +1,5 @@
 exports_files([
+    "rules_cc_windows_native_llvm.patch",
     "abseil_windows_gnullvm_thread_identity.patch",
     "bzip2_windows_stack_args.patch",
     "llvm_rusty_v8_custom_libcxx.patch",
