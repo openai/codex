@@ -53,6 +53,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::LoadedUserInstructions;
+use codex_extension_api::SessionIsolation;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
@@ -353,6 +354,17 @@ impl StartThreadOptions {
             disabled_plugin_ids: None,
         }
     }
+}
+
+/// Parent dependencies resolved before the shared session startup.
+struct ThreadStartupContext {
+    history_initialization: HistoryInitialization,
+    instructions: SessionInstructions,
+    exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    multi_agent_version: Option<MultiAgentVersion>,
+    parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext,
+    originator: String,
+    attachment_source: Option<ThreadId>,
 }
 
 struct ThreadSpawnRequest {
@@ -2203,13 +2215,13 @@ impl ThreadManagerState {
         // Older callers and saved reviewers identify isolation through their source.
         // New internal callers supply an explicit runtime policy before startup.
         let isolation = thread_extension_init
-            .get::<codex_extension_api::SessionIsolation>()
+            .get::<SessionIsolation>()
             .map(|policy| *policy)
             .unwrap_or_else(|| {
                 if crate::guardian::is_basic_session_source(&session_source) {
-                    codex_extension_api::SessionIsolation::Isolated
+                    SessionIsolation::Isolated
                 } else {
-                    codex_extension_api::SessionIsolation::Inherit
+                    SessionIsolation::Inherit
                 }
             });
         thread_extension_init.insert(isolation);
@@ -2219,13 +2231,9 @@ impl ThreadManagerState {
                 else {
                     return None;
                 };
-                inherited_environments.as_ref().map(|snapshot| {
-                    snapshot
-                        .inheritable_selections()
-                        .into_iter()
-                        .map(TurnEnvironmentSelection::into_request)
-                        .collect()
-                })
+                inherited_environments
+                    .as_ref()
+                    .map(TurnEnvironmentSnapshot::inheritable_requests)
             })
             .unwrap_or_else(|| {
                 default_thread_environment_requests(
@@ -2317,70 +2325,73 @@ impl ThreadManagerState {
                 .restore_v2_agent_metadata(&config, resumed.conversation_id)
                 .await;
         }
-        let (instructions, inherited_exec_policy, extensions, mcp_manager, multi_agent_version) =
-            if isolation == codex_extension_api::SessionIsolation::Isolated {
-                let extensions = thread_extension_init
-                    .get::<codex_extension_api::IsolatedSessionExtensions<Config>>()
-                    .map(|extensions| Arc::clone(&extensions.0))
-                    .unwrap_or_else(empty_extension_registry);
-                let mcp_manager = McpManager::new_with_extensions(
-                    Arc::clone(&self.plugins_manager),
-                    Arc::clone(&extensions),
-                    CodexAppsToolsCache::default(),
-                );
-                (
-                    inherited_instructions.unwrap_or_default(),
-                    None,
-                    extensions,
-                    Arc::new(mcp_manager),
-                    Some(MultiAgentVersion::Disabled),
+        let mut instructions = match inherited_instructions {
+            Some(instructions) => instructions,
+            None if isolation == SessionIsolation::Isolated => SessionInstructions::default(),
+            None => {
+                self.instructions_for_spawn(
+                    &session_source,
+                    parent_thread_id,
+                    forked_from_thread_id,
+                    thread_instructions_provider,
                 )
-            } else {
-                (
-                    match inherited_instructions {
-                        Some(instructions) => instructions,
-                        None => {
-                            self.instructions_for_spawn(
-                                &session_source,
-                                parent_thread_id,
-                                forked_from_thread_id,
-                                thread_instructions_provider,
-                            )
-                            .await
-                        }
-                    },
-                    inherited_exec_policy,
-                    Arc::clone(&self.extensions),
-                    Arc::clone(&self.mcp_manager),
-                    self.initial_multi_agent_version_for_spawn(
-                        &initial_history,
-                        Some(&session_source),
-                        parent_thread_id,
-                        forked_from_thread_id,
-                    )
-                    .await,
-                )
-            };
-        let mut instructions = instructions;
+                .await
+            }
+        };
         if let Some(supplied) = supplied_user_instructions {
             instructions.user = supplied.instructions;
             instructions.user_provider = None;
             config.startup_warnings.extend(supplied.warnings);
         }
-        let parent_rollout_thread_trace = self
-            .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
-            .await;
+        let (exec_policy, multi_agent_version) = match isolation {
+            SessionIsolation::Isolated => (None, Some(MultiAgentVersion::Disabled)),
+            SessionIsolation::Inherit => (
+                inherited_exec_policy,
+                self.initial_multi_agent_version_for_spawn(
+                    &initial_history,
+                    Some(&session_source),
+                    parent_thread_id,
+                    forked_from_thread_id,
+                )
+                .await,
+            ),
+        };
+        let startup_context = ThreadStartupContext {
+            history_initialization,
+            instructions,
+            exec_policy,
+            multi_agent_version,
+            parent_rollout_thread_trace: self
+                .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
+                .await,
+            originator: self
+                .effective_originator(
+                    &initial_history,
+                    metrics_service_name.as_deref(),
+                    &session_source,
+                    parent_thread_id,
+                    forked_from_thread_id,
+                    parent_originator,
+                )
+                .await,
+            attachment_source: forked_from_thread_id
+                .filter(|_| matches!(&initial_history, InitialHistory::Forked(_))),
+        };
+        let (extensions, mcp_manager) = if isolation == SessionIsolation::Isolated {
+            let extensions = thread_extension_init
+                .get::<codex_extension_api::IsolatedSessionExtensions<Config>>()
+                .map(|extensions| Arc::clone(&extensions.0))
+                .unwrap_or_else(empty_extension_registry);
+            let mcp_manager = McpManager::new_with_extensions(
+                Arc::clone(&self.plugins_manager),
+                Arc::clone(&extensions),
+                CodexAppsToolsCache::default(),
+            );
+            (extensions, Arc::new(mcp_manager))
+        } else {
+            (Arc::clone(&self.extensions), Arc::clone(&self.mcp_manager))
+        };
         let tracked_session_source = session_source.clone();
-        let originator = self
-            .effective_originator(
-                &initial_history,
-                metrics_service_name.as_deref(),
-                &session_source,
-                parent_thread_id,
-                forked_from_thread_id,
-                parent_originator,
-            )
-            .await;
         let source_changed_during_startup = Arc::new(AtomicBool::new(false));
         {
             let mut starting = self
@@ -2398,20 +2409,18 @@ impl ThreadManagerState {
         } else {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
-        let attachment_source =
-            forked_from_thread_id.filter(|_| matches!(&initial_history, InitialHistory::Forked(_)));
         let spawn_result = Session::spawn(SessionSpawnArgs {
             attached_thread,
             startup,
             config,
             prompt_cache_key,
             allow_provider_model_fallback,
-            instructions,
+            instructions: startup_context.instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager: self
                 .models_manager
-                .for_originator(&originator)
+                .for_originator(&startup_context.originator)
                 .unwrap_or_else(|| Arc::clone(&self.models_manager)),
             git_root_discovery: Arc::clone(&self.git_root_discovery),
             environment_manager: Arc::clone(&self.environment_manager),
@@ -2422,7 +2431,7 @@ impl ThreadManagerState {
             extensions,
             conversation_history: initial_history,
             resume_preparation,
-            history_initialization,
+            history_initialization: startup_context.history_initialization,
             disabled_plugin_ids,
             requested_history_mode: history_mode,
             fork_persistence,
@@ -2439,13 +2448,13 @@ impl ThreadManagerState {
             forked_from_thread_id,
             parent_thread_id,
             thread_source: thread_source.clone(),
-            originator,
+            originator: startup_context.originator,
             agent_control,
             dynamic_tools,
             metrics_service_name,
             inherited_environments,
-            inherited_exec_policy,
-            parent_rollout_thread_trace,
+            inherited_exec_policy: startup_context.exec_policy,
+            parent_rollout_thread_trace: startup_context.parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
             environment_requests,
@@ -2458,7 +2467,7 @@ impl ThreadManagerState {
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
             external_time_provider: self.external_time_provider.clone(),
-            inherited_multi_agent_version: multi_agent_version,
+            inherited_multi_agent_version: startup_context.multi_agent_version,
             git_enrichment_policy: if matches!(
                 &tracked_session_source,
                 SessionSource::Internal(InternalSessionSource::Guardian)
@@ -2479,7 +2488,7 @@ impl ThreadManagerState {
                 return Err(error);
             }
         };
-        if let Some(source_thread_id) = attachment_source
+        if let Some(source_thread_id) = startup_context.attachment_source
             && session.live_thread().is_some()
             && self.thread_store.supports_thread_attachments()
         {

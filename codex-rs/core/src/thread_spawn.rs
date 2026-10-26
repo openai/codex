@@ -2,8 +2,6 @@
 //!
 //! Callers supply captured step settings; the configured agent backend owns child lifetimes.
 
-use std::sync::Arc;
-
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
@@ -56,11 +54,27 @@ pub(crate) enum ThreadSpawnError {
 }
 
 pub(crate) async fn spawn(
-    session: &Arc<Session>,
-    step_context: &Arc<StepContext>,
+    session: &Session,
+    step_context: &StepContext,
     call_id: &str,
     request: ThreadSpawnRequest,
 ) -> Result<ThreadSpawnResult, ThreadSpawnError> {
+    let (request, task_name) = prepare(session, step_context, call_id, request).await?;
+    let (agent, config) = session.services.agent_control.spawn(request).await?;
+    Ok(ThreadSpawnResult {
+        agent,
+        config,
+        task_name,
+    })
+}
+
+/// Prepare the native child settings without choosing its coordination backend.
+pub(crate) async fn prepare(
+    session: &Session,
+    step_context: &StepContext,
+    call_id: &str,
+    request: ThreadSpawnRequest,
+) -> Result<(SpawnRequest, AgentPath), ThreadSpawnError> {
     let turn = &step_context.turn;
     let ThreadSpawnRequest {
         task_name,
@@ -134,10 +148,8 @@ pub(crate) async fn spawn(
     } else {
         None
     };
-    let (agent, config) = session
-        .services
-        .agent_control
-        .spawn(SpawnRequest {
+    Ok((
+        SpawnRequest {
             caller: session.thread_id,
             config,
             input: AgentInput::Message {
@@ -157,11 +169,7 @@ pub(crate) async fn spawn(
                 multi_agent_v2_usage_hints,
                 cyber_access_program: turn.cyber_access_program,
             },
-        })
-        .await?;
-    Ok(ThreadSpawnResult {
-        agent,
-        config,
+        },
         task_name,
-    })
+    ))
 }
