@@ -2918,7 +2918,6 @@ impl AuthManager {
         if auth_changed_for_refresh {
             guard.permanent_refresh_failure = None;
         }
-        tracing::info!("Reloaded auth, changed: {changed}");
         guard.auth = new_auth;
         if auth_changed_for_refresh {
             self.auth_change_state_tx.send_modify(|state| {
@@ -2935,6 +2934,10 @@ impl AuthManager {
             });
             self.auth_change_tx.send_modify(|revision| *revision += 1);
         }
+        tracing::info!(
+            auth_changed_for_refresh,
+            "Reloaded auth, changed: {changed}"
+        );
         changed
     }
 

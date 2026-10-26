@@ -9,6 +9,12 @@ use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::encode_id_token;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
+use axum::Router;
+use axum::body::Body;
+use axum::http::HeaderMap;
+use axum::http::Uri;
+use axum::http::header::HOST;
+use axum::routing::get;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_app_server_protocol::Account;
@@ -61,8 +67,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
+use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use url::Url;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -2296,11 +2305,53 @@ async fn login_survives_same_owner_token_refresh(
 ) -> Result<()> {
     let codex_home = TempDir::new()?;
     let backend = MockServer::start().await;
+    let release_response = CancellationToken::new();
+    let (chatgpt_base_url, _response_gate) = match refresh_trigger {
+        LoginRefreshTrigger::AuthStatus => {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let base_url = format!("http://{}/backend-api", listener.local_addr()?);
+            let upstream = backend.uri();
+            let gated_path = delayed_path.to_string();
+            let release = release_response.clone();
+            let client = HttpClientBuilder::new().build_direct()?;
+            // Keep Wiremock's matching and request recording, but hold the response
+            // asynchronously so the token refresh can use the same mock backend.
+            let router = Router::new().fallback(get(move |uri: Uri, mut headers: HeaderMap| {
+                let upstream = upstream.clone();
+                let gated_path = gated_path.clone();
+                let release = release.clone();
+                let client = client.clone();
+                async move {
+                    let hold_response = uri.path() == gated_path
+                        && headers
+                            .get("authorization")
+                            .is_some_and(|value| value == "Bearer access-token-123");
+                    headers.remove(HOST);
+                    let response = client
+                        .get(format!("{upstream}{uri}"))
+                        .headers(headers)
+                        .send()
+                        .await
+                        .expect("mock backend response");
+                    if hold_response {
+                        release.cancelled().await;
+                    }
+                    response.into_http_response().map(Body::new)
+                }
+            }));
+            let task =
+                AbortOnDropHandle::new(tokio::spawn(
+                    async move { axum::serve(listener, router).await },
+                ));
+            (base_url, Some(task))
+        }
+        LoginRefreshTrigger::UnauthorizedConfig => (format!("{}/backend-api", backend.uri()), None),
+    };
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
             requires_openai_auth: Some(true),
-            chatgpt_base_url: Some(format!("{}/backend-api", backend.uri())),
+            chatgpt_base_url: Some(chatgpt_base_url),
             ..Default::default()
         },
     )?;
@@ -2352,11 +2403,11 @@ async fn login_survives_same_owner_token_refresh(
                 .and(header("authorization", "Bearer access-token-123"))
                 .respond_with(move |_: &wiremock::Request| {
                     request_started.notify_one();
-                    ResponseTemplate::new(match refresh_trigger {
-                        LoginRefreshTrigger::AuthStatus => 200,
-                        LoginRefreshTrigger::UnauthorizedConfig => 401,
-                    })
-                    .set_delay(Duration::from_secs(/*secs*/ 2))
+                    match refresh_trigger {
+                        LoginRefreshTrigger::AuthStatus => ResponseTemplate::new(200),
+                        LoginRefreshTrigger::UnauthorizedConfig => ResponseTemplate::new(401)
+                            .set_delay(Duration::from_secs(/*secs*/ 2)),
+                    }
                     .set_body_json(response.clone())
                 })
                 .with_priority(1)
@@ -2368,6 +2419,7 @@ async fn login_survives_same_owner_token_refresh(
     let issuer = backend.uri();
     let refresh_url = format!("{issuer}/oauth/refresh");
     let mut server = TestAppServer::builder()
+        .with_json_logging("warn,codex_login::auth::manager=info,codex_app_server=info")
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[
             ("OPENAI_API_KEY", None),
@@ -2404,6 +2456,26 @@ async fn login_survives_same_owner_token_refresh(
                     refresh_token: Some(true),
                 })
                 .await?;
+            // getAuthStatus reloads config before replying, which can wait for
+            // this held response. The reload log records the credential change
+            // after publishing the refreshed auth cache and its generation.
+            let request_id = request.to_string();
+            server
+                .wait_for_matching_json_log_event(
+                    "auth cache refresh in getAuthStatus",
+                    |event| {
+                        event["fields"]["auth_changed_for_refresh"] == true
+                            && event["spans"].as_array().is_some_and(|spans| {
+                                spans.iter().any(|span| {
+                                    span["rpc.method"] == "getAuthStatus"
+                                        && span["rpc.request_id"] == request_id
+                                })
+                            })
+                    },
+                    DEFAULT_READ_TIMEOUT,
+                )
+                .await?;
+            release_response.cancel();
             let refreshed: GetAuthStatusResponse =
                 timeout(DEFAULT_READ_TIMEOUT, server.read_response(request)).await??;
             assert_eq!(
