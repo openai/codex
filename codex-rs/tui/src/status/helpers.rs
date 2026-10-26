@@ -113,11 +113,12 @@ pub(crate) fn format_tokens_compact(value: i64) -> String {
     }
 
     let value_f64 = value as f64;
-    let (scaled, suffix) = if value >= 1_000_000_000_000 {
+    // Promote values that would round to 1000 in the smaller unit.
+    let (scaled, suffix) = if value >= 999_500_000_000 {
         (value_f64 / 1_000_000_000_000.0, "T")
-    } else if value >= 1_000_000_000 {
+    } else if value >= 999_500_000 {
         (value_f64 / 1_000_000_000.0, "B")
-    } else if value >= 1_000_000 {
+    } else if value >= 999_500 {
         (value_f64 / 1_000_000.0, "M")
     } else {
         (value_f64 / 1_000.0, "K")
