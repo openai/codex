@@ -7,13 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::tools::handlers::PreparedPermissionRequest;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_plugin::PluginId;
 use codex_protocol::approvals::ExecApprovalKind;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
-use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -182,12 +182,11 @@ async fn permission_request_holds_an_elicitation_until_response(capture: bool) {
                 .request_permissions_for_environment(
                     &StepContext::for_test(Arc::clone(&turn_context)),
                     "call-1".to_string(),
-                    RequestPermissionsArgs {
-                        environment_id: None,
+                    PreparedPermissionRequest {
+                        environment_id: environment.environment_id,
                         reason: None,
                         permissions: RequestPermissionProfile::default(),
                     },
-                    environment,
                     CancellationToken::new(),
                 )
                 .await

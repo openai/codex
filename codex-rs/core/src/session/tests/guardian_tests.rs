@@ -11,6 +11,7 @@ use crate::test_support::models_manager_with_provider;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::PreparedPermissionRequest;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalAction;
@@ -45,7 +46,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
-use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
@@ -270,12 +270,11 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         session.request_permissions_for_environment(
             &step_context,
             "perm-call-1".to_string(),
-            RequestPermissionsArgs {
-                environment_id: None,
+            PreparedPermissionRequest {
+                environment_id: environment.environment_id.clone(),
                 reason: Some("need network".to_string()),
                 permissions: requested_permissions.clone(),
             },
-            environment.clone(),
             CancellationToken::new(),
         ),
     )
@@ -294,12 +293,11 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         .request_permissions_for_environment(
             &step_context,
             "perm-call-2".to_string(),
-            RequestPermissionsArgs {
-                environment_id: None,
+            PreparedPermissionRequest {
+                environment_id: environment.environment_id,
                 reason: Some("need network".to_string()),
                 permissions: requested_permissions.clone(),
             },
-            environment,
             CancellationToken::new(),
         )
         .await;
@@ -369,15 +367,17 @@ async fn request_permissions_uses_issuing_step_policy_and_reviewer() {
         session.request_permissions_for_environment(
             &step,
             "step-permissions".to_string(),
-            RequestPermissionsArgs {
-                environment_id: None,
+            PreparedPermissionRequest {
+                environment_id: step
+                    .environments
+                    .primary()
+                    .expect("primary environment")
+                    .selection
+                    .environment_id
+                    .clone(),
                 reason: Some("need network".to_string()),
                 permissions: permissions.clone(),
             },
-            step.environments
-                .primary()
-                .expect("primary environment")
-                .selection(),
             CancellationToken::new(),
         ),
     )
@@ -474,12 +474,11 @@ async fn request_permissions_guardian_review_stops_when_cancelled(
                 .request_permissions_for_environment(
                     &StepContext::for_test(Arc::clone(&turn_context)),
                     "perm-call-cancelled".to_string(),
-                    RequestPermissionsArgs {
-                        environment_id: None,
+                    PreparedPermissionRequest {
+                        environment_id: environment.environment_id,
                         reason: Some("need network".to_string()),
                         permissions: requested_permissions,
                     },
-                    environment,
                     cancellation_token,
                 )
                 .await

@@ -1,10 +1,12 @@
 use codex_protocol::permissions::FileSystemSandboxPolicyContext;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions_with_context;
 use codex_utils_path_uri::LegacyAppPathString;
 use serde_json::Value;
 
 use crate::function_tool::FunctionCallError;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolEnvironments;
 use crate::tools::context::ToolInvocation;
@@ -18,11 +20,64 @@ use crate::tools::handlers::shell_spec::request_permissions_tool_description;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::with_updated_function_input;
+use crate::tools::sandboxing::ApprovalAction;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
 
 pub struct RequestPermissionsHandler;
+
+/// Literal paths are resolved in the selected environment. Entries such as
+/// `project_roots` stay symbolic until the grant is applied.
+pub(crate) struct PreparedPermissionRequest {
+    pub(crate) environment_id: String,
+    pub(crate) reason: Option<String>,
+    pub(crate) permissions: RequestPermissionProfile,
+}
+
+impl PreparedPermissionRequest {
+    /// The caller selects the executor from the tool arguments before resolving permission paths.
+    pub(crate) fn parse(
+        arguments: &str,
+        turn_environment: &TurnEnvironment,
+    ) -> Result<Self, FunctionCallError> {
+        let sandbox_context =
+            turn_environment.sandbox_context(/*additional_permissions*/ None);
+        let context = sandbox_context.policy_context();
+        let mut arguments: Value = parse_arguments(arguments)?;
+        resolve_permission_path_strings(&mut arguments, &context)?;
+        let mut args: RequestPermissionsArgs =
+            serde_json::from_value(arguments).map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {err}"
+                ))
+            })?;
+        args.permissions =
+            normalize_additional_permissions_with_context(args.permissions.into(), &context)
+                .map(RequestPermissionProfile::from)
+                .map_err(FunctionCallError::RespondToModel)?;
+        if args.permissions.is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "request_permissions requires at least one permission".to_string(),
+            ));
+        }
+        Ok(Self {
+            environment_id: turn_environment.selection.environment_id.clone(),
+            reason: args.reason,
+            permissions: args.permissions,
+        })
+    }
+
+    pub(crate) fn approval_action(&self, call_id: &str, turn_id: &str) -> ApprovalAction {
+        ApprovalAction::RequestPermissions {
+            id: call_id.to_owned(),
+            environment_id: self.environment_id.clone(),
+            turn_id: turn_id.to_owned(),
+            reason: self.reason.clone(),
+            permissions: self.permissions.clone(),
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct RequestPermissionsEnvironmentArgs {
@@ -72,33 +127,12 @@ impl RequestPermissionsHandler {
         };
 
         let turn_environment = selected_executor(&environments, &step_context.environments)?;
-        let sandbox_context =
-            turn_environment.sandbox_context(/*additional_permissions*/ None);
-        let context = sandbox_context.policy_context();
-        let mut arguments: Value = parse_arguments(&arguments)?;
-        resolve_permission_path_strings(&mut arguments, &context)?;
-        let mut args: RequestPermissionsArgs =
-            serde_json::from_value(arguments).map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {err}"
-                ))
-            })?;
-        args.permissions =
-            normalize_additional_permissions_with_context(args.permissions.into(), &context)
-                .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
-                .map_err(FunctionCallError::RespondToModel)?;
-        if args.permissions.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "request_permissions requires at least one permission".to_string(),
-            ));
-        }
-
+        let request = PreparedPermissionRequest::parse(&arguments, turn_environment)?;
         let response = session
             .request_permissions_for_environment(
                 &step_context,
                 call_id,
-                args,
-                turn_environment.selection(),
+                request,
                 cancellation_token,
             )
             .await
