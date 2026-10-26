@@ -754,17 +754,16 @@ async fn rejected_queue_messages_are_consumed_without_retrying_or_blocking_follo
     }
     let queue = install_registered_queue(&test, installed.as_ref())?;
 
-    tokio::time::timeout(Duration::from_secs(10), async {
-        test.submit_text_turn("A").await?;
-        for _ in 0..2 {
-            wait_for_event_match(test.codex.as_ref(), |event| {
-                matches!(event, EventMsg::TurnComplete(_)).then_some(())
-            })
-            .await;
-        }
-        anyhow::Ok(())
-    })
-    .await??;
+    // Each turn runs an external hook. Use the event waits' progress deadlines
+    // instead of sharing one wall-clock deadline across all three turns.
+    test.submit_text_turn("A").await?;
+    for _ in 0..2 {
+        wait_for_event_match(test.codex.as_ref(), |event| {
+            matches!(event, EventMsg::TurnComplete(_)).then_some(())
+        })
+        .await;
+    }
+    wait_for_queue_empty(&queue, thread_id).await?;
 
     let prompts = responses
         .requests()
@@ -782,7 +781,6 @@ async fn rejected_queue_messages_are_consumed_without_retrying_or_blocking_follo
         vec!["A", "blocked", "C"],
         hook_log.lines().collect::<Vec<_>>()
     );
-    assert!(queue.list(thread_id).await?.is_empty());
     assert_eq!(2, responses.requests().len());
     Ok(())
 }
