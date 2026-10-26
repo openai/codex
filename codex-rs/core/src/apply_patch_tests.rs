@@ -29,7 +29,7 @@ fn convert_apply_patch_maps_add_variant() {
 }
 
 #[tokio::test]
-async fn prepare_apply_patch_uses_action_policy_before_turn_policy() {
+async fn patch_approval_requirement_uses_action_policy_before_turn_policy() {
     let (_, mut turn) = make_session_and_context().await;
     Arc::make_mut(&mut turn.config)
         .permissions
@@ -62,19 +62,18 @@ async fn prepare_apply_patch_uses_action_policy_before_turn_policy() {
     let sandbox = environment.sandbox_context(/*additional_permissions*/ None);
     let context = sandbox.policy_context();
 
-    let prepared = prepare_apply_patch(
+    let requirement = patch_approval_requirement(
         &step,
         &environment,
         &PatchSandboxRoute::Platform(codex_protocol::config_types::WindowsSandboxLevel::Disabled)
             .prepare_matching(&file_system_policy, &context)
             .expect("prepare patch matching"),
-        action,
+        &action,
     )
     .expect("issuing action policy should request approval");
 
-    assert!(!prepared.auto_approved);
     assert!(matches!(
-        prepared.exec_approval_requirement,
+        requirement,
         ExecApprovalRequirement::NeedsApproval { .. }
     ));
 }

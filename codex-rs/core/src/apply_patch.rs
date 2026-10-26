@@ -12,21 +12,14 @@ use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Debug)]
-pub(crate) struct ApplyPatchRuntimeInvocation {
-    pub(crate) action: ApplyPatchAction,
-    pub(crate) auto_approved: bool,
-    pub(crate) exec_approval_requirement: ExecApprovalRequirement,
-}
-
-pub(crate) fn prepare_apply_patch(
+pub(crate) fn patch_approval_requirement(
     step_context: &StepContext,
     turn_environment: &TurnEnvironment,
     matching: &PatchPolicyMatcher<'_>,
-    action: ApplyPatchAction,
-) -> Result<ApplyPatchRuntimeInvocation, FunctionCallError> {
+    action: &ApplyPatchAction,
+) -> Result<ExecApprovalRequirement, FunctionCallError> {
     match assess_patch_safety(
-        &action,
+        action,
         step_context.settings.approval_policy(),
         turn_environment.permission_profile(),
         matching,
@@ -34,25 +27,17 @@ pub(crate) fn prepare_apply_patch(
     .map_err(|error| {
         FunctionCallError::RespondToModel(format!("failed to check patch permissions: {error}"))
     })? {
-        SafetyCheck::AutoApprove => Ok(ApplyPatchRuntimeInvocation {
-            action,
-            auto_approved: true,
-            exec_approval_requirement: ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
-            },
+        SafetyCheck::AutoApprove => Ok(ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
         }),
         SafetyCheck::AskUser => {
             // Delegate the approval prompt (including cached approvals) to the
             // tool runtime, consistent with how shell/unified_exec approvals
             // are orchestrator-driven.
-            Ok(ApplyPatchRuntimeInvocation {
-                action,
-                auto_approved: false,
-                exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
-                    reason: None,
-                    proposed_execpolicy_amendment: None,
-                },
+            Ok(ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
             })
         }
         SafetyCheck::Reject { reason } => Err(FunctionCallError::RespondToModel(format!(
