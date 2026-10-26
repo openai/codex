@@ -12,7 +12,6 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::PrefixedWrappedHistoryCell;
 use crate::history_cell::ReasoningSummaryCell;
-use crate::history_cell::UserHistoryCell;
 use crate::history_cell::split_reasoning_summary_parts;
 use crate::inline_visualization::InlineVisualizationContext;
 use crate::legacy_core::config::Config;
@@ -252,28 +251,36 @@ fn item_to_cells(
                     .collect(),
             };
             let message = item.message();
-            let reply_text = crate::async_question_reply::display_text(&message);
-            let text_elements = if reply_text.is_some() {
-                Vec::new()
+            let replies = crate::async_question_reply::parse(&message).unwrap_or_default();
+            let (message, elements) = if replies.is_empty() {
+                (message, item.text_elements())
             } else {
-                item.text_elements()
+                (
+                    crate::async_question_reply::display_replies(&replies),
+                    Vec::new(),
+                )
             };
-            cells.push(Arc::new(UserHistoryCell {
-                presentation: Default::default(),
-                message: reply_text.unwrap_or(message),
-                text_elements,
-                local_image_paths: item.local_image_paths(),
-                remote_image_urls: item.image_urls(),
-            }));
+            let cell = crate::history_cell::new_user_prompt(
+                message,
+                elements,
+                item.local_image_paths(),
+                item.image_urls(),
+            );
+            cells.push(Arc::new(cell.with_async_replies(replies, cwd.as_path())));
         }
-        ThreadItemPayload::AgentMessage { text, .. } => {
+        ThreadItemPayload::AgentMessage {
+            text, questions, ..
+        } => {
             let parsed = parse_assistant_markdown(&text, cwd.as_path());
             if !parsed.visible_markdown.trim().is_empty() {
-                cells.push(Arc::new(AgentMarkdownCell::new_with_inline_visualizations(
-                    parsed.visible_markdown,
-                    cwd.as_path(),
-                    inline_visualization_context,
-                )));
+                cells.push(Arc::new(
+                    AgentMarkdownCell::new_with_inline_visualizations(
+                        parsed.visible_markdown,
+                        cwd.as_path(),
+                        inline_visualization_context,
+                    )
+                    .with_questions(questions.as_deref().unwrap_or_default()),
+                ));
             }
         }
         ThreadItemPayload::FunctionCallOutput {

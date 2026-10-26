@@ -982,7 +982,7 @@ prompt_stack_back = ["ctrl-x down", "shift-right"]
 #[tokio::test]
 async fn desktop_async_answer_dismisses_only_its_question_and_preserves_the_other_draft() {
     for replay_kind in [None, Some(ReplayKind::ThreadSnapshot)] {
-        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         let questions = vec![
             question("Same title?", /*options*/ None),
             question("Same title?", /*options*/ None),
@@ -997,7 +997,7 @@ async fn desktop_async_answer_dismisses_only_its_question_and_preserves_the_othe
         chat.bottom_pane
             .handle_paste("My draft for the second question".into());
         let reply = r#"<send_user_message_question_reply>
-[{"questionItemId":"[\"request_user_input_async\",\"questions\",0]","question":"Same title?","answer":"Answer from desktop"}]
+[{"questionItemId":"[\"request_user_input_async\",\"questions\",0]","question":"Same title?","answer":"Answer from **desktop**"}]
 </send_user_message_question_reply>"#;
         let reply = format!(
             "# Context from my IDE setup:\n\n## Open tabs:\n- lib.rs: src/lib.rs\n\n## My request for Codex:\n{reply}"
@@ -1010,6 +1010,7 @@ async fn desktop_async_answer_dismisses_only_its_question_and_preserves_the_othe
                 text_elements: Vec::new(),
             }],
         };
+        drain_insert_history(&mut rx);
         chat.handle_server_notification(
             ServerNotification::ItemCompleted(ItemCompletedNotification::new(
                 "thread".into(),
@@ -1028,9 +1029,16 @@ async fn desktop_async_answer_dismisses_only_its_question_and_preserves_the_othe
             crate::thread_transcript::RawReasoningVisibility::Hidden,
             /*config*/ None,
         );
-        insta::assert_snapshot!(
-            "desktop_async_question_reply",
-            lines_to_single_string(&cells[0].transcript_lines(/*width*/ 80))
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors {
+                fg: (220, 220, 220),
+                bg: (20, 20, 20),
+            },
+            || {
+                let persisted = cells[0].transcript_lines(/*width*/ 80);
+                insta::assert_debug_snapshot!("desktop_async_question_reply", persisted);
+                assert_eq!(drain_insert_history(&mut rx), [persisted]);
+            },
         );
         insta::assert_snapshot!(
             "async_question_answered_on_another_client",
@@ -1052,6 +1060,46 @@ async fn desktop_async_answer_dismisses_only_its_question_and_preserves_the_othe
             "> Same title?\n\nMy draft for the second question"
         );
     }
+}
+
+#[tokio::test]
+async fn async_question_markdown_matches_loaded_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let title = "Keep `--verbose` for **failed** runs?";
+    let item = AppServerThreadItemPayload::AgentMessage {
+        id: "ask".into(),
+        text: format!("{title}\n- Only for **CI**\n\nSee the [guide](https://example.test/guide)?"),
+        phase: None,
+        memory_citation: None,
+        delivery: None,
+        questions: Some(vec![
+            question(title, Some(vec!["Only for **CI**".into()])),
+            question(
+                "See the [guide](https://example.test/guide)?",
+                /*options*/ None,
+            ),
+        ]),
+    };
+    drain_insert_history(&mut rx);
+    crate::terminal_palette::with_test_default_colors(
+        crate::terminal_probe::DefaultColors {
+            fg: (220, 220, 220),
+            bg: (20, 20, 20),
+        },
+        || {
+            chat.handle_thread_item(item.clone(), "turn-1".into(), ThreadItemRenderSource::Live);
+            let cells = drain_insert_history(&mut rx);
+            let paged = crate::thread_transcript::thread_items_to_transcript_cells(
+                /*thread_id*/ None,
+                &chat.config.cwd,
+                [item],
+                crate::thread_transcript::RawReasoningVisibility::Hidden,
+                /*config*/ None,
+            );
+            assert_eq!(cells, [paged[0].transcript_lines(/*width*/ 80)]);
+            insta::assert_debug_snapshot!("async_question_transcript", cells[0]);
+        },
+    );
 }
 
 #[tokio::test]

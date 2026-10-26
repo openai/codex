@@ -1,9 +1,19 @@
 ---
 source: tui/src/chatwidget/tests/questions_tests.rs
-assertion_line: 856
-expression: "lines_to_single_string(&cells[0].transcript_lines(80))"
+expression: persisted
 ---
-
-› > Same title?
-  
-  Answer from desktop
+[
+    Line::default().bg(Color::Rgb(57, 57, 57)),
+    Line::from_iter([
+        Span::from("↪ ").fg(Color::Rgb(99, 168, 248)).bg(Color::Rgb(57, 57, 57)).not_dim(),
+        Span::from("Re: ").fg(Color::Rgb(99, 168, 248)).bg(Color::Rgb(57, 57, 57)).dim(),
+        Span::from("Same title?").fg(Color::Rgb(99, 168, 248)).bg(Color::Rgb(57, 57, 57)).dim(),
+    ]).bg(Color::Rgb(57, 57, 57)),
+    Line::default().bg(Color::Rgb(57, 57, 57)),
+    Line::from_iter([
+        Span::from("  "),
+        Span::from("Answer from "),
+        Span::from("desktop").fg(Color::Rgb(243, 139, 168)).bold(),
+    ]).bg(Color::Rgb(57, 57, 57)),
+    Line::default().bg(Color::Rgb(57, 57, 57)),
+]

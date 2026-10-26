@@ -1,0 +1,31 @@
+---
+source: tui/src/chatwidget/tests/questions_tests.rs
+expression: "cells[0]"
+---
+[
+    Line::from_iter([
+        Span::from("? ").fg(Color::Rgb(99, 168, 248)),
+        Span::from("Keep ").fg(Color::Rgb(99, 168, 248)),
+        Span::from("--verbose").fg(Color::Rgb(166, 227, 161)),
+        Span::from(" for ").fg(Color::Rgb(99, 168, 248)),
+        Span::from("failed").fg(Color::Rgb(243, 139, 168)).bold(),
+        Span::from(" runs?").fg(Color::Rgb(99, 168, 248)),
+    ]),
+    Line::default(),
+    Line::from_iter([
+        Span::from("  "),
+        Span::from("• ").fg(Color::Rgb(148, 226, 213)),
+        Span::from("Only for "),
+        Span::from("CI").fg(Color::Rgb(243, 139, 168)).bold(),
+    ]),
+    Line::default(),
+    Line::from_iter([
+        Span::from("? ").fg(Color::Rgb(99, 168, 248)),
+        Span::from("See the ").fg(Color::Rgb(99, 168, 248)),
+        Span::from("guide").fg(Color::Rgb(137, 180, 250)).underlined(),
+        Span::from(" (").fg(Color::Rgb(99, 168, 248)),
+        Span::from("https://example.test/guide").fg(Color::Rgb(137, 180, 250)).underlined(),
+        Span::from(")").fg(Color::Rgb(99, 168, 248)),
+        Span::from("?").fg(Color::Rgb(99, 168, 248)),
+    ]),
+]

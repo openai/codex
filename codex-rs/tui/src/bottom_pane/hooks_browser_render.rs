@@ -233,10 +233,7 @@ pub(super) fn detail_wrapped_lines(
             .collect::<String>();
         let visible_end = prefix_width + crate::width::display_width(content.trim_end_matches('…'));
         last_span.content = content.into();
-        last_line.hyperlinks.retain_mut(|link| {
-            link.columns.end = link.columns.end.min(visible_end);
-            !link.columns.is_empty()
-        });
+        last_line.clip_hyperlinks_to_width(visible_end);
     }
     lines
 }

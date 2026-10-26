@@ -455,7 +455,8 @@ impl ChatWidget {
             }
         }
         let parsed = parse_assistant_markdown(&message, self.config.cwd.as_path());
-        if from_replay
+        let questions = item.questions.as_deref().unwrap_or_default();
+        if (from_replay || !questions.is_empty())
             && self.stream_controller.is_none()
             && !parsed.visible_markdown.is_empty()
             && !self.completed_agent_message_was_flushed(&message)
@@ -475,6 +476,7 @@ impl ChatWidget {
                     self.config.cwd.as_path(),
                     context,
                 )
+                .with_questions(questions)
                 .with_copy_source(Some(message.clone())),
             );
             self.handle_stream_finished();

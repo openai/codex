@@ -202,6 +202,24 @@ impl HyperlinkLine {
         }
     }
 
+    pub(crate) fn clip_hyperlinks_to_width(&mut self, width: usize) {
+        self.hyperlinks.retain_mut(|link| {
+            link.columns.end = link.columns.end.min(width);
+            !link.columns.is_empty()
+        });
+    }
+
+    /// Native scrollback paints the row style last. Resolve text styles onto the spans so
+    /// inline Markdown and gutter overrides survive, keeping the background for empty columns.
+    pub(crate) fn resolve_span_styles(mut self) -> Self {
+        let style = std::mem::take(&mut self.line.style);
+        self.line.style.bg = style.bg;
+        for span in &mut self.line.spans {
+            span.style = style.patch(span.style);
+        }
+        self
+    }
+
     pub(crate) fn style(mut self, style: ratatui::style::Style) -> Self {
         self.line = self.line.style(style);
         if let Some(source) = &mut self.source {
@@ -283,24 +301,32 @@ pub(crate) fn prefix_hyperlink_lines(
 
 /// Retain a known first-line label in copy text without changing the existing wrapping.
 ///
-/// Callers pass the suffix of the first row's synthetic prefix that carries meaning, such as
-/// a checkbox or `answer:`. Only that row's shared logical source is updated.
+/// The label may precede Markdown indentation or follow a display-only gutter.
+/// Only the first row's shared logical source is updated.
 pub(crate) fn retain_initial_prefix(lines: &mut [HyperlinkLine], prefix: &str) {
     let Some(origin) = lines.first().and_then(|line| line.source.clone()) else {
         return;
     };
-    debug_assert!(origin.prefix_bytes >= prefix.len());
-    let prefix_line = LogicalLineSource::from_line(&lines[0].line)
-        .styled_range(origin.prefix_bytes - prefix.len()..origin.prefix_bytes);
+    let first = LogicalLineSource::from_line(&lines[0].line);
+    let indent = &first.text[..origin.prefix_bytes];
+    let Some(label_start) = indent.rfind(prefix) else {
+        return;
+    };
+    let retained = &indent[label_start..];
+    let prefix_line = first.styled_range(label_start..origin.prefix_bytes);
     let mut styles = LogicalLineSource::from_line(&prefix_line).styles.to_vec();
     styles.extend(origin.styles.iter().map(|(range, style)| {
         (
-            range.start + prefix.len()..range.end + prefix.len(),
+            range.start + retained.len()..range.end + retained.len(),
             origin.line_style.patch(*style).patch(origin.span_style),
         )
     }));
     let styles = std::sync::Arc::from(styles);
-    let text: std::sync::Arc<str> = format!("{prefix}{}", origin.text).into();
+    let text: std::sync::Arc<str> = format!("{retained}{}", origin.text).into();
+    let labelled_body = origin
+        .copy
+        .as_ref()
+        .map(|_| std::sync::Arc::new((prefix.len(), origin.clone())));
     for (index, line) in lines.iter_mut().enumerate() {
         let Some(source) = line
             .source
@@ -311,12 +337,13 @@ pub(crate) fn retain_initial_prefix(lines: &mut [HyperlinkLine], prefix: &str) {
         };
         source.text = std::sync::Arc::clone(&text);
         source.styles = std::sync::Arc::clone(&styles);
+        source.labelled_body = labelled_body.clone();
         source.line_style = ratatui::style::Style::default();
         source.span_style = ratatui::style::Style::default();
-        source.range = source.range.start + prefix.len()..source.range.end + prefix.len();
+        source.range = source.range.start + retained.len()..source.range.end + retained.len();
         if index == 0 {
             source.range.start = 0;
-            source.prefix_bytes -= prefix.len();
+            source.prefix_bytes -= retained.len();
         }
     }
 }

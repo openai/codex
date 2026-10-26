@@ -104,6 +104,8 @@ const RAW_DIFF_SUMMARY_WIDTH: usize = 10_000;
 mod activity_details;
 pub(crate) mod activity_preview;
 mod approvals;
+mod async_questions;
+mod async_replies;
 mod base;
 mod dynamic;
 mod exec;

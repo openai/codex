@@ -292,6 +292,26 @@ impl SelectedLine {
         range: Range<usize>,
         separator: &str,
     ) {
+        if let Some((label_end, body)) = source.labelled_body.as_deref() {
+            let body_start = source.text.len() - body.text.len();
+            let mut separator = separator;
+            if range.start < *label_end {
+                let mut label = LogicalLineSource::new(source.text[..*label_end].to_owned());
+                label.copy_as_prose = true;
+                Self::append(
+                    lines,
+                    label,
+                    range.start..range.end.min(*label_end),
+                    separator,
+                );
+                separator = "";
+            }
+            if range.end > body_start {
+                let body_range = range.start.saturating_sub(body_start)..range.end - body_start;
+                Self::append(lines, body.clone(), body_range, separator);
+            }
+            return;
+        }
         // Streaming can split the same logical line across history cells.
         if let Some(previous) = lines.last_mut()
             && Arc::ptr_eq(&previous.source.text, &source.text)
