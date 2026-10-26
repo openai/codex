@@ -18,7 +18,14 @@ pub(crate) struct UserHistoryCell {
     pub text_elements: Vec<TextElement>,
     pub local_image_paths: Vec<PathBuf>,
     pub remote_image_urls: Vec<String>,
-    pub(crate) spoken: bool,
+    pub(crate) presentation: UserMessagePresentation,
+}
+
+#[derive(Debug, Default)]
+pub(crate) enum UserMessagePresentation {
+    #[default]
+    Plain,
+    Spoken,
 }
 
 /// Remove CSI sequences and control characters, preserving tabs and newlines.
@@ -152,6 +159,10 @@ fn build_user_message_lines_with_elements(
 }
 
 impl UserHistoryCell {
+    pub(crate) fn is_spoken(&self) -> bool {
+        matches!(self.presentation, UserMessagePresentation::Spoken)
+    }
+
     pub(crate) fn has_visible_content(&self) -> bool {
         !sanitize_user_text(Cow::Borrowed(&self.message))
             .trim()
@@ -183,7 +194,7 @@ impl HistoryCell for UserHistoryCell {
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         let sanitized_message = sanitize_user_text((&self.message).into());
         // Speech transcripts can begin with whitespace; the marker already supplies its separator.
-        let message = if self.spoken {
+        let message = if self.is_spoken() {
             sanitized_message.trim_start()
         } else {
             sanitized_message.as_ref()
@@ -231,7 +242,7 @@ impl HistoryCell for UserHistoryCell {
         if let Some(wrapped_message) = wrapped_message {
             lines.extend(prefix_hyperlink_lines(
                 wrapped_message,
-                if self.spoken {
+                if self.is_spoken() {
                     "› ".red().bold()
                 } else {
                     "› ".bold().dim()
@@ -730,13 +741,13 @@ pub(crate) fn new_user_prompt(
         text_elements,
         local_image_paths,
         remote_image_urls,
-        spoken: false,
+        presentation: UserMessagePresentation::Plain,
     }
 }
 
 pub(crate) fn new_spoken_user_prompt(message: String) -> UserHistoryCell {
     let mut cell = new_user_prompt(message, Vec::new(), Vec::new(), Vec::new());
-    cell.spoken = true;
+    cell.presentation = UserMessagePresentation::Spoken;
     cell
 }
 
