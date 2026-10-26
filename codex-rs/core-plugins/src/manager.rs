@@ -1588,6 +1588,7 @@ impl PluginsManager {
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
+        prefetch_recommendations: bool,
         on_effective_plugins_changed: Option<EffectivePluginsChangedCallback>,
     ) {
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
@@ -1598,6 +1599,9 @@ impl PluginsManager {
             EffectivePluginsChange::default(),
         );
 
+        if !prefetch_recommendations {
+            return;
+        }
         let manager = Arc::clone(self);
         let config = config.clone();
         tokio::spawn(async move {
@@ -1873,6 +1877,7 @@ impl PluginsManager {
         self.maybe_start_remote_plugin_caches_refresh(
             &context.global_config,
             auth.clone(),
+            /*prefetch_recommendations*/ true,
             on_effective_plugins_changed.clone(),
         );
         self.maybe_start_remote_installed_plugin_bundle_sync(
@@ -2874,6 +2879,7 @@ impl PluginsManager {
     pub fn maybe_start_plugin_startup_tasks_for_config(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
+        prefetch_discovery: bool,
         reload_config: ConfigLayerReload,
         on_effective_plugins_changed: Option<EffectivePluginsChangedCallback>,
         upgrade_warnings: mpsc::UnboundedSender<String>,
@@ -2966,6 +2972,7 @@ impl PluginsManager {
                 manager.maybe_start_remote_plugin_caches_refresh(
                     &config_for_remote_sync,
                     auth.clone(),
+                    prefetch_discovery,
                     on_effective_plugins_changed.clone(),
                 );
                 manager.maybe_start_remote_installed_plugin_bundle_sync(
@@ -2973,6 +2980,9 @@ impl PluginsManager {
                     auth.clone(),
                     on_effective_plugins_changed,
                 );
+                if !prefetch_discovery {
+                    return;
+                }
                 let mut scopes = crate::remote::cached_remote_plugin_catalog_scopes(
                     manager.codex_home.as_path(),
                     &remote_plugin_service_config(&config_for_remote_sync),
@@ -2985,18 +2995,12 @@ impl PluginsManager {
                 }
                 manager.maybe_start_remote_catalog_cache_refresh(
                     &config_for_remote_sync,
-                    auth,
+                    auth.clone(),
                     scopes,
                     RemoteCatalogCacheRefreshMode::Force,
                 );
-            });
-
-            let config_for_featured_plugins = config.clone();
-            let manager = Arc::clone(self);
-            tokio::spawn(async move {
-                let auth = manager.auth_manager.auth().await;
                 if let Err(err) = manager
-                    .featured_plugin_ids_for_config(&config_for_featured_plugins, auth.as_ref())
+                    .featured_plugin_ids_for_config(&config_for_remote_sync, auth.as_ref())
                     .await
                 {
                     warn!(

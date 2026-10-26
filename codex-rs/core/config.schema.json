@@ -1197,6 +1197,9 @@
             "personality": {
               "type": "boolean"
             },
+            "plugin_discovery_prefetch": {
+              "type": "boolean"
+            },
             "plugin_hooks": {
               "type": "boolean"
             },
@@ -7816,6 +7819,9 @@
           "type": "boolean"
         },
         "personality": {
+          "type": "boolean"
+        },
+        "plugin_discovery_prefetch": {
           "type": "boolean"
         },
         "plugin_hooks": {

@@ -1961,7 +1961,8 @@ enabled = true
 }
 
 #[tokio::test]
-async fn app_server_startup_sync_downloads_remote_installed_plugin_bundles() -> Result<()> {
+async fn app_server_startup_downloads_installed_plugin_bundles_without_discovery_prefetch()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -2001,11 +2002,24 @@ async fn app_server_startup_sync_downloads_remote_installed_plugin_bundles() -> 
         .await;
     mount_empty_user_installed_plugins(&server).await;
 
+    for endpoint in [
+        "/backend-api/ps/plugins/list",
+        "/backend-api/plugins/featured",
+        "/backend-api/ps/plugins/suggested/codex",
+    ] {
+        Mock::given(path(endpoint))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(0)
+            .mount(&server)
+            .await;
+    }
+
     let installed_path = codex_home
         .path()
         .join("plugins/cache/openai-curated-remote/linear/1.2.3");
     let _mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .with_args(&["-c", "features.plugin_discovery_prefetch=false"])
         .with_plugin_startup_tasks()
         .with_env_overrides(&[(TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS, Some("1"))])
         .build_initialized_with_timeout(DEFAULT_TIMEOUT)
@@ -2137,7 +2151,7 @@ enum ProjectPluginConfiguration {
     Invalid,
 }
 
-#[test_case(ProjectPluginConfiguration::None, None, "", true, true; "without project override")]
+#[test_case(ProjectPluginConfiguration::None, None, "plugin_discovery_prefetch = false", true, true; "without discovery prefetch")]
 #[test_case(ProjectPluginConfiguration::Disabled, None, "", true, true; "project disables local plugins")]
 #[test_case(ProjectPluginConfiguration::Invalid, None, "", true, true; "invalid project preserves remote plugins")]
 #[test_case(ProjectPluginConfiguration::None, Some("tpp"), "", true, true; "configured product sku")]
