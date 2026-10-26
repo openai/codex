@@ -3562,6 +3562,23 @@ enabled = true
     }
 
     #[test]
+    fn queue_help_lists_supported_options() {
+        let help = help_from_args(&["codex", "queue", "--help"]);
+        let (general, local) = help
+            .split_once("Local server options (without --remote):")
+            .unwrap();
+        assert!(general.contains("--message <TEXT>"));
+        assert!(!general.contains("--model"));
+        assert!(!general.contains("-c model="));
+        let local_flags = local
+            .lines()
+            .filter(|line| line.starts_with("  -") || line.starts_with("      --"))
+            .map(str::trim)
+            .collect::<Vec<_>>();
+        insta::assert_snapshot!(local_flags.join("\n"), @"-C, --cd <DIR>");
+    }
+
+    #[test]
     fn tcp_tunnel_is_hidden_and_accepts_its_control_input_contract() {
         let root_help = help_from_args(&["codex", "--help"]);
         assert!(!root_help.contains("tcp-tunnel"), "{root_help}");

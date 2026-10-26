@@ -182,20 +182,39 @@ fn queue_rejects_empty_message() -> Result<()> {
 }
 
 #[test]
-fn queue_rejects_image_attachments() -> Result<()> {
-    let output = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
-        .args([
-            "queue",
-            "--thread",
-            THREAD_ID,
-            "--message",
-            "do the thing",
-            "--image",
-            "screenshot.png",
-        ])
-        .output()?;
-    assert!(!output.status.success());
-    assert!(String::from_utf8(output.stderr)?.contains("does not support image attachments"));
+fn queue_rejects_unsupported_options() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    for (args, expected) in [
+        ("queue --image screenshot.png", "image attachments"),
+        ("queue --model other-model", "`--model`"),
+        ("--oss queue", "`--oss`"),
+        ("queue --local-provider ollama", "`--local-provider`"),
+        (
+            "queue --dangerously-bypass-hook-trust",
+            "`--dangerously-bypass-hook-trust`",
+        ),
+        (
+            "-c model=other queue -c analytics.enabled=false",
+            "`model` config override",
+        ),
+        ("queue -s read-only", "`--sandbox`"),
+        ("--approve-for-me queue", "`--approve-for-me`"),
+        ("prompt queue", "positional prompt; use `--message`"),
+        ("-C . queue --remote unix://", "`--cd` with `--remote`"),
+        ("--remote unix:// queue -C .", "`--cd` with `--remote`"),
+    ] {
+        let output = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+            .env("CODEX_HOME", codex_home.path())
+            .args(args.split_whitespace())
+            .args(["--thread", THREAD_ID, "--message", "do the thing"])
+            .output()?;
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains("`codex queue`") && stderr.contains(expected),
+            "{args:?}: {stderr}"
+        );
+    }
     Ok(())
 }
 
@@ -631,8 +650,10 @@ async fn queue_rejects_overrides_that_bypass_local_daemon() -> Result<()> {
         .env("CODEX_HOME", codex_home.path())
         .args([
             "queue",
+            "-C",
+            ".",
             "-c",
-            "model=\"test-model\"",
+            "analytics.enabled=false",
             "--thread",
             THREAD_ID,
             "--message",
@@ -640,12 +661,11 @@ async fn queue_rejects_overrides_that_bypass_local_daemon() -> Result<()> {
         ])
         .output()
         .await?;
-    server.await??;
-
     assert!(!output.status.success());
     assert!(
         String::from_utf8(output.stderr)?
             .contains("embedded app server while a local app-server daemon is running")
     );
+    server.await??;
     Ok(())
 }
