@@ -1803,6 +1803,18 @@ impl Session {
                     }
                 }
                 self.persist_rollout_items(&rollout_items).await;
+                if self.preserve_parent_tool_declarations() {
+                    let notice = DeveloperInstructions::new(
+                        "<mcp_tools>\nMCP tools are unavailable for this request.\n</mcp_tools>",
+                    )
+                    .with_metadata(ContentItemMetadata::tool(/*namespace*/ None));
+                    self.record_conversation_items(
+                        &turn_context,
+                        turn_context.model_info(),
+                        &[ContextualUserFragment::into(notice)],
+                    )
+                    .await;
+                }
 
                 // Agent spawn owns its final durability barrier so it can overlap the edge write.
                 let persist_context = match self.fork_persistence {
@@ -4515,6 +4527,16 @@ impl Session {
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
         true
+    }
+
+    fn preserve_parent_tool_declarations(&self) -> bool {
+        // Only prediction forks and thread/sample set this marker when they disable MCP.
+        self.enabled(Feature::PredictionPreserveParentTools)
+            && self
+                .services
+                .thread_extension_data
+                .get::<crate::McpServersDisabled>()
+                .is_some()
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

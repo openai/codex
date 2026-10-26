@@ -2945,7 +2945,7 @@ async fn fork_option_disables_mcp_servers(
     let server = responses::start_mock_server().await;
     let mock = responses::mount_sse_sequence(
         &server,
-        ["parent", "child", "refreshed-child", "continued-parent"]
+        ["parent", "prediction", "continued-parent"]
             .into_iter()
             .map(|id| responses::sse(vec![responses::ev_completed(id)]))
             .collect(),
@@ -2987,7 +2987,7 @@ async fn fork_option_disables_mcp_servers(
     let mut model = construct_model_info_offline("gpt-5.4", &config);
     model.use_responses_lite = responses_lite;
     model.supports_search_tool = false;
-    model.tool_mode = Some(codex_protocol::openai_models::ToolMode::Direct);
+    model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeMode);
     let catalog = codex_home.path().join("catalog.json");
     std::fs::write(
         &catalog,
@@ -3036,38 +3036,36 @@ async fn fork_option_disables_mcp_servers(
             },
         })
         .await?;
-    let removes_mcp = disable_mcp && incremental_tools && responses_lite;
-    for (index, thread_id) in [&child.thread.id, &child.thread.id, &parent.thread.id]
-        .into_iter()
-        .enumerate()
-    {
-        if index == 1 {
-            let initializations = mcp_server
-                .received_requests()
-                .await
-                .expect("MCP request recording must be enabled")
-                .iter()
-                .filter(|request| request.method.as_str() == "POST")
-                .filter(|request| {
-                    serde_json::from_slice::<Value>(&request.body)
-                        .expect("MCP request must be valid JSON")["method"]
-                        == "initialize"
-                })
-                .count();
-            if removes_mcp {
-                assert_eq!(initializations, 1, "disabled fork must not connect MCPs");
-            }
-            let _: McpServerRefreshResponse = app
-                .request(|request_id| ClientRequest::McpServerRefresh {
-                    request_id,
-                    params: None,
-                })
-                .await?;
-        }
+    let disables_mcp = disable_mcp && incremental_tools && responses_lite;
+    if disables_mcp {
+        let initializations = mcp_server
+            .received_requests()
+            .await
+            .expect("MCP request recording must be enabled")
+            .iter()
+            .filter(|request| request.method.as_str() == "POST")
+            .filter(|request| {
+                serde_json::from_slice::<Value>(&request.body)
+                    .expect("MCP request must be valid JSON")["method"]
+                    == "initialize"
+            })
+            .count();
+        assert_eq!(initializations, 1, "disabled fork must not connect MCPs");
+    }
+    let _: McpServerRefreshResponse = app
+        .request(|request_id| ClientRequest::McpServerRefresh {
+            request_id,
+            params: None,
+        })
+        .await?;
+    for (thread_id, text) in [
+        (&child.thread.id, "Predict the next message."),
+        (&parent.thread.id, "Continue"),
+    ] {
         app.start_turn_and_wait_for_completion(TurnStartParams {
             thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
-                text: "Continue".into(),
+                text: text.into(),
                 text_elements: vec![],
             }],
             ..Default::default()
@@ -3081,21 +3079,36 @@ async fn fork_option_disables_mcp_servers(
             .to_string()
             .contains("prediction_mcp_lookup")
     );
-    assert_eq!(
-        requests
-            .iter()
-            .map(|request| request.body_json()["input"]
-                .as_array()
-                .expect("input")
+    let declarations = requests[0].inputs_of_type("additional_tools");
+    if disables_mcp {
+        assert!(
+            declarations
                 .iter()
-                .any(|item| {
-                    let text = item.to_string();
-                    text.contains("namespaces are no longer available")
-                        && text.contains("mcp__fixture")
-                }))
-            .collect::<Vec<_>>(),
-        vec![false, removes_mcp, removes_mcp, false],
-    );
+                .any(|item| responses::namespace_child_tool(item, "functions", "exec").is_some())
+        );
+    }
+    let notice_counts: Vec<_> = requests
+        .iter()
+        .map(|request| {
+            request
+                .message_input_texts("developer")
+                .iter()
+                .filter(|text| text.contains("MCP tools are unavailable for this request."))
+                .count()
+        })
+        .collect();
+    assert_eq!(notice_counts, [0, usize::from(disables_mcp), 0]);
+    for request in &requests[1..] {
+        if disables_mcp {
+            assert_eq!(request.inputs_of_type("additional_tools"), declarations);
+        }
+        assert!(
+            !request
+                .input()
+                .iter()
+                .any(|item| item.to_string().contains("no longer available"))
+        );
+    }
     Ok(())
 }
 
