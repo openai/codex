@@ -6,12 +6,19 @@ use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::TestAppServer;
 use app_test_support::encode_id_token;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_models_cache;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -241,6 +248,76 @@ async fn stable_clients_do_not_treat_failed_workspace_discovery_as_unrestricted(
         json!({"account": {"type": "chatgpt", "email": null, "planType": "pro"},
             "requiresOpenaiAuth": true, "workspaceRouting": routing("selected", "https://chatgpt.com", "NO_CONSTRAINT")})
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn reused_refresh_token_tells_the_user_to_sign_in_again() -> Result<()> {
+    let backend = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&backend)
+        .await;
+    Mock::given(path("/backend-api/wham/accounts/check"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&backend)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {"code": "refresh_token_reused"}
+        })))
+        .mount(&backend)
+        .await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "chatgpt_base_url = '{0}/backend-api'\nopenai_base_url = '{0}/backend-api/codex'\ncli_auth_credentials_store = 'file'\n",
+            backend.uri()
+        ),
+    )?;
+    write_models_cache(home.path()).await?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("stale-token")
+            .account_id("selected")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let refresh_url = format!("{}/oauth/token", backend.uri());
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .with_env_overrides(&[
+            ("OPENAI_API_KEY", None),
+            (REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, Some(&refresh_url)),
+        ])
+        .build_initialized_with_timeout(READ_TIMEOUT)
+        .await?;
+    let thread = server
+        .start_thread(ThreadStartParams::default())
+        .await?
+        .thread;
+    let completed = timeout(
+        READ_TIMEOUT,
+        server.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "hi".into(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+    let error = completed.turn.error.expect("failed turn error");
+    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::Unauthorized));
+    assert!(
+        error.message.contains("refresh token was already used"),
+        "{error}"
+    );
+    assert!(error.message.contains("sign in again"), "{error}");
     Ok(())
 }
 
