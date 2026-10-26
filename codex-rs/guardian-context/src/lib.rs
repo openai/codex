@@ -77,6 +77,7 @@ pub use budget::request_token_bucket;
 pub use cursor::TranscriptCursor;
 pub use cursor::TranscriptMode;
 pub use cursor::TranscriptSelection;
+mod preparation;
 mod profile;
 pub use codex_protocol::TranscriptFormat;
 pub use composition::CollectedContext;

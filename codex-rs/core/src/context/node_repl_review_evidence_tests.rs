@@ -139,6 +139,20 @@ fn evidence_preserves_tail_text_after_oversized_image_response() {
         .render_inputs();
     assert_eq!(inputs.len(), 6);
     assert!(rendered_text(&inputs).contains("FINAL IMPORTANT"));
+    let pressure = "a".repeat(NodeReplReviewEvidence::MAX_RETAINED_BYTES - 1_024);
+    evidence.record(
+        "browser",
+        "cell",
+        "pressure",
+        vec![image_input(&format!("data:image/png;base64,{pressure}"))],
+    );
+    assert!(evidence.images().is_empty());
+    assert_eq!(
+        fragment
+            .context(NodeReplReviewEvidenceMode::Multimodal)
+            .render_inputs(),
+        inputs,
+    );
 }
 
 #[test]
@@ -152,8 +166,13 @@ fn file_backed_images_are_retained_but_omitted_from_guardian_views() {
     let snapshot = evidence.snapshot_since(/*reviewed_sequence*/ 0).unwrap();
     assert_eq!(snapshot.responses.len(), 1);
     assert_eq!(snapshot.responses[0].items, items);
-    assert!(snapshot.responses[0].has_images());
-    assert!(snapshot.responses[0].retained_bytes() >= file_id.len());
+    assert!(
+        snapshot.responses[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, UserInput::Image { .. }))
+    );
+    assert!(super::retained_bytes(&snapshot.responses[0]) >= file_id.len());
     assert_eq!(evidence.images(), Vec::new());
 
     let rendered = snapshot
@@ -192,7 +211,12 @@ fn evidence_evicts_complete_oldest_responses_and_rejects_oversized_items() {
         assert!(body.contains(expected));
     }
     assert!(evidence.0.lock().unwrap().retained_bytes <= max);
-    assert!(retained.responses.iter().all(|item| !item.has_images()));
+    assert!(retained.responses.iter().all(|response| {
+        response
+            .items
+            .iter()
+            .all(|item| !matches!(item, UserInput::Image { .. }))
+    }));
     assert!(body.contains("node_repl_responses=\"1\""));
 }
 

@@ -1,5 +1,6 @@
 //! Thread-owned capture and bounded storage for completed REPL evidence.
 //! Immutable snapshots feed shared rendering; sequence and eviction stay host-owned.
+//! Collection shares frozen records; image eviction uses copy-on-write to preserve readers.
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -39,54 +40,42 @@ pub(crate) fn node_repl_review_evidence_mode(turn: &TurnContext) -> NodeReplRevi
     }
 }
 
-#[derive(Clone, Debug)]
-struct NodeReplReviewResponse {
-    sequence: u64,
-    provenance: String,
-    items: Vec<UserInput>,
+fn retained_bytes(response: &NodeReplResponse) -> usize {
+    std::mem::size_of::<NodeReplResponse>()
+        .saturating_add(std::mem::size_of::<Arc<NodeReplResponse>>())
+        .saturating_add(response.provenance.len())
+        .saturating_add(
+            response
+                .items
+                .capacity()
+                .saturating_mul(std::mem::size_of::<UserInput>()),
+        )
+        .saturating_add(response.items.iter().fold(0_usize, |bytes, item| {
+            bytes.saturating_add(match item {
+                Text { text, .. } => text.len(),
+                Image {
+                    image: ImageReference::Inline { image_url },
+                    ..
+                } => image_url.len(),
+                Image {
+                    image: ImageReference::File { file_id },
+                    ..
+                } => file_id.len(),
+                _ => 0,
+            })
+        }))
 }
 
-impl NodeReplReviewResponse {
-    fn has_images(&self) -> bool {
-        self.items.iter().any(|item| matches!(item, Image { .. }))
-    }
-
-    fn retained_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            .saturating_add(std::mem::size_of::<Arc<Self>>())
-            .saturating_add(self.provenance.len())
-            .saturating_add(
-                self.items
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<UserInput>()),
-            )
-            .saturating_add(self.items.iter().fold(0_usize, |bytes, item| {
-                bytes.saturating_add(match item {
-                    Text { text, .. } => text.len(),
-                    Image {
-                        image: ImageReference::Inline { image_url },
-                        ..
-                    } => image_url.len(),
-                    Image {
-                        image: ImageReference::File { file_id },
-                        ..
-                    } => file_id.len(),
-                    _ => 0,
-                })
-            }))
-    }
-
-    fn discard_images(&mut self) -> usize {
-        let before = self.retained_bytes();
-        self.items.retain(|item| !matches!(item, Image { .. }));
-        self.items.shrink_to_fit();
-        before.saturating_sub(self.retained_bytes())
-    }
+fn discard_images(response: &mut NodeReplResponse) -> usize {
+    let before = retained_bytes(response);
+    response.items.retain(|item| !matches!(item, Image { .. }));
+    response.items.shrink_to_fit();
+    before.saturating_sub(retained_bytes(response))
 }
 
 #[derive(Debug, Default)]
 struct NodeReplReviewEvidenceState {
-    responses: VecDeque<Arc<NodeReplReviewResponse>>,
+    responses: VecDeque<Arc<NodeReplResponse>>,
     next_sequence: u64,
     retained_bytes: usize,
     image_capture_enabled: bool,
@@ -192,7 +181,7 @@ impl NodeReplReviewEvidence {
 
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         state.next_sequence = state.next_sequence.saturating_add(1);
-        let mut response = Arc::new(NodeReplReviewResponse {
+        let mut response = Arc::new(NodeReplResponse {
             sequence: state.next_sequence,
             provenance: format!(
                 "tool={} cell={} call={}",
@@ -202,15 +191,15 @@ impl NodeReplReviewEvidence {
             ),
             items: bounded_items,
         });
-        if response.retained_bytes() > Self::MAX_RETAINED_BYTES {
-            Arc::make_mut(&mut response).discard_images();
+        if retained_bytes(&response) > Self::MAX_RETAINED_BYTES {
+            discard_images(Arc::make_mut(&mut response));
             if response.items.is_empty() {
                 return;
             }
         }
         while state
             .retained_bytes
-            .saturating_add(response.retained_bytes())
+            .saturating_add(retained_bytes(&response))
             > Self::MAX_RETAINED_BYTES
         {
             if state.responses.front().is_some_and(|retained| {
@@ -222,10 +211,15 @@ impl NodeReplReviewEvidence {
                 let reclaimed = state
                     .responses
                     .iter_mut()
-                    .find(|retained| retained.has_images())
-                    .map_or(0, |retained| Arc::make_mut(retained).discard_images());
+                    .find(|retained| {
+                        retained
+                            .items
+                            .iter()
+                            .any(|item| matches!(item, Image { .. }))
+                    })
+                    .map_or(0, |retained| discard_images(Arc::make_mut(retained)));
                 state.retained_bytes = state.retained_bytes.saturating_sub(reclaimed);
-                if reclaimed > 0 || Arc::make_mut(&mut response).discard_images() > 0 {
+                if reclaimed > 0 || discard_images(Arc::make_mut(&mut response)) > 0 {
                     if response.items.is_empty() {
                         return;
                     }
@@ -237,11 +231,11 @@ impl NodeReplReviewEvidence {
             };
             state.retained_bytes = state
                 .retained_bytes
-                .saturating_sub(evicted.retained_bytes());
+                .saturating_sub(retained_bytes(&evicted));
         }
         state.retained_bytes = state
             .retained_bytes
-            .saturating_add(response.retained_bytes());
+            .saturating_add(retained_bytes(&response));
         state.responses.push_back(response);
     }
 
@@ -288,7 +282,7 @@ fn text_input(text: String) -> UserInput {
 }
 
 pub(crate) struct NodeReplReviewEvidenceSnapshot {
-    responses: Vec<Arc<NodeReplReviewResponse>>,
+    responses: Vec<Arc<NodeReplResponse>>,
     omitted_responses: u64,
     pub(crate) sequence: u64,
 }
@@ -296,15 +290,7 @@ pub(crate) struct NodeReplReviewEvidenceSnapshot {
 impl NodeReplReviewEvidenceSnapshot {
     pub(crate) fn context(&self, mode: NodeReplReviewEvidenceMode) -> NodeReplContext<'_> {
         NodeReplContext {
-            responses: self
-                .responses
-                .iter()
-                .map(|response| NodeReplResponse {
-                    sequence: response.sequence,
-                    provenance: &response.provenance,
-                    items: &response.items,
-                })
-                .collect(),
+            responses: &self.responses,
             omitted_responses: self.omitted_responses,
             mode,
         }
