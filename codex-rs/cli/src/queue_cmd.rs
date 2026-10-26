@@ -19,6 +19,11 @@ pub(crate) struct QueueCommand {
     #[arg(long, value_name = "TEXT", value_parser = NonEmptyStringValueParser::new())]
     message: String,
 
+    /// After queueing, try to resume the thread on the local daemon or selected --remote server.
+    /// A failed resume produces a warning and the command still succeeds.
+    #[arg(long)]
+    resume: bool,
+
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
 
@@ -37,6 +42,7 @@ pub(crate) async fn run_queue_command(
     let QueueCommand {
         thread,
         message,
+        resume,
         remote,
         config_overrides,
     } = command;
@@ -52,6 +58,7 @@ pub(crate) async fn run_queue_command(
     codex_tui::run_session_queue_command(
         thread,
         message,
+        resume,
         codex_tui::SessionArchiveCommandOptions {
             cli,
             arg0_paths,

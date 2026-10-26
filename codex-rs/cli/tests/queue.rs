@@ -17,6 +17,7 @@ const THREAD_ID: &str = "123e4567-e89b-12d3-a456-426614174000";
 
 enum QueueResponse {
     Success,
+    ResumeRejected,
     MethodNotFound,
     #[cfg(unix)]
     UnknownMethodVariant,
@@ -72,9 +73,10 @@ where
     let request = websocket.next().await.context("missing queue request")??;
     let request: Value = serde_json::from_str(request.to_text()?)?;
     assert_eq!(request["method"], "thread/queue/add");
+    assert_eq!(request["params"]["threadId"], THREAD_ID);
 
     let result = match response {
-        QueueResponse::Success => json!({
+        QueueResponse::Success | QueueResponse::ResumeRejected => json!({
             "id": request["id"],
             "result": {
                 "queuedSubmission": {
@@ -100,6 +102,27 @@ where
     websocket
         .send(Message::Text(result.to_string().into()))
         .await?;
+    if matches!(response, QueueResponse::ResumeRejected) {
+        for (method, mut reply) in [
+            (
+                "thread/read",
+                json!({"result": {"thread": {"status": {"type": "notLoaded"}, "cwd": r"C:\workspace"}}}),
+            ),
+            (
+                "thread/resume",
+                json!({"error": {"code": -32603, "message": "thread already has an active writer"}}),
+            ),
+        ] {
+            let rpc = websocket.next().await.context("missing resume request")??;
+            let rpc: Value = serde_json::from_str(rpc.to_text()?)?;
+            assert_eq!(rpc["method"], method);
+            assert_eq!(rpc["params"]["threadId"], THREAD_ID);
+            reply["id"] = rpc["id"].clone();
+            websocket
+                .send(Message::Text(reply.to_string().into()))
+                .await?;
+        }
+    }
     Ok(request)
 }
 
@@ -118,6 +141,22 @@ async fn queue_submits_message_to_remote_app_server() -> Result<()> {
         String::from_utf8(output.stdout)?,
         format!("Queued message queued-submission-id for thread {THREAD_ID}.\n")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn queue_succeeds_when_another_server_owns_the_thread() -> Result<()> {
+    let (output, _) = run_remote_queue_command(QueueResponse::ResumeRejected).await?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        format!("Queued message queued-submission-id for thread {THREAD_ID}.\n")
+    );
+    assert!(String::from_utf8(output.stderr)?.contains("thread already has an active writer"));
     Ok(())
 }
 
@@ -165,6 +204,7 @@ async fn run_remote_queue_command(response: QueueResponse) -> Result<(Output, Va
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("ws://{}", listener.local_addr()?);
     let remote_first = matches!(response, QueueResponse::MethodNotFound);
+    let resume = matches!(response, QueueResponse::ResumeRejected);
     let server_home = codex_home.path().to_path_buf();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await?;
@@ -192,6 +232,7 @@ async fn run_remote_queue_command(response: QueueResponse) -> Result<(Output, Va
         .env("CODEX_HOME", codex_home.path())
         .env("CODEX_REMOTE_TOKEN", "test-token")
         .args(remote_args)
+        .args(resume.then_some("--resume"))
         .args(["--thread", THREAD_ID, "--message", "do the thing"])
         .output()
         .await?;
@@ -206,7 +247,6 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     use app_test_support::MockResponsesConfig;
     use app_test_support::TestAppServer;
     use app_test_support::create_final_assistant_message_sse_response;
-    use app_test_support::create_mock_responses_server_sequence_unchecked;
     use codex_app_server_client::AppServerEvent;
     use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
     use codex_app_server_client::RemoteAppServerClient;
@@ -223,18 +263,28 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     use codex_app_server_protocol::ThreadSetNameResponse;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
+    use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::TurnStatus;
     use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
     use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
+    use core_test_support::responses;
     use tokio::process::Command;
     use tokio::time::timeout;
+    use wiremock::Mock;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     let codex_home = socket_test_home()?;
     let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
-    let model = create_mock_responses_server_sequence_unchecked(vec![
-        create_final_assistant_message_sse_response("queued message consumed")?,
-    ])
-    .await;
+    let model = responses::start_mock_server().await;
+    let model_requests = Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(responses::sse_response(
+            create_final_assistant_message_sse_response("queued message consumed")?,
+        ))
+        .expect(2)
+        .mount_as_scoped(&model)
+        .await;
     MockResponsesConfig::new(&model.uri())
         .with_root_config("features.plugins = false\nanalytics.enabled = false")
         .with_provider_config("env_key = \"CODEX_QUEUE_SERVER_API_KEY\"")
@@ -294,7 +344,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
             )
             .env_remove("CODEX_QUEUE_SERVER_API_KEY")
             .kill_on_drop(true)
-            .args(["queue", "--remote", "unix://"])
+            .args(["queue", "--resume", "--remote", "unix://"])
             .args(["--thread", &thread_id, "--message", message])
             .output(),
     )
@@ -329,13 +379,9 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
         .await?;
     assert!(queue.data.is_empty());
 
-    let requests = model
-        .received_requests()
-        .await
-        .context("model request capture unavailable")?;
+    let requests = model_requests.received_requests().await;
     let request = requests
-        .iter()
-        .find(|request| request.url.path().ends_with("/responses"))
+        .first()
         .context("queued message did not reach the model")?;
     assert!(
         request.body_json::<Value>()?["input"]
@@ -384,6 +430,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     assert!(!output.status.success());
     assert!(String::from_utf8(output.stderr)?.contains("cannot confirm session deletion"));
 
+    let cold_message = "Continue after the thread was unloaded";
     let cases: &[(&[&str], Option<bool>)] = &[
         (&["archive", name], Some(true)),
         (&["unarchive", name], Some(false)),
@@ -425,10 +472,53 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
                     },
                 })
                 .await?;
+            let thread = threads.data.iter().find(|thread| thread.id == thread_id);
             assert_eq!(
-                threads.data.iter().any(|thread| thread.id == thread_id),
+                thread.is_some(),
                 expected_archived == Some(archived),
                 "{args:?}: archived={archived}"
+            );
+            if expected_archived == Some(false)
+                && let Some(thread) = thread
+            {
+                assert_eq!(thread.status, ThreadStatus::NotLoaded);
+            }
+        }
+        let Some(archived) = expected_archived else {
+            continue;
+        };
+        // Archived threads are reachable by ID; active threads can also be targeted by name.
+        let (target, text) = if archived {
+            (thread_id.as_str(), "still archived")
+        } else {
+            (name, cold_message)
+        };
+        let output = remote_command()
+            .args(["queue", "--resume", "--thread", target, "--message", text])
+            .output()
+            .await?;
+        if archived {
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8(output.stderr)?
+                    .contains(&format!("session {thread_id} is archived"))
+            );
+        } else {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            timeout(
+                Duration::from_secs(30),
+                model_requests.wait_until_satisfied(),
+            )
+            .await?;
+            let requests = model_requests.received_requests().await;
+            assert!(
+                requests[1].body_json::<Value>()?["input"]
+                    .to_string()
+                    .contains(cold_message)
             );
         }
     }

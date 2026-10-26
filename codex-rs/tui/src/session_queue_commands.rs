@@ -9,6 +9,9 @@ use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ThreadQueueAddParams;
 use codex_app_server_protocol::ThreadQueueAddResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::experimental_required_message;
 use codex_protocol::ThreadId;
@@ -17,6 +20,9 @@ use color_eyre::Report;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use color_eyre::eyre::eyre;
+use serde::Deserialize;
+use serde::de::IgnoredAny;
+use std::io::Write;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -27,6 +33,7 @@ const THREAD_QUEUE_ADD_METHOD: &str = "thread/queue/add";
 pub async fn run_session_queue_command(
     target: String,
     message: String,
+    resume: bool,
     options: SessionArchiveCommandOptions,
 ) -> Result<String> {
     if options.cli.no_daemon && options.explicit_remote_endpoint.is_none() {
@@ -74,6 +81,12 @@ pub async fn run_session_queue_command(
         }
         result => result?,
     };
+    if resume && let Err(err) = resume_if_unloaded(&mut app_server, thread_id).await {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "Warning: message was queued, but could not resume thread {thread_id}: {err:#}"
+        );
+    }
 
     Ok(format!(
         "Queued message {} for thread {}.",
@@ -125,6 +138,50 @@ pub(super) async fn run_session_queue_action_with_app_server(
         .await
         .wrap_err("failed to queue session message")?;
     Ok((thread_id, response))
+}
+
+async fn resume_if_unloaded(app_server: &mut AppServerSession, thread_id: ThreadId) -> Result<()> {
+    if app_server.uses_embedded_app_server() {
+        return Err(eyre!(
+            "start a local daemon or specify a server with --remote"
+        ));
+    }
+    // Only decode the status: remote thread metadata can contain paths from another OS.
+    #[derive(Deserialize)]
+    struct ReadResponse {
+        thread: Status,
+    }
+    #[derive(Deserialize)]
+    struct Status {
+        status: ThreadStatus,
+    }
+
+    let handle = app_server.request_handle();
+    let response: ReadResponse = handle
+        .request_typed(ClientRequest::ThreadRead {
+            request_id: app_server.next_request_id(),
+            params: ThreadReadParams {
+                thread_id: thread_id.to_string(),
+                include_turns: false,
+            },
+        })
+        .await
+        .wrap_err_with(|| format!("failed to read thread {thread_id}"))?;
+    if response.thread.status != ThreadStatus::NotLoaded {
+        // A fresh loaded thread can accept input before it has any history to resume.
+        return Ok(());
+    }
+    handle
+        .request_typed::<IgnoredAny>(ClientRequest::ThreadResume {
+            request_id: app_server.next_request_id(),
+            params: ThreadResumeParams {
+                thread_id: thread_id.to_string(),
+                exclude_turns: true,
+                ..Default::default()
+            },
+        })
+        .await?;
+    Ok(())
 }
 
 fn is_unsupported_queue_error(error: &Report) -> bool {
