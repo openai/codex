@@ -2924,8 +2924,7 @@ class NetworkRequirements(BaseModel):
         ),
     ] = None
     domains: Annotated[
-        dict[str, Any] | None,
-        Field(description="Canonical network permission map for `experimental_network`."),
+        dict[str, Any] | None, Field(description="Canonical managed network permission map.")
     ] = None
     enabled: bool | None = None
     http_port: Annotated[int | None, Field(alias="httpPort", ge=0)] = None
@@ -2946,10 +2945,7 @@ class NetworkRequirements(BaseModel):
     socks_port: Annotated[int | None, Field(alias="socksPort", ge=0)] = None
     unix_sockets: Annotated[
         dict[str, Any] | None,
-        Field(
-            alias="unixSockets",
-            description="Canonical unix socket permission map for `experimental_network`.",
-        ),
+        Field(alias="unixSockets", description="Canonical managed unix socket permission map."),
     ] = None
 
 

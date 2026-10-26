@@ -145,6 +145,54 @@ fn assert_discovery(
 }
 
 #[tokio::test]
+async fn managed_network_requirements_control_broker_project_discovery() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    std::fs::write(
+        fixture.home.join("config.toml"),
+        format!(
+            "{}\n[features.network_proxy]\nenabled = true\ncredential_broker = true\n",
+            fixture.trust("trusted")
+        ),
+    )?;
+    std::fs::write(
+        fixture.cwd.join(".codex/config.toml"),
+        "[features]\nshell_snapshot = false\n",
+    )?;
+    let requirements_path = fixture._temp.path().join("requirements.toml");
+    fixture.overrides.system_requirements_path = Some(requirements_path.clone());
+
+    for table in ["network_proxy", "experimental_network"] {
+        for enabled in [false, true] {
+            std::fs::write(
+                &requirements_path,
+                format!("[{table}]\nenabled = {enabled}\n"),
+            )?;
+            let (canonical, local) = fixture.load().await?;
+            let mut local_effective = TomlValue::Table(toml::map::Map::new());
+            for layer in local.config.layers {
+                merge_toml_values(&mut local_effective, &layer.toml);
+            }
+            let shell_snapshot = |value: &TomlValue| {
+                value
+                    .get("features")
+                    .and_then(|features| features.get("shell_snapshot"))
+                    .cloned()
+            };
+            let expected = (!enabled).then_some(TomlValue::Boolean(false));
+            assert_eq!(
+                (
+                    shell_snapshot(&canonical.effective_config()),
+                    shell_snapshot(&local_effective)
+                ),
+                (expected.clone(), expected),
+                "{table}, enabled = {enabled}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn managed_project_discovery_uses_file_markers_without_changing_precedence()
 -> anyhow::Result<()> {
     let fixture = Fixture::new()?;

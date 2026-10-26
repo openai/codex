@@ -25,5 +25,5 @@ Requirements:
   - features: guardian_approval=true (source: MDM managed_config.toml (legacy))
   - mcp_servers: docs (source: MDM managed_config.toml (legacy))
   - enforce_residency: us (source: MDM managed_config.toml (legacy))
-  - experimental_network: enabled=true, domains={example.com=allow}, review_domains={api.example.com}, header_injections=1 hosts={api.example.com} (source: MDM managed_config.toml (legacy))
+  - network_proxy: enabled=true, domains={example.com=allow}, review_domains={api.example.com}, header_injections=1 hosts={api.example.com} (source: MDM managed_config.toml (legacy))
   - permissions.filesystem.deny_read: /home/alice/.gitconfig (source: /etc/codex/requirements.toml)

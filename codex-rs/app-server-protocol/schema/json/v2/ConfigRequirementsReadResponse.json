@@ -1046,7 +1046,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/NetworkDomainPermission"
           },
-          "description": "Canonical network permission map for `experimental_network`.",
+          "description": "Canonical managed network permission map.",
           "type": [
             "object",
             "null"
@@ -1095,7 +1095,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/NetworkUnixSocketPermission"
           },
-          "description": "Canonical unix socket permission map for `experimental_network`.",
+          "description": "Canonical managed unix socket permission map.",
           "type": [
             "object",
             "null"

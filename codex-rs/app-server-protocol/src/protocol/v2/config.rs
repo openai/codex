@@ -723,7 +723,7 @@ pub struct NetworkRequirements {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
-    /// Canonical network permission map for `experimental_network`.
+    /// Canonical managed network permission map.
     pub domains: Option<BTreeMap<String, NetworkDomainPermission>>,
     /// Host patterns routed to network approval before ordinary allow rules.
     pub review_domains: Option<Vec<String>>,
@@ -734,7 +734,7 @@ pub struct NetworkRequirements {
     pub allowed_domains: Option<Vec<String>>,
     /// Legacy compatibility view derived from `domains`.
     pub denied_domains: Option<Vec<String>>,
-    /// Canonical unix socket permission map for `experimental_network`.
+    /// Canonical managed unix socket permission map.
     pub unix_sockets: Option<BTreeMap<String, NetworkUnixSocketPermission>>,
     /// Legacy compatibility view derived from `unix_sockets`.
     pub allow_unix_sockets: Option<Vec<String>>,

@@ -161,6 +161,7 @@ pub(super) async fn load_local_config_layers_with_overrides(
             "credential_masking".to_string(),
         ],
         vec!["experimental_network".to_string(), "enabled".to_string()],
+        vec!["network_proxy".to_string(), "enabled".to_string()],
     ]);
     let effective_requirements =
         compose_requirements(broker_requirements.layers.into_iter().map(|layer| {

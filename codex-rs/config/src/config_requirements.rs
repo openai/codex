@@ -517,13 +517,13 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
 
         if domains.is_some() && (allowed_domains.is_some() || denied_domains.is_some()) {
             return Err(D::Error::custom(
-                "`experimental_network.domains` cannot be combined with legacy `allowed_domains` or `denied_domains`",
+                "`domains` cannot be combined with legacy `allowed_domains` or `denied_domains` in managed network requirements",
             ));
         }
 
         if unix_sockets.is_some() && allow_unix_sockets.is_some() {
             return Err(D::Error::custom(
-                "`experimental_network.unix_sockets` cannot be combined with legacy `allow_unix_sockets`",
+                "`unix_sockets` cannot be combined with legacy `allow_unix_sockets` in managed network requirements",
             ));
         }
 
@@ -1088,7 +1088,8 @@ pub struct ConfigRequirementsToml {
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
-    #[serde(rename = "experimental_network")]
+    /// Shared managed network constraints; `experimental_network` remains an alias.
+    #[serde(rename = "network_proxy", alias = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
     pub application: Option<ApplicationRequirementsToml>,
     pub permissions: Option<PermissionsRequirementsToml>,
@@ -4496,6 +4497,38 @@ command = "python3 /enterprise/hooks/pre.py"
     }
 
     #[test]
+    fn network_proxy_and_experimental_network_are_equivalent_aliases() -> Result<()> {
+        let parse = |table: &str| {
+            from_str::<ConfigRequirementsToml>(&format!(
+                "[{table}]\nenabled = true\nmanaged_allowed_domains_only = true\n\
+                 [{table}.domains]\n\"api.example.com\" = \"allow\""
+            ))
+        };
+        assert_eq!(parse("network_proxy")?, parse("experimental_network")?);
+
+        for values in ["", "enabled = true"] {
+            let both = format!("[network_proxy]\n{values}\n[experimental_network]\n{values}");
+            assert!(from_str::<ConfigRequirementsToml>(&both).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn network_proxy_does_not_reserve_the_managed_network_profile() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            "[network_proxy]\nenabled = true\n[permissions.network]\nextends = ':workspace'",
+        )?;
+        assert!(
+            requirements
+                .permissions
+                .expect("managed permissions")
+                .profiles
+                .contains_key("network")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
         let toml_str = r#"
             [experimental_network]
@@ -4687,8 +4720,7 @@ command = "python3 /enterprise/hooks/pre.py"
         .expect_err("mixed network domain shapes should fail");
 
         assert!(
-            err.to_string()
-                .contains("`experimental_network.domains` cannot be combined"),
+            err.to_string().contains("`domains` cannot be combined"),
             "unexpected error: {err:#}"
         );
 
@@ -4705,7 +4737,7 @@ command = "python3 /enterprise/hooks/pre.py"
 
         assert!(
             err.to_string()
-                .contains("`experimental_network.unix_sockets` cannot be combined"),
+                .contains("`unix_sockets` cannot be combined"),
             "unexpected error: {err:#}"
         );
     }

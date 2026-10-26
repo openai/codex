@@ -726,6 +726,48 @@ fn network_maps_use_regular_toml_merge() {
 }
 
 #[test]
+fn network_aliases_merge_with_layer_precedence_and_sources() {
+    for (low_key, high_key) in [
+        ("network_proxy", "experimental_network"),
+        ("experimental_network", "network_proxy"),
+    ] {
+        let low = layer(
+            "req_low",
+            "Low",
+            &format!(
+                "[{low_key}]\nenabled = true\nallow_local_binding = false\n\
+                 [{low_key}.domains]\n'low.example.com' = 'allow'\n'shared.example.com' = 'allow'"
+            ),
+        );
+        let high = layer(
+            "req_high",
+            "High",
+            &format!(
+                "[{high_key}]\nenabled = false\nallow_upstream_proxy = true\n\
+                 [{high_key}.domains]\n'high.example.com' = 'allow'\n'shared.example.com' = 'deny'"
+            ),
+        );
+        let expected_source =
+            RequirementSource::composite([high.source.clone(), low.source.clone()]);
+        let composed = compose_requirements_for_hostname(vec![low, high], /*hostname*/ None)
+            .expect("compose network aliases")
+            .expect("requirements present");
+        assert_eq!(
+            composed.network,
+            Some(Sourced::new(
+                expected_requirements(
+                    "[network_proxy]\nenabled = false\nallow_local_binding = false\nallow_upstream_proxy = true\n\
+                     [network_proxy.domains]\n'low.example.com' = 'allow'\n'high.example.com' = 'allow'\n'shared.example.com' = 'deny'"
+                )
+                .network
+                .expect("network requirements"),
+                expected_source,
+            ))
+        );
+    }
+}
+
+#[test]
 fn browser_and_computer_use_requirements_use_regular_toml_merge() {
     let composed = compose(vec![
         layer(

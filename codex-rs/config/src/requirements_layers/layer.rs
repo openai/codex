@@ -153,6 +153,11 @@ impl ComposableRequirementsLayer {
         {
             table.insert("features".to_string(), features);
         }
+        if let Some(table) = regular_toml.as_table_mut()
+            && let Some(network) = table.remove("experimental_network")
+        {
+            table.insert("network_proxy".to_string(), network);
+        }
 
         // Hostname lookup is configuration-driven and may block on DNS, so only
         // resolve it when this layer contains hostname-based sandbox selectors.
