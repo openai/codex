@@ -58,7 +58,7 @@ pub(crate) enum StatusLineItem {
     #[strum(to_string = "model", serialize = "model-name")]
     ModelName,
 
-    /// Model name with reasoning level suffix.
+    /// Model name with reasoning level and processing tier.
     ModelWithReasoning,
 
     /// Current reasoning level.
@@ -138,7 +138,7 @@ pub(crate) enum StatusLineItem {
     #[strum(to_string = "thread-id", serialize = "session-id")]
     SessionId,
 
-    /// Whether Fast mode is currently active.
+    /// Effective processing tier for the current model.
     FastMode,
 
     /// Whether Daybreak is enabled for this thread.
@@ -206,7 +206,7 @@ impl StatusLineItem {
                 "Estimated current-thread cost in USD (Enterprise workspaces only; omitted when unavailable)"
             }
             StatusLineItem::SessionId => "Current thread identifier (omitted until thread starts)",
-            StatusLineItem::FastMode => "Whether Fast mode is currently active",
+            StatusLineItem::FastMode => "Effective processing tier for the current model",
             StatusLineItem::Daybreak => "Whether Daybreak is enabled for this thread",
             StatusLineItem::RawOutput => "Whether raw scrollback mode is active",
             StatusLineItem::ThreadName => "Current thread name (omitted when unnamed)",

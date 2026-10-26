@@ -131,7 +131,7 @@ impl ChatWidget {
         }
         if matches!(feature, Feature::FastMode | Feature::UltrafastMode) {
             self.refresh_effective_service_tier();
-            self.sync_service_tier_commands();
+            self.refresh_model_dependent_surfaces();
         }
         if feature == Feature::Plugins {
             self.sync_plugins_command_enabled();

@@ -4048,38 +4048,58 @@ async fn completed_turn_clears_visible_running_hook() {
 }
 
 #[tokio::test]
-async fn status_line_fast_mode_renders_on_and_off() {
+async fn status_line_processing_tier_updates_with_selection() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);
     chat.local_settings.tui.status_line = Some(vec!["fast-mode".to_string()]);
+    chat.local_settings.tui.terminal_title = Some(vec!["fast-mode".to_string()]);
 
     chat.refresh_status_line();
-    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+    assert_eq!(status_line_text(&chat), Some("Standard".to_string()));
 
     chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
-    chat.refresh_status_line();
-    assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
+    assert_eq!(status_line_text(&chat), Some("fast".to_string()));
+    insta::assert_snapshot!(chat.last_terminal_title.as_deref().unwrap(), @"fast");
+
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ false);
+    assert_eq!(
+        (status_line_text(&chat), chat.last_terminal_title.clone()),
+        (Some("Standard".to_string()), Some("Standard".to_string()))
+    );
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+
+    chat.set_model("gpt-5.2");
+    chat.set_service_tier(Some(ServiceTier::Flex.request_value().to_string()));
+    assert_eq!(status_line_text(&chat), Some("Flex".to_string()));
+    for provider_id in [
+        codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID,
+        "remote-only-provider",
+    ] {
+        chat.config.model_provider_id = provider_id.into();
+        chat.refresh_status_line();
+        assert_eq!(status_line_text(&chat), Some("Standard".to_string()));
+    }
 }
 
 #[tokio::test]
-async fn status_line_fast_mode_updates_visibility_on_model_change() {
+async fn status_line_fast_mode_updates_on_model_change() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);
     chat.local_settings.tui.status_line = Some(vec!["fast-mode".to_string()]);
 
     chat.refresh_status_line();
-    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+    assert_eq!(status_line_text(&chat), Some("Standard".to_string()));
 
     chat.set_model("gpt-5.2");
-    assert_eq!(status_line_text(&chat), None);
+    assert_eq!(status_line_text(&chat), Some("Standard".to_string()));
 
     chat.set_model("gpt-5.4");
-    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+    assert_eq!(status_line_text(&chat), Some("Standard".to_string()));
 
     chat.set_model("uncatalogued-model");
-    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+    assert_eq!(status_line_text(&chat), Some("Standard".to_string()));
     chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
-    assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
+    assert_eq!(status_line_text(&chat), Some("Standard".to_string()));
 }
 
 #[tokio::test]
@@ -4122,10 +4142,6 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
     ]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
     chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
-    set_chatgpt_auth(&mut chat);
-    set_fast_mode_test_catalog(&mut chat);
-    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
-    chat.refresh_status_line();
     let test_cwd = test_path_display("/tmp/project");
 
     assert_eq!(

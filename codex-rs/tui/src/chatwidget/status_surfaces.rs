@@ -816,23 +816,11 @@ impl ChatWidget {
                 .and_then(|usage| thread_cost_micros(usage, self.plan_type))
                 .and_then(format_estimated_usd_micros),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
-            StatusLineItem::FastMode => self
-                .model_catalog
-                .try_list_models()
-                .ok()
-                .and_then(|models| {
-                    models
-                        .into_iter()
-                        .find(|preset| preset.model == self.current_model())
-                })
-                .is_none_or(|preset| preset.supports_fast_mode())
-                .then(|| {
-                    if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {
-                        "Fast on".to_string()
-                    } else {
-                        "Fast off".to_string()
-                    }
-                }),
+            StatusLineItem::FastMode => Some(
+                self.processing_tier_display_name()
+                    .unwrap_or("Standard")
+                    .to_string(),
+            ),
             StatusLineItem::Daybreak => Some(
                 if self.daybreak_enabled && !self.side_conversation_active() {
                     "Daybreak on".to_string()
@@ -995,17 +983,29 @@ impl ChatWidget {
     fn model_with_reasoning_display_name(&self) -> String {
         let label = self.reasoning_display_name();
         let service_tier_label = self
-            .current_service_tier()
-            .and_then(|service_tier| {
-                self.current_model_service_tier_commands()
-                    .into_iter()
-                    .find(|tier| tier.id == service_tier)
-                    .map(|tier| tier.name)
-            })
-            .filter(|_| self.has_chatgpt_account)
+            .processing_tier_display_name()
             .map(|tier| format!(" {tier}"))
             .unwrap_or_default();
         format!("{} {label}{service_tier_label}", self.model_display_name())
+    }
+
+    fn processing_tier_display_name(&self) -> Option<&str> {
+        let id = self.current_service_tier()?;
+        self.model_catalog
+            .models
+            .iter()
+            .find(|preset| preset.model == self.current_model())
+            .and_then(|preset| preset.service_tiers.iter().find(|tier| tier.id == id))
+            .map(|tier| tier.name.as_str())
+            .or_else(|| {
+                (id == ServiceTier::Flex.request_value()
+                    && self
+                        .config
+                        .model_providers
+                        .get(&self.config.model_provider_id)
+                        .is_some_and(|provider| !provider.is_amazon_bedrock()))
+                .then_some("Flex")
+            })
     }
 
     /// Computes the compact runtime status label used by word-based status items.
