@@ -415,7 +415,7 @@ impl App {
             let modifiers = key_event.modifiers;
             if key_event.code == KeyCode::Esc
                 && modifiers == KeyModifiers::NONE
-                && !matches!(self.app_server_target, AppServerTarget::Embedded)
+                && self.app_server_target.supports_command_center()
             {
                 self.open_agents_overview(app_server);
                 return;
@@ -626,7 +626,7 @@ impl App {
                 && key_event.code == KeyCode::Left
                 && key_event.modifiers == KeyModifiers::NONE
                 && self.chat_widget.agents_navigation_key_available()
-                && !matches!(self.app_server_target, AppServerTarget::Embedded)
+                && self.app_server_target.supports_command_center()
             {
                 self.open_agents_overview(app_server);
             }

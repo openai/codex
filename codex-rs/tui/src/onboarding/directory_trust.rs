@@ -102,7 +102,7 @@ pub(crate) async fn check_directory_trust(
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: project.trust_level == Some(TrustLevel::Untrusted),
                 existing_task: connected && resumed_thread.is_some(),
-                cancel: cancel.unwrap_or(if connected {
+                cancel: cancel.unwrap_or(if target.supports_command_center() {
                     TrustCancelAction::AgentsOverview
                 } else {
                     TrustCancelAction::Quit

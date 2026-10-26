@@ -8,7 +8,6 @@ use super::agents_overview_details::preview_agent_message;
 use super::agents_overview_discovery::list_pinned_threads;
 use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
-use crate::AppServerTarget;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
@@ -256,7 +255,7 @@ impl App {
             .is_some();
         if !visible
             && (self.agents_overview.initialized
-                || matches!(self.app_server_target, AppServerTarget::Embedded))
+                || !self.app_server_target.supports_command_center())
         {
             return;
         }

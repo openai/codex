@@ -285,7 +285,7 @@ impl ChatWidget {
                             ..Default::default()
                         },
                         SelectionItem {
-                            name: if self.remote_connection.is_some() {
+                            name: if self.bottom_pane.command_center_enabled() {
                                 "Yes, delete and return to command center"
                             } else {
                                 "Yes, delete and exit"

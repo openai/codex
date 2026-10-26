@@ -3876,7 +3876,7 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
-        if !matches!(self.app_server_target, AppServerTarget::Embedded) {
+        if self.app_server_target.supports_command_center() {
             self.shutdown_side_threads(app_server).await;
             if !self.side_threads.is_empty() {
                 return Ok(AppRunControl::Continue);
@@ -3890,7 +3890,7 @@ impl App {
         }
         .await;
         Ok(match result {
-            Ok(()) if matches!(self.app_server_target, AppServerTarget::Embedded) => {
+            Ok(()) if !self.app_server_target.supports_command_center() => {
                 AppRunControl::Exit(ExitReason::Archived(thread_id))
             }
             Ok(()) => {
@@ -3944,7 +3944,7 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
-        if !matches!(self.app_server_target, AppServerTarget::Embedded) {
+        if self.app_server_target.supports_command_center() {
             self.shutdown_side_threads(app_server).await;
             if !self.side_threads.is_empty() {
                 return Ok(AppRunControl::Continue);
@@ -3958,7 +3958,7 @@ impl App {
         }
         .await;
         Ok(match result {
-            Ok(()) if matches!(self.app_server_target, AppServerTarget::Embedded) => {
+            Ok(()) if !self.app_server_target.supports_command_center() => {
                 AppRunControl::Exit(ExitReason::ThreadRemoved)
             }
             Ok(()) => {

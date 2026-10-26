@@ -513,10 +513,7 @@ impl App {
             chat_widget.windows_sandbox_elevated_setup_complete =
                 self.chat_widget.windows_sandbox_elevated_setup_complete;
         }
-        chat_widget.set_agents_navigation_enabled(matches!(
-            self.app_server_target,
-            AppServerTarget::LocalDaemon { .. }
-        ));
+        chat_widget.set_command_center_enabled(self.app_server_target.supports_command_center());
         chat_widget.inherit_backend_banner_state(&mut self.chat_widget);
         chat_widget.inherit_security_setup(&mut self.chat_widget);
         chat_widget
@@ -941,7 +938,7 @@ impl App {
                 }
                 // Lifecycle notifications may arrive before the thread/start response.
                 if !self.config.ephemeral
-                    && !matches!(self.app_server_target, AppServerTarget::Embedded)
+                    && self.app_server_target.supports_command_center()
                     && !self.pending_primary_events.iter().any(|event| {
                         matches!(event, ThreadBufferedEvent::Notification(notification)
                             if matches!(notification.as_ref(),
@@ -1100,9 +1097,7 @@ impl App {
                     None
                 };
                 let thread_id = started.session.thread_id;
-                if !self.config.ephemeral
-                    && !matches!(self.app_server_target, AppServerTarget::Embedded)
-                {
+                if !self.config.ephemeral && self.app_server_target.supports_command_center() {
                     self.agents_overview
                         .blank_sessions
                         .insert(thread_id, started.clone());

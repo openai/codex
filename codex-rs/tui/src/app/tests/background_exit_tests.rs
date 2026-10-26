@@ -157,11 +157,8 @@ async fn external_writer_view_respects_remapped_left() -> Result<()> {
         app.app_server_target = AppServerTarget::Remote {
             endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
         };
-        app.chat_widget.remote_connection =
-            crate::status::remote_connection::remote_connection_status_value(
-                &app.app_server_target,
-                /*server_version*/ None,
-            );
+        app.chat_widget
+            .set_command_center_enabled(app.app_server_target.supports_command_center());
         app.chat_widget.apply_keymap_update(config.clone(), &keymap);
         app.keymap = keymap.clone();
         if vim {

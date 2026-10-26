@@ -90,7 +90,7 @@ impl Drop for AgentsOverviewState {
 
 impl App {
     pub(super) fn open_agents_overview(&mut self, app_server: &AppServerSession) {
-        if matches!(self.app_server_target, AppServerTarget::Embedded) {
+        if !self.app_server_target.supports_command_center() {
             let workload_identity_selected = codex_login::is_workload_identity_selected();
             self.chat_widget.show_selection_view(SelectionViewParams {
                 title: Some("Shared agents unavailable".to_string()),

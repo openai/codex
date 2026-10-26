@@ -162,12 +162,7 @@ async fn misalignment_policy_failure_stops_the_thread_and_renders_once() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
     assert!(chat.bottom_pane.has_active_view());
 
-    chat.remote_connection = Some(crate::status::remote_connection::RemoteConnectionStatus {
-        address: "wss://remote.example.com".to_string(),
-        version: "v1.0.0".to_string(),
-        is_local_daemon: false,
-        is_managed_daemon: false,
-    });
+    chat.set_command_center_enabled(/*enabled*/ true);
     chat.show_misalignment_policy_precaution();
     assert_chatwidget_snapshot!(
         "misalignment_policy_violation_remote",

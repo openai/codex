@@ -337,6 +337,13 @@ pub(crate) enum AppServerTarget {
 }
 
 impl AppServerTarget {
+    fn supports_command_center(&self) -> bool {
+        match self {
+            Self::Embedded => false,
+            Self::LocalDaemon { .. } | Self::Remote { .. } => true,
+        }
+    }
+
     fn preserve_selected_backend(&mut self, selection: &resume_picker::SessionSelection) {
         if matches!(
             selection,
@@ -1899,7 +1906,7 @@ async fn run_ratatui_app(
     if (!matches!(
         session_selection,
         resume_picker::SessionSelection::AgentsOverview
-    ) || matches!(app_server_target, AppServerTarget::Embedded))
+    ) || !app_server_target.supports_command_center())
         && (!uses_remote_workspace || remote_cwd_override.is_some())
     {
         let resumed_thread = if matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
@@ -1979,7 +1986,7 @@ async fn run_ratatui_app(
                 trust_decision_was_made = true;
             }
         } else if consent.should_exit {
-            if matches!(app_server_target, AppServerTarget::Embedded) {
+            if !app_server_target.supports_command_center() {
                 shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
                 return Ok(AppExitInfo {
                     token_usage: crate::token_usage::TokenUsage::default(),

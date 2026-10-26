@@ -555,9 +555,7 @@ async fn external_writer_notice_offers_command_center_on_shared_servers() {
     ] {
         let (mut widget, _sender, _events, _operations) =
             make_chatwidget_manual_with_sender().await;
-        widget.remote_connection = crate::status::remote_connection::remote_connection_status_value(
-            &target, /*server_version*/ None,
-        );
+        widget.set_command_center_enabled(target.supports_command_center());
         widget.show_external_writer_thread();
         for width in [60, 100] {
             let rendered = crate::chatwidget::tests::render_bottom_popup(&widget, width);

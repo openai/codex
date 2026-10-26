@@ -35,7 +35,7 @@
 //!
 //! # Key Event Routing
 //!
-//! Plain Left opens agents when the local-daemon composer is empty and available for input.
+//! Plain Left opens agents from an empty, active composer connected to a local daemon or remote App Server.
 //! Explicit editor remaps take precedence.
 //! Most key handling goes through [`ChatComposer::handle_key_event`], which dispatches to a
 //! popup-specific handler if a popup is visible and otherwise to
@@ -618,7 +618,7 @@ pub(crate) struct ChatComposer {
     pub(super) mention_usage: MentionUsage,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
-    agents_navigation_enabled: bool,
+    pub(super) command_center_enabled: bool,
     footer: FooterState,
     has_focus: bool,
     frame_requester: Option<FrameRequester>,
@@ -750,7 +750,7 @@ impl ChatComposer {
             mention_usage: MentionUsage::default(),
             app_event_tx,
             history: ChatComposerHistory::new(),
-            agents_navigation_enabled: false,
+            command_center_enabled: false,
             footer: FooterState {
                 quit_shortcut_expires_at: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),

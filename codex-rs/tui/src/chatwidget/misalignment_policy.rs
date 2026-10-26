@@ -155,7 +155,7 @@ impl ChatWidget {
                 },
             );
         }
-        if self.remote_connection.is_some() {
+        if self.bottom_pane.command_center_enabled() {
             items.insert(
                 1,
                 SelectionItem {

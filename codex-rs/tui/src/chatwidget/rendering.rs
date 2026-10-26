@@ -238,7 +238,7 @@ impl ChatWidget {
             ))
         } else if self.external_writer_view && !self.bottom_pane.has_active_view() {
             RenderableItem::Owned(Box::new(ExternalWriterNotice {
-                command_center_available: self.remote_connection.is_some(),
+                command_center_available: self.bottom_pane.command_center_enabled(),
                 agents_navigation_key_available: self.agents_navigation_key_available(),
                 transcript_hint: self.bottom_pane.transcript_shortcut_hint(),
             }))

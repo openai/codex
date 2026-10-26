@@ -3088,9 +3088,7 @@ async fn slash_delete_confirmation_requests_current_thread_delete() {
         crate::AppServerTarget::Remote { endpoint },
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        chat.remote_connection = crate::status::remote_connection::remote_connection_status_value(
-            &target, /*server_version*/ None,
-        );
+        chat.set_command_center_enabled(target.supports_command_center());
         chat.dispatch_command(SlashCommand::Delete);
         assert!(chat.bottom_pane.has_active_view());
         assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
