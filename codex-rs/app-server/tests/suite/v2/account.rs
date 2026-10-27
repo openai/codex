@@ -3729,3 +3729,6 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
     assert_eq!(received, expected);
     Ok(())
 }
+
+#[path = "account_workspace_switching.rs"]
+mod workspace_switching;

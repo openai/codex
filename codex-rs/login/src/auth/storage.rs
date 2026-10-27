@@ -182,6 +182,31 @@ pub(super) fn auth_storage_commit_guard() -> std::io::Result<std::sync::MutexGua
 }
 
 pub(super) trait AuthStorageBackend: Debug + Send + Sync {
+    fn persistent_home(&self) -> Option<&Path> {
+        None
+    }
+
+    /// Serialize the whole read/modify/write across managers and processes.
+    fn lock_for_write(
+        &self,
+    ) -> std::io::Result<(std::sync::MutexGuard<'static, ()>, Option<File>)> {
+        let guard = auth_storage_commit_guard()?;
+        let file = if let Some(home) = self.persistent_home() {
+            std::fs::create_dir_all(home)?;
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(home.join("auth.lock"))?;
+            file.lock()?;
+            Some(file)
+        } else {
+            None
+        };
+        Ok((guard, file))
+    }
+
     fn load(&self) -> std::io::Result<Option<AuthDotJson>>;
     /// An unavailable keyring cannot authorize using an older fallback record.
     fn load_account_grant(&self) -> std::io::Result<Option<AuthDotJson>> {
@@ -214,6 +239,10 @@ impl FileAuthStorage {
 }
 
 impl AuthStorageBackend for FileAuthStorage {
+    fn persistent_home(&self) -> Option<&Path> {
+        Some(&self.codex_home)
+    }
+
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let auth_file = get_auth_file(&self.codex_home);
         let auth_dot_json = match self.try_read_auth_json(&auth_file) {
@@ -320,6 +349,10 @@ impl DirectKeyringAuthStorage {
 }
 
 impl AuthStorageBackend for DirectKeyringAuthStorage {
+    fn persistent_home(&self) -> Option<&Path> {
+        Some(&self.codex_home)
+    }
+
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let key = compute_store_key(&self.codex_home)?;
         self.load_from_keyring(&key)
@@ -398,6 +431,10 @@ impl SecretsKeyringAuthStorage {
 }
 
 impl AuthStorageBackend for SecretsKeyringAuthStorage {
+    fn persistent_home(&self) -> Option<&Path> {
+        Some(&self.codex_home)
+    }
+
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         match self
             .secrets_manager
@@ -489,6 +526,10 @@ impl AutoAuthStorage {
 }
 
 impl AuthStorageBackend for AutoAuthStorage {
+    fn persistent_home(&self) -> Option<&Path> {
+        Some(&self.file_storage.codex_home)
+    }
+
     fn load_account_grant(&self) -> std::io::Result<Option<AuthDotJson>> {
         match self.keyring_storage.load()? {
             Some(auth) => Ok(Some(auth)),

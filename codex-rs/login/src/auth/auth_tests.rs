@@ -1188,6 +1188,19 @@ async fn loads_api_key_from_auth_json() {
 }
 
 #[test]
+fn logout_does_not_create_a_missing_file_store() -> std::io::Result<()> {
+    let root = tempdir()?;
+    let missing_home = root.path().join("missing");
+    assert!(!logout(
+        &missing_home,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default()
+    )?);
+    assert!(!missing_home.exists());
+    Ok(())
+}
+
+#[test]
 fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     let dir = tempdir()?;
     let auth_dot_json = AuthDotJson {

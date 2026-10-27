@@ -26,3 +26,26 @@ fn drain_rejects_new_work_without_waiting_for_admitted_work() {
     drop(automatic);
     assert_eq!(*active.borrow(), 0);
 }
+
+#[tokio::test]
+async fn workspace_pause_waits_for_admitted_work_and_preserves_shutdown_drain() {
+    let admission = TurnAdmission::default();
+    let in_flight = admission.admit().unwrap();
+    let pending_pause = admission.pause();
+    tokio::pin!(pending_pause);
+    tokio::select! {
+        biased;
+        _ = &mut pending_pause => panic!("pause completed before the existing request"),
+        () = async {} => {}
+    }
+    assert!(admission.admit().is_err());
+    assert!(admission.admit_turn_start().is_none());
+    drop(in_flight);
+    let pause = pending_pause.await.unwrap();
+    drop(pause);
+    drop(admission.admit().unwrap());
+    let pause = admission.pause().await.unwrap();
+    admission.begin_drain();
+    drop(pause);
+    assert!(admission.admit().is_err());
+}

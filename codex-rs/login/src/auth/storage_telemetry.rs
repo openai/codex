@@ -71,6 +71,10 @@ impl ObservedStorage {
 }
 
 impl AuthStorageBackend for ObservedStorage {
+    fn persistent_home(&self) -> Option<&std::path::Path> {
+        self.inner.persistent_home()
+    }
+
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let mut telemetry = telemetry(self.mode, self.kind, Operation::Load);
         let result = self.inner.load();

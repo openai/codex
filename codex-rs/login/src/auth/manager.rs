@@ -1,4 +1,7 @@
 mod workspace_routing;
+mod workspace_switching;
+pub use workspace_switching::WorkspaceLogin;
+pub use workspace_switching::WorkspaceSwitch;
 
 #[path = "account_grant.rs"]
 mod account_grant;
@@ -604,7 +607,7 @@ impl CodexAuth {
                 tokens: Some(tokens),
                 last_refresh: Some(_),
                 ..
-            }) => Ok(tokens),
+            }) => Ok(workspace_switching::selected_workspace_tokens(tokens)),
             _ => Err(std::io::Error::other("Token data is not available.")),
         }
     }
@@ -738,7 +741,9 @@ impl CodexAuth {
 
     /// Returns `None` if token-backed ChatGPT auth is unavailable.
     fn get_current_token_data(&self) -> Option<TokenData> {
-        self.get_current_auth_json().and_then(|t| t.tokens)
+        self.get_current_auth_json()
+            .and_then(|t| t.tokens)
+            .map(workspace_switching::selected_workspace_tokens)
     }
 
     fn stored_managed_chatgpt_agent_identity_record(
@@ -960,13 +965,12 @@ fn persist_agent_identity_record(
     storage: &Arc<dyn AuthStorageBackend>,
     record: AgentIdentityAuthRecord,
 ) -> std::io::Result<()> {
-    let _commit = auth_storage_commit_guard()?;
+    let _commit = storage.lock_for_write()?;
     let mut guard = auth_dot_json
         .lock()
         .map_err(|_| std::io::Error::other("failed to lock auth state"))?;
     let stored = storage.load()?;
     if let Some(previous) = guard.as_ref().and_then(|auth| auth.tokens.as_ref())
-        && previous.login_owner_id.is_some()
         && !stored
             .as_ref()
             .and_then(|auth| auth.tokens.as_ref())
@@ -976,9 +980,7 @@ fn persist_agent_identity_record(
             "Account changed during agent identity registration.",
         ));
     }
-    let mut auth = stored
-        .or_else(|| guard.clone())
-        .ok_or_else(|| std::io::Error::other("auth data is not available"))?;
+    let mut auth = stored.ok_or_else(|| std::io::Error::other("auth data is not available"))?;
     auth.agent_identity = Some(AgentIdentityStorage::Record(record));
     storage.save(&auth)?;
     // Publishing credentials belongs to AuthManager. Persisting identity metadata must
@@ -1022,12 +1024,15 @@ pub fn logout(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<bool> {
-    let _commit = auth_storage_commit_guard()?;
+    if auth_credentials_store_mode == AuthCredentialsStoreMode::File && !codex_home.try_exists()? {
+        return Ok(false);
+    }
     let storage = create_auth_storage(
         codex_home.to_path_buf(),
         auth_credentials_store_mode,
         keyring_backend_kind,
     );
+    let _commit = storage.lock_for_write()?;
     storage.delete()
 }
 
@@ -1193,12 +1198,12 @@ pub fn save_auth(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> std::io::Result<()> {
-    let _commit = auth_storage_commit_guard()?;
     let storage = create_auth_storage(
         codex_home.to_path_buf(),
         auth_credentials_store_mode,
         keyring_backend_kind,
     );
+    let _commit = storage.lock_for_write()?;
     storage.save(auth)
 }
 
@@ -1658,7 +1663,7 @@ pub(super) fn persist_tokens(
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
-    let _commit = auth_storage_commit_guard()?;
+    let _commit = storage.lock_for_write()?;
     let stored = storage.load()?;
     let mut auth_dot_json = stored.ok_or(std::io::Error::other("Token data is not available."))?;
     if auth_dot_json.resolved_mode() != AuthMode::Chatgpt {
