@@ -30,6 +30,7 @@ use codex_guardian_reviewer::ConversationState;
 use codex_guardian_reviewer::ReviewModel;
 use codex_guardian_reviewer::ReviewSessionResult;
 use codex_guardian_reviewer::SessionDisposition;
+use codex_guardian_reviewer::token_usage_delta;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
@@ -49,7 +50,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::TokenUsage;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -159,20 +159,6 @@ struct PendingNodeReplEvidenceAdmission {
 
 fn had_prior_review_context(prompt_mode: &GuardianPromptMode) -> bool {
     matches!(prompt_mode, GuardianPromptMode::Delta { .. })
-}
-
-fn token_usage_delta(start: &TokenUsage, end: &TokenUsage) -> TokenUsage {
-    TokenUsage {
-        input_tokens: (end.input_tokens - start.input_tokens).max(0),
-        cached_input_tokens: (end.cached_input_tokens - start.cached_input_tokens).max(0),
-        cache_write_input_tokens: (end.cache_write_input_tokens - start.cache_write_input_tokens)
-            .max(0),
-        output_tokens: (end.output_tokens - start.output_tokens).max(0),
-        reasoning_output_tokens: (end.reasoning_output_tokens - start.reasoning_output_tokens)
-            .max(0),
-        total_tokens: (end.total_tokens - start.total_tokens).max(0),
-        codex_rollout_budget_units: None,
-    }
 }
 
 type GuardianReviewForkSnapshot = ConversationCheckpoint<GuardianReviewHistory>;

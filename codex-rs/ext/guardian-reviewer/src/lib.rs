@@ -32,6 +32,7 @@ pub(crate) use circuit_breaker::AUTO_REVIEW_DENIAL_WINDOW_SIZE;
 pub(crate) use circuit_breaker::GuardianRejectionCircuitBreaker;
 pub(crate) use circuit_breaker::GuardianRejectionCircuitBreakerAction;
 pub(crate) use circuit_breaker::GuardianRejectionCircuitBreakerPolicy;
+pub use metrics::token_usage_delta;
 pub use model::ReviewModel;
 pub use model::select_review_model;
 pub use outcome::GuardianReviewError;
