@@ -89,6 +89,39 @@ pub(crate) async fn handoff_scenario(native_history: bool) -> Result<Vec<Respons
         .await?;
     let root = test.session_configured.thread_id;
     let mut created = test.thread_manager.subscribe_thread_created();
+    // Allow the setup handoffs. Match the trailing native evidence output so
+    // historical calls cannot swallow the final command's separate denial.
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/responses"))
+        .and(|request: &wiremock::Request| {
+            request_body(request).is_some_and(|body| {
+                body["client_metadata"]["x-openai-subagent"] == "guardian"
+                    && body["input"]
+                        .as_array()
+                        .and_then(|items| items.last())
+                        .is_some_and(|item| {
+                            item["type"] == "function_call_output"
+                                && matches!(
+                                    item["call_id"].as_str(),
+                                    Some(
+                                        "spawn-alpha" | "spawn-leaf" | "spawn-beta" | "send-alpha"
+                                            | "followup-alpha"
+                                    )
+                                )
+                        })
+            })
+        })
+        .respond_with(sse_response(sse(vec![
+            ev_assistant_message(
+                "handoff-allow",
+                r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"Mock approval for the scenario handoff."}"#,
+            ),
+            ev_completed("handoff-allow"),
+        ])))
+        .with_priority(/*p*/ 1)
+        .expect(if native_history { 5 } else { 0 })
+        .mount(&server)
+        .await;
     // Ordinary root/worker continuations idle; the reviewed action has its own mock.
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/responses"))
