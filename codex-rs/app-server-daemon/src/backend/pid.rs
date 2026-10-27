@@ -1,5 +1,5 @@
 //! PID reservations serialize detached launches; process identities protect stale-record cleanup.
-//! Missing-PID probes explicitly unlock so concurrent forks cannot retain their transient reservations.
+//! PID probes explicitly unlock so concurrent forks cannot retain their transient reservations.
 
 #[path = "pid_identity.rs"]
 mod identity;
@@ -750,9 +750,36 @@ async fn inspect_empty_pid_reservation(
             });
         }
     };
+    inspect_empty_pid_reservation_with_file(pid_path, file).await
+}
+
+#[cfg(unix)]
+struct EmptyPidProbeLock(fs::File);
+
+#[cfg(unix)]
+impl Drop for EmptyPidProbeLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+
+        // Closing alone leaves the lock held by any concurrent fork. Release it
+        // on every exit, including errors and cancellation while inspecting the PID.
+        if unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) } != 0 {
+            let error = std::io::Error::last_os_error();
+            tracing::warn!(%error, "failed to unlock empty pid reservation probe");
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+async fn inspect_empty_pid_reservation_with_file(
+    pid_path: &Path,
+    file: fs::File,
+) -> Result<EmptyPidReservation> {
     if !try_lock_file(&file)? {
         return Ok(EmptyPidReservation::Active);
     }
+    #[cfg(unix)]
+    let _probe_lock = EmptyPidProbeLock(file);
 
     let contents = match fs::read_to_string(pid_path).await {
         Ok(contents) => contents,
