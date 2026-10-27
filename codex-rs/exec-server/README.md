@@ -1,18 +1,22 @@
 # codex-exec-server
 
-`codex-exec-server` is the library backing `codex exec-server`, a small
+`codex-exec-server` is the library backing `codex exec-server` and the standalone
+`codex-exec-server` executable, a small
 JSON-RPC server for spawning and controlling subprocesses through
 `codex-utils-pty`.
 
 It provides:
 
-- a CLI entrypoint: `codex exec-server`
+- CLI entrypoints: `codex exec-server` and `codex-exec-server`
 - a Rust client: `ExecServerClient`
 - a small protocol module with shared request/response types
 
 This crate owns the transport, protocol, and filesystem/process handlers. The
-top-level `codex` binary owns hidden helper dispatch for sandboxed
-filesystem operations and `codex-linux-sandbox`.
+`codex-exec-server-cli` crate shares startup between the two executables. Both
+use `codex-arg0` for hidden filesystem, process, and platform sandbox dispatch.
+The standalone executable accepts the same executor arguments and `-c` config
+overrides, including `--listen stdio`. Build it with
+`cargo build -p codex-exec-server-cli --bin codex-exec-server`.
 
 ## Command metadata
 

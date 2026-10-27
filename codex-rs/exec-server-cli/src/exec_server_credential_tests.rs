@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use std::io::PipeWriter;
 use std::io::Write;
 

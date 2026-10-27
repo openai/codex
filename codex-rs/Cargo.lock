@@ -2514,7 +2514,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-app-server-test-client",
  "codex-arg0",
- "codex-aws-auth",
  "codex-build-info",
  "codex-chatgpt",
  "codex-cloud-config",
@@ -2524,6 +2523,7 @@ dependencies = [
  "codex-core-plugins",
  "codex-exec",
  "codex-exec-server",
+ "codex-exec-server-cli",
  "codex-execpolicy",
  "codex-extension-api",
  "codex-features",
@@ -3311,6 +3311,46 @@ dependencies = [
  "which 8.0.0",
  "windows-sys 0.61.2",
  "wiremock",
+]
+
+[[package]]
+name = "codex-exec-server-cli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_matches",
+ "clap",
+ "codex-api",
+ "codex-app-server",
+ "codex-arg0",
+ "codex-aws-auth",
+ "codex-build-info",
+ "codex-cloud-config",
+ "codex-config",
+ "codex-core",
+ "codex-exec-server",
+ "codex-http-client",
+ "codex-login",
+ "codex-model-provider",
+ "codex-protocol",
+ "codex-sandboxing",
+ "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
+ "codex-utils-cli",
+ "codex-utils-process",
+ "codex-websocket-auth",
+ "http 1.4.0",
+ "insta",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tikv-jemallocator",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

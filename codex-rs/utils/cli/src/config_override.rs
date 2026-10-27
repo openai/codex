@@ -101,6 +101,39 @@ fn parse_toml_value(raw: &str) -> Result<Value, toml::de::Error> {
         .ok_or_else(|| SerdeError::custom("missing sentinel key"))
 }
 
+/// Collects config overrides across command boundaries in argument order.
+///
+/// Clap keeps the deepest global argument's values instead of appending across
+/// scopes. Reparse with local config arguments after validating the typed CLI.
+pub fn collect_config_overrides(
+    command: clap::Command,
+    args: impl IntoIterator<Item = impl Into<std::ffi::OsString> + Clone>,
+) -> Result<CliConfigOverrides, clap::Error> {
+    let matches = localize_config_arg(command).try_get_matches_from(args)?;
+    let raw_overrides = std::iter::successors(Some(&matches), |scope| {
+        scope.subcommand().map(|(_, child)| child)
+    })
+    .filter_map(|scope| scope.get_many::<String>("raw_overrides"))
+    .flatten()
+    .cloned()
+    .collect();
+    Ok(CliConfigOverrides { raw_overrides })
+}
+
+fn localize_config_arg(mut command: clap::Command) -> clap::Command {
+    use clap::CommandFactory;
+
+    if !command
+        .get_arguments()
+        .any(|arg| arg.get_id() == "raw_overrides")
+    {
+        command = command.args(CliConfigOverrides::command().get_arguments().cloned());
+    }
+    command
+        .mut_arg("raw_overrides", |arg| arg.global(false))
+        .mut_subcommands(localize_config_arg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

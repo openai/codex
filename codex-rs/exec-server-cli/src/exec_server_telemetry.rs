@@ -1,3 +1,5 @@
+//! Executor telemetry and shutdown coordination shared by both entry points.
+
 use std::future::Future;
 
 use tracing_subscriber::EnvFilter;

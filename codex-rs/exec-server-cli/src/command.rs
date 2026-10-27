@@ -1,39 +1,29 @@
-//! Command-line startup for `codex exec-server`.
+//! Command-line startup shared by `codex exec-server` and `codex-exec-server`.
 //!
 //! Transport, configuration, authentication, and shutdown are kept together.
 
 use std::sync::Arc;
 
 use clap::Parser;
-use codex_app_server::in_process::EmbeddedNetworkPolicy;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::chatgpt_config_bundle_loader_for_storage;
-use codex_config::LoaderOverrides;
 use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config::ConfigLoadOptions;
-use codex_core::config::bootstrap_auth_config;
-use codex_core::config::find_codex_home;
-use codex_core::config::load_config_toml_with_layer_stack;
 use codex_exec_server::ExecServerRuntimeOptions;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
-use codex_login::AuthManager;
-use codex_login::CodexAuth;
-use codex_login::read_codex_access_token_from_env;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_websocket_auth::WebsocketAuthArgs;
 
+use crate::config::load_exec_server_config;
+use crate::config::load_exec_server_remote_auth_provider;
 use crate::exec_server_auth;
 use crate::exec_server_credential::ExecutorCredentialPipe;
 use crate::exec_server_telemetry;
 
 /// [EXPERIMENTAL] Run the standalone exec-server service.
 #[derive(Debug, Parser)]
-pub(super) struct ExecServerCommand {
+pub struct ExecServerCommand {
     #[command(subcommand)]
-    pub(super) command: Option<ExecServerSubcommand>,
+    command: Option<ExecServerSubcommand>,
 
     /// Error out when config.toml contains fields that are not recognized by this version of Codex.
     #[arg(
@@ -42,7 +32,7 @@ pub(super) struct ExecServerCommand {
         default_value_t = false,
         global = true
     )]
-    pub(super) strict_config: bool,
+    pub strict_config: bool,
 
     /// Linux PID namespace: isolate (default) or inherit. Inherit allows signals to
     /// other same-UID processes; enable only when provisioning a dedicated environment.
@@ -86,7 +76,7 @@ pub(super) struct ExecServerCommand {
         requires = "environment_id",
         global = true
     )]
-    pub(super) remote: Option<String>,
+    remote: Option<String>,
 
     /// Transport used for the remote executor connection.
     #[arg(
@@ -97,15 +87,15 @@ pub(super) struct ExecServerCommand {
         requires_if("direct", "aws_sigv4"),
         global = true
     )]
-    pub(super) remote_transport: ExecServerRemoteTransport,
+    remote_transport: ExecServerRemoteTransport,
 
     /// Environment id to attach to when registering remotely.
     #[arg(long = "environment-id", value_name = "ID", global = true)]
-    pub(super) environment_id: Option<String>,
+    environment_id: Option<String>,
 
     /// Human-readable environment name.
     #[arg(long = "name", value_name = "NAME", global = true)]
-    pub(super) name: Option<String>,
+    name: Option<String>,
 
     /// Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration.
     #[arg(
@@ -114,7 +104,7 @@ pub(super) struct ExecServerCommand {
         conflicts_with = "aws_sigv4",
         global = true
     )]
-    pub(super) use_agent_identity_auth: bool,
+    use_agent_identity_auth: bool,
 
     /// Read rotating executor credentials from stdin; exit when the pipe closes.
     #[arg(
@@ -123,11 +113,11 @@ pub(super) struct ExecServerCommand {
         conflicts_with_all = ["use_agent_identity_auth", "aws_sigv4"],
         global = true
     )]
-    pub(super) executor_credential_stdin: bool,
+    executor_credential_stdin: bool,
 
     /// Sign Direct registration and WebSocket handshake requests with AWS SigV4.
     #[arg(long = "aws-sigv4", requires = "exec_server_remote", global = true)]
-    pub(super) aws_sigv4: bool,
+    aws_sigv4: bool,
 
     /// AWS profile used for SigV4 authentication.
     #[arg(
@@ -136,7 +126,7 @@ pub(super) struct ExecServerCommand {
         requires = "aws_sigv4",
         global = true
     )]
-    pub(super) aws_profile: Option<String>,
+    aws_profile: Option<String>,
 
     /// AWS signing region. Uses the SDK region chain when omitted.
     #[arg(
@@ -145,7 +135,7 @@ pub(super) struct ExecServerCommand {
         requires = "aws_sigv4",
         global = true
     )]
-    pub(super) aws_region: Option<String>,
+    aws_region: Option<String>,
 
     /// AWS signing service.
     #[arg(
@@ -155,7 +145,7 @@ pub(super) struct ExecServerCommand {
         requires = "aws_sigv4",
         global = true
     )]
-    pub(super) aws_service: String,
+    aws_service: String,
 
     /// Exit when the parent-owned standard-input pipe closes.
     #[arg(
@@ -169,7 +159,7 @@ pub(super) struct ExecServerCommand {
 
 impl ExecServerCommand {
     /// Starts the executor with the given runtime paths and configuration overrides.
-    pub(super) async fn run(
+    pub async fn run(
         mut self,
         arg0_paths: &Arg0DispatchPaths,
         root_config_overrides: &CliConfigOverrides,
@@ -348,7 +338,7 @@ impl ExecServerCommand {
         }
     }
 
-    pub(super) fn should_load_cloud_config(&self) -> bool {
+    fn should_load_cloud_config(&self) -> bool {
         self.remote.is_some()
             && self.command.is_none()
             && !self.executor_credential_stdin
@@ -356,7 +346,7 @@ impl ExecServerCommand {
             && !self.use_agent_identity_auth
     }
 
-    pub(super) fn validate_remote_transport(&self) -> anyhow::Result<()> {
+    fn validate_remote_transport(&self) -> anyhow::Result<()> {
         match (self.remote_transport, self.aws_sigv4) {
             (ExecServerRemoteTransport::Noise, true) => {
                 anyhow::bail!("--aws-sigv4 requires --remote-transport direct");
@@ -380,14 +370,14 @@ impl ExecServerCommand {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
-pub(super) enum ExecServerRemoteTransport {
+enum ExecServerRemoteTransport {
     #[default]
     Noise,
     Direct,
 }
 
 #[derive(Debug, clap::Subcommand)]
-pub(super) enum ExecServerSubcommand {
+enum ExecServerSubcommand {
     /// Register an existing WebSocket exec-server as a remote environment.
     Forward {
         /// Destination exec-server WebSocket URL.
@@ -396,150 +386,6 @@ pub(super) enum ExecServerSubcommand {
     },
 }
 
-async fn load_exec_server_remote_auth_provider(
-    config: &codex_core::config::Config,
-    base_url: &str,
-    use_agent_identity_auth: bool,
-) -> anyhow::Result<codex_api::SharedAuthProvider> {
-    if use_agent_identity_auth {
-        read_codex_access_token_from_env().ok_or_else(|| {
-            anyhow::anyhow!("CODEX_ACCESS_TOKEN is required when --use-agent-identity-auth is set")
-        })?;
-        let auth = AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false)
-            .await?
-            .auth()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Agent Identity authentication is unavailable"))?;
-        if !matches!(auth, CodexAuth::AgentIdentity(_)) {
-            anyhow::bail!(
-                "CODEX_ACCESS_TOKEN did not provide permitted Agent Identity authentication"
-            );
-        }
-        return Ok(codex_model_provider::auth_provider_from_auth(&auth));
-    }
-
-    let (auth_manager, auth) = load_exec_server_remote_auth(
-        config,
-        "remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY",
-    )
-    .await?;
-
-    if !is_supported_exec_server_remote_auth(&auth) {
-        anyhow::bail!(
-            "remote exec-server registration requires ChatGPT authentication or API key authentication; Agent Identity auth requires --use-agent-identity-auth"
-        );
-    }
-
-    if auth.is_api_key_auth() {
-        validate_api_key_remote_host(base_url)?;
-    }
-
-    if auth.is_chatgpt_auth() || auth_manager.is_workload_identity_selected() {
-        Ok(codex_model_provider::auth_provider_from_auth_manager(
-            auth_manager,
-            &auth,
-        ))
-    } else {
-        Ok(codex_model_provider::auth_provider_from_auth(&auth))
-    }
-}
-
-pub(super) fn is_supported_exec_server_remote_auth(auth: &CodexAuth) -> bool {
-    auth.is_chatgpt_auth() || auth.is_api_key_auth()
-}
-
-pub(super) fn validate_api_key_remote_host(base_url: &str) -> anyhow::Result<()> {
-    let url = url::Url::parse(base_url)
-        .map_err(|err| anyhow::anyhow!("invalid remote exec-server registration URL: {err}"))?;
-    let host = url.host().ok_or_else(|| {
-        anyhow::anyhow!("remote exec-server registration URL must include a host")
-    })?;
-
-    let is_loopback = match &host {
-        url::Host::Domain(host) => host.eq_ignore_ascii_case("localhost"),
-        url::Host::Ipv4(ip) => ip.is_loopback(),
-        url::Host::Ipv6(ip) => ip.is_loopback(),
-    };
-    let is_openai_host = match &host {
-        url::Host::Domain(host) => ["openai.com", "openai.org"].into_iter().any(|domain| {
-            host.eq_ignore_ascii_case(domain)
-                || host.to_ascii_lowercase().ends_with(&format!(".{domain}"))
-        }),
-        _ => false,
-    };
-    let is_allowed = match url.scheme() {
-        "https" => is_loopback || is_openai_host,
-        "http" => is_loopback,
-        _ => false,
-    };
-
-    if !is_allowed {
-        anyhow::bail!(
-            "remote exec-server API-key authentication is restricted to HTTPS openai.com and openai.org hosts and subdomains or loopback hosts"
-        );
-    }
-
-    Ok(())
-}
-
-async fn load_exec_server_config(
-    root_config_overrides: &CliConfigOverrides,
-    strict_config: bool,
-    enable_cloud_config: bool,
-) -> anyhow::Result<codex_core::config::Config> {
-    let cli_kv_overrides = root_config_overrides
-        .parse_overrides()
-        .map_err(anyhow::Error::msg)?;
-    let bootstrap_cli_overrides = cli_kv_overrides.clone();
-    let mut builder = ConfigBuilder::default()
-        .cli_overrides(cli_kv_overrides)
-        .strict_config(strict_config);
-    if enable_cloud_config {
-        let codex_home = find_codex_home()?;
-        let loader_overrides = LoaderOverrides::default();
-        let network_policy = EmbeddedNetworkPolicy::load(&loader_overrides).await;
-        let bootstrap_cwd = AbsolutePathBuf::current_dir()?;
-        let bootstrap_config = load_config_toml_with_layer_stack(
-            &codex_home,
-            Some(&bootstrap_cwd),
-            bootstrap_cli_overrides,
-            ConfigLoadOptions {
-                loader_overrides,
-                strict_config,
-                cloud_config_bundle: Default::default(),
-            },
-        )
-        .await?;
-        let bootstrap_auth_config = bootstrap_auth_config(&codex_home, &bootstrap_config)?;
-        let cloud_config_bundle = chatgpt_config_bundle_loader_for_storage(
-            network_policy.bind_bootstrap_auth(bootstrap_auth_config),
-            /*enable_codex_api_key_env*/ true,
-        )
-        .await?;
-        builder = builder.cloud_config_bundle(cloud_config_bundle);
-    }
-    let mut config = builder.build().await?;
-    EmbeddedNetworkPolicy::default().activate(&mut config);
-    Ok(config)
-}
-
-async fn load_exec_server_remote_auth(
-    config: &codex_core::config::Config,
-    missing_auth_error: &'static str,
-) -> anyhow::Result<(Arc<AuthManager>, codex_login::CodexAuth)> {
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await?;
-
-    let auth = match auth_manager.auth().await {
-        Some(auth) => auth,
-        None => {
-            auth_manager.reload().await;
-            auth_manager
-                .auth()
-                .await
-                .ok_or_else(|| anyhow::anyhow!(missing_auth_error))?
-        }
-    };
-
-    Ok((auth_manager, auth))
-}
+#[cfg(test)]
+#[path = "exec_server_args_tests.rs"]
+mod tests;

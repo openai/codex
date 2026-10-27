@@ -65,10 +65,6 @@ mod exec_args_tests;
 #[cfg(test)]
 #[path = "exec_server_args_tests.rs"]
 mod exec_server_args_tests;
-mod exec_server_auth;
-mod exec_server_command;
-mod exec_server_credential;
-mod exec_server_telemetry;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod mcp_login;
@@ -84,12 +80,12 @@ mod state_db_recovery;
 #[cfg(not(windows))]
 mod wsl_paths;
 
-use crate::exec_server_command::ExecServerCommand;
 use crate::mcp_cmd::McpCli;
 use crate::plugin_cmd::PluginCli;
 use crate::plugin_cmd::PluginSubcommand;
 use crate::queue_cmd::QueueCommand;
 use crate::remote_control_cmd::RemoteControlCommand;
+use codex_exec_server_cli::ExecServerCommand;
 use doctor::DoctorCommand;
 use state_db_recovery as local_state_db;
 
@@ -2823,11 +2819,7 @@ fn print_completion(cmd: CompletionCommand) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec_server_command::ExecServerSubcommand;
-    use crate::exec_server_command::is_supported_exec_server_remote_auth;
-    use crate::exec_server_command::validate_api_key_remote_host;
     use assert_matches::assert_matches;
-    use codex_login::CodexAuth;
     use codex_protocol::ThreadId;
     use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
@@ -2965,63 +2957,6 @@ enabled = true
                         .expect("URL")
                 )
                 .is_ok()
-        );
-    }
-
-    #[test]
-    fn exec_server_remote_auth_accepts_api_key_auth() {
-        let auth = CodexAuth::from_api_key("sk-test");
-
-        assert!(is_supported_exec_server_remote_auth(&auth));
-    }
-
-    #[test]
-    fn exec_server_remote_api_key_auth_accepts_https_openai_domains() {
-        for base_url in [
-            "https://openai.com/api",
-            "https://service.openai.com/api",
-            "https://openai.org/api",
-            "https://service.openai.org/api",
-        ] {
-            assert!(validate_api_key_remote_host(base_url).is_ok());
-        }
-    }
-
-    #[test]
-    fn exec_server_remote_api_key_auth_accepts_http_loopback() {
-        for base_url in [
-            "http://localhost:8098/api",
-            "http://127.0.0.1:8098/api",
-            "http://[::1]:8098/api",
-        ] {
-            assert!(validate_api_key_remote_host(base_url).is_ok());
-        }
-    }
-
-    #[test]
-    fn exec_server_remote_api_key_auth_rejects_http_openai_domain() {
-        for base_url in [
-            "http://service.openai.com/api",
-            "http://service.openai.org/api",
-        ] {
-            let error = validate_api_key_remote_host(base_url)
-                .expect_err("reject plaintext OpenAI destination");
-
-            assert_eq!(
-                error.to_string(),
-                "remote exec-server API-key authentication is restricted to HTTPS openai.com and openai.org hosts and subdomains or loopback hosts"
-            );
-        }
-    }
-
-    #[test]
-    fn exec_server_remote_api_key_auth_rejects_suffix_spoof() {
-        let error = validate_api_key_remote_host("https://service.openai.org.evil.example/api")
-            .expect_err("reject suffix spoof");
-
-        assert_eq!(
-            error.to_string(),
-            "remote exec-server API-key authentication is restricted to HTTPS openai.com and openai.org hosts and subdomains or loopback hosts"
         );
     }
 
@@ -4422,15 +4357,13 @@ enabled = true
         .expect("parse forward");
         assert!(cli.remote.remote.is_none());
         assert!(!cli.interactive.strict_config);
-        assert_matches!(cli.subcommand, Some(Subcommand::ExecServer(ExecServerCommand {
-            command: Some(ExecServerSubcommand::Forward { connect }),
-            remote: Some(remote),
-            environment_id: Some(environment_id),
-            name: Some(name),
-            strict_config: true,
-            use_agent_identity_auth: true,
-            ..
-        })) if connect == "ws://127.0.0.1:8765" && remote == "https://example.openai.com" && environment_id == "env-1" && name == "forwarded");
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::ExecServer(ExecServerCommand {
+                strict_config: true,
+                ..
+            }))
+        );
     }
 
     #[test]

@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use std::time::Duration;
 
 use super::ShutdownBehavior;
