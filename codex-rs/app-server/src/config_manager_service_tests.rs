@@ -1188,6 +1188,29 @@ async fn write_value_reports_override() {
 }
 
 #[tokio::test]
+async fn provider_setup_rejects_config_changed_after_preview() -> Result<()> {
+    let tmp = tempdir()?;
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let layers = service.load_config_layers(/*cwd*/ None).await?;
+    let (write, _) = service.prepare_provider_config(
+        &layers,
+        codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID,
+        [("aws.region", Some("us-west-2"))],
+    )?;
+
+    let user_path = tmp.path().join(CONFIG_TOML_FILE);
+    let newer_config = "model = 'newer'";
+    std::fs::write(&user_path, newer_config)?;
+    let error = service.commit_provider_config(write).await.unwrap_err();
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigVersionConflict)
+    );
+    assert_eq!(std::fs::read_to_string(user_path)?, newer_config);
+    Ok(())
+}
+
+#[tokio::test]
 async fn version_conflict_rejected() {
     let tmp = tempdir().expect("tempdir");
     let user_path = tmp.path().join(CONFIG_TOML_FILE);

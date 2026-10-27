@@ -199,7 +199,11 @@ async fn setup_bedrock_profile_and_environment() -> Result<()> {
 
     let managed_home = TempDir::new()?;
     let managed_config_path = managed_home.path().join("config.toml");
-    std::fs::write(&managed_config_path, "")?;
+    std::fs::write(&managed_config_path, "model_provider = 'openai'")?;
+    std::fs::write(
+        managed_home.path().join("requirements.toml"),
+        "model_provider = 'amazon-bedrock'",
+    )?;
     login_with_bedrock_api_key(
         managed_home.path(),
         "managed-bedrock-api-key",
@@ -223,7 +227,6 @@ async fn setup_bedrock_profile_and_environment() -> Result<()> {
         .as_table_mut()
         .expect("config should be a table")
         .extend(toml::toml! {
-            model_provider = "amazon-bedrock"
             [model_providers.amazon-bedrock.aws]
             profile = "engineering"
             region = "us-west-2"

@@ -1,7 +1,8 @@
 use super::super::bedrock_auth::BedrockProviderConfig;
-use super::super::bedrock_auth::configure_bedrock_provider;
-use super::super::bedrock_auth::ensure_user_model_provider_can_be_bedrock;
+use super::super::bedrock_auth::prepare_bedrock_provider;
+use super::super::config_processor::map_error as map_config_error;
 use super::AccountRequestProcessor;
+use super::CloudLoginProvider;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::AwsCredentialType;
@@ -25,7 +26,7 @@ impl AccountRequestProcessor {
         &self,
         _params: BedrockDiscoverParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.ensure_bedrock_login_allowed()?;
+        self.ensure_provider_login_allowed(CloudLoginProvider::AmazonBedrock)?;
         let profiles = codex_aws_auth::discover_aws_profiles()
             .await
             .map_err(|err| internal_error(format!("failed to discover AWS profiles: {err}")))?
@@ -69,9 +70,22 @@ impl AccountRequestProcessor {
         &self,
         params: BedrockSetupParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.ensure_bedrock_login_allowed()?;
-        ensure_user_model_provider_can_be_bedrock(&self.config_manager).await?;
-        if matches!(&params, BedrockSetupParams::Environment { .. })
+        self.ensure_provider_login_allowed(CloudLoginProvider::AmazonBedrock)?;
+        let (profile, region) = match &params {
+            BedrockSetupParams::Profile { profile, region } => {
+                (Some(profile.trim()), region.trim())
+            }
+            BedrockSetupParams::Environment { region } => (None, region.trim()),
+        };
+        let write = prepare_bedrock_provider(
+            &self.config_manager,
+            BedrockProviderConfig {
+                region: Some(region),
+                profile,
+            },
+        )
+        .await?;
+        if profile.is_none()
             && matches!(
                 self.auth_manager.auth_cached(),
                 Some(CodexAuth::BedrockApiKey(_) | CodexAuth::BedrockAccessKeys(_))
@@ -82,58 +96,44 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let region = match &params {
-            BedrockSetupParams::Profile { region, .. }
-            | BedrockSetupParams::Environment { region, .. } => region.trim(),
-        };
         if !is_supported_amazon_bedrock_region(region) {
             return Err(invalid_request(format!(
                 "Amazon Bedrock does not support region `{region}`"
             )));
         }
 
-        let profile = match &params {
-            BedrockSetupParams::Profile { profile, .. } => {
-                let profile = profile.trim();
-                if profile.is_empty() {
-                    return Err(invalid_request("AWS profile name must not be empty."));
-                }
-                codex_aws_auth::validate_aws_profile(
-                    profile,
-                    region,
-                    self.config.http_client_factory(),
-                )
-                .await
-                .map_err(|err| {
-                    invalid_request(format!(
-                        "failed to load credentials for AWS profile `{profile}`: {err}"
-                    ))
-                })?;
-                Some(profile.to_string())
+        if let Some(profile) = profile {
+            if profile.is_empty() {
+                return Err(invalid_request("AWS profile name must not be empty."));
             }
-            BedrockSetupParams::Environment { .. } => {
-                let has_bedrock_api_key = non_empty_env_var(AWS_BEARER_TOKEN_BEDROCK).is_some();
-                let has_access_keys = non_empty_env_var(AWS_ACCESS_KEY_ID).is_some()
-                    && non_empty_env_var(AWS_SECRET_ACCESS_KEY).is_some();
-                if !has_bedrock_api_key && !has_access_keys {
-                    return Err(invalid_request(
-                        "No AWS credentials found. Please Configure AWS credentials or complete AWS sign-in, then try again.",
-                    ));
-                }
-                None
+            codex_aws_auth::validate_aws_profile(
+                profile,
+                region,
+                self.config.http_client_factory(),
+            )
+            .await
+            .map_err(|err| {
+                invalid_request(format!(
+                    "failed to load credentials for AWS profile `{profile}`: {err}"
+                ))
+            })?;
+        } else {
+            let has_bedrock_api_key = non_empty_env_var(AWS_BEARER_TOKEN_BEDROCK).is_some();
+            let has_access_keys = non_empty_env_var(AWS_ACCESS_KEY_ID).is_some()
+                && non_empty_env_var(AWS_SECRET_ACCESS_KEY).is_some();
+            if !has_bedrock_api_key && !has_access_keys {
+                return Err(invalid_request(
+                    "No AWS credentials found. Please Configure AWS credentials or complete AWS sign-in, then try again.",
+                ));
             }
-        };
+        }
 
         // TODO: Validate the selected credentials against Bedrock ListModels once supported.
         self.cancel_active_login().await;
-        configure_bedrock_provider(
-            &self.config_manager,
-            BedrockProviderConfig {
-                region: Some(region),
-                profile: profile.as_deref(),
-            },
-        )
-        .await?;
+        self.config_manager
+            .commit_provider_config(write)
+            .await
+            .map_err(map_config_error)?;
 
         Ok(Some(BedrockSetupResponse {}.into()))
     }

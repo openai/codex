@@ -800,46 +800,55 @@ pub fn merge_configured_model_providers(
                 }
             }
         } else if key == GCP_PROVIDER_ID {
-            provider
-                .validate_gcp_credential_file()
-                .and_then(|()| provider.validate())
-                .map_err(|message| format!("model_providers.{GCP_PROVIDER_ID} {message}"))?;
-            let base_url_override = provider.base_url.take();
-            let auth_override = provider.auth.take();
-            let credential_file_override = provider.credential_file.take();
-            let http_headers_override = provider.http_headers.take();
-            let project_id_override = provider.project_id.take();
-            let location_override = provider.location.take();
-            if provider != ModelProviderInfo::default() {
-                return Err(format!(
-                    "model_providers.{GCP_PROVIDER_ID} only supports changing \
-`base_url`, `auth`, `http_headers`, `project_id`, `location`, and `credential_file`; other non-default provider fields are not supported"
-                ));
-            }
-
-            if let Some(built_in_provider) = model_providers.get_mut(GCP_PROVIDER_ID) {
-                built_in_provider.project_id = project_id_override;
-                built_in_provider.location = location_override;
-                built_in_provider.credential_file = credential_file_override;
-                if let Some(base_url_override) = base_url_override {
-                    built_in_provider.base_url = Some(base_url_override);
-                }
-                if let Some(auth_override) = auth_override {
-                    built_in_provider.auth = Some(auth_override);
-                }
-                if let Some(http_headers_override) = http_headers_override {
-                    built_in_provider
-                        .http_headers
-                        .get_or_insert_default()
-                        .extend(http_headers_override);
-                }
-            }
+            merge_gcp_provider_overrides(model_providers.get_mut(&key), provider)?;
         } else {
             model_providers.entry(key).or_insert(provider);
         }
     }
 
     Ok(model_providers)
+}
+
+/// Validates GCP overrides and applies them when the built-in provider is present.
+pub fn merge_gcp_provider_overrides(
+    built_in: Option<&mut ModelProviderInfo>,
+    mut overrides: ModelProviderInfo,
+) -> Result<(), String> {
+    overrides
+        .validate_gcp_credential_file()
+        .and_then(|()| overrides.validate())
+        .map_err(|message| format!("model_providers.{GCP_PROVIDER_ID} {message}"))?;
+    let base_url = overrides.base_url.take();
+    let auth = overrides.auth.take();
+    let credential_file = overrides.credential_file.take();
+    let http_headers = overrides.http_headers.take();
+    let project_id = overrides.project_id.take();
+    let location = overrides.location.take();
+    if overrides != ModelProviderInfo::default() {
+        return Err(format!(
+            "model_providers.{GCP_PROVIDER_ID} only supports changing \
+`base_url`, `auth`, `http_headers`, `project_id`, `location`, and `credential_file`; other non-default provider fields are not supported"
+        ));
+    }
+
+    if let Some(provider) = built_in {
+        provider.project_id = project_id;
+        provider.location = location;
+        provider.credential_file = credential_file;
+        if let Some(base_url) = base_url {
+            provider.base_url = Some(base_url);
+        }
+        if let Some(auth) = auth {
+            provider.auth = Some(auth);
+        }
+        if let Some(http_headers) = http_headers {
+            provider
+                .http_headers
+                .get_or_insert_default()
+                .extend(http_headers);
+        }
+    }
+    Ok(())
 }
 
 pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> ModelProviderInfo {

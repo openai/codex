@@ -1338,6 +1338,13 @@ client_request_definitions! {
         response: v2::BedrockSetupResponse,
     },
 
+    #[experimental("account/gcp/setup")]
+    GcpSetup => "account/gcp/setup" {
+        params: v2::GcpSetupParams,
+        serialization: global("account-auth"),
+        response: v2::GcpSetupResponse,
+    },
+
     #[experimental("account/bedrock/checkGovCloudRequirements")]
     BedrockCheckGovCloudRequirements => "account/bedrock/checkGovCloudRequirements" {
         params: v2::BedrockCheckGovCloudRequirementsParams,

@@ -130,10 +130,13 @@ async fn run_provider_auth_command(
             ))
         })?
         .map_err(|err| {
-            io::Error::other(format!(
-                "provider auth command `{}` failed to start: {err}",
-                config.command
-            ))
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "provider auth command `{}` failed to start: {err}",
+                    config.command
+                ),
+            )
         })?;
 
     if !output.status.success() {

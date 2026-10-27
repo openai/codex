@@ -1,7 +1,7 @@
 use super::bedrock_auth::BedrockProviderConfig;
 use super::bedrock_auth::clear_user_model_provider_if_bedrock;
-use super::bedrock_auth::configure_bedrock_provider;
-use super::bedrock_auth::ensure_user_model_provider_can_be_bedrock;
+use super::bedrock_auth::prepare_bedrock_provider;
+use super::config_processor::map_error as map_config_error;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
@@ -21,11 +21,13 @@ mod bedrock_gov_cloud;
 mod bedrock_setup;
 mod enterprise_login;
 mod gateway_oauth;
+mod gcp_setup;
 mod rate_limit_resets;
 mod workspace_routing;
 
 pub(super) use enterprise_login::EnterpriseLoginCompletion;
 pub(super) use enterprise_login::EnterpriseLoginTarget;
+pub(crate) use gcp_setup::handle_gcp_setup;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -78,6 +80,11 @@ enum RefreshTokenRequestOutcome {
     NotAttemptedOrSucceeded,
     FailedTransiently,
     FailedPermanently,
+}
+
+enum CloudLoginProvider {
+    AmazonBedrock,
+    Gcp,
 }
 
 enum BedrockLoginCredentials {
@@ -426,7 +433,10 @@ impl AccountRequestProcessor {
         )
     }
 
-    fn ensure_bedrock_login_allowed(&self) -> Result<(), JSONRPCErrorError> {
+    fn ensure_provider_login_allowed(
+        &self,
+        provider: CloudLoginProvider,
+    ) -> Result<(), JSONRPCErrorError> {
         if self.auth_manager.is_workload_identity_selected() {
             return Err(self.configured_auth_owned_by_host_error());
         }
@@ -437,9 +447,13 @@ impl AccountRequestProcessor {
             .auth_manager
             .is_login_method_allowed(ForcedLoginMethod::Api)
         {
-            return Err(invalid_request(
-                "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
-            ));
+            let operation = match provider {
+                CloudLoginProvider::AmazonBedrock => "Amazon Bedrock login",
+                CloudLoginProvider::Gcp => "Google Cloud setup",
+            };
+            return Err(invalid_request(format!(
+                "{operation} is disabled. Use ChatGPT login instead."
+            )));
         }
         Ok(())
     }
@@ -508,7 +522,7 @@ impl AccountRequestProcessor {
         region: String,
     ) {
         let result = async {
-            self.ensure_bedrock_login_allowed()?;
+            self.ensure_provider_login_allowed(CloudLoginProvider::AmazonBedrock)?;
 
             match &credentials {
                 BedrockLoginCredentials::ApiKey(api_key) => {
@@ -536,8 +550,7 @@ impl AccountRequestProcessor {
             }
 
             self.cancel_active_login().await;
-            ensure_user_model_provider_can_be_bedrock(&self.config_manager).await?;
-            configure_bedrock_provider(
+            let write = prepare_bedrock_provider(
                 &self.config_manager,
                 BedrockProviderConfig {
                     region: matches!(&credentials, BedrockLoginCredentials::AccessKeys { .. })
@@ -546,6 +559,10 @@ impl AccountRequestProcessor {
                 },
             )
             .await?;
+            self.config_manager
+                .commit_provider_config(write)
+                .await
+                .map_err(map_config_error)?;
 
             match credentials {
                 BedrockLoginCredentials::ApiKey(api_key) => login_with_bedrock_api_key(

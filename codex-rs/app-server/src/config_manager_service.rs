@@ -3,6 +3,7 @@ use crate::config_layer::config_layer_to_api;
 use crate::config_manager::ConfigManager;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigEdit as ApiConfigEdit;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
@@ -31,6 +32,7 @@ use codex_core::path_utils;
 use codex_core::path_utils::SymlinkWritePaths;
 use codex_core::path_utils::resolve_symlink_write_paths;
 use codex_core::path_utils::write_atomically;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
@@ -44,6 +46,8 @@ use toml_edit::Item as TomlItem;
 
 #[path = "config_manager_service_credential_edits.rs"]
 mod credential_edits;
+#[path = "config_manager_service_provider_setup.rs"]
+mod provider_setup;
 
 use credential_edits::CredentialProviderEdits;
 
@@ -114,6 +118,11 @@ impl ConfigManagerError {
             _ => None,
         }
     }
+}
+
+pub(crate) struct PreparedProviderWrite {
+    edits: Vec<ApiConfigEdit>,
+    expected_version: String,
 }
 
 impl ConfigManager {
@@ -202,6 +211,63 @@ impl ConfigManager {
             .await
     }
 
+    pub(crate) fn prepare_provider_config<'a>(
+        &self,
+        layers: &ConfigLayerStack,
+        provider_id: &'a str,
+        settings: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    ) -> Result<(PreparedProviderWrite, ModelProviderInfo), ConfigManagerError> {
+        let selection = match layers.required_model_provider() {
+            Some(required) if required == provider_id => None,
+            Some(required) => {
+                return Err(ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigRequirementReadonly,
+                    format!(
+                        "Cannot select `{provider_id}` because requirements set `model_provider` to `{required}`."
+                    ),
+                ));
+            }
+            None => Some(("model_provider".to_owned(), Some(provider_id))),
+        };
+        let settings = settings
+            .into_iter()
+            .map(|(key, value)| (format!("model_providers.{provider_id}.{key}"), value));
+        let edits = selection
+            .into_iter()
+            .chain(settings)
+            .map(|(key_path, value)| ApiConfigEdit {
+                key_path,
+                value: value.into(),
+                merge_strategy: MergeStrategy::Replace,
+            })
+            .collect();
+        let user_path = self
+            .user_config_path()
+            .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?;
+        provider_setup::preview(layers, &user_path, provider_id, edits)
+    }
+
+    pub(crate) async fn commit_provider_config(
+        &self,
+        write: PreparedProviderWrite,
+    ) -> Result<(), ConfigManagerError> {
+        let response = self
+            .batch_write(ConfigBatchWriteParams {
+                edits: write.edits,
+                file_path: None,
+                expected_version: Some(write.expected_version),
+                reload_user_config: false,
+            })
+            .await?;
+        if let Some(overridden) = response.overridden_metadata {
+            return Err(ConfigManagerError::write(
+                ConfigWriteErrorCode::ConfigLayerReadonly,
+                overridden.message,
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn batch_write(
         &self,
         params: ConfigBatchWriteParams,
@@ -262,18 +328,7 @@ impl ConfigManager {
         let mut config_edits = Vec::new();
 
         for (key_path, value, strategy) in edits.into_iter() {
-            let mut segments = parse_key_path(&key_path).map_err(|message| {
-                ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
-            })?;
-            if let Some(field) = layers
-                .requirements_toml()
-                .exact_requirement_for_config_path(&segments)
-            {
-                return Err(ConfigManagerError::write(
-                    ConfigWriteErrorCode::ConfigRequirementReadonly,
-                    format!("`{field}` is managed by requirements and cannot be changed"),
-                ));
-            }
+            let mut segments = writable_key_path(&layers, &key_path)?;
             if (value.is_null() || matches!(strategy, MergeStrategy::Upsert))
                 && let Some(pattern) = shell_environment_filter_entry(&user_config, &segments)
                     .map(|(pattern, _)| pattern.clone())
@@ -318,9 +373,7 @@ impl ConfigManager {
             let parsed_value = if preserves_network_proxy_settings {
                 Some(TomlValue::Boolean(false))
             } else {
-                parse_value(value).map_err(|message| {
-                    ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
-                })?
+                parse_value(value)?
             };
             if matches!(strategy, MergeStrategy::Upsert)
                 && let Some(value) = parsed_value.as_ref()
@@ -526,14 +579,38 @@ async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigManage
         .map_err(|err| ConfigManagerError::io("failed to create empty user config.toml", err))
 }
 
-fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, String> {
+fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, ConfigManagerError> {
     if value.is_null() {
         return Ok(None);
     }
 
     serde_json::from_value::<TomlValue>(value)
         .map(Some)
-        .map_err(|err| format!("invalid value: {err}"))
+        .map_err(|err| {
+            ConfigManagerError::write(
+                ConfigWriteErrorCode::ConfigValidationError,
+                format!("invalid value: {err}"),
+            )
+        })
+}
+
+fn writable_key_path(
+    layers: &ConfigLayerStack,
+    key_path: &str,
+) -> Result<Vec<String>, ConfigManagerError> {
+    let segments = parse_key_path(key_path).map_err(|message| {
+        ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
+    })?;
+    if let Some(field) = layers
+        .requirements_toml()
+        .exact_requirement_for_config_path(&segments)
+    {
+        return Err(ConfigManagerError::write(
+            ConfigWriteErrorCode::ConfigRequirementReadonly,
+            format!("`{field}` is managed by requirements and cannot be changed"),
+        ));
+    }
+    Ok(segments)
 }
 
 fn parse_key_path(path: &str) -> Result<Vec<String>, String> {

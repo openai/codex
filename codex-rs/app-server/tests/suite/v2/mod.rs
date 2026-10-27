@@ -76,6 +76,8 @@ mod frozen_cloud_skills;
 mod fs;
 #[path = "gateway_oauth_tests.rs"]
 mod gateway_oauth;
+#[path = "gcp_setup_tests.rs"]
+mod gcp_setup;
 mod git_attribution;
 mod guardian_v2;
 mod history_notes_extension;

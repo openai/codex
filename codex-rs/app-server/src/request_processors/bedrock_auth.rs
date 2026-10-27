@@ -1,5 +1,6 @@
 use super::config_processor::map_error as map_config_error;
 use crate::config_manager::ConfigManager;
+use crate::config_manager_service::PreparedProviderWrite;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -7,9 +8,6 @@ use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::MergeStrategy;
-use codex_config::CONFIG_TOML_FILE;
-use codex_config::ConfigLayerSource;
-use codex_config::format_config_layer_source;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_model_provider::AMAZON_BEDROCK_PROVIDER_ID;
@@ -19,100 +17,30 @@ pub(super) struct BedrockProviderConfig<'a> {
     pub(super) profile: Option<&'a str>,
 }
 
-pub(super) async fn configure_bedrock_provider(
+pub(super) async fn prepare_bedrock_provider(
     config_manager: &ConfigManager,
     config: BedrockProviderConfig<'_>,
-) -> Result<(), JSONRPCErrorError> {
-    let mut edits = vec![
-        (
-            "model_provider",
-            serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
-        ),
-        (
-            "model_providers.amazon-bedrock.aws.profile",
-            serde_json::json!(config.profile),
-        ),
-    ];
-    if let Some(region) = config.region {
-        edits.push((
-            "model_providers.amazon-bedrock.aws.region",
-            serde_json::json!(region),
-        ));
-    }
-
-    let response = config_manager
-        .batch_write(ConfigBatchWriteParams {
-            edits: edits
-                .into_iter()
-                .map(|(key_path, value)| ConfigEdit {
-                    key_path: key_path.to_string(),
-                    value,
-                    merge_strategy: MergeStrategy::Replace,
-                })
-                .collect(),
-            file_path: None,
-            expected_version: None,
-            reload_user_config: false,
-        })
-        .await
-        .map_err(map_config_error)?;
-    if let Some(overridden) = response.overridden_metadata {
-        let message = overridden.message;
-        return Err(invalid_request(format!(
-            "Amazon Bedrock configuration cannot take effect: {message}"
-        )));
-    }
-    Ok(())
-}
-
-pub(super) async fn ensure_user_model_provider_can_be_bedrock(
-    config_manager: &ConfigManager,
-) -> Result<(), JSONRPCErrorError> {
+) -> Result<PreparedProviderWrite, JSONRPCErrorError> {
     let layers = config_manager
         .load_config_layers(/*cwd*/ None)
         .await
         .map_err(|err| internal_error(format!("failed to load configuration layers: {err}")))?;
-    let user_precedence = match layers.get_active_user_layer() {
-        Some(layer) => layer.name.precedence(),
-        None => ConfigLayerSource::User {
-            file: config_manager.user_config_path().map_err(|err| {
-                internal_error(format!("failed to resolve user config path: {err}"))
-            })?,
-            profile: None,
-        }
-        .precedence(),
-    };
-    if let Some((overriding_layer, effective_provider)) = layers
-        .layers_high_to_low()
-        .filter(|layer| layer.name.precedence() > user_precedence)
-        .find_map(|layer| {
-            layer
-                .config
-                .get("model_provider")
-                .map(|value| (layer, value))
-        })
-        && effective_provider.as_str() != Some(AMAZON_BEDROCK_PROVIDER_ID)
-    {
-        let source = format_config_layer_source(&overriding_layer.name, CONFIG_TOML_FILE);
-        return Err(invalid_request(format!(
-            "Amazon Bedrock login cannot select `{AMAZON_BEDROCK_PROVIDER_ID}` because {source} sets `model_provider` to {effective_provider}"
-        )));
+    let mut settings = vec![("aws.profile", config.profile)];
+    if let Some(region) = config.region {
+        settings.push(("aws.region", Some(region)));
     }
-
-    if layers
-        .effective_config()
-        .get("model_providers")
-        .and_then(|providers| providers.get(AMAZON_BEDROCK_PROVIDER_ID))
-        .and_then(|provider| provider.get("aws"))
-        .and_then(|aws| aws.get("credential_export"))
-        .is_some()
+    let (write, provider) = config_manager
+        .prepare_provider_config(&layers, AMAZON_BEDROCK_PROVIDER_ID, settings)
+        .map_err(map_config_error)?;
+    if provider
+        .aws
+        .is_some_and(|aws| aws.credential_export.is_some())
     {
         return Err(invalid_request(
             "Amazon Bedrock is configured to use `aws.credential_export`. Please clear this setting to use another sign-in method.",
         ));
     }
-
-    Ok(())
+    Ok(write)
 }
 
 pub(super) async fn clear_user_model_provider_if_bedrock(

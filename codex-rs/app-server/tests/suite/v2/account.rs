@@ -1441,7 +1441,7 @@ async fn login_amazon_bedrock_rejects_non_bedrock_provider_override_without_chan
     .await??;
     assert_eq!(
         error.error.message,
-        "Amazon Bedrock login cannot select `amazon-bedrock` because session-flags sets `model_provider` to \"mock_provider\""
+        "Cannot configure `model_provider`: Overridden by session flags"
     );
     assert_eq!(load_file_auth(codex_home.path())?, expected_auth);
     assert_eq!(read_config_toml(codex_home.path())?, expected_config);
@@ -1470,10 +1470,9 @@ async fn login_amazon_bedrock_rejects_non_bedrock_provider_override_without_chan
 
 #[tokio::test]
 async fn login_amazon_bedrock_access_keys_rejects_overridden_aws_configuration() -> Result<()> {
-    for config_override in [
-        r#"model_providers.amazon-bedrock.aws.profile="other-account""#,
-        r#"model_providers.amazon-bedrock.aws.region="eu-west-1""#,
-    ] {
+    for (field, value) in [("profile", "other-account"), ("region", "eu-west-1")] {
+        let key = format!("model_providers.amazon-bedrock.aws.{field}");
+        let config_override = format!(r#"{key}="{value}""#);
         let codex_home = TempDir::new()?;
         create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
         login_with_api_key(
@@ -1488,9 +1487,11 @@ async fn login_amazon_bedrock_access_keys_rejects_overridden_aws_configuration()
             .with_codex_home(codex_home.path())
             .without_auto_env()
             .with_env_overrides(&[("OPENAI_API_KEY", None)])
-            .with_args(&["-c", config_override])
+            .with_args(&["-c", &config_override])
             .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
             .await?;
+        let config_path = codex_home.path().join("config.toml");
+        let expected_config = std::fs::read_to_string(&config_path)?;
 
         let request_id = mcp
             .send_login_account_request(json!({
@@ -1508,9 +1509,10 @@ async fn login_amazon_bedrock_access_keys_rejects_overridden_aws_configuration()
 
         assert_eq!(
             error.error.message,
-            "Amazon Bedrock configuration cannot take effect: Overridden by session flags"
+            format!("Cannot configure `{key}`: Overridden by session flags")
         );
         assert_eq!(load_file_auth(codex_home.path())?, expected_auth);
+        assert_eq!(std::fs::read_to_string(&config_path)?, expected_config);
     }
 
     Ok(())
