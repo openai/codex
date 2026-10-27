@@ -21,6 +21,17 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews() -> anyho
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let action = |id| {
+        if id == "second-check" {
+            let mut call = responses::ev_function_call_with_namespace(
+                id,
+                "team",
+                "send_message",
+                r#"{"target":"/root","message":"opaque-message"}"#,
+            );
+            call["item"]["encrypted_function_args"] = serde_json::json!(["message"]);
+            call["item"]["encrypted_content"] = serde_json::json!("opaque-replay");
+            return responses::sse(vec![call, responses::ev_completed(id)]);
+        }
         responses::sse(vec![
             responses::ev_function_call(
                 id,
@@ -65,6 +76,14 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews() -> anyho
         .with_model("gpt-5.5")
         .with_config(|config| {
             super::configure_scenario_catalog(config);
+            for feature in [
+                codex_features::Feature::Collab,
+                codex_features::Feature::MultiAgentV2,
+                codex_features::Feature::GuardianNativeMultiAgentHistory,
+            ] {
+                config.features.enable(feature).unwrap();
+            }
+            config.multi_agent_v2.tool_namespace = Some("team".to_owned());
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config
@@ -98,7 +117,7 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews() -> anyho
     .await;
     let requests = mock.requests();
     assert_eq!(requests.len(), 6);
-    for request in [&requests[2], &requests[4]] {
+    for request in [&requests[2], &requests[4], &requests[5]] {
         let messages = request
             .input()
             .into_iter()

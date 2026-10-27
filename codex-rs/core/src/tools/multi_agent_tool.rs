@@ -117,6 +117,18 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
 }
 
 impl CoreToolRuntime for MultiAgentV2ToolOverrides {
+    fn requires_guardian_review(&self, invocation: &ToolInvocation) -> bool {
+        invocation
+            .turn
+            .config
+            .features
+            .enabled(codex_features::Feature::GuardianNativeMultiAgentHistory)
+            && matches!(
+                self.handler.tool_name().name.as_str(),
+                "spawn_agent" | "send_message" | "followup_task" | "interrupt_agent"
+            )
+    }
+
     fn wait_until_ready<'a>(&'a self, session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
         self.handler.wait_until_ready(session)
     }
