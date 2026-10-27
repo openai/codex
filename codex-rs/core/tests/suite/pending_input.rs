@@ -57,6 +57,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_successful_turn;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::from_slice;
@@ -437,14 +438,6 @@ async fn wait_for_agent_message(codex: &CodexThread, text: &str) {
 
 async fn wait_for_turn_complete(codex: &CodexThread) {
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-}
-
-async fn wait_for_successful_turn(codex: &CodexThread) {
-    let event = wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-    assert!(
-        matches!(&event, EventMsg::TurnComplete(completed) if completed.error.is_none()),
-        "turn failed: {event:?}"
-    );
 }
 
 async fn wait_for_sleep_item_started(codex: &CodexThread, call_id: &str, duration_ms: u64) {

@@ -711,6 +711,15 @@ impl ToolRegistry {
         mut invocation: ToolInvocation,
         call_state: Option<Arc<ToolCallState>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        // Standalone dispatch has no outer task to reserve the ID for it.
+        let standalone;
+        let reservation = if let Some(state) = &call_state {
+            &state.invocation
+        } else {
+            standalone = crate::agent::host::InvocationReservation::default();
+            standalone.reserve(&invocation.session, &invocation.turn, &invocation.call_id)?;
+            &standalone
+        };
         let cancellation_token = invocation.cancellation_token.clone();
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
@@ -879,6 +888,7 @@ impl ToolRegistry {
             return Err(fail_before_execution(&invocation, err).await);
         }
 
+        let invocation_guard = reservation.activate(&invocation);
         if tool.mcp_server_name().is_none() {
             notify_tool_start(&invocation, /*mcp_tool*/ None)
                 .or_cancel_tool(&cancellation_token)
@@ -978,6 +988,7 @@ impl ToolRegistry {
                 handler_executed: true,
             },
         };
+        drop(invocation_guard);
         notify_tool_finish_if_unclaimed(&invocation, call_state.as_deref(), lifecycle_outcome)
             .await;
 

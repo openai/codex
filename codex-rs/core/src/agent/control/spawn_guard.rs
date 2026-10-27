@@ -12,22 +12,30 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-pub(super) struct PendingSpawn {
+pub(in crate::agent) enum SpawnOwner {
+    Local,
+    Host,
+}
+
+pub(in crate::agent) struct PendingSpawn {
     state: Arc<ThreadManagerState>,
     pending: Option<(ThreadId, AgentTreeMembership)>,
     edge_write: Option<JoinHandle<()>>,
+    owner: SpawnOwner,
 }
 
 impl PendingSpawn {
-    pub(super) fn new(
+    pub(in crate::agent) fn new(
         state: Arc<ThreadManagerState>,
         child: ThreadId,
         membership: AgentTreeMembership,
+        owner: SpawnOwner,
     ) -> Self {
         Self {
             state,
             pending: Some((child, membership)),
             edge_write: None,
+            owner,
         }
     }
 
@@ -45,7 +53,7 @@ impl PendingSpawn {
         self.edge_write = None;
     }
 
-    pub(super) fn disarm(mut self) -> AgentTreeMembership {
+    pub(in crate::agent) fn disarm(mut self) -> AgentTreeMembership {
         let Some((_child, membership)) = self.pending.take() else {
             unreachable!("pending spawn must own agent-tree membership");
         };
@@ -61,6 +69,7 @@ impl Drop for PendingSpawn {
         let state = Arc::clone(&self.state);
         let teardown = membership.into_teardown_guard("child_spawn_cleanup", Some(child));
         let edge_write = self.edge_write.take();
+        let local_owner = matches!(self.owner, SpawnOwner::Local);
         drop(tokio::spawn(async move {
             if let Some(thread) = state.remove_thread(&child).await {
                 if let Err(error) = thread.shutdown_and_wait().await {
@@ -85,7 +94,8 @@ impl Drop for PendingSpawn {
             if let Some(edge_write) = edge_write {
                 let _ = edge_write.await;
             }
-            if let Some(store) = state.agent_graph_store()
+            if local_owner
+                && let Some(store) = state.agent_graph_store()
                 && let Err(error) = store
                     .set_thread_spawn_edge_status(child, ThreadSpawnEdgeStatus::Closed)
                     .await

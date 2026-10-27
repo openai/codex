@@ -12,7 +12,7 @@ pub struct MessageLifecycleInput {
     pub data: ExtensionData,
 }
 
-/// Observes messages published through local agent control, where the sender is known.
+/// Observes messages from local agent control and the initial task of a host-spawned child.
 /// Callbacks are synchronous and must not block. Replaying history or submitting raw
 /// protocol input does not create a publication.
 pub trait MessageLifecycleContributor: Send + Sync {

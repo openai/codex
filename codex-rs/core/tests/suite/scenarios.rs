@@ -141,6 +141,9 @@ mod mailbox_preemption;
 #[path = "scenarios_agent_eviction_tests.rs"]
 mod agent_eviction;
 
+#[path = "scenarios_reserved_spawn.rs"]
+mod reserved_spawn;
+
 #[path = "scenarios_partial_answers.rs"]
 mod partial_answers;
 

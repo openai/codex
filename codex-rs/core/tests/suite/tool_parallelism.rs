@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::TurnInputRequest;
+use codex_features::Feature;
 use core_test_support::test_codex::local_requests;
 use std::fs;
 use std::time::Duration;
@@ -70,84 +71,45 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_turn_and_measure(test: &TestCodex, prompt: &str) -> anyhow::Result<Duration> {
-    let start = Instant::now();
-    run_turn(test, prompt).await?;
-    Ok(start.elapsed())
-}
-
 async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
     let mut builder = test_codex().with_model("test-gpt-5.1-codex");
     builder.build(server).await
 }
 
-fn assert_parallel_duration(actual: Duration) {
-    // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
-    assert!(
-        actual < Duration::from_millis(1_600),
-        "expected parallel execution to finish quickly, got {actual:?}"
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
+async fn native_v2_tool_calls_with_the_same_id_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let test = build_codex_with_test_tool(&server).await?;
-
-    let warmup_args = json!({
-        "sleep_after_ms": 10,
-        "barrier": {
-            "id": "parallel-test-sync-warmup",
-            "participants": 2,
-            "timeout_ms": 1_000,
-        }
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config.features.enable(Feature::MultiAgentV2).unwrap();
+        })
+        .build(&server)
+        .await?;
+    let args = json!({
+        "barrier": { "id": "parallel-test-sync", "participants": 2, "timeout_ms": 5_000 }
     })
     .to_string();
-
-    let parallel_args = json!({
-        "sleep_after_ms": 300,
-        "barrier": {
-            "id": "parallel-test-sync",
-            "participants": 2,
-            "timeout_ms": 1_000,
-        }
-    })
-    .to_string();
-
-    let warmup_first = sse(vec![
-        json!({"type": "response.created", "response": {"id": "resp-warm-1"}}),
-        ev_function_call("warm-call-1", "test_sync_tool", &warmup_args),
-        ev_function_call("warm-call-2", "test_sync_tool", &warmup_args),
-        ev_completed("resp-warm-1"),
-    ]);
-    let warmup_second = sse(vec![
-        ev_assistant_message("warm-msg-1", "warmup complete"),
-        ev_completed("resp-warm-2"),
-    ]);
-
-    let first_response = sse(vec![
-        json!({"type": "response.created", "response": {"id": "resp-1"}}),
-        ev_function_call("call-1", "test_sync_tool", &parallel_args),
-        ev_function_call("call-2", "test_sync_tool", &parallel_args),
+    let calls = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call("shared", "test_sync_tool", &args),
+        ev_function_call("shared", "test_sync_tool", &args),
         ev_completed("resp-1"),
     ]);
-    let second_response = sse(vec![
+    let done = sse(vec![
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(
-        &server,
-        vec![warmup_first, warmup_second, first_response, second_response],
-    )
-    .await;
+    let responses = mount_sse_sequence(&server, vec![calls, done]).await;
 
-    run_turn(&test, "warm up parallel tool").await?;
-
-    let duration = run_turn_and_measure(&test, "exercise sync tool").await?;
-    assert_parallel_duration(duration);
-
+    run_turn(&test, "exercise sync tool").await?;
+    // Either call can return "ok" only after both handlers reach the barrier.
+    assert_eq!(
+        responses.function_call_output_text("shared").as_deref(),
+        Some("ok")
+    );
     Ok(())
 }
 
@@ -240,8 +202,13 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     ]);
     mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
-    let duration = run_turn_and_measure(&test, "mix tools").await?;
-    assert_parallel_duration(duration);
+    let start = Instant::now();
+    run_turn(&test, "mix tools").await?;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(1_600),
+        "expected parallel execution to finish quickly, got {elapsed:?}"
+    );
 
     Ok(())
 }

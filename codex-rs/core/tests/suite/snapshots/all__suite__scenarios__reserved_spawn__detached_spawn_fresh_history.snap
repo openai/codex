@@ -1,0 +1,58 @@
+---
+source: core/tests/suite/scenarios_reserved_spawn.rs
+expression: history
+---
+Scenario: A prepares a child. After A and its manager shut down, a second manager creates the idle child and then starts its first turn.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=e03063c2cb6ece3a):
+        - namespace/functions; hash=e58195dea5c51dea
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Remember PRIOR_CONTEXT_5241.
+07:configuration_update:reasoning={"effort":"low"}
+-- request 2 (turn) --
+08:message/user:
+    Remember TRANSFERRED_CONTEXT_7391 and ask the host to start a worker.
+
+## Window 2 (after request 2: input diverged at item 00)
+-- request 3 (turn) --
+00:additional_tools/developer (2; hash=adec8e1bf249cb8f):
+        - namespace/functions; hash=00aa6cf7871d56b9
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Report TRANSFERRED_TASK_8812 and the remembered context.
+07:configuration_update:reasoning={"effort":"low"}

@@ -160,6 +160,13 @@ impl ToolCallRuntime {
         cancellation_token: CancellationToken,
         call_state: Arc<ToolCallState>,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
+        if let Err(err) =
+            call_state
+                .invocation
+                .reserve(&self.session, &step_context.turn, &call.call_id)
+        {
+            return Either::Left(std::future::ready(Err(err)));
+        }
         let message_admission =
             super::user_messaging::admit_code_mode_send(&self.session, &source, &call.tool_name);
         self.session
@@ -320,7 +327,7 @@ impl ToolCallRuntime {
                         tracker,
                         dispatch_call,
                         source,
-                        dispatch_call_state,
+                        Arc::clone(&dispatch_call_state),
                     )
                     .await;
                 drop(_admitted_timing);
@@ -339,22 +346,34 @@ impl ToolCallRuntime {
                         started.elapsed(),
                     );
                 }
+                // Finished calls release their IDs even if their results have not been collected.
+                // Otherwise the outer task may still need the ID for its abort callback.
+                if dispatch_call_state
+                    .terminal_outcome_reached
+                    .load(Ordering::Acquire)
+                {
+                    drop(dispatch_call_state.invocation.take());
+                }
                 result
             }
             .instrument(dispatch_span.clone().or_current()),
         ));
 
-        async move {
+        let completion = async move {
             let mut tool_call_timing_guard = tool_call_timing_guard;
+            let join_error = |err| {
+                drop(call_state.invocation.take());
+                Self::tool_task_join_error(err)
+            };
             let mut result = tokio::select! {
-                res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
+                res = &mut dispatch_handle => res.map_err(join_error)?,
                 _ = cancellation_token.cancelled() => {
                     // Dynamic handlers observe the token and publish their terminal item themselves.
                     if finishes_on_cancellation
                         || call_state.terminal_outcome_reached.load(Ordering::Acquire)
                         || dispatch_handle.is_finished()
                     {
-                        dispatch_handle.await.map_err(Self::tool_task_join_error)?
+                        dispatch_handle.await.map_err(join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         abort_dispatch_span.record("aborted", true);
@@ -362,6 +381,7 @@ impl ToolCallRuntime {
                         match dispatch_handle.await {
                             Ok(result) => result,
                             Err(err) if err.is_cancelled() => {
+                                let _reservation = call_state.invocation.take();
                                 let response = Self::aborted_response(&call, Some(secs));
                                 call_trace::result_ready(
                                     thread_id,
@@ -387,6 +407,7 @@ impl ToolCallRuntime {
                     }
                 },
             };
+            let _reservation = call_state.invocation.take();
             // Cancellation outside the handler can return before the registry reports an outcome.
             if cancellation_token.is_cancelled()
                 && !call_state
@@ -416,7 +437,8 @@ impl ToolCallRuntime {
             }
             result
         }
-        .instrument(dispatch_span.or_current())
+        .instrument(dispatch_span.or_current());
+        Either::Right(completion)
     }
 }
 

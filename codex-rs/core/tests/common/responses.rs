@@ -105,6 +105,19 @@ fn assert_turn_id(body: &Value, key: &str, expected: Option<&str>) -> Result<()>
 #[derive(Debug, Clone)]
 pub struct ResponsesRequest(wiremock::Request);
 
+pub async fn received_analytics_events(server: &MockServer, event_type: &str) -> Vec<Value> {
+    server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.url.path() == "/codex/analytics-events/events")
+        .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+        .flat_map(|payload| payload["events"].as_array().cloned().unwrap_or_default())
+        .filter(|event| event["event_type"] == event_type)
+        .collect()
+}
+
 pub async fn received_responses_requests(server: &MockServer) -> Vec<ResponsesRequest> {
     server
         .received_requests()

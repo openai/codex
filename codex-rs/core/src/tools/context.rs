@@ -48,6 +48,7 @@ pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 pub(crate) struct ToolCallState {
     pub(crate) terminal_outcome_reached: AtomicBool,
     pub(crate) delivered_assistant_message: OnceLock<String>,
+    pub(crate) invocation: crate::agent::host::InvocationReservation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

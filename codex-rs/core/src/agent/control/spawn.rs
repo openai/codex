@@ -1,5 +1,6 @@
 use super::residency::is_v2_resident_session_source;
 use super::spawn_guard::PendingSpawn;
+use super::spawn_guard::SpawnOwner;
 use super::spawn_telemetry::SpawnMeasurements;
 use super::spawn_telemetry::record_spawn_success;
 use super::*;
@@ -16,10 +17,10 @@ use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::PermissionProfileSnapshot;
 use crate::thread_manager::StartThreadOptions;
 use codex_features::Feature;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::AgentErrorContext;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
-use codex_thread_store::PersistContext;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use futures::stream;
@@ -39,7 +40,9 @@ pub(super) enum SpawnInitialInput {
     InterAgentCommunication(InterAgentCommunication, AgentCommunicationContext),
 }
 
-async fn effective_spawn_config(thread: &CodexThread) -> CodexResult<ThreadConfigSnapshot> {
+pub(in crate::agent) async fn effective_spawn_config(
+    thread: &CodexThread,
+) -> CodexResult<ThreadConfigSnapshot> {
     let mut config = thread.config_snapshot().await;
     let model_info = thread
         .thread_extension_data()
@@ -72,6 +75,26 @@ pub(super) fn agent_nickname_candidates(config: &Config, role_name: Option<&str>
         .into_iter()
         .map(ToOwned::to_owned)
         .collect()
+}
+
+pub(in crate::agent) async fn fresh_child_history_and_tools(
+    parent: &CodexThread,
+    config: &Config,
+    version: MultiAgentVersion,
+) -> (Option<ThreadHistoryMode>, Vec<DynamicToolSpec>) {
+    let history_mode = matches!(
+        parent.config_snapshot().await.history_mode,
+        ThreadHistoryMode::Paginated
+    )
+    .then_some(ThreadHistoryMode::Paginated);
+    let tools = if version == MultiAgentVersion::V2
+        && config.features.enabled(Feature::MultiAgentV2DynamicTools)
+    {
+        parent.session.dynamic_tools().await.to_vec()
+    } else {
+        Vec::new()
+    };
+    (history_mode, tools)
 }
 
 impl LocalAgentControl {
@@ -511,15 +534,11 @@ impl LocalAgentControl {
                 })
         };
         let subagent_analytics =
-            if let SessionSource::SubAgent(source @ SubAgentSource::ThreadSpawn { .. }) =
-                &session_source
+            if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) = &session_source
                 && let Some(parent_thread_id) = parent_thread_id
                 && let Ok(parent) = state.get_thread(parent_thread_id).await
             {
-                Some((
-                    parent.session.app_server_client_metadata().await,
-                    source.clone(),
-                ))
+                Some(parent.session.app_server_client_metadata().await)
             } else {
                 None
             };
@@ -559,22 +578,14 @@ impl LocalAgentControl {
                     runtime.registry.clear_evicted_environments(thread_id);
                     residency_slot.commit(reloaded_thread.thread_id);
                     // Register before listeners can forward events from the resumed thread.
-                    if let Some((client_metadata, source)) = subagent_analytics {
-                        let thread_config = reloaded_thread.thread.config_snapshot().await;
-                        emit_subagent_session_started(
-                            &reloaded_thread
-                                .thread
-                                .session
-                                .services
-                                .analytics_events_client,
-                            client_metadata,
-                            reloaded_thread.thread.session.session_id(),
-                            reloaded_thread.thread_id,
-                            thread_config.parent_thread_id,
-                            thread_config,
-                            source,
-                            /*resumed_created_at*/ Some(stored_thread.created_at),
-                        );
+                    if let Some(client_metadata) = subagent_analytics {
+                        reloaded_thread
+                            .thread
+                            .emit_subagent_session_started(
+                                client_metadata,
+                                Some(stored_thread.created_at),
+                            )
+                            .await;
                     }
                     state.notify_thread_created(reloaded_thread.thread_id);
                     Ok(residency_pin)
@@ -734,17 +745,9 @@ impl LocalAgentControl {
                 if let Some(parent_thread_id) = parent_thread_id
                     && let Ok(parent_thread) = state.get_thread(parent_thread_id).await
                 {
-                    start_options.history_mode = matches!(
-                        parent_thread.config_snapshot().await.history_mode,
-                        ThreadHistoryMode::Paginated
-                    )
-                    .then_some(ThreadHistoryMode::Paginated);
-                    if multi_agent_version == MultiAgentVersion::V2
-                        && config.features.enabled(Feature::MultiAgentV2DynamicTools)
-                    {
-                        start_options.dynamic_tools =
-                            parent_thread.session.dynamic_tools().await.to_vec();
-                    }
+                    (start_options.history_mode, start_options.dynamic_tools) =
+                        fresh_child_history_and_tools(&parent_thread, &config, multi_agent_version)
+                            .await;
                 }
                 None
             }
@@ -762,14 +765,16 @@ impl LocalAgentControl {
             .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
         let child_create = child_create_started_at.elapsed();
         agent_metadata.agent_id = Some(new_thread.thread_id);
-        let mut pending_spawn =
-            PendingSpawn::new(Arc::clone(&state), new_thread.thread_id, membership);
+        let mut pending_spawn = PendingSpawn::new(
+            Arc::clone(&state),
+            new_thread.thread_id,
+            membership,
+            SpawnOwner::Local,
+        );
 
-        if let Some(SessionSource::SubAgent(
-            subagent_source @ SubAgentSource::ThreadSpawn {
-                parent_thread_id, ..
-            },
-        )) = notification_source.as_ref()
+        if let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = notification_source.as_ref()
         {
             let client_metadata = match state.get_thread(*parent_thread_id).await {
                 Ok(parent_thread) => parent_thread.session.app_server_client_metadata().await,
@@ -785,18 +790,10 @@ impl LocalAgentControl {
                     }
                 }
             };
-            let thread_config = new_thread.thread.config_snapshot().await;
-            let parent_thread_id = thread_config.parent_thread_id;
-            emit_subagent_session_started(
-                &new_thread.thread.session.services.analytics_events_client,
-                client_metadata,
-                new_thread.thread.session.session_id(),
-                new_thread.thread_id,
-                parent_thread_id,
-                thread_config,
-                subagent_source.clone(),
-                /*resumed_created_at*/ None,
-            );
+            new_thread
+                .thread
+                .emit_subagent_session_started(client_metadata, /*resumed_created_at*/ None)
+                .await;
         }
 
         let control = self.clone();
@@ -815,10 +812,7 @@ impl LocalAgentControl {
         let durability_wait_started_at = Instant::now();
         if options.fork_mode.is_some() {
             tokio::join!(
-                new_thread
-                    .thread
-                    .session
-                    .ensure_rollout_materialized(PersistContext::Standard),
+                new_thread.thread.ensure_rollout_materialized(),
                 pending_spawn.wait_for_edge(),
             );
         } else {

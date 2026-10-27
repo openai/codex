@@ -15,7 +15,6 @@ use crate::config::RolloutBudgetConfig;
 use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
@@ -62,6 +61,10 @@ pub(crate) use self::runtime::AgentTreeShutdownState;
 pub(crate) use self::runtime::AgentTreeTeardownGuard;
 pub(crate) use self::runtime::LocalAgentRuntime;
 pub(crate) use self::watch::StatusSubscription;
+pub(in crate::agent) use spawn::effective_spawn_config;
+pub(in crate::agent) use spawn::fresh_child_history_and_tools;
+pub(in crate::agent) use spawn_guard::PendingSpawn;
+pub(in crate::agent) use spawn_guard::SpawnOwner;
 
 mod api;
 mod budget;
@@ -626,14 +629,8 @@ impl LocalAgentControl {
         state: &Arc<ThreadManagerState>,
         session_source: Option<&SessionSource>,
     ) -> Option<TurnEnvironmentSnapshot> {
-        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        })) = session_source
-        else {
-            return None;
-        };
-
-        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+        let parent_thread_id = session_source?.parent_thread_id()?;
+        let parent_thread = state.get_thread(parent_thread_id).await.ok()?;
         Some(parent_thread.session.inherited_environment_snapshot().await)
     }
 
@@ -674,14 +671,15 @@ async fn inherited_exec_policy_for_source(
     session_source: Option<&SessionSource>,
     child_config: &Config,
 ) -> Option<Arc<crate::exec_policy::ExecPolicyManager>> {
-    let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id, ..
-    })) = session_source
-    else {
-        return None;
-    };
+    let parent_thread_id = session_source?.parent_thread_id()?;
+    let parent_thread = state.get_thread(parent_thread_id).await.ok()?;
+    inherited_exec_policy_for_parent(&parent_thread, child_config).await
+}
 
-    let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+pub(in crate::agent) async fn inherited_exec_policy_for_parent(
+    parent_thread: &crate::CodexThread,
+    child_config: &Config,
+) -> Option<Arc<crate::exec_policy::ExecPolicyManager>> {
     let parent_config = parent_thread.session.get_config().await;
     if !crate::exec_policy::child_uses_parent_exec_policy(&parent_config, child_config) {
         return None;

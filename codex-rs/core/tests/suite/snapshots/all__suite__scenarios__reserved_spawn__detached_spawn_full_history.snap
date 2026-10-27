@@ -1,0 +1,50 @@
+---
+source: core/tests/suite/scenarios_reserved_spawn.rs
+expression: history
+---
+Scenario: A prepares a child. After A and its manager shut down, a second manager creates the idle child and then starts its first turn.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=e03063c2cb6ece3a):
+        - namespace/functions; hash=e58195dea5c51dea
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Remember PRIOR_CONTEXT_5241.
+07:configuration_update:reasoning={"effort":"low"}
+-- request 2 (turn) --
+08:message/user:
+    Remember TRANSFERRED_CONTEXT_7391 and ask the host to start a worker.
+-- request 3 (turn) --
+09:function_call/host_spawn:{}
+10:function_call_output:aborted
+11:message/developer:
+    You are now a newly spawned child agent. The preceding conversation is inherited parent context. Follow ...are not inherited. Report your result to your parent. [hash=0e586a5d405d39db]
+12:message/developer:
+    <MULTI_AGENT_ROLE>
+13:message/developer:
+    The following tools are no longer available. Do not call them:
+    - functions.request_user_input_async
+14:message/user:
+    <AGENTS_MD>
+15:message/developer:
+    <MULTI_AGENT_MODE>
+16:message/user:
+    Report TRANSFERRED_TASK_8812 and the remembered context.
+17:configuration_update:reasoning={"effort":"low"}
