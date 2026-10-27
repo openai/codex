@@ -1,9 +1,8 @@
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_features::Feature;
+#[cfg(test)]
 use codex_guardian_context::Budgeted;
 use codex_guardian_context::CollectedContext;
-use codex_guardian_context::ComposedContext;
-use codex_guardian_context::ContextPresentation;
 use codex_guardian_context::ContextProfile;
 #[cfg(test)]
 use codex_guardian_context::ConversationTranscriptEntry;
@@ -13,10 +12,11 @@ use codex_guardian_context::PlannedActionKind;
 use codex_guardian_context::SectionError;
 use codex_guardian_context::SectionHistory;
 use codex_guardian_context::SectionInput;
+#[cfg(test)]
 pub(crate) use codex_guardian_context::TranscriptCursor as GuardianTranscriptCursor;
 pub(crate) use codex_guardian_context::TranscriptMode as GuardianPromptMode;
-use codex_guardian_context::TranscriptSelection;
 use codex_guardian_context::default_registry;
+use codex_guardian_reviewer::GuardianPromptItems;
 use codex_protocol::models::ResponseItem;
 
 use crate::context::GuardianPermissionContext;
@@ -43,12 +43,6 @@ pub(super) const GUARDIAN_TRANSCRIPT_START: &str = ">>> TRANSCRIPT START\n";
 pub(crate) enum GuardianTranscriptHistory<'a> {
     Retained(&'a dyn ConversationHistorySnapshot),
     LoadedParentCheckpoint(&'a dyn ConversationHistorySnapshot),
-}
-
-pub(crate) struct GuardianPromptItems {
-    pub(crate) context: ComposedContext,
-    pub(crate) transcript_cursor: GuardianTranscriptCursor,
-    pub(crate) node_repl_evidence_sequence: u64,
 }
 
 /// Builds the guardian user content items from:
@@ -210,45 +204,18 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         permissions.as_ref(),
         node_repl_context.as_ref(),
     )?;
-    let (selection, transcript_cursor) = mode.select(
-        sections.transcript_entries(),
+    codex_guardian_reviewer::compose_guardian_prompt(
+        sections,
+        &profile,
+        mode,
         if use_parent_checkpoint {
             history.history_version()
         } else {
             history.review_history_version()
         },
-    );
-    let session_id = session.thread_id.to_string();
-    let (transcript_entries, offset, placeholder, presentation) = match selection {
-        TranscriptSelection::Full(entries) => (
-            entries,
-            0,
-            "<no retained transcript entries>",
-            ContextPresentation::SyncFull {
-                session_id: &session_id,
-            },
-        ),
-        TranscriptSelection::Delta { entries, offset } => (
-            entries,
-            offset,
-            "<no retained transcript delta entries>",
-            ContextPresentation::SyncDelta {
-                session_id: &session_id,
-            },
-        ),
-    };
-    let mut transcript = profile.prepare_transcript(transcript_entries, offset);
-    if transcript_entries.is_empty() {
-        transcript.items.push(Budgeted::required(
-            codex_guardian_context::TranscriptContent::Text(placeholder.to_owned()),
-        ));
-    }
-    let context = sections.compose(presentation, transcript)?;
-    Ok(GuardianPromptItems {
-        context,
-        transcript_cursor,
+        &session.thread_id.to_string(),
         node_repl_evidence_sequence,
-    })
+    )
 }
 
 /// Exercises the sync profile through the host's existing transcript tests.

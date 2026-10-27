@@ -19,6 +19,7 @@ mod metrics;
 mod model;
 mod outcome;
 mod pool;
+mod prompt;
 mod reporting;
 mod retry;
 mod review;
@@ -58,6 +59,8 @@ pub use pool::ReviewerRequest;
 pub use pool::ReviewerSession;
 pub use pool::ReviewerTasks;
 pub use pool::SessionDisposition;
+pub use prompt::GuardianPromptItems;
+pub use prompt::compose_guardian_prompt;
 
 pub use review::ReviewHost;
 
