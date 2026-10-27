@@ -1,3 +1,6 @@
+//! Store session names in an append-only index and serialize index rewrites.
+//! Writers must share the filesystem lock namespace and use this locking protocol.
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::File;
@@ -5,8 +8,8 @@ use std::io::ErrorKind;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::LazyLock;
+use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 
 use crate::reverse_jsonl_scanner::ReverseJsonlScanner;
@@ -18,8 +21,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 const SESSION_INDEX_FILE: &str = "session_index.jsonl";
-static SESSION_INDEX_LOCK: LazyLock<Arc<tokio::sync::Mutex<()>>> =
-    LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+const SESSION_INDEX_LOCK_FILE: &str = "session_index.jsonl.lock";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionIndexEntry {
@@ -56,7 +58,7 @@ pub async fn append_session_index_entry(
     entry: SessionIndexEntry,
 ) -> std::io::Result<()> {
     let path = session_index_path(codex_home);
-    with_session_index_lock(&SESSION_INDEX_LOCK, move || {
+    with_session_index_lock(codex_home, move || {
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -76,7 +78,10 @@ pub async fn remove_thread_name_entries(
     thread_id: ThreadId,
 ) -> std::io::Result<()> {
     let path = session_index_path(codex_home);
-    with_session_index_lock(&SESSION_INDEX_LOCK, move || {
+    if !path.try_exists()? {
+        return Ok(());
+    }
+    with_session_index_lock(codex_home, move || {
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
@@ -97,21 +102,50 @@ pub async fn remove_thread_name_entries(
         if !removed {
             return Ok(());
         }
-        let temp_path = path.with_extension("jsonl.tmp");
-        std::fs::write(&temp_path, remaining)?;
-        std::fs::rename(temp_path, path)
+        let mut temporary = tempfile::Builder::new()
+            .prefix("session-index-")
+            .tempfile_in(path.parent().unwrap_or(Path::new(".")))?;
+        temporary
+            .as_file()
+            .set_permissions(std::fs::metadata(&path)?.permissions())?;
+        temporary.write_all(remaining.as_bytes())?;
+        temporary.persist(&path).map_err(|error| error.error)?;
+        Ok(())
     })
     .await
 }
 
-/// Acquire the ordered index lock before dispatch and retain it through cancelled updates.
+/// Serialize index mutations within and across processes, including cancelled updates.
 async fn with_session_index_lock(
-    lock: &Arc<tokio::sync::Mutex<()>>,
+    codex_home: &Path,
     update: impl FnOnce() -> std::io::Result<()> + Send + 'static,
 ) -> std::io::Result<()> {
-    let guard = Arc::clone(lock).lock_owned().await;
+    let lock_path = codex_home.join(SESSION_INDEX_LOCK_FILE);
     tokio::task::spawn_blocking(move || {
-        let _guard = guard;
+        // Keep this file in place. If we replace it, another process can lock a new
+        // file while this update still holds the old file's lock.
+        let file_lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)?;
+        let deadline = Instant::now() + Duration::from_secs(/*secs*/ 30);
+        loop {
+            match file_lock.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(/*millis*/ 50));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(std::io::Error::new(
+                        ErrorKind::TimedOut,
+                        "timed out waiting for the session index lock; another Codex process may be suspended on this or another host",
+                    ));
+                }
+                Err(std::fs::TryLockError::Error(err)) => return Err(err),
+            }
+        }
         update()
     })
     .await
