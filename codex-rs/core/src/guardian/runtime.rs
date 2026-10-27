@@ -2,6 +2,7 @@
 //! Tool-call provenance is separate from the item's display identity.
 
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_path_uri::PathConvention;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -11,6 +12,7 @@ use super::GuardianReviewContext;
 use super::GuardianReviewOptions;
 use super::approval_request::guardian_approval_request_to_json;
 use crate::session::session::Session;
+use crate::tools::sandboxing::ApprovalAction;
 
 /// Carries the original action even when the legacy synchronous renderer cannot handle its paths.
 /// This lets the extension return AskUser before invoking that renderer.
@@ -49,9 +51,32 @@ impl From<GuardianApprovalRequest> for ReviewAction {
 
 impl ReviewAction {
     pub(crate) fn from_approval_action(
-        action: crate::tools::sandboxing::ApprovalAction,
-        exec_command_cwd_convention: Option<codex_utils_path_uri::PathConvention>,
+        action: ApprovalAction,
+        context: &GuardianReviewContext,
     ) -> Self {
+        let exec_command_cwd_convention = match &action {
+            ApprovalAction::ExecCommand {
+                environment_id,
+                cwd,
+                ..
+            } => Some(
+                match context
+                    .environments()
+                    .turn_environments()
+                    .find(|environment| environment.selection.environment_id == *environment_id)
+                    .and_then(|environment| environment.executor_platform_os.as_deref())
+                {
+                    Some("windows") => PathConvention::Windows,
+                    Some(_) => PathConvention::Posix,
+                    // Legacy executors did not report their OS. Preserve the
+                    // previous spelling-based behavior for those executors.
+                    None => cwd
+                        .infer_path_convention()
+                        .unwrap_or_else(PathConvention::native),
+                },
+            ),
+            _ => None,
+        };
         let category = action.guardian_scope();
         let original = serde_json::to_value(&action).map_err(|error| error.to_string());
         match action.into_guardian_request(exec_command_cwd_convention) {

@@ -623,34 +623,7 @@ impl Session {
         }
         let is_network_approval = matches!(&action, ApprovalAction::NetworkAccess { .. });
         let review_id = new_guardian_review_id();
-        let exec_command_cwd_convention = match &action {
-            ApprovalAction::ExecCommand {
-                environment_id,
-                cwd,
-                ..
-            } => Some(
-                match ctx
-                    .review_context
-                    .environments()
-                    .turn_environments()
-                    .find(|environment| environment.selection.environment_id == *environment_id)
-                    .and_then(|environment| environment.executor_platform_os.as_deref())
-                {
-                    Some("windows") => PathConvention::Windows,
-                    Some(_) => PathConvention::Posix,
-                    // Legacy executors did not report their OS. Preserve the
-                    // previous spelling-based behavior for those executors.
-                    None => cwd
-                        .infer_path_convention()
-                        .unwrap_or_else(PathConvention::native),
-                },
-            ),
-            _ => None,
-        };
-        let action = crate::guardian::ReviewAction::from_approval_action(
-            action,
-            exec_command_cwd_convention,
-        );
+        let action = crate::guardian::ReviewAction::from_approval_action(action, &context);
 
         let reasons = ApprovalRequestReasons {
             approval: ctx.approval_reason.clone(),
