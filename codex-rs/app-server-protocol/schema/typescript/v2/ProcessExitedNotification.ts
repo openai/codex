@@ -15,6 +15,11 @@ processHandle: string,
  */
 exitCode: number,
 /**
+ * Whether output collection hit its post-exit deadline before seeing EOF or reaching the
+ * requested byte cap on either stream. Older servers omit this field.
+ */
+outputDrainTimedOut?: boolean | null,
+/**
  * Buffered stdout capture.
  *
  * Empty when stdout was streamed via `process/outputDelta`.

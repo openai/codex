@@ -242,21 +242,6 @@ async fn spawn_process_with_stdin_mode(
             read_output_stream(BufReader::new(stderr), stderr_tx).await;
         })
     });
-    let mut reader_abort_handles = Vec::new();
-    if let Some(handle) = stdout_handle.as_ref() {
-        reader_abort_handles.push(handle.abort_handle());
-    }
-    if let Some(handle) = stderr_handle.as_ref() {
-        reader_abort_handles.push(handle.abort_handle());
-    }
-    let reader_handle = tokio::spawn(async move {
-        if let Some(handle) = stdout_handle {
-            let _ = handle.await;
-        }
-        if let Some(handle) = stderr_handle {
-            let _ = handle.await;
-        }
-    });
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
     let exit_status = Arc::new(AtomicBool::new(false));
@@ -298,8 +283,8 @@ async fn spawn_process_with_stdin_mode(
             #[cfg(unix)]
             process_group_id,
         }),
-        reader_handle,
-        reader_abort_handles,
+        stdout_handle,
+        stderr_handle,
         writer_handle,
         wait_handle,
         exit_status,

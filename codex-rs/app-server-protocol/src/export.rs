@@ -2415,6 +2415,8 @@ mod tests {
                         && matches!(field_prefix.trim(), "startedAtMs?" | "completedAtMs?"))
                     || (path == Path::new("v2/McpServerOauthLoginCompletedNotification.ts")
                         && field_prefix.trim() == "loginId?")
+                    || (path == Path::new("v2/ProcessExitedNotification.ts")
+                        && field_prefix.trim() == "outputDrainTimedOut?")
                     || (path == Path::new("v2/MisalignmentErrorDetails.ts")
                         && field_prefix.trim() == "reviewTarget?");
                 if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?')

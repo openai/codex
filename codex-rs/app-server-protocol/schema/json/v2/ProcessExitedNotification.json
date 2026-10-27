@@ -7,6 +7,13 @@
       "format": "int32",
       "type": "integer"
     },
+    "outputDrainTimedOut": {
+      "description": "Whether output collection hit its post-exit deadline before seeing EOF or reaching the requested byte cap on either stream. Older servers omit this field.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "processHandle": {
       "description": "Client-supplied, connection-scoped `processHandle` from `process/spawn`.",
       "type": "string"

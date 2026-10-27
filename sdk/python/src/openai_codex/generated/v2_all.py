@@ -3511,6 +3511,13 @@ class ProcessExitedNotification(BaseModel):
         populate_by_name=True,
     )
     exit_code: Annotated[int, Field(alias="exitCode", description="Process exit code.")]
+    output_drain_timed_out: Annotated[
+        bool | None,
+        Field(
+            alias="outputDrainTimedOut",
+            description="Whether output collection hit its post-exit deadline before seeing EOF or reaching the requested byte cap on either stream. Older servers omit this field.",
+        ),
+    ] = None
     process_handle: Annotated[
         str,
         Field(

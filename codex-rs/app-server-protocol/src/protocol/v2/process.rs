@@ -183,6 +183,10 @@ pub struct ProcessExitedNotification {
     pub process_handle: String,
     /// Process exit code.
     pub exit_code: i32,
+    /// Whether output collection hit its post-exit deadline before seeing EOF or reaching the
+    /// requested byte cap on either stream. Older servers omit this field.
+    #[ts(optional, as = "Option<Option<bool>>")]
+    pub output_drain_timed_out: Option<bool>,
     /// Buffered stdout capture.
     ///
     /// Empty when stdout was streamed via `process/outputDelta`.

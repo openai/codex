@@ -114,7 +114,9 @@ type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorErro
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(
         notification,
-        ServerNotification::TurnCompleted(_)
+        ServerNotification::ProcessOutputDelta(_)
+            | ServerNotification::ProcessExited(_)
+            | ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadQueueChanged(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ThreadAttachmentUpdated(_)
@@ -460,10 +462,12 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
         let analytics_events_flush_client = analytics_events_client.clone();
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-            analytics_events_client.clone(),
-        ));
+        // A client can be waiting for process/kill while nobody is polling next_event.
+        let (process_reply_tx, mut process_reply_rx) = mpsc::channel(channel_capacity);
+        let outgoing_message_sender = Arc::new(
+            OutgoingMessageSender::new(outgoing_tx, analytics_events_client.clone())
+                .with_process_reply_sender(process_reply_tx),
+        );
 
         let log_write_warning = crate::log_write_warning::LogWriteWarningReporter::new(
             args.feedback.clone(),
@@ -617,6 +621,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
         let mut shutdown_ack = None;
+        let mut pending_event: Option<(InProcessServerEvent, Option<oneshot::Sender<()>>)> = None;
 
         loop {
             tokio::select! {
@@ -693,7 +698,27 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                         }
                     }
                 }
-                queued_message = writer_rx.recv() => {
+                permit = event_tx.reserve(), if pending_event.is_some() => {
+                    let Ok(permit) = permit else { break };
+                    let Some((event, written)) = pending_event.take() else { continue };
+                    permit.send(event);
+                    if let Some(written) = written {
+                        let _ = written.send(());
+                    }
+                }
+                queued_message = async {
+                    tokio::select! {
+                        reply = process_reply_rx.recv() => match reply {
+                            Some(OutgoingEnvelope::ToConnection { message, write_complete_tx, .. }) => {
+                                Some(QueuedOutgoingMessage { message, write_complete_tx })
+                            }
+                            Some(OutgoingEnvelope::Broadcast { .. }) => unreachable!("replies are connection scoped"),
+                            None => None,
+                        },
+                        // Leave ordinary replies and events queued until the pending event fits.
+                        event = writer_rx.recv(), if pending_event.is_none() => event,
+                    }
+                } => {
                     let Some(queued_message) = queued_message else {
                         break;
                     };
@@ -757,16 +782,13 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                         OutgoingMessage::AppServerNotification(envelope) => {
                             let notification = envelope.notification;
                             if server_notification_requires_delivery(&notification) {
-                                if event_tx
-                                    .send(InProcessServerEvent::ServerNotification(Box::new(
-                                        notification,
-                                    )))
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
-                            } else if let Err(send_error) =
+                                pending_event = Some((
+                                    InProcessServerEvent::ServerNotification(Box::new(notification)),
+                                    queued_message.write_complete_tx,
+                                ));
+                                continue;
+                            }
+                            if let Err(send_error) =
                                 event_tx.try_send(InProcessServerEvent::ServerNotification(
                                     Box::new(notification),
                                 ))
@@ -790,7 +812,9 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
             }
         }
 
+        drop(pending_event);
         drop(writer_rx);
+        drop(process_reply_rx);
         drop(processor_tx);
         outgoing_message_sender
             .cancel_all_requests(Some(internal_error(
@@ -873,9 +897,10 @@ mod tests {
         }
     }
 
-    async fn start_test_client_with_capacity(
+    async fn start_test_client_with_options(
         session_source: SessionSource,
         channel_capacity: usize,
+        capabilities: Option<codex_app_server_protocol::InitializeCapabilities>,
     ) -> InProcessClientHandle {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
@@ -904,7 +929,7 @@ mod tests {
                     title: None,
                     version: "0.0.0".to_string(),
                 },
-                capabilities: None,
+                capabilities,
             },
             channel_capacity,
         };
@@ -914,7 +939,12 @@ mod tests {
     }
 
     async fn start_test_client(session_source: SessionSource) -> InProcessClientHandle {
-        start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
+        start_test_client_with_options(
+            session_source,
+            DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            /*capabilities*/ None,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -936,6 +966,47 @@ mod tests {
             .shutdown()
             .await
             .expect("in-process runtime should shutdown cleanly");
+    }
+
+    /// Importing a project makes its change visible to an embedder before the import reply.
+    #[tokio::test]
+    async fn project_import_delivers_change_before_reply() {
+        let mut client = start_test_client_with_options(
+            SessionSource::Cli,
+            DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            Some(codex_app_server_protocol::InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
+        )
+        .await;
+        let params = codex_app_server_protocol::ProjectImportParams {
+            name: "Imported".into(),
+            roots: Vec::new(),
+            metadata: None,
+            threads: None,
+            idempotency_key: "test-import".into(),
+        };
+        client
+            .request(ClientRequest::ProjectImport {
+                request_id: RequestId::Integer(1),
+                params,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        loop {
+            let event = client
+                .event_rx
+                .try_recv()
+                .expect("project/changed must already be queued");
+            if let InProcessServerEvent::ServerNotification(notification) = event
+                && matches!(*notification, ServerNotification::ProjectChanged(_))
+            {
+                break;
+            }
+        }
+        client.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -968,8 +1039,12 @@ mod tests {
 
     #[tokio::test]
     async fn in_process_start_clamps_zero_channel_capacity() {
-        let client =
-            start_test_client_with_capacity(SessionSource::Cli, /*channel_capacity*/ 0).await;
+        let client = start_test_client_with_options(
+            SessionSource::Cli,
+            /*channel_capacity*/ 0,
+            /*capabilities*/ None,
+        )
+        .await;
         let response = loop {
             match client
                 .request(ClientRequest::ConfigRequirementsRead {
@@ -1104,6 +1179,156 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    async fn spawn_streaming_test_process(
+        cwd: &Path,
+        handle: &str,
+        script: &str,
+    ) -> InProcessClientHandle {
+        use codex_app_server_protocol::InitializeCapabilities;
+        use codex_app_server_protocol::ProcessSpawnParams;
+
+        let client = start_test_client_with_options(
+            SessionSource::Cli,
+            /*channel_capacity*/ 2,
+            Some(InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
+        )
+        .await;
+        client
+            .request(ClientRequest::ProcessSpawn {
+                request_id: RequestId::Integer(1),
+                params: ProcessSpawnParams {
+                    process_handle: handle.into(),
+                    command: vec!["/bin/sh".into(), "-c".into(), script.into()],
+                    cwd: cwd.try_into().unwrap(),
+                    tty: false,
+                    stream_stdin: false,
+                    stream_stdout_stderr: true,
+                    output_bytes_cap: Some(None),
+                    timeout_ms: None,
+                    env: None,
+                    size: None,
+                },
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        client
+    }
+
+    /// A kill after child exit must promptly report it has exited while the client is still
+    /// waiting to consume the complete download and its successful exit notification.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn process_output_and_exit_survive_a_full_in_process_event_queue() {
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD;
+        use codex_app_server_protocol::ProcessKillParams;
+
+        let dir = TempDir::new().unwrap();
+        let contents: Vec<u8> = (0..128 * 1024u32).flat_map(u32::to_le_bytes).collect();
+        std::fs::write(dir.path().join("input"), &contents).unwrap();
+        let mut client = spawn_streaming_test_process(
+            dir.path(),
+            "download",
+            concat!(
+                "p=$$; (while kill -0 $p 2>/dev/null; do sleep 0.05; done; touch exited) ",
+                "</dev/null >/dev/null 2>&1 & exec cat input",
+            ),
+        )
+        .await;
+
+        timeout(Duration::from_secs(10), async {
+            // The pipe readers can hold this payload while delivery is stalled.
+            while client.event_rx.capacity() != 0 || !dir.path().join("exited").exists() {
+                tokio::task::yield_now().await;
+            }
+            let error = client
+                .request(ClientRequest::ProcessKill {
+                    request_id: RequestId::Integer(2),
+                    params: ProcessKillParams {
+                        process_handle: "download".into(),
+                    },
+                })
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.message, "process \"download\" is no longer running");
+            let mut received = Vec::new();
+            loop {
+                if let InProcessServerEvent::ServerNotification(notification) =
+                    client.next_event().await.unwrap()
+                {
+                    match *notification {
+                        ServerNotification::ProcessOutputDelta(delta) => {
+                            received.extend(STANDARD.decode(delta.delta_base64).unwrap());
+                        }
+                        ServerNotification::ProcessExited(exit) => {
+                            assert_eq!(exit.exit_code, 0);
+                            assert_eq!(received.len(), contents.len());
+                            assert_eq!(received, contents);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        })
+        .await
+        .expect("process output and exit must both reach the consumer");
+        client.shutdown().await.unwrap();
+    }
+
+    /// Unread output must not block process control replies or a subsequent kill on the same handle.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn in_process_kill_completes_while_process_output_is_stalled() {
+        use codex_app_server_protocol::ProcessKillParams;
+        use codex_app_server_protocol::ProcessResizePtyParams;
+        use codex_app_server_protocol::ProcessTerminalSize;
+
+        let dir = TempDir::new().unwrap();
+        let client = spawn_streaming_test_process(
+            dir.path(),
+            "writer",
+            "head -c 524288 /dev/zero; head -c 524288 /dev/zero >&2; touch written; exec sleep 30",
+        )
+        .await;
+        timeout(Duration::from_secs(10), async {
+            while client.event_rx.capacity() != 0 || !dir.path().join("written").exists() {
+                tokio::task::yield_now().await;
+            }
+            // A resize on a pipe fails, but its error still has to release the handle for kill.
+            client
+                .request(ClientRequest::ProcessResizePty {
+                    request_id: RequestId::Integer(2),
+                    params: ProcessResizePtyParams {
+                        process_handle: "writer".into(),
+                        size: ProcessTerminalSize { rows: 24, cols: 80 },
+                    },
+                })
+                .await
+                .unwrap()
+                .unwrap_err();
+            client
+                .request(ClientRequest::ProcessKill {
+                    request_id: RequestId::Integer(3),
+                    params: ProcessKillParams {
+                        process_handle: "writer".into(),
+                    },
+                })
+                .await
+                .unwrap()
+                .unwrap();
+        })
+        .await
+        .expect("kill must finish before the client resumes reading output");
+        client.shutdown().await.unwrap();
+    }
+
     #[tokio::test]
     async fn in_process_shutdown_completes_with_full_request_and_event_queues() {
         let capacity = DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
@@ -1132,10 +1357,10 @@ mod tests {
             .expect("thread/name/set transport should work")
             .expect("thread/name/set should succeed");
 
-        // Drain through the first attachment notification to establish a clean boundary,
-        // then leave capacity + 1 notifications unread. Reuse one identity to stay below
-        // the attachment limit. Each mutation responds before sending its notification.
-        for index in 0..(capacity + 2) {
+        // Observe both mutation replies at the point their updates become visible, then
+        // leave capacity + 1 updates unread to exercise shutdown with full queues.
+        let sender = client.sender();
+        for index in 0..(capacity + 3) {
             let request_id = RequestId::Integer((index + 3) as i64);
             let request = if index % 2 == 0 {
                 ClientRequest::ThreadAttachmentAdd {
@@ -1157,12 +1382,9 @@ mod tests {
                     },
                 }
             };
-            client
-                .request(request)
-                .await
-                .expect("attachment request transport should work")
-                .expect("attachment mutation should succeed");
-            if index == 0 {
+            let mut reply = std::pin::pin!(sender.request(request));
+            if index < 2 {
+                assert!(reply.as_mut().now_or_never().is_none());
                 loop {
                     let event = client
                         .next_event()
@@ -1174,26 +1396,33 @@ mod tests {
                             ServerNotification::ThreadAttachmentUpdated(_)
                         )
                     {
+                        reply
+                            .as_mut()
+                            .now_or_never()
+                            .expect("the attachment reply must be ready before its update")
+                            .expect("attachment request transport should work")
+                            .expect("attachment mutation should succeed");
                         break;
                     }
                 }
+            } else {
+                reply
+                    .await
+                    .expect("attachment request transport should work")
+                    .expect("attachment mutation should succeed");
             }
         }
 
-        let sender = client.sender();
+        assert_eq!(client.event_rx.capacity(), 0);
         let mut queued_requests = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let mut request = Box::pin(sender.request(ClientRequest::ConfigRequirementsRead {
                 request_id: RequestId::Integer((1000 + index) as i64),
                 params: None,
             }));
-            if index == 0 {
-                // Verify a normal read stalls behind the unread notification before
-                // filling the remaining request slots.
-                assert!(timeout(Duration::from_secs(1), &mut request).await.is_err());
-            } else {
-                assert!(request.as_mut().now_or_never().is_none());
-            }
+            // Fill the command queue on this single-thread runtime without giving the
+            // dispatcher a turn between submissions.
+            assert!(request.as_mut().now_or_never().is_none());
             queued_requests.push(request);
         }
         assert_eq!(sender.client_tx.capacity(), 0);

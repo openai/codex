@@ -300,8 +300,8 @@ async fn spawn_process_portable(
             #[cfg(unix)]
             process_group_id,
         }),
-        reader_handle,
-        Vec::new(),
+        Some(reader_handle),
+        /*stderr_reader*/ None,
         writer_handle,
         wait_handle,
         exit_status,
@@ -459,8 +459,8 @@ async fn spawn_process_preserving_fds(
     let handle = ProcessHandle::new(
         writer_tx,
         Box::new(RawPidTerminator { process_group_id }),
-        reader_handle,
-        Vec::new(),
+        Some(reader_handle),
+        /*stderr_reader*/ None,
         writer_handle,
         wait_handle,
         exit_status,

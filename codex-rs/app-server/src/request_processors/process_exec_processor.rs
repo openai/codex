@@ -34,7 +34,7 @@ use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::watch;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::error_code::internal_error;
@@ -250,7 +250,8 @@ struct SpawnProcessOutputParams {
     connection_id: ConnectionId,
     process_handle: String,
     output_rx: mpsc::Receiver<Vec<u8>>,
-    stdio_timeout_rx: watch::Receiver<bool>,
+    reader: Option<tokio::task::AbortHandle>,
+    process_exited: CancellationToken,
     outgoing: Arc<OutgoingMessageSender>,
     stream: ProcessOutputStream,
     stream_output: bool,
@@ -261,6 +262,7 @@ struct SpawnProcessOutputParams {
 struct ProcessOutputCapture {
     text: String,
     cap_reached: bool,
+    output_incomplete: bool,
 }
 
 impl ProcessExecManager {
@@ -508,13 +510,14 @@ async fn run_process(params: RunProcessParams) {
     } = spawned;
     tokio::pin!(exit_rx);
     let mut expiration_outcome = None;
-    let (stdio_timeout_tx, stdio_timeout_rx) = watch::channel(false);
+    let process_exited = CancellationToken::new();
 
     let stdout_handle = collect_spawn_process_output(SpawnProcessOutputParams {
         connection_id: request_id.connection_id,
         process_handle: process_handle.clone(),
         output_rx: stdout_rx,
-        stdio_timeout_rx: stdio_timeout_rx.clone(),
+        reader: session.stdout_reader(),
+        process_exited: process_exited.clone(),
         outgoing: Arc::clone(&outgoing),
         stream: ProcessOutputStream::Stdout,
         stream_output: stream_stdout_stderr,
@@ -524,7 +527,8 @@ async fn run_process(params: RunProcessParams) {
         connection_id: request_id.connection_id,
         process_handle: process_handle.clone(),
         output_rx: stderr_rx,
-        stdio_timeout_rx,
+        reader: session.stderr_reader(),
+        process_exited: process_exited.clone(),
         outgoing: Arc::clone(&outgoing),
         stream: ProcessOutputStream::Stderr,
         stream_output: stream_stdout_stderr,
@@ -582,22 +586,17 @@ async fn run_process(params: RunProcessParams) {
         }
     };
 
-    // Give stdout/stderr readers a bounded grace period to drain after process exit.
-    let timeout_handle = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(IO_DRAIN_TIMEOUT_MS)).await;
-        let _ = stdio_timeout_tx.send(true);
-    });
-
+    drop(control_rx);
+    process_exited.cancel();
     let stdout = stdout_handle.await.unwrap_or_default();
     let stderr = stderr_handle.await.unwrap_or_default();
-    timeout_handle.abort();
-
     outgoing
         .send_server_notification_to_connection_and_wait(
             request_id.connection_id,
             ServerNotification::ProcessExited(ProcessExitedNotification {
                 process_handle,
                 exit_code,
+                output_drain_timed_out: Some(stdout.output_incomplete || stderr.output_incomplete),
                 stdout: stdout.text,
                 stdout_cap_reached: stdout.cap_reached,
                 stderr: stderr.text,
@@ -605,6 +604,10 @@ async fn run_process(params: RunProcessParams) {
             }),
         )
         .await;
+
+    // On older Windows, ClosePseudoConsole can block until surviving clients disconnect.
+    #[cfg(windows)]
+    tokio::task::spawn_blocking(move || drop(session));
 }
 
 fn collect_spawn_process_output(
@@ -614,7 +617,8 @@ fn collect_spawn_process_output(
         connection_id,
         process_handle,
         mut output_rx,
-        mut stdio_timeout_rx,
+        reader,
+        process_exited,
         outgoing,
         stream,
         stream_output,
@@ -624,14 +628,33 @@ fn collect_spawn_process_output(
         let mut buffer: Vec<u8> = Vec::new();
         let mut observed_num_bytes = 0usize;
         let mut cap_reached = false;
+        let mut drain_timed_out = false;
+        let mut draining = false;
+        let drain_timer = tokio::time::sleep(Duration::ZERO);
+        tokio::pin!(drain_timer);
         loop {
-            let mut chunk = tokio::select! {
-                chunk = output_rx.recv() => match chunk {
-                    Some(chunk) => chunk,
-                    None => break,
-                },
-                _ = stdio_timeout_rx.wait_for(|&v| v) => break,
+            let chunk = tokio::select! {
+                biased;
+                _ = process_exited.cancelled(), if !draining => {
+                    draining = true;
+                    drain_timer.as_mut().reset(Instant::now() + Duration::from_millis(IO_DRAIN_TIMEOUT_MS));
+                    continue;
+                }
+                _ = &mut drain_timer, if draining && !output_rx.is_closed() => {
+                    drain_timed_out = !output_rx.is_closed();
+                    output_rx.close();
+                    if let Some(reader) = &reader {
+                        reader.abort();
+                    }
+                    continue;
+                }
+                chunk = output_rx.recv() => chunk,
             };
+            let Some(mut chunk) = chunk else { break };
+            // The byte cap limits delivery. Keep draining until EOF or the post-exit deadline.
+            if cap_reached {
+                continue;
+            }
             while chunk.len() < OUTPUT_CHUNK_SIZE_HINT
                 && let Ok(next_chunk) = output_rx.try_recv()
             {
@@ -649,6 +672,7 @@ fn collect_spawn_process_output(
             };
             cap_reached = Some(observed_num_bytes) == output_bytes_cap;
             if stream_output {
+                let write_started = Instant::now();
                 outgoing
                     .send_server_notification_to_connection_and_wait(
                         connection_id,
@@ -660,16 +684,19 @@ fn collect_spawn_process_output(
                         }),
                     )
                     .await;
+                // A slow client can take longer than the pipe drain budget to accept one chunk.
+                if draining {
+                    let deadline = drain_timer.deadline() + write_started.elapsed();
+                    drain_timer.as_mut().reset(deadline);
+                }
             } else {
                 buffer.extend_from_slice(capped_chunk);
-            }
-            if cap_reached {
-                break;
             }
         }
         ProcessOutputCapture {
             text: bytes_to_string_smart(&buffer),
             cap_reached,
+            output_incomplete: drain_timed_out && output_bytes_cap != Some(observed_num_bytes),
         }
     })
 }
@@ -732,3 +759,7 @@ fn no_active_process_error(process_handle: &str) -> JSONRPCErrorError {
 fn process_no_longer_running_error(process_handle: &str) -> JSONRPCErrorError {
     invalid_request(format!("process {process_handle:?} is no longer running"))
 }
+
+#[cfg(test)]
+#[path = "process_exec_processor_tests.rs"]
+mod tests;

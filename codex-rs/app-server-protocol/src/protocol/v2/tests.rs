@@ -1945,6 +1945,7 @@ fn process_notifications_round_trip() {
     let exited = ProcessExitedNotification {
         process_handle: "proc-1".to_string(),
         exit_code: 0,
+        output_drain_timed_out: Some(true),
         stdout: "out".to_string(),
         stdout_cap_reached: false,
         stderr: "err".to_string(),
@@ -1956,15 +1957,25 @@ fn process_notifications_round_trip() {
         json!({
             "processHandle": "proc-1",
             "exitCode": 0,
+            "outputDrainTimedOut": true,
             "stdout": "out",
             "stdoutCapReached": false,
             "stderr": "err",
             "stderrCapReached": true,
         })
     );
-    let decoded = serde_json::from_value::<ProcessExitedNotification>(value)
+    let decoded = serde_json::from_value::<ProcessExitedNotification>(value.clone())
         .expect("deserialize process/exited");
     assert_eq!(decoded, exited);
+
+    let mut legacy = value;
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("outputDrainTimedOut");
+    let decoded = serde_json::from_value::<ProcessExitedNotification>(legacy)
+        .expect("deserialize process/exited from an older server");
+    assert_eq!(decoded.output_drain_timed_out, None);
 }
 
 #[test]
