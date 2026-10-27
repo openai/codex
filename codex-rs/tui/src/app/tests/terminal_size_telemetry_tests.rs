@@ -15,8 +15,12 @@ async fn terminal_size_telemetry_respects_reloaded_exporter_and_consent() -> Res
         "analytics.enabled = false\n[otel.metrics_exporter.otlp-http]\nendpoint = \"http://127.0.0.1:4318/v1/metrics\"\nprotocol = \"json\"\n",
     ] {
         std::fs::write(app.config.codex_home.join("config.toml"), config)?;
-        let (config, local_settings) =
-            Box::pin(app.rebuild_config_for_resume_or_fallback(&cwd, cwd.clone())).await?;
+        let (config, local_settings) = Box::pin(app.rebuild_config_for_resume_or_fallback(
+            &cwd,
+            cwd.clone(),
+            (&app.config, &app.local_settings),
+        ))
+        .await?;
         app.config = config;
         app.local_settings = local_settings;
         enabled.push(crate::terminal_size_telemetry::enabled(&app.config));

@@ -558,7 +558,12 @@ impl App {
                     history_mode: Some(target_thread.history_mode),
                 };
                 match self
-                    .resume_config_for_target(tui, app_server, &target_session)
+                    .resume_config_for_target(
+                        tui,
+                        app_server,
+                        &target_session,
+                        super::resume_preparation::ResumeSource::Active,
+                    )
                     .await
                 {
                     Ok(config) => config,
@@ -572,7 +577,11 @@ impl App {
                 };
                 let current_cwd = self.config.cwd.to_path_buf();
                 match self
-                    .rebuild_config_for_resume_or_fallback(&current_cwd, config_cwd)
+                    .rebuild_config_for_resume_or_fallback(
+                        &current_cwd,
+                        config_cwd,
+                        (&self.config, &self.local_settings),
+                    )
                     .await
                 {
                     Ok(config) => config,

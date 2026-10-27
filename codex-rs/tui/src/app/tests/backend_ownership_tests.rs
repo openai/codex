@@ -273,3 +273,52 @@ async fn startup_rejects_foreign_resume_and_fork_before_requests() -> Result<()>
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn prepared_resume_cannot_activate_through_another_backend() -> Result<()> {
+    let (mut app, mut events, _) = make_test_app_with_channels().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let (mut server, requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    let active_thread = ThreadId::new();
+    app.enqueue_primary_thread_session(
+        test_thread_session(active_thread, app.config.cwd.to_path_buf()),
+        Vec::new(),
+    )
+    .await?;
+    app.chat_widget.insert_str("keep this draft");
+    let prepared = super::super::resume_preparation::PreparedResume {
+        backend_id: BackendId::new(),
+        config: app.config.clone(),
+        local_settings: app.local_settings.clone(),
+        thread: AppServerStartedThread {
+            session: test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf()),
+            turns: Vec::new(),
+            blocks_direct_input: false,
+            task_tools_available: true,
+        },
+        read_only: false,
+        history_notice: None,
+    };
+    requests.lock().unwrap().clear();
+    while events.try_recv().is_ok() {}
+    app.activate_prepared_session(&mut tui, &mut server, prepared)
+        .await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(active_thread));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "keep this draft"
+    );
+    assert!(requests.lock().unwrap().is_empty());
+    let Some(AppEvent::InsertHistoryCell(cell)) = events.recv().await else {
+        panic!("expected backend mismatch error");
+    };
+    insta::assert_snapshot!(lines_to_single_string(&cell.display_lines(/*width*/ 100)), @"■ This session belongs to a different backend. Open the session picker again.");
+    server.shutdown().await?;
+    proxy.abort();
+    Ok(())
+}

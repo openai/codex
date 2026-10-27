@@ -1362,60 +1362,43 @@ impl App {
         if self.reject_pending_permission_root_switch() {
             return Ok(AppRunControl::Continue);
         }
-        let (mut resume_config, local_settings) = match self
-            .resume_config_for_target(tui, app_server, &target_session)
+        let prepared = match self
+            .prepare_target_session(
+                tui,
+                app_server,
+                &target_session,
+                super::resume_preparation::ResumeSource::Active,
+            )
             .await
         {
-            Ok(config) => config,
+            Ok(prepared) => prepared,
             Err(control) => return Ok(control),
         };
-        if let Err(error) = self.apply_runtime_policy_overrides(
-            &mut resume_config,
-            RuntimePolicyOverrideScope::ExplicitOnly,
-        ) {
-            self.add_session_picker_error(format!("{error:#}"));
+        self.activate_prepared_session(tui, app_server, prepared)
+            .await
+    }
+
+    pub(super) async fn activate_prepared_session(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        prepared: super::resume_preparation::PreparedResume,
+    ) -> Result<AppRunControl> {
+        let super::resume_preparation::PreparedResume {
+            backend_id,
+            config: resume_config,
+            local_settings,
+            thread: resumed,
+            read_only,
+            history_notice,
+        } = prepared;
+        if backend_id != app_server.backend_id() {
+            self.add_session_picker_error(
+                "This session belongs to a different backend. Open the session picker again."
+                    .to_string(),
+            );
             return Ok(AppRunControl::Continue);
         }
-        let permission_overrides = self.resume_permission_overrides(&resume_config);
-
-        if let Some(history_mode) = target_session.history_mode {
-            app_server.remember_thread_history_mode(target_session.thread_id, history_mode);
-        }
-        let resumed = app_server
-            .resume_thread_with_permission_overrides(
-                &local_settings,
-                resume_config.clone(),
-                target_session.thread_id,
-                self.resume_model_settings(),
-                permission_overrides,
-            )
-            .await;
-        let mut history_notice = None;
-        let (resumed, read_only) = match resumed {
-            Ok(resumed) => (resumed, false),
-            Err(err) if crate::app_server_session::is_active_writer_error(&err) => match app_server
-                .read_thread_for_viewing(&resume_config, &local_settings, target_session.thread_id)
-                .await
-            {
-                Ok((thread, notice)) => {
-                    history_notice = notice;
-                    (thread, true)
-                }
-                Err(read_err) => {
-                    self.add_session_picker_error(format!(
-                        "Failed to view thread open elsewhere: {read_err}"
-                    ));
-                    return Ok(AppRunControl::Continue);
-                }
-            },
-            Err(err) => {
-                let path_display = target_session.display_label();
-                self.add_session_picker_error(format!(
-                    "Failed to resume session from {path_display}: {err}"
-                ));
-                return Ok(AppRunControl::Continue);
-            }
-        };
         let resumed_thread_id = resumed.session.thread_id;
         let retained_input = (self.chat_widget.is_external_writer_view()
             && self.chat_widget.thread_id() == Some(resumed_thread_id))

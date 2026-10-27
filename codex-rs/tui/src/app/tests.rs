@@ -3610,7 +3610,7 @@ async fn server_only_profile_selection_keeps_turns_on_the_selected_profile() -> 
 async fn remote_resume_rejects_explicit_permission_override() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:8765")?;
-    app.app_server_target = crate::AppServerTarget::Remote { endpoint };
+
     let home = tempdir()?;
     std::fs::write(
         home.path().join("config.toml"),
@@ -3635,18 +3635,23 @@ async fn remote_resume_rejects_explicit_permission_override() -> Result<()> {
         &app.harness_overrides
     ));
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    app.resume_target_session(
-        &mut tui,
-        &mut server,
-        SessionTarget {
-            backend_id,
-            thread_id: ThreadId::new(),
-            path: None,
-            cwd: None,
-            history_mode: None,
-        },
-    )
-    .await?;
+    let mut settings = app.backend_settings();
+    settings.target = crate::AppServerTarget::Remote { endpoint };
+    let result = app
+        .prepare_target_session(
+            &mut tui,
+            &mut server,
+            &SessionTarget {
+                backend_id,
+                thread_id: ThreadId::new(),
+                path: None,
+                cwd: None,
+                history_mode: None,
+            },
+            super::resume_preparation::ResumeSource::Backend(&settings),
+        )
+        .await;
+    assert!(matches!(result, Err(AppRunControl::Continue)));
     assert_eq!(app.active_thread_id, None);
     let cell = std::iter::from_fn(|| events.try_recv().ok())
         .find_map(|event| match event {
@@ -8235,6 +8240,7 @@ async fn in_app_resume_session_cwd_without_metadata_is_non_fatal() -> Result<()>
     )?;
     app.state_db = None;
     let active_thread_id = app.chat_widget.thread_id();
+    app.chat_widget.insert_str("keep this draft");
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let backend_id = app_server.backend_id();
     let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -8255,6 +8261,10 @@ async fn in_app_resume_session_cwd_without_metadata_is_non_fatal() -> Result<()>
 
     assert!(matches!(control, AppRunControl::Continue));
     assert_eq!(app.chat_widget.thread_id(), active_thread_id);
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "keep this draft"
+    );
     let cell = match app_event_rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => cell,
         other => panic!("expected InsertHistoryCell event, got {other:?}"),
@@ -8481,18 +8491,44 @@ async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
             .handle_thread_session_quiet(test_thread_session(ThreadId::new(), active_cwd.clone()));
         let mut tui = crate::tui::test_support::make_test_tui()?;
 
-        let control = app
-            .resume_target_session(
+        let settings = app.backend_settings();
+        // Prepare a destination while another backend owns the displayed configuration.
+        let other_home = tempdir()?;
+        app.config.codex_home = other_home.path().to_path_buf().abs();
+        let active_settings = (app.config.clone(), app.local_settings.clone());
+        let active_thread_id = app.chat_widget.thread_id();
+        app.chat_widget
+            .insert_str("keep this draft until attachment");
+        let prepared = match app
+            .prepare_target_session(
                 &mut tui,
                 app_server,
-                crate::resume_picker::SessionTarget {
+                &crate::resume_picker::SessionTarget {
                     backend_id,
                     path: Some(rollout_path),
                     thread_id,
                     cwd: None,
                     history_mode: None,
                 },
+                super::resume_preparation::ResumeSource::Backend(&settings),
             )
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(_) => panic!("saved thread should be ready for attachment"),
+        };
+        assert_eq!(
+            (&app.config, &app.local_settings),
+            (&active_settings.0, &active_settings.1)
+        );
+        assert_eq!(app.chat_widget.thread_id(), active_thread_id);
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "keep this draft until attachment"
+        );
+        assert_eq!(app.chat_widget.config_ref().cwd.as_path(), active_cwd);
+        let control = app
+            .activate_prepared_session(&mut tui, app_server, prepared)
             .await?;
 
         assert!(matches!(control, AppRunControl::Continue));
