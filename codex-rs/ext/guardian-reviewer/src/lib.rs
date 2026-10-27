@@ -2,6 +2,7 @@
 //! of the host session runtime.
 //! The host supplies review attempts and enforces the resulting decision on the bound action.
 
+mod approval_request;
 mod assessment;
 mod blocking;
 pub use blocking::ReviewBlocking;
@@ -25,6 +26,9 @@ mod routing;
 mod session;
 mod settings;
 
+pub use approval_request::GuardianApprovalRequest;
+pub use approval_request::GuardianMcpAnnotations;
+pub use approval_request::GuardianNetworkAccessTrigger;
 pub use assessment::GuardianAssessment;
 pub use assessment::guardian_output_contract_prompt;
 pub use assessment::guardian_output_schema;
