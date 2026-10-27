@@ -30,9 +30,12 @@ pub use action::PlannedAction;
 pub use action::PlannedActionKind;
 pub use action::action_for_review;
 pub use authorization::GuardianRootMessage;
+pub use authorization::RootConversationContent;
 pub use preparation::root::RootAssistantCandidate;
 pub use preparation::root::RootAssistantContent;
 pub use preparation::root::RootConversationCandidates;
+pub use preparation::root::RootConversationInput;
+pub use preparation::root::RootConversationSource;
 pub use preparation::root::RootDeliveredMessage;
 pub use preparation::root::RootMessageCandidate;
 pub use preparation::root::RootRetainedAssistant;
@@ -95,6 +98,7 @@ pub use composition::CollectedContext;
 pub use composition::ComposedContext;
 pub use composition::ContextPresentation;
 pub use composition::PreparedTranscript;
+pub use preparation::prepare_sync_images;
 pub use preparation::root::PreparedRootContext;
 pub use preparation::root::prepare_root_context;
 pub use profile::ContextProfile;
@@ -175,6 +179,8 @@ pub struct SectionInput<'a> {
     pub transcript: &'a ConversationTranscriptConfig,
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],
+    /// Sync originals retained until request preparation; preferred over the bounded view.
+    pub root_conversation_candidates: Option<&'a RootConversationInput>,
     /// Role-labeled sync answer candidates or already-bounded answers from other consumers.
     pub trusted_user_answers: &'a [TrustedUserAnswer],
     /// Exact action JSON; sync composition bounds the reason and descriptions.

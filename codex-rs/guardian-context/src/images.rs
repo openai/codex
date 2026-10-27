@@ -3,6 +3,7 @@
 //! Byte caps cover inline URLs and file ID strings, not referenced file contents.
 //! Consumers still choose source visibility and model-specific image detail.
 //! Continuations compare prepared image references against their own admitted history.
+//! Sync admission also applies prompt and model-window budgets.
 
 use crate::ComposedContext;
 use crate::ContextSection;

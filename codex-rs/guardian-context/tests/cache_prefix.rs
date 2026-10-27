@@ -127,6 +127,7 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
                     history: &history,
                     transcript: &profile.transcript,
                     root_conversation: &[],
+                    root_conversation_candidates: None,
                     trusted_user_answers: &[],
                     planned_action: Some(&action),
                     permissions: None,

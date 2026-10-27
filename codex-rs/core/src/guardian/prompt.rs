@@ -103,12 +103,13 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     } else {
         GUARDIAN_MAX_TOOL_ENTRY_TOKENS
     };
+    let config = session.get_config().await;
     let root_authorization = session
         .services
         .agent_control
         .get_guardian_package(session.thread_id)
         .await
-        .map(|snapshot| snapshot.messages);
+        .and_then(|snapshot| snapshot.request_candidates);
     let trusted_user_inputs = history
         .retained_context()
         .map(codex_guardian_context::collect_verified_answer_candidates)
@@ -169,7 +170,6 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         .map_or(reviewed_node_repl_evidence_sequence, |snapshot| {
             snapshot.sequence
         });
-    let config = session.get_config().await;
     let mut profile = ContextProfile::synchronous();
     profile.transcript.entry_limits.node_repl_output_tokens = node_repl_result_token_limit;
     profile.transcript.options.native_multi_agent_namespace = parent_context
@@ -198,7 +198,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
             use_parent_checkpoint,
         },
         &profile,
-        root_authorization.as_deref().unwrap_or_default(),
+        root_authorization.as_ref(),
         &trusted_user_inputs,
         Some(&planned_action),
         permissions.as_ref(),
@@ -263,7 +263,7 @@ pub(crate) fn render_guardian_transcript_entries(
 pub(super) fn collect_guardian_context(
     history: &dyn SectionHistory,
     profile: &ContextProfile,
-    root_conversation: &[GuardianRootMessage],
+    root_conversation_candidates: Option<&codex_guardian_context::RootConversationInput>,
     trusted_user_answers: &[codex_guardian_context::TrustedUserAnswer],
     planned_action: Option<&PlannedAction>,
     permissions: Option<&GuardianPermissionContext>,
@@ -273,7 +273,8 @@ pub(super) fn collect_guardian_context(
         target: profile.target,
         history: &FilteredGuardianHistory(history),
         transcript: &profile.transcript,
-        root_conversation,
+        root_conversation: &[],
+        root_conversation_candidates,
         trusted_user_answers,
         planned_action,
         permissions,

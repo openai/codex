@@ -54,6 +54,7 @@ pub struct RootConversationCandidates<'a> {
     /// Retained identities used for legacy matching after request-size preparation.
     pub retained_user_sources: Vec<RetainedUserMessage>,
     pub handoff_boundaries: Vec<RetainedContextOrder>,
+    pub latest_user_turn_id: Option<String>,
     pub missing_root_instructions: bool,
     pub missing_assistant_context: bool,
     pub missing_verified_answers: bool,
@@ -62,6 +63,39 @@ pub struct RootConversationCandidates<'a> {
 impl std::fmt::Debug for RootConversationCandidates<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("RootConversationCandidates(..)")
+    }
+}
+
+/// An immutable host snapshot that lends sources only during synchronous preparation.
+/// Implementations must preserve capture-time provenance and avoid reading live session state.
+pub trait RootConversationSource: Send + Sync {
+    fn prepare(&self) -> PreparedRootContext;
+}
+
+/// Shared ownership keeps captured source payloads alive without copying them.
+/// Equality identifies the same capture, rather than comparing potentially sensitive payloads.
+#[derive(Clone)]
+pub struct RootConversationInput(std::sync::Arc<dyn RootConversationSource>);
+
+impl RootConversationInput {
+    pub fn new(source: impl RootConversationSource + 'static) -> Self {
+        Self(std::sync::Arc::new(source))
+    }
+
+    pub fn prepare(&self) -> PreparedRootContext {
+        self.0.prepare()
+    }
+}
+
+impl std::fmt::Debug for RootConversationInput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RootConversationInput(..)")
+    }
+}
+
+impl PartialEq for RootConversationInput {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -219,7 +253,7 @@ pub struct PreparedRootContext {
     pub messages: Vec<GuardianRootMessage>,
     pub missing_root_instructions: bool,
     pub handoff_selection: Option<BTreeSet<usize>>,
-    pub latest_legacy_turn_id: Option<String>,
+    pub latest_user_turn_id: Option<String>,
 }
 
 /// Applies the fixed root request policy without discarding the captured sources.
@@ -353,6 +387,6 @@ pub fn prepare_root_context(
         messages,
         missing_root_instructions,
         handoff_selection,
-        latest_legacy_turn_id,
+        latest_user_turn_id: input.latest_user_turn_id.clone().or(latest_legacy_turn_id),
     }
 }

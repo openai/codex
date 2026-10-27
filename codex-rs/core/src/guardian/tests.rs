@@ -1037,7 +1037,7 @@ fn collect_guardian_transcript_entries(
     prompt::collect_guardian_context(
         history,
         &profile,
-        &[],
+        /*root_conversation_candidates*/ None,
         &[],
         /*planned_action*/ None,
         /*permissions*/ None,

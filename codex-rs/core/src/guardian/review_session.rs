@@ -97,7 +97,6 @@ pub(crate) use super::reviewer_config::build_guardian_review_session_config;
 use codex_guardian_reviewer::run_before_review_deadline;
 use codex_guardian_reviewer::wait_for_guardian_review;
 
-const GUARDIAN_MAX_IMAGE_ITEM_TOKENS: i64 = 10_000;
 pub(crate) use codex_guardian_reviewer::GuardianReviewSessionOutcome;
 
 pub(crate) struct GuardianReviewSessionParams {
@@ -560,18 +559,22 @@ async fn run_review_on_session(
                         .saturating_mul(model_info.effective_context_window_percent.clamp(0, 100))
                         / 100
                 });
-                let admit_images = if let Some(context_window) = context_window.filter(|limit| {
+                let context_window = context_window.filter(|limit| {
                     *limit > 0
                         && !model_info.used_fallback_model_metadata
                         && model_info.input_modalities.contains(&InputModality::Image)
-                }) {
-                    let features = &params.spawn_config.features;
-                    let mode = if unified_image_budget_enabled(features, &model_info) {
-                        ImagePreparationMode::UnifiedBudget
-                    } else {
-                        ImagePreparationMode::DetailBased
-                    };
-                    prompt_items.context.retain_new_images(reviewer_history.raw_items(), |image, detail| {
+                });
+                let features = &params.spawn_config.features;
+                let mode = if unified_image_budget_enabled(features, &model_info) {
+                    ImagePreparationMode::UnifiedBudget
+                } else {
+                    ImagePreparationMode::DetailBased
+                };
+                codex_guardian_context::prepare_sync_images(
+                    &mut prompt_items.context,
+                    reviewer_history.raw_items(),
+                    context_window,
+                    |image, detail| {
                         *detail = match normalize_output_image_detail(&model_info, *detail) {
                             _ if mode == ImagePreparationMode::UnifiedBudget => {
                                 Some(ImageDetail::Original)
@@ -582,9 +585,11 @@ async fn run_review_on_session(
                         match image {
                             ImageReference::Inline { image_url } => {
                                 match resize_image(image_url, detail, mode) {
-                                    Ok(Some(prepared)) => Some(Cow::Owned(ImageReference::Inline {
-                                        image_url: prepared.into_data_url(),
-                                    })),
+                                    Ok(Some(prepared)) => {
+                                        Some(Cow::Owned(ImageReference::Inline {
+                                            image_url: prepared.into_data_url(),
+                                        }))
+                                    }
                                     Ok(None) => Some(Cow::Borrowed(image)),
                                     Err(error) => {
                                         warn!(%error, "failed to prepare guardian review image");
@@ -594,27 +599,18 @@ async fn run_review_on_session(
                             }
                             ImageReference::File { .. } => Some(Cow::Borrowed(image)),
                         }
-                    });
-                    let prompt_tokens = prompt_items
-                        .context
-                        .clone()
-                        .into_messages()
-                        .iter()
-                        .map(crate::context_manager::estimate_item_token_count)
-                        .fold(0i64, i64::saturating_add);
-                    let base_instructions = review_session.session.get_base_instructions().await;
-                    let history_tokens = reviewer_history
-                        .estimate_token_count_with_base_instructions(&base_instructions)
-                        .unwrap_or(i64::MAX)
-                        .max(review_session.session.get_total_token_usage().await);
-                    prompt_tokens <= GUARDIAN_MAX_IMAGE_ITEM_TOKENS
-                        && prompt_tokens.saturating_add(history_tokens) <= context_window
-                } else {
-                    false
-                };
-                if !admit_images {
-                    prompt_items.context.retain_images(|_, _| false);
-                }
+                    },
+                    crate::context_manager::estimate_item_token_count,
+                    || async {
+                        let base_instructions =
+                            review_session.session.get_base_instructions().await;
+                        reviewer_history
+                            .estimate_token_count_with_base_instructions(&base_instructions)
+                            .unwrap_or(i64::MAX)
+                            .max(review_session.session.get_total_token_usage().await)
+                    },
+                )
+                .await;
             }
 
             let items = match prompt_items.context.clone().into_user_inputs() {

@@ -22,10 +22,13 @@ use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
 use crate::context::UserGoalUpdate;
 use crate::context::is_contextual_user_fragment;
+use crate::context_manager::ContextManager;
 use crate::event_mapping::parse_turn_item;
 use codex_guardian_context::RootAssistantCandidate;
 use codex_guardian_context::RootAssistantContent;
 use codex_guardian_context::RootConversationCandidates;
+use codex_guardian_context::RootConversationInput;
+use codex_guardian_context::RootConversationSource;
 use codex_guardian_context::RootDeliveredMessage;
 use codex_guardian_context::RootMessageCandidate;
 use codex_guardian_context::RootRetainedAssistant;
@@ -41,36 +44,14 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::MultiAgentVersion;
 
-impl LocalAgentControl {
-    /// Returns bounded root conversation and authorization state for a MultiAgent V2 worker.
-    pub(crate) async fn root_user_authorization(
-        &self,
-        thread_id: ThreadId,
-    ) -> Option<GuardianRootSnapshot> {
-        let root_thread_id = self
-            .runtime
-            .registry
-            .agent_id_for_path(&AgentPath::root())?;
-        if root_thread_id == thread_id {
-            return None;
-        }
-        let manager = self.runtime.upgrade().ok()?;
-        let root_thread = manager.get_thread(root_thread_id).await.ok()?;
-        if root_thread.multi_agent_version() != Some(MultiAgentVersion::V2) {
-            return None;
-        }
+struct CapturedRootConversation {
+    history: ContextManager,
+    handoff_boundaries: Vec<RetainedContextOrder>,
+}
 
-        let worker_path = root_thread
-            .enabled(codex_features::Feature::GuardianRootHandoffContext)
-            .then(|| {
-                self.runtime
-                    .registry
-                    .agent_metadata_for_thread(thread_id)?
-                    .agent_path
-            })
-            .flatten();
-        let root_history = root_thread.session.clone_history().await;
-        let history = root_history.conversation_history_snapshot();
+impl RootConversationSource for CapturedRootConversation {
+    fn prepare(&self) -> codex_guardian_context::PreparedRootContext {
+        let root_history = &self.history;
         // Join calls to host-confirmed outputs in this snapshot. Older outputs without
         // captured text cannot establish what was sent, including after a hook rewrite.
         let delivered_candidates = root_history
@@ -93,11 +74,6 @@ impl LocalAgentControl {
                 Some(RootDeliveredMessage { call_id, text })
             })
             .collect::<Vec<_>>();
-        let root_evidence = root_thread
-            .session
-            .services
-            .thread_extension_data
-            .get_or_init(GuardianReviewEvidence::default);
         let retained_context = root_history.retained_context();
         let reconciled = ReconciledRetainedContext::new(
             Some(retained_context),
@@ -136,7 +112,6 @@ impl LocalAgentControl {
                     ))
                 }),
         );
-        let mut latest_user_turn_id = reconciled.latest_user_turn_id.clone();
         let mut missing_root_instructions = reconciled.missing_user_messages;
         let user_candidates = reconciled
             .ordered_entries()
@@ -258,6 +233,54 @@ impl LocalAgentControl {
                 })
             })
             .collect::<Vec<_>>();
+        let request_candidates = RootConversationCandidates {
+            user_messages: user_candidates,
+            assistant_messages: assistant_candidates,
+            retained_assistants: retained_assistant_candidates,
+            delivered_messages: delivered_candidates,
+            retained_user_sources,
+            handoff_boundaries: self.handoff_boundaries.clone(),
+            latest_user_turn_id: reconciled.latest_user_turn_id.clone(),
+            missing_root_instructions: original_missing_root_instructions,
+            missing_assistant_context: retained_context.has_omitted_assistant_messages(),
+            missing_verified_answers: !retained_context.verified_answers_complete(),
+        };
+        codex_guardian_context::prepare_root_context(
+            &request_candidates,
+            root_history.original_legacy_user_messages(),
+        )
+    }
+}
+
+impl LocalAgentControl {
+    /// Returns bounded root conversation and authorization state for a MultiAgent V2 worker.
+    pub(crate) async fn root_user_authorization(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<GuardianRootSnapshot> {
+        let root_thread_id = self
+            .runtime
+            .registry
+            .agent_id_for_path(&AgentPath::root())?;
+        if root_thread_id == thread_id {
+            return None;
+        }
+        let manager = self.runtime.upgrade().ok()?;
+        let root_thread = manager.get_thread(root_thread_id).await.ok()?;
+        if root_thread.multi_agent_version() != Some(MultiAgentVersion::V2) {
+            return None;
+        }
+
+        let worker_path = root_thread
+            .enabled(codex_features::Feature::GuardianRootHandoffContext)
+            .then(|| {
+                self.runtime
+                    .registry
+                    .agent_metadata_for_thread(thread_id)?
+                    .agent_path
+            })
+            .flatten();
+        let root_history = root_thread.session.clone_history().await;
         let handoff_boundaries = if let Some(worker) = worker_path {
             super::root_handoff::handoff_boundaries(
                 root_history.annotated_items(),
@@ -272,21 +295,18 @@ impl LocalAgentControl {
         } else {
             Vec::new()
         };
-        let request_candidates = RootConversationCandidates {
-            user_messages: user_candidates,
-            assistant_messages: assistant_candidates,
-            retained_assistants: retained_assistant_candidates,
-            delivered_messages: delivered_candidates,
-            retained_user_sources,
+        let history = root_history.conversation_history_snapshot();
+        let history_reset_version = root_history.reset_version;
+        let request_candidates = RootConversationInput::new(CapturedRootConversation {
+            history: root_history,
             handoff_boundaries,
-            missing_root_instructions: original_missing_root_instructions,
-            missing_assistant_context: retained_context.has_omitted_assistant_messages(),
-            missing_verified_answers: !retained_context.verified_answers_complete(),
-        };
-        let prepared = codex_guardian_context::prepare_root_context(
-            &request_candidates,
-            root_history.original_legacy_user_messages(),
-        );
+        });
+        let prepared = request_candidates.prepare();
+        let root_evidence = root_thread
+            .session
+            .services
+            .thread_extension_data
+            .get_or_init(GuardianReviewEvidence::default);
         let mut authorization_version = root_evidence.authorization_version(history.as_ref());
         if prepared.missing_root_instructions {
             authorization_version.retained_context_complete = false;
@@ -298,20 +318,19 @@ impl LocalAgentControl {
             selected.hash(&mut revision);
             review_context_revision = revision.finish();
         }
-        if latest_user_turn_id.is_none() {
-            latest_user_turn_id = prepared.latest_legacy_turn_id;
-        }
-        let trusted_skill_paths = latest_user_turn_id
+        let trusted_skill_paths = prepared
+            .latest_user_turn_id
             .as_deref()
             .map(|turn_id| root_evidence.trusted_skill_paths(turn_id))
             .unwrap_or_default();
         Some(GuardianRootSnapshot {
             root_thread_id,
-            history_reset_version: root_history.reset_version,
+            history_reset_version,
             authorization_version,
             review_context_revision,
             messages: prepared.messages,
             trusted_skill_paths,
+            request_candidates: Some(request_candidates),
         })
     }
 }

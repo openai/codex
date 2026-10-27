@@ -22,7 +22,7 @@ pub enum ContextSection<T = ConversationTranscriptEntry> {
         items: Vec<T>,
     },
     RootConversation {
-        items: Vec<String>,
+        content: crate::RootConversationContent,
     },
     TrustedUserAnswers {
         items: Vec<crate::TrustedUserAnswer>,

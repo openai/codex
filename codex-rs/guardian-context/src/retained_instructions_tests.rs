@@ -430,6 +430,7 @@ fn transcript_context(
             history,
             transcript: &profile.transcript,
             root_conversation: &[],
+            root_conversation_candidates: None,
             trusted_user_answers: &answers
                 .fragments
                 .into_iter()

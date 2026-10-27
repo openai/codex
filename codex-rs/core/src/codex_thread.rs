@@ -191,8 +191,8 @@ pub struct GuardianAuthorizationVersion {
     pub retained_context_complete: bool,
 }
 
-/// Bounded root conversation and authorization state from one history snapshot.
-#[derive(Debug, Eq, PartialEq)]
+/// Root authorization state, selected messages and request-local originals from one snapshot.
+#[derive(Debug, PartialEq)]
 pub struct GuardianRootSnapshot {
     /// Authoritative root from which this evidence was captured.
     pub root_thread_id: ThreadId,
@@ -202,6 +202,8 @@ pub struct GuardianRootSnapshot {
     /// Confirmed assistant context is relevant to review but cannot authorize an action.
     pub review_context_revision: u64,
     pub messages: Vec<GuardianRootMessage>,
+    /// Request-local originals retained before the bounded compatibility projection.
+    pub(crate) request_candidates: Option<codex_guardian_context::RootConversationInput>,
     pub trusted_skill_paths: Vec<String>,
 }
 
@@ -1082,11 +1084,15 @@ impl CodexThread {
 
     /// Returns bounded root conversation evidence and its authorization version atomically.
     pub async fn guardian_root_snapshot(&self) -> Option<GuardianRootSnapshot> {
-        self.session
+        let mut snapshot = self
+            .session
             .services
             .agent_control
             .get_guardian_package(self.session.thread_id)
-            .await
+            .await?;
+        // Async consumers need only the bounded projection, not the sync source snapshot.
+        snapshot.request_candidates = None;
+        Some(snapshot)
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied
