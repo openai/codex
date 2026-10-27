@@ -940,6 +940,14 @@ pub fn validate_reserved_model_provider_ids(
     let mut conflicts = model_providers
         .keys()
         .filter(|key| {
+            if key.as_str() == "openai" {
+                let provider = &model_providers[*key];
+                return provider
+                    != &ModelProviderInfo {
+                        model_catalog_url: provider.model_catalog_url.clone(),
+                        ..Default::default()
+                    };
+            }
             !matches!(
                 key.as_str(),
                 AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID | GCP_PROVIDER_ID
@@ -980,7 +988,8 @@ pub fn validate_model_providers(
         if !matches!(
             key.as_str(),
             AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID | GCP_PROVIDER_ID
-        ) && provider.name.trim().is_empty()
+        ) && key != "openai"
+            && provider.name.trim().is_empty()
         {
             return Err(format!(
                 "model_providers.{key}: provider name must not be empty"

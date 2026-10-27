@@ -152,6 +152,16 @@ pub struct ModelProviderInfo {
     pub base_url: Option<String>,
     /// Optional full URL for a Codex-native model catalog. When unset, OpenAI discovery
     /// uses the Codex backend unless `base_url` overrides the inference endpoint.
+    /// The endpoint must serve the Codex catalog format, not the public `/v1/models` API.
+    ///
+    /// For built-in OpenAI, set this under `[model_providers.openai]`; other non-default
+    /// provider overrides are rejected. The URL must use HTTPS and an allowed ChatGPT
+    /// host. Other hosts require a custom provider. Inference still uses `openai_base_url`.
+    ///
+    /// Catalog requests use the provider's credentials, including an API key or ChatGPT
+    /// access token. Only configure an endpoint you trust with those credentials.
+    /// Setting this URL does not grant catalog access or guarantee that the endpoint
+    /// accepts a regional API key. Existing discovery gates and entitlement checks apply.
     pub model_catalog_url: Option<RedactedString>,
     /// Environment variable that stores the user's API key for this provider.
     pub env_key: Option<String>,
@@ -768,14 +778,35 @@ pub fn built_in_model_providers(
 /// Merge configured providers into the built-in provider catalog.
 ///
 /// Configured providers extend the built-in set. Built-in providers are not
-/// generally overridable, but the cloud-hosted OpenAI providers allow a limited
+/// generally overridable. OpenAI allows a catalog URL override, while the
+/// cloud-hosted OpenAI providers allow a limited
 /// set of endpoint, authentication, header, and cloud-specific overrides.
 pub fn merge_configured_model_providers(
     mut model_providers: HashMap<String, ModelProviderInfo>,
     configured_model_providers: HashMap<String, ModelProviderInfo>,
 ) -> Result<HashMap<String, ModelProviderInfo>, String> {
     for (key, mut provider) in configured_model_providers {
-        if matches!(
+        if key == "openai" {
+            // Keep the built-in identity, inference routing, and authentication.
+            // Only catalog routing is configurable through this provider entry.
+            if let Some(catalog_url) = provider.model_catalog_url.take()
+                && let Some(built_in_provider) = model_providers.get_mut(&key)
+            {
+                let allowed = catalog_url.parse::<http::Uri>().ok().is_some_and(|uri| {
+                    uri.scheme_str() == Some("https")
+                        && uri.host().is_some_and(|host| {
+                            codex_http_client::is_allowed_chatgpt_host(&host.to_ascii_lowercase())
+                        })
+                        && uri
+                            .authority()
+                            .is_some_and(|authority| !authority.as_str().contains('@'))
+                });
+                if !allowed {
+                    return Err("model_providers.openai.model_catalog_url must use an allowed ChatGPT host. If you need to use a 3rd party host, configure a custom model_provider".to_string());
+                }
+                built_in_provider.model_catalog_url = Some(catalog_url);
+            }
+        } else if matches!(
             key.as_str(),
             AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
         ) {

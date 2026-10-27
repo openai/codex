@@ -993,3 +993,91 @@ model_catalog_url = "https://gateway.example/codex/catalog?token=catalog-secret"
         "https://gateway.example/v1"
     );
 }
+
+#[test]
+fn builtin_openai_catalog_override_preserves_inference_and_identity() {
+    for inference_url in [None, Some("https://us.api.openai.com/v1")] {
+        for catalog_url in [None, Some("https://chatgpt.com/backend-api/codex/models")] {
+            let configured: ModelProviderInfo = toml::from_str(&format!(
+                "name = \"Ignored name\"\nbase_url = \"https://ignored.example/v1\"\nrequires_openai_auth = false\n{}",
+                catalog_url.map(|url| format!("model_catalog_url = {url:?}")).unwrap_or_default()
+            )).unwrap();
+            let builtins = built_in_model_providers(inference_url.map(str::to_owned));
+            let mut expected = builtins.clone();
+            expected.get_mut("openai").unwrap().model_catalog_url = catalog_url.map(Into::into);
+            assert_eq!(
+                merge_configured_model_providers(
+                    builtins,
+                    HashMap::from([("openai".to_string(), configured)]),
+                )
+                .unwrap(),
+                expected,
+            );
+        }
+    }
+}
+
+#[test]
+fn builtin_openai_catalog_rejects_untrusted_destinations() {
+    for url in [
+        "http://chatgpt.com/backend-api/codex/models",
+        "https://chatgpt.com.evil.example/models",
+        "https://evilchatgpt.com/models",
+        "https://api.openai.com/v1/models",
+        "https://example.com/models?secret=do-not-log",
+        "https://user:secret@chatgpt.com/models",
+        "/models",
+        "not a URL",
+    ] {
+        let provider = ModelProviderInfo {
+            model_catalog_url: Some(url.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            merge_configured_model_providers(
+                built_in_model_providers(/*openai_base_url*/ None),
+                HashMap::from([("openai".to_string(), provider.clone())]),
+            )
+            .unwrap_err(),
+            "model_providers.openai.model_catalog_url must use an allowed ChatGPT host. If you need to use a 3rd party host, configure a custom model_provider",
+        );
+        let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+        expected.insert("custom".into(), provider.clone());
+        assert_eq!(
+            merge_configured_model_providers(
+                built_in_model_providers(/*openai_base_url*/ None),
+                HashMap::from([("custom".into(), provider)]),
+            )
+            .unwrap(),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn builtin_openai_catalog_accepts_existing_chatgpt_hosts() {
+    for host in [
+        "chatgpt.com",
+        "gov.chatgpt.com",
+        "chat.openai.com",
+        "chatgpt-staging.com",
+        "api.chatgpt-staging.com",
+        "CHATGPT.COM",
+    ] {
+        let url = format!("https://{host}/backend-api/codex/models");
+        let provider = ModelProviderInfo {
+            model_catalog_url: Some(url.clone().into()),
+            ..Default::default()
+        };
+        let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+        expected.get_mut("openai").unwrap().model_catalog_url = Some(url.into());
+        assert_eq!(
+            merge_configured_model_providers(
+                built_in_model_providers(/*openai_base_url*/ None),
+                HashMap::from([("openai".into(), provider)]),
+            )
+            .unwrap(),
+            expected
+        );
+    }
+}

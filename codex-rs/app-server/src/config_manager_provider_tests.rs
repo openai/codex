@@ -14,20 +14,29 @@ use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 use test_case::test_case;
 
-#[test_case(AMAZON_BEDROCK_PROVIDER_ID, "aws.region = 'us-west-2'", "us-west-2", "us-east-1"; "bedrock")]
-#[test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, "aws.region = 'us-west-2'", "us-west-2", "us-east-1"; "bedrock_runtime")]
-#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nlocation = 'us-central1'", "example-project", "other-project"; "gcp_project")]
-#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nlocation = 'us-central1'", "us-central1", "us-east4"; "gcp_location")]
-#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nauth.command = 'print-token'", "print-token", "other-token"; "gcp_auth")]
+#[test_case(AMAZON_BEDROCK_PROVIDER_ID, "aws.region = 'us-west-2'", "us-west-2", "us-east-1", None; "bedrock")]
+#[test_case(AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, "aws.region = 'us-west-2'", "us-west-2", "us-east-1", None; "bedrock_runtime")]
+#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nlocation = 'us-central1'", "example-project", "other-project", None; "gcp_project")]
+#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nlocation = 'us-central1'", "us-central1", "us-east4", None; "gcp_location")]
+#[test_case(GCP_PROVIDER_ID, "project_id = 'example-project'\nauth.command = 'print-token'", "print-token", "other-token", None; "gcp_auth")]
+#[test_case("openai", "model_catalog_url = 'https://chatgpt.com/backend-api/codex/models'", "https://chatgpt.com/backend-api/codex/models", "https://chatgpt.com/backend-api/codex/other-models", None; "openai_catalog")]
+#[test_case("openai", "model_catalog_url = 'https://chatgpt.com/backend-api/codex/models'", "https://chatgpt.com/backend-api/codex/models", "https://chatgpt.com/backend-api/codex/other-models", Some("https://us.api.openai.com/v1"); "openai_regional_catalog")]
 #[tokio::test]
 async fn provider_requirements_resolve_builtin_overrides(
     provider_id: &str,
     provider_config: &str,
     original: &str,
     replacement: &str,
+    openai_base_url: Option<&str>,
 ) -> Result<()> {
     let home = tempdir()?;
     let workspace = tempdir()?;
+    if let Some(base_url) = openai_base_url {
+        std::fs::write(
+            home.path().join("config.toml"),
+            format!("openai_base_url = '{base_url}'"),
+        )?;
+    }
     let requirements = format!(
         "model_provider = '{provider_id}'\n[model_providers.{provider_id}]\n{provider_config}"
     );
@@ -40,6 +49,14 @@ async fn provider_requirements_resolve_builtin_overrides(
     let current = manager
         .load_latest_config(Some(workspace.path().to_path_buf()))
         .await?;
+    if provider_id == "openai" {
+        assert_eq!(current.model_provider.base_url.as_deref(), openai_base_url);
+        // Retained threads keep their inference route even if user defaults later change.
+        std::fs::write(
+            home.path().join("config.toml"),
+            "openai_base_url = 'https://eu.api.openai.com/v1'",
+        )?;
+    }
     manager.check_thread_model_provider(&current).await?;
 
     let changed = ConfigManager::new_for_tests(

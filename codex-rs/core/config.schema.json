@@ -3113,7 +3113,7 @@
           "type": "string"
         },
         "model_catalog_url": {
-          "description": "Optional full URL for a Codex-native model catalog. When unset, OpenAI discovery uses the Codex backend unless `base_url` overrides the inference endpoint.",
+          "description": "Optional full URL for a Codex-native model catalog. When unset, OpenAI discovery uses the Codex backend unless `base_url` overrides the inference endpoint. The endpoint must serve the Codex catalog format, not the public `/v1/models` API.\n\nFor built-in OpenAI, set this under `[model_providers.openai]`; other non-default provider overrides are rejected. The URL must use HTTPS and an allowed ChatGPT host. Other hosts require a custom provider. Inference still uses `openai_base_url`.\n\nCatalog requests use the provider's credentials, including an API key or ChatGPT access token. Only configure an endpoint you trust with those credentials. Setting this URL does not grant catalog access or guarantee that the endpoint accepts a regional API key. Existing discovery gates and entitlement checks apply.",
           "type": "string"
         },
         "name": {
