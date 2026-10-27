@@ -3619,15 +3619,12 @@ async fn code_mode_complete_calls_preserve_large_arguments() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(false, None, false; "control")]
-#[test_case(true, None, false; "ranked_search")]
-#[test_case(true, Some(30_000), false; "ranked_search_expanded_schema")]
-#[test_case(false, None, true; "tool_description_first")]
-#[test_case(true, None, true; "ranked_search_tool_description_first")]
+#[test_case(false, None; "catalog_search")]
+#[test_case(true, None; "ranked_search")]
+#[test_case(true, Some(30_000); "ranked_search_expanded_schema")]
 async fn code_mode_only_searches_and_calls_deferred_app_tools(
     ranked_search: bool,
     schema_max_bytes: Option<usize>,
-    tool_description_first: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -3747,13 +3744,6 @@ if (!tool) {
                 .enable(Feature::CodeModeOnly)
                 .expect("test config should allow feature update");
             config.code_mode.tool_input_schema_max_bytes = schema_max_bytes;
-            config
-                .features
-                .set_enabled(
-                    Feature::CodeModeToolDescriptionFirst,
-                    tool_description_first,
-                )
-                .expect("test config should allow description order update");
             if ranked_search {
                 config
                     .features
@@ -3841,11 +3831,7 @@ if (!tool) {
             "hasDeclaration": true,
             "hasSchemaDescription": schema_max_bytes.is_some(),
             "hasNamespacePrefix": true,
-            "descriptionPrefix": if tool_description_first {
-                "Calendar search context.\n\nRead timezone option 99.\n\nPlan events and manage your calendar."
-            } else {
-                "Calendar search context.\n\nPlan events and manage your calendar.\n\nRead timezone option 99."
-            },
+            "descriptionPrefix": "Calendar search context.\n\nRead timezone option 99.\n\nPlan events and manage your calendar.",
             "matchesCatalog": true,
             "isError": false,
             "text": "called calendar_timezone_option_99 for  at  with ",
@@ -7918,7 +7904,7 @@ text(JSON.stringify({
         exec_output,
         serde_json::json!({
             "name": "editor__apply_patch",
-            "description": format!("Editing tools.\n\n{second_description}"),
+            "description": format!("Apply a raw editor patch (step 2).\n\nEditing tools.\n\nexec tool declaration:\n```ts\n{declaration}\n```"),
             "result": {
                 "namespace": "editor",
                 "name": "apply_patch",
@@ -8064,8 +8050,8 @@ text(JSON.stringify(tool));
         serde_json::json!({
             "name": "mcp__rmcp__echo",
             "description": concat!(
-                "Use these tools to exercise the rmcp test server.\n\n",
                 "Echo back the provided message and include environment data.\n\n",
+                "Use these tools to exercise the rmcp test server.\n\n",
                 "exec tool declaration:\n",
                 "```ts\n",
                 "declare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): ",

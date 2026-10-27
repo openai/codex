@@ -109,9 +109,9 @@ Settings:
 08:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
-     | mcp__codex_apps__calendar_timezone_option_99 | Plan events and manage your calendar.
+     | mcp__codex_apps__calendar_timezone_option_99 | Read timezone option 99.
 
-    Read timezone option 99.
+    Plan events and manage your calendar.
 
     exec tool declaration:
     ```ts
