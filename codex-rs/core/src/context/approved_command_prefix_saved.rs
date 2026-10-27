@@ -3,25 +3,33 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
 
+pub(crate) const SAVED_PREFIX_KIND: &str = "permissions.approved_command_prefix_saved";
+
 pub(crate) const APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX: &str =
     "Approved command prefix saved:";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ApprovedCommandPrefixSaved {
-    prefixes: String,
+    text: String,
 }
 
 impl ApprovedCommandPrefixSaved {
-    pub(crate) fn new(prefixes: impl Into<String>) -> Self {
-        Self {
-            prefixes: prefixes.into(),
-        }
+    /// The catalog heading is capped at 500 UTF-8 bytes. Keep the bundled marker
+    /// first so older clients can trim this notification during rollback. The
+    /// prefix list retains its own size limit and truncation notice.
+    pub(crate) fn new(prefixes: String, heading: Option<&str>) -> Self {
+        let marker = APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
+        let text = match heading {
+            Some(heading) if heading != marker => format!("{marker}\n{heading}\n{prefixes}"),
+            Some(_) | None => format!("{marker}\n{prefixes}"),
+        };
+        Self { text }
     }
 }
 
 impl ContextualUserFragment for ApprovedCommandPrefixSaved {
     fn content_kind(&self) -> ContentItemKind {
-        ContentItemKind("permissions.approved_command_prefix_saved".to_string())
+        ContentItemKind(SAVED_PREFIX_KIND.to_string())
     }
 
     fn role(&self) -> &'static str {
@@ -37,9 +45,6 @@ impl ContextualUserFragment for ApprovedCommandPrefixSaved {
     }
 
     fn body(&self) -> ContentItem {
-        input_text(format!(
-            "{APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX}\n{}",
-            self.prefixes
-        ))
+        input_text(self.text.clone())
     }
 }

@@ -1,6 +1,8 @@
 #![cfg(test)]
 
 //! Verifies workspace exchange persistence and failed-switch isolation.
+//!
+//! Auth environment readers share `codex_auth_env` with tests that override tokens.
 
 use super::*;
 use base64::Engine;
@@ -68,6 +70,7 @@ async fn session(server: &MockServer) -> anyhow::Result<(TempDir, AuthManager, A
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn workspace_switch_preserves_login_and_survives_reload() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let (home, manager, snapshot) = session(&server).await?;
@@ -129,6 +132,7 @@ async fn workspace_switch_preserves_login_and_survives_reload() -> anyhow::Resul
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn workspace_switch_rejects_stale_agent_identity_and_rolls_back_conditionally()
 -> anyhow::Result<()> {
     let server = MockServer::start().await;
@@ -191,6 +195,7 @@ async fn workspace_switch_rejects_stale_agent_identity_and_rolls_back_conditiona
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn workspace_switch_rejection_preserves_current_login() -> anyhow::Result<()> {
     for (status, response) in [
         (
@@ -229,6 +234,7 @@ async fn workspace_switch_rejection_preserves_current_login() -> anyhow::Result<
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn workspace_switch_obeys_workspace_policy() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let (_home, manager, snapshot) = session(&server).await?;
@@ -250,6 +256,7 @@ async fn workspace_switch_obeys_workspace_policy() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn workspace_switch_does_not_restore_a_logged_out_session() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let (home, manager, _) = session(&server).await?;
@@ -286,6 +293,7 @@ async fn workspace_switch_does_not_restore_a_logged_out_session() -> anyhow::Res
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn workspace_switch_rejects_a_session_from_a_previous_login() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let (home, manager, mut snapshot) = session(&server).await?;
@@ -323,6 +331,7 @@ async fn workspace_switch_rejects_a_session_from_a_previous_login() -> anyhow::R
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn workspace_sso_only_commits_for_the_requesting_login_and_workspace() -> anyhow::Result<()> {
     let backend = MockServer::start().await;
     let (_home, manager, original) = session(&backend).await?;

@@ -222,6 +222,8 @@ impl Session {
             .services
             .exec_policy
             .current_for_prefix_rules(turn_context.allow_prefix_rules());
+        let approval_context =
+            ApprovalPromptContext::new(settings.approvals_reviewer(), model_messages);
         if turn_context.config.include_permissions_instructions {
             let environment = step_context.environments.primary();
             let sandbox = environment
@@ -238,8 +240,6 @@ impl Session {
             let cwd = environment
                 .and_then(|environment| environment.cwd().to_abs_path().ok())
                 .unwrap_or_else(|| turn_context.cwd.clone());
-            let approval_context =
-                ApprovalPromptContext::new(settings.approvals_reviewer(), model_messages);
             world_state.add_section(PermissionsState::new(
                 &permission_profile,
                 settings.approval_policy(),
@@ -257,7 +257,10 @@ impl Session {
                     .enabled(Feature::RequestPermissionsTool),
             ));
         } else {
-            world_state.add_section(CompactPermissionsState::new(exec_policy.as_ref()));
+            world_state.add_section(CompactPermissionsState::new(
+                exec_policy.as_ref(),
+                approval_context.approved_command_prefix_saved_heading(),
+            ));
         }
         if turn_context.config.include_collaboration_mode_instructions {
             world_state.add_section(CollaborationModeState::from_collaboration_mode(

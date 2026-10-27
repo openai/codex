@@ -12,12 +12,14 @@ use std::collections::BTreeSet;
 /// Newly approved command prefixes visible without the full permissions instructions.
 #[derive(Clone, Debug)]
 pub(crate) struct CompactPermissionsState {
+    saved_prefix_heading: Option<String>,
     prefixes: BTreeSet<Vec<String>>,
 }
 
 impl CompactPermissionsState {
-    pub(crate) fn new(exec_policy: &Policy) -> Self {
+    pub(crate) fn new(exec_policy: &Policy, saved_prefix_heading: Option<&str>) -> Self {
         Self {
+            saved_prefix_heading: saved_prefix_heading.map(str::to_owned),
             prefixes: exec_policy.get_allowed_prefixes().into_iter().collect(),
         }
     }
@@ -52,7 +54,12 @@ impl WorldStateSection for CompactPermissionsState {
         let fragment: Option<Box<dyn ContextualUserFragment>> =
             format_allow_prefixes(added_prefixes)
                 .filter(|prefixes| !prefixes.is_empty())
-                .map(|prefixes| Box::new(ApprovedCommandPrefixSaved::new(prefixes)) as _);
+                .map(|prefixes| {
+                    Box::new(ApprovedCommandPrefixSaved::new(
+                        prefixes,
+                        self.saved_prefix_heading.as_deref(),
+                    )) as _
+                });
         (
             Some(current),
             WorldStateUpdate::optional_boxed_fragment(fragment),

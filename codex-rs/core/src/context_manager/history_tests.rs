@@ -1,5 +1,7 @@
 use super::*;
 use crate::context::APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
+use crate::context::ApprovedCommandPrefixSaved;
+use crate::context::ContextualUserFragment;
 use crate::context::UserInstructions;
 use crate::context::world_state::SectionTransition;
 use crate::context::world_state::WorldState;
@@ -2154,15 +2156,38 @@ fn drop_last_n_user_turns_preserves_annotations_for_surviving_developer_fragment
     );
 }
 
+#[test_case::test_case(APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX, None; "legacy")]
+#[test_case::test_case("Saved for this session", Some(crate::context::SAVED_PREFIX_KIND); "catalog")]
+#[test_case::test_case("Saved for this session", None; "catalog_without_metadata")]
 #[tokio::test]
-async fn drop_last_n_user_turns_trims_saved_prefix_update_above_rolled_back_turn() {
+async fn drop_last_n_user_turns_trims_saved_prefix_update_above_rolled_back_turn(
+    heading: &str,
+    kind: Option<&str>,
+) {
+    // Without metadata, use the rendered text to exercise the legacy reader's
+    // prefix-based classification of notifications written by this client.
+    let text = match kind {
+        Some(_) => format!("{heading}\n- [\"touch\"]"),
+        None => ApprovedCommandPrefixSaved::new("- [\"touch\"]".to_string(), Some(heading))
+            .render()
+            .expect_text(),
+    };
+    let mut notification = developer_msg(&text);
+    if let Some(kind) = kind
+        && let ResponseItem::Message {
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = &mut notification
+    {
+        internal_chat_message_metadata_passthrough
+            .get_or_insert_with(Default::default)
+            .content_item_kinds = Some(vec![ContentItemKind(kind.to_owned())]);
+    }
     let items = vec![
         assistant_msg("session prefix item"),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
-        developer_msg(&format!(
-            "{APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX}\n- [\"touch\"]"
-        )),
+        notification,
         user_input_text_msg("turn 2 user"),
         assistant_msg("turn 2 assistant"),
     ];

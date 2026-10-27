@@ -834,6 +834,10 @@ pub struct PermissionMessages {
     /// an empty string suppresses the approved-prefix section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_prefixes: Option<String>,
+    /// Optional plain heading for the separate saved-command-prefix notification.
+    /// The harness formats the prefix list and falls back to its bundled heading for invalid text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_command_prefix_saved: Option<String>,
     /// Single writable-root sentence with exactly one `{{ roots }}` placeholder.
     /// Missing, null, empty, invalid, or oversized templates use the bundled sentence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1456,9 +1460,12 @@ mod tests {
     }
 
     #[test]
-    fn permission_path_messages_preserve_sparse_wire_values() {
+    fn permission_messages_preserve_sparse_wire_values() {
         for input in [
             serde_json::json!({}),
+            serde_json::json!({"approved_command_prefix_saved": null}),
+            serde_json::json!({"approved_command_prefix_saved": ""}),
+            serde_json::json!({"approved_command_prefix_saved": "Saved", "approved_prefixes": "Allowed: {{ approved_prefixes }}"}),
             serde_json::json!({"writable_root": null, "writable_roots": null}),
             serde_json::json!({"writable_root": "", "writable_roots": "Roots: {{ roots }}."}),
             serde_json::json!({"omitted_paths": null, "denied_reads": null}),
@@ -1471,6 +1478,8 @@ mod tests {
                 "read_only": null,
             });
             for key in [
+                "approved_command_prefix_saved",
+                "approved_prefixes",
                 "writable_root",
                 "writable_roots",
                 "omitted_paths",

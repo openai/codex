@@ -562,9 +562,25 @@ async fn metrics_exporters_respect_analytics_preferences() -> Result<()> {
                     default_analytics_enabled,
                 )
                 .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+                let metrics = provider.as_ref().and_then(|otel| otel.metrics());
+                let metrics_enabled = metrics.is_some();
+                // Exercise the nonempty export path that concurrent tests can
+                // trigger through process-global metrics.
+                let record_result = metrics
+                    .map(|metrics| {
+                        metrics.counter("codex.test.analytics_preferences", /*inc*/ 1, &[])
+                    })
+                    .transpose();
+                if let Some(provider) = provider {
+                    // Keep Tokio running while the gRPC exporter flushes; a
+                    // synchronous drop can deadlock this current-thread runtime.
+                    provider
+                        .shutdown_with_timeout(Duration::from_secs(/*secs*/ 5))
+                        .await?;
+                }
+                record_result?;
                 assert_eq!(
-                    provider.as_ref().and_then(|otel| otel.metrics()).is_some(),
-                    expected_metrics,
+                    metrics_enabled, expected_metrics,
                     "exporter={:?}, analytics={analytics_enabled:?}, default={default_analytics_enabled}",
                     config.otel.metrics_exporter,
                 );

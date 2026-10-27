@@ -1,5 +1,4 @@
-use super::has_non_contextual_dev_message_content;
-use super::is_contextual_dev_message_content;
+use super::contextual_dev_fragments;
 use super::parse_turn_item;
 use crate::context::ContextualUserFragment;
 use crate::context::InternalContextSource;
@@ -28,11 +27,15 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn recognizes_skills_instructions_as_contextual_developer_content() {
-    assert!(is_contextual_dev_message_content(&[
-        ContentItem::InputText {
-            text: format!("{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills"),
-        },
-    ]));
+    assert!(
+        contextual_dev_fragments(
+            &[ContentItem::InputText {
+                text: format!("{SKILLS_INSTRUCTIONS_OPEN_TAG}\n## Skills"),
+            },],
+            &[]
+        )
+        .any(|matched| matched)
+    );
 }
 
 #[test]
@@ -42,8 +45,10 @@ fn recognizes_legacy_token_budget_as_contextual_developer_content() {
             .to_string(),
     }];
 
-    assert!(is_contextual_dev_message_content(&content));
-    assert!(!has_non_contextual_dev_message_content(&content));
+    assert_eq!(
+        contextual_dev_fragments(&content, &[]).collect::<Vec<_>>(),
+        vec![true]
+    );
 }
 
 #[test]
@@ -56,8 +61,10 @@ Agent name: /root
         ),
     }];
 
-    assert!(is_contextual_dev_message_content(&content));
-    assert!(!has_non_contextual_dev_message_content(&content));
+    assert_eq!(
+        contextual_dev_fragments(&content, &[]).collect::<Vec<_>>(),
+        vec![true]
+    );
 }
 
 #[test]
@@ -68,8 +75,10 @@ fn recognizes_context_window_guidance_as_contextual_developer_content() {
         ),
     }];
 
-    assert!(is_contextual_dev_message_content(&content));
-    assert!(!has_non_contextual_dev_message_content(&content));
+    assert_eq!(
+        contextual_dev_fragments(&content, &[]).collect::<Vec<_>>(),
+        vec![true]
+    );
 }
 
 #[test]

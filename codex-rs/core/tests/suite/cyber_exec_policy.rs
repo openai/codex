@@ -5,6 +5,8 @@ use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
+use codex_protocol::openai_models::ModelMessages;
+use codex_protocol::openai_models::PermissionMessages;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -251,11 +253,21 @@ async fn switching_models_suppresses_and_restores_saved_prefix_approvals() -> Re
     skip_if_wine_exec!(Ok(()), "Guardian command reviews require host-native paths");
 
     let server = start_mock_server().await;
+    let messages = |heading: &str| ModelMessages {
+        permissions: Some(PermissionMessages {
+            approved_command_prefix_saved: Some(heading.to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
     let mut builder = test_codex()
-        .with_model_info_override("gpt-5.4", |model| {
+        .with_model_info_override("gpt-5.4", move |model| {
             model.model_specialty = Some(MODEL_SPECIALTY_CYBER.to_string());
+            model.model_messages = Some(messages("Cyber model saved rule"));
         })
-        .with_model("gpt-5.2")
+        .with_model_info_override("gpt-5.2", move |model| {
+            model.model_messages = Some(messages("General model saved rule"));
+        })
         .with_config(configure_saved_prefix_and_guardian);
     let test = builder.build_with_auto_env(&server).await?;
 
@@ -298,6 +310,7 @@ async fn switching_models_suppresses_and_restores_saved_prefix_approvals() -> Re
         .find(|message| message.contains("<permissions instructions>"))
         .expect("refreshed cyber-model permissions instructions");
     assert!(!cyber_permissions.contains(SAVED_PREFIX));
+    assert!(!cyber_request.body_contains_text("Cyber model saved rule"));
 
     let final_parent_request = requests
         .iter()
@@ -307,10 +320,9 @@ async fn switching_models_suppresses_and_restores_saved_prefix_approvals() -> Re
     assert!(
         final_parent_request
             .message_input_texts("developer")
-            .iter()
-            .any(|message| {
-                message.contains("Approved command prefix saved:") && message.contains(SAVED_PREFIX)
-            }),
+            .contains(&format!(
+                "Approved command prefix saved:\nGeneral model saved rule\n- {SAVED_PREFIX}"
+            )),
         "switching back should restore the original saved-prefix context",
     );
 

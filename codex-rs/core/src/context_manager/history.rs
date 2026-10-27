@@ -23,8 +23,7 @@ use crate::context::world_state::WorldStateSnapshot;
 use crate::context::world_state::WorldStateUpdate;
 use crate::context_manager::normalize;
 use crate::context_manager::replace_unresolvable_image_files;
-use crate::event_mapping::has_non_contextual_dev_message_content;
-use crate::event_mapping::is_contextual_dev_message_content;
+use crate::event_mapping::contextual_dev_fragments;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS;
@@ -1023,10 +1022,23 @@ impl ContextManager {
     ) -> usize {
         while cut_idx > first_instruction_turn_idx {
             match &snapshot[cut_idx - 1].item {
-                ResponseItem::Message { role, content, .. }
-                    if role == "developer" && is_contextual_dev_message_content(content) =>
-                {
-                    if has_non_contextual_dev_message_content(content) {
+                ResponseItem::Message {
+                    role,
+                    content,
+                    internal_chat_message_metadata_passthrough,
+                    ..
+                } if role == "developer" => {
+                    let kinds = internal_chat_message_metadata_passthrough
+                        .as_ref()
+                        .and_then(|metadata| metadata.content_item_kinds.as_deref())
+                        .unwrap_or_default();
+                    let contextual_count = contextual_dev_fragments(content, kinds)
+                        .filter(|matched| *matched)
+                        .count();
+                    if contextual_count == 0 {
+                        break;
+                    }
+                    if contextual_count < content.len() {
                         // Mixed `build_initial_context` bundles are not reconstructible from
                         // steady-state diffs once trimmed, so the next real turn must fully
                         // reinject context instead of diffing against a stale baseline.

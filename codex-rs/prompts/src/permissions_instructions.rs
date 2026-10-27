@@ -76,6 +76,18 @@ impl<'a> ApprovalPromptContext<'a> {
             permission_messages: model_messages.permissions(),
         }
     }
+
+    /// Resolves a plain heading for the standalone notification about newly saved prefixes.
+    pub fn approved_command_prefix_saved_heading(&self) -> Option<&'a str> {
+        self.permission_messages
+            .approved_command_prefix_saved
+            .filter(|text| {
+                text.len() <= 500
+                    && !text.trim().is_empty()
+                    && !text.chars().any(char::is_control)
+                    && !text.contains(['<', '>', '{', '}', '\u{2028}', '\u{2029}'])
+            })
+    }
 }
 
 /// Prepared runtime facts borrowed only while composing the fragment.

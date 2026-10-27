@@ -5,6 +5,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -65,21 +66,18 @@ pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> boo
     message.iter().any(is_contextual_user_fragment)
 }
 
-/// Returns true when a developer message contains any rollback-trimmable contextual fragment.
-///
-/// `build_initial_context` can bundle these fragments together with persistent developer text in a
-/// single developer message, so callers that care about invalidating a stored reference baseline
-/// should pair this with `has_non_contextual_dev_message_content`.
-pub(crate) fn is_contextual_dev_message_content(message: &[ContentItem]) -> bool {
-    message.iter().any(is_contextual_dev_fragment)
-}
-
-/// Returns true when a developer message contains any fragment that is not part of the
-/// rollback-trimmable contextual prefix set.
-pub(crate) fn has_non_contextual_dev_message_content(message: &[ContentItem]) -> bool {
-    message
-        .iter()
-        .any(|content_item| !is_contextual_dev_fragment(content_item))
+/// Classifies each fragment for rollback. A catalog heading can change while its
+/// harness-owned kind stays stable. Older messages only carry the literal text.
+pub(crate) fn contextual_dev_fragments<'a>(
+    message: &'a [ContentItem],
+    kinds: &'a [ContentItemKind],
+) -> impl Iterator<Item = bool> + 'a {
+    message.iter().enumerate().map(|(index, item)| {
+        kinds
+            .get(index)
+            .is_some_and(|kind| kind.0 == crate::context::SAVED_PREFIX_KIND)
+            || is_contextual_dev_fragment(item)
+    })
 }
 
 fn is_contextual_dev_fragment(content_item: &ContentItem) -> bool {

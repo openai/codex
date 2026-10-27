@@ -22,6 +22,7 @@ use std::path::Path;
 /// Permission instructions currently visible to the model.
 #[derive(Clone, Debug)]
 pub(crate) struct PermissionsState {
+    saved_prefix_heading: Option<String>,
     snapshot: PermissionsSnapshot,
     instructions: PermissionsInstructions,
 }
@@ -67,6 +68,9 @@ impl PermissionsState {
             approved_command_prefixes: exec_policy.get_allowed_prefixes().into_iter().collect(),
         };
         Self {
+            saved_prefix_heading: approval_context
+                .approved_command_prefix_saved_heading()
+                .map(str::to_owned),
             snapshot,
             instructions,
         }
@@ -118,6 +122,7 @@ impl WorldStateSection for PermissionsState {
                             Some(current),
                             vec![WorldStateUpdate::fragment(ApprovedCommandPrefixSaved::new(
                                 prefixes,
+                                self.saved_prefix_heading.as_deref(),
                             ))],
                         );
                     }

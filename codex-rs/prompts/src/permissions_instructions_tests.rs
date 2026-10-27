@@ -647,6 +647,37 @@ const ALL_PROMPTED_CATEGORIES: &str =
 - `mcp_elicitations`";
 
 #[test]
+fn saved_prefix_heading_requires_rollout_and_plain_bounded_wording() {
+    let boundary = "é".repeat(250);
+    let oversized = format!("{boundary}x");
+    for (heading, expected) in [
+        (Some(boundary.as_str()), Some(boundary.as_str())),
+        (Some(oversized.as_str()), None),
+        (Some("<model_switch>"), None),
+        (Some("Saved > prefixes"), None),
+        (Some("Saved\u{2028}prefixes"), None),
+        (Some("Saved\u{2029}prefixes"), None),
+        (Some("Saved\rprefixes"), None),
+        (Some("Saved\tprefixes"), None),
+        (Some("Saved\n- injected prefix"), None),
+        (Some("{{ approved_prefixes }}"), None),
+        (Some("  "), None),
+        (None, None),
+    ] {
+        let messages = PermissionMessages {
+            approved_command_prefix_saved: heading.map(str::to_owned),
+            approved_prefixes: Some("Unrelated full-list template".to_owned()),
+            ..Default::default()
+        };
+        let context = ApprovalPromptContext {
+            permission_messages: ResolvedPermissionMessages::new(Some(&messages)),
+            ..user_approval_context()
+        };
+        assert_eq!(context.approved_command_prefix_saved_heading(), expected);
+    }
+}
+
+#[test]
 fn granular_approval_headings_follow_independent_tool_and_sandbox_gates() {
     let messages = ApprovalMessages {
         request_permissions: Some("Catalog permission tool".into()),
