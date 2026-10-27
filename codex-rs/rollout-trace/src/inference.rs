@@ -1,8 +1,9 @@
 //! Hot-path helpers for recording upstream inference attempts.
 //!
-//! The model client should not need to know whether rollout tracing is enabled.
 //! A disabled context records nothing, which keeps one-shot HTTP calls,
-//! WebSocket reuse, and retry/fallback attempts on the same code path.
+//! WebSocket reuse, and retry/fallback attempts on the same lifecycle path.
+//! Transport callers can check whether terminal records need output items
+//! before retaining them.
 
 use std::fmt::Display;
 use std::sync::Arc;
@@ -140,6 +141,11 @@ impl InferenceTraceAttempt {
         Self {
             state: InferenceTraceAttemptState::Disabled,
         }
+    }
+
+    /// Whether terminal trace records need the completed output items.
+    pub fn needs_output_items(&self) -> bool {
+        matches!(&self.state, InferenceTraceAttemptState::Enabled(_))
     }
 
     fn inference_call_id(&self) -> Option<&str> {

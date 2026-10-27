@@ -1658,6 +1658,34 @@ async fn summarize_memories_returns_empty_for_empty_input() {
 }
 
 #[tokio::test]
+async fn untraced_http_stream_releases_completed_output_before_response_ends() {
+    // This item's shared payload lets us observe whether the mapper kept a copy.
+    let tools = Arc::from([json!({"type": "function", "name": "lookup"})]);
+    let payload = Arc::downgrade(&tools);
+    let item = ResponseItem::AdditionalTools {
+        id: None,
+        role: "developer".to_string(),
+        tools,
+    };
+    let events = futures::stream::iter([Ok(ResponseEvent::OutputItemDone(item))])
+        .chain(futures::stream::pending());
+    let mut stream = super::map_response_events(
+        /*upstream_request_id*/ None,
+        events,
+        test_session_telemetry(),
+        InferenceTraceAttempt::disabled(),
+        test_model_provider(),
+        /*last_response_tx*/ None,
+    );
+
+    assert!(matches!(
+        stream.next().await,
+        Some(Ok(ResponseEvent::OutputItemDone(_)))
+    ));
+    assert_eq!(payload.strong_count(), 0);
+}
+
+#[tokio::test]
 async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let attempt = started_inference_attempt(&temp)?;
@@ -1669,12 +1697,13 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     let item = output_message("1", "partial answer");
     let api_stream = futures::stream::iter([Ok(ResponseEvent::OutputItemDone(item))])
         .chain(futures::stream::pending());
-    let (mut stream, _) = super::map_response_events(
+    let mut stream = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        /*last_response_tx*/ None,
     );
 
     let observed = stream
@@ -1725,12 +1754,13 @@ async fn response_stream_records_last_model_feedback_ids() {
             end_turn: Some(true),
         }),
     ]);
-    let (mut stream, _) = super::map_response_events(
+    let mut stream = super::map_response_events(
         Some("req-123".to_string()),
         api_stream,
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
         test_model_provider(),
+        /*last_response_tx*/ None,
     );
 
     while stream.next().await.is_some() {}
@@ -1948,12 +1978,13 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         notify: Arc::clone(&backpressured_item_yielded),
     };
 
-    let (stream, _) = super::map_response_events(
+    let stream = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
         test_session_telemetry(),
         attempt,
         test_model_provider(),
+        /*last_response_tx*/ None,
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output
@@ -2244,7 +2275,8 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         }))
         .await?;
     drop(tx_event);
-    let (mut stream, last_response) = super::map_response_stream(
+    let (last_response_tx, last_response_rx) = tokio::sync::oneshot::channel();
+    let mut stream = super::map_response_stream(
         codex_api::ResponseStream {
             rx_event,
             upstream_request_id: None,
@@ -2254,6 +2286,7 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         attempt,
         test_model_provider(),
         vec![Box::new(ReplaceOutput)],
+        Some(last_response_tx),
     );
     let mut delivered = Vec::new();
     while let Some(event) = stream.next().await {
@@ -2262,7 +2295,7 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         }
     }
     assert_eq!(delivered, vec![output_message("1", "transformed")]);
-    assert_eq!(last_response.await?.items_added, delivered);
+    assert_eq!(last_response_rx.await?.items_added, delivered);
     let rollout = replay_bundle(temp.path())?;
     let payload = rollout
         .raw_payloads
