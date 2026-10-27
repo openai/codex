@@ -120,8 +120,8 @@ async fn seeds_full_package() {
     use std::os::unix::fs::PermissionsExt;
     let read_only = old.join("codex-resources/nested");
     std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let _ = release_pruning::prune(&daemon, &root, &settings).await;
-    assert!(!old.exists());
+    let result = release_pruning::prune(&daemon, &root, &settings).await;
+    assert!(!old.exists(), "release was not retired: {result:#?}");
     for retained in [&selected, &previous, &outside, &linked] {
         assert!(retained.join("codex-resources/nested/runtime").is_file());
     }

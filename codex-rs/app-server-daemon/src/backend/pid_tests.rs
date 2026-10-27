@@ -67,6 +67,17 @@ async fn locked_empty_pid_file_is_treated_as_active_reservation() {
         PidFileState::Starting
     );
     assert!(pid_file.exists());
+
+    tokio::fs::remove_file(&pid_file)
+        .await
+        .expect("remove pid file");
+    assert_eq!(
+        backend
+            .read_pid_file_state()
+            .await
+            .expect("read missing pid"),
+        PidFileState::Starting
+    );
 }
 
 #[tokio::test]
@@ -87,6 +98,38 @@ async fn unlocked_empty_pid_file_is_treated_as_stale_reservation() {
         PidFileState::Missing
     );
     assert!(!pid_file.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reservation_probe_releases_lock_with_duplicated_handle() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let backend = PidBackend::new(
+        temp_dir.path().join("codex"),
+        temp_dir.path().join("app-server.pid"),
+        /*remote_control_enabled*/ false,
+    );
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&backend.lock_file)
+        .expect("open pid lock file");
+    // Share the open file description as fork would, without inheriting
+    // unrelated descriptors from other tests.
+    let inherited = file.try_clone().expect("clone pid lock file");
+
+    let probe = super::probe_reservation_lock(tokio::fs::File::from_std(file));
+    let running = backend.is_starting_or_running().await;
+
+    drop(inherited);
+    assert_eq!(
+        (
+            probe.expect("probe reservation"),
+            running.expect("read daemon status"),
+        ),
+        (false, false),
+    );
 }
 
 #[tokio::test]
