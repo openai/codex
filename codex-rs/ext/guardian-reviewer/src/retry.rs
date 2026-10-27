@@ -186,6 +186,7 @@ fn should_retry_guardian_review(outcome: &GuardianReviewOutcome) -> bool {
             CodexErrorInfo::RateLimitExceeded
             | CodexErrorInfo::FlexUnavailable
             | CodexErrorInfo::ServerOverloaded
+            | CodexErrorInfo::PolicyCapacityUnavailable
             | CodexErrorInfo::InternalServerError => true,
             CodexErrorInfo::HttpConnectionFailed { http_status_code }
             | CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code }

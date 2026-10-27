@@ -4796,6 +4796,10 @@ fn codex_error_info_serializes_http_status_code_in_camel_case() {
 #[test]
 fn core_error_info_converts_to_camel_case() {
     for (core, expected) in [
+        (
+            CoreCodexErrorInfo::PolicyCapacityUnavailable,
+            json!("policyCapacityUnavailable"),
+        ),
         (CoreCodexErrorInfo::CyberPolicy, json!("cyberPolicy")),
         (CoreCodexErrorInfo::BioPolicy, json!("other")),
         (CoreCodexErrorInfo::InvalidPrompt, json!("other")),

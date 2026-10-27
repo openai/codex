@@ -115,6 +115,7 @@ impl SamplingExecution {
                 | ApiError::Stream(_)
                 | ApiError::ContentFilter
                 | ApiError::ServerOverloaded { .. }
+                | ApiError::PolicyCapacityUnavailable { .. }
                 | ApiError::FlexUnavailable,
             )
             | LunaSamplerError::Api(ApiError::Transport(

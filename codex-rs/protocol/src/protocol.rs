@@ -2049,6 +2049,8 @@ pub enum CodexErrorInfo {
     FlexUnavailable,
     ServerOverloaded,
     ModelNotFound,
+    /// Capacity is unavailable on a route restricted by server policy.
+    PolicyCapacityUnavailable,
     CyberPolicy,
     BioPolicy,
     MisalignmentPolicyViolation,
@@ -2095,6 +2097,7 @@ impl CodexErrorInfo {
             | Self::FlexUnavailable
             | Self::ServerOverloaded
             | Self::ModelNotFound
+            | Self::PolicyCapacityUnavailable
             | Self::CyberPolicy
             | Self::BioPolicy
             | Self::MisalignmentPolicyViolation

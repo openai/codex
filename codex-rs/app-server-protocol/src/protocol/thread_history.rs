@@ -4679,7 +4679,7 @@ mod tests {
                 error: Some(ErrorEvent {
                     misalignment: None,
                     message: "Selected model is at capacity. Please try a different model.".into(),
-                    codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
+                    codex_error_info: Some(CodexErrorInfo::PolicyCapacityUnavailable),
                 }),
                 completed_at: Some(20),
                 duration_ms: Some(10_000),
@@ -4713,7 +4713,7 @@ mod tests {
                         message: "Selected model is at capacity. Please try a different model."
                             .into(),
                         codex_error_info: Some(
-                            crate::protocol::v2::CodexErrorInfo::ServerOverloaded,
+                            crate::protocol::v2::CodexErrorInfo::PolicyCapacityUnavailable,
                         ),
                         additional_details: None,
                     }),

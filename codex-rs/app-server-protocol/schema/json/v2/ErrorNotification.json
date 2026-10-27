@@ -12,6 +12,7 @@
             "flexUnavailable",
             "serverOverloaded",
             "modelNotFound",
+            "policyCapacityUnavailable",
             "cyberPolicy",
             "misalignmentPolicyViolation",
             "tooManyDenials",

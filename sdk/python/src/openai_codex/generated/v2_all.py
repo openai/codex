@@ -513,6 +513,7 @@ class CodexErrorInfoValue(str, Enum):
     flex_unavailable = "flexUnavailable"
     server_overloaded = "serverOverloaded"
     model_not_found = "modelNotFound"
+    policy_capacity_unavailable = "policyCapacityUnavailable"
     cyber_policy = "cyberPolicy"
     misalignment_policy_violation = "misalignmentPolicyViolation"
     too_many_denials = "tooManyDenials"

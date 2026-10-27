@@ -57,6 +57,9 @@ pub enum ApiError {
     },
     #[error("Flex capacity unavailable.")]
     FlexUnavailable,
+    /// Server-confirmed capacity failure on a policy-restricted route.
+    #[error("policy-restricted capacity unavailable")]
+    PolicyCapacityUnavailable { retry_after: Option<RetryAfter> },
     #[error("server overloaded")]
     ServerOverloaded { retry_after: Option<RetryAfter> },
 }

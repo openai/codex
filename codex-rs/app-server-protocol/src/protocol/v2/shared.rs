@@ -81,6 +81,8 @@ pub enum CodexErrorInfo {
     FlexUnavailable,
     ServerOverloaded,
     ModelNotFound,
+    // Capacity is unavailable on a route restricted by server policy.
+    PolicyCapacityUnavailable,
     CyberPolicy,
     MisalignmentPolicyViolation,
     TooManyDenials,
@@ -157,6 +159,9 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
             CoreCodexErrorInfo::FlexUnavailable => CodexErrorInfo::FlexUnavailable,
             CoreCodexErrorInfo::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
             CoreCodexErrorInfo::ModelNotFound => CodexErrorInfo::ModelNotFound,
+            CoreCodexErrorInfo::PolicyCapacityUnavailable => {
+                CodexErrorInfo::PolicyCapacityUnavailable
+            }
             CoreCodexErrorInfo::CyberPolicy => CodexErrorInfo::CyberPolicy,
             CoreCodexErrorInfo::BioPolicy => CodexErrorInfo::Other,
             CoreCodexErrorInfo::MisalignmentPolicyViolation => {

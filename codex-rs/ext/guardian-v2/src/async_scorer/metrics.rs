@@ -58,6 +58,7 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
             | ApiError::BioPolicy { .. }
             | ApiError::MisalignmentPolicyViolation { .. } => "policy_error",
             ApiError::ServerOverloaded { .. } => "server_overloaded",
+            ApiError::PolicyCapacityUnavailable { .. } => "policy_capacity_unavailable",
             ApiError::FlexUnavailable => "flex_unavailable",
         },
     }
