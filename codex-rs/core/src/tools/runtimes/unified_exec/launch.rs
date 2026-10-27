@@ -2,11 +2,11 @@
 //! Approval rejections retain their own lifecycle, and sandbox denials remain retryable.
 //! Once started, failure event publication survives caller cancellation.
 
-use super::UnifiedExecRequest;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
+use crate::tools::handlers::unified_exec::preparation::PreparedExecCommand;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::UnifiedExecProcess;
@@ -16,7 +16,7 @@ use tracing::Instrument;
 
 pub(super) async fn with_launch_failure_events(
     result: Result<UnifiedExecProcess, ToolError>,
-    req: &UnifiedExecRequest,
+    req: &PreparedExecCommand,
     ctx: &ToolCtx,
 ) -> Result<UnifiedExecProcess, ToolError> {
     let Err(ToolError::Rejected(message)) = &result else {
@@ -29,17 +29,21 @@ pub(super) async fn with_launch_failure_events(
             .get_filesystem_without_reconnect();
         ctx.step_context
             .turn
-            .plugin_attribution_for_executor_command(&req.command, &req.cwd, file_system.as_ref())
+            .plugin_attribution_for_executor_command(
+                &req.resolved.command,
+                &req.cwd,
+                file_system.as_ref(),
+            )
             .await
     } else {
         req.cwd.to_abs_path().ok().and_then(|cwd| {
             ctx.step_context
                 .turn
-                .plugin_attribution_for_command(&req.command, &cwd)
+                .plugin_attribution_for_command(&req.resolved.command, &cwd)
         })
     };
     let emitter = ToolEmitter::unified_exec(
-        &req.command,
+        &req.resolved.command,
         req.cwd.clone(),
         ExecCommandSource::UnifiedExecStartup,
         /*process_id*/ None,

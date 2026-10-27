@@ -175,16 +175,13 @@ impl ExecCommandHandler {
         )
         .await;
         let prepared = parsed.prepare(self.lifetime)?;
-        let command = prepared.resolved.command;
-        let cwd = prepared.cwd;
-        let hook_command = prepared.hook_command;
         let max_output_tokens = prepared.max_output_tokens;
-        let fs = turn_environment.environment.get_filesystem();
+        let fs = prepared.turn_environment.environment.get_filesystem();
         let intercepted_patch = intercept_apply_patch(
-            &command,
-            &cwd,
+            &prepared.resolved.command,
+            &prepared.cwd,
             fs.as_ref(),
-            turn_environment.clone(),
+            prepared.turn_environment.clone(),
             context.session.clone(),
             Arc::clone(&context.step_context),
             context.cancellation_token.clone(),
@@ -217,32 +214,22 @@ impl ExecCommandHandler {
             context.session.as_ref(),
             context.step_context.turn.as_ref(),
             &context.call_id,
-            &command,
-            &cwd,
+            &prepared.resolved.command,
+            &prepared.cwd,
             fs.as_ref(),
         )
         .await;
         // Preparation can be cancelled. Reserve a process only once it is done.
         let process_id = manager.allocate_process_id().await;
+        let hook_command = prepared.hook_command.clone();
+        let tool_cwd =
+            (!prepared.turn_environment.environment.is_remote()).then(|| prepared.cwd.clone());
         let request = ExecCommandRequest {
-            command,
-            shell: prepared.resolved.shell,
-            hook_command: hook_command.clone(),
+            prepared,
             process_id,
-            yield_time_ms: prepared.yield_time_ms,
-            max_output_tokens,
-            cwd: cwd.clone(),
-            sandbox_cwd: turn_environment.cwd().clone(),
-            turn_environment: turn_environment.clone(),
             network: context.step_context.turn.network.clone(),
-            tty: prepared.tty,
-            sandbox_permissions: prepared.permissions.sandbox_permissions,
-            additional_permissions: prepared.permissions.additional_permissions,
-            additional_permissions_preapproved: prepared.permissions.permissions_preapproved,
-            justification: prepared.justification,
-            prefix_rule: prepared.prefix_rule,
         };
-        let result = match prepared.completion_timeout {
+        let result = match request.prepared.completion_timeout {
             Some(timeout) => {
                 UnifiedExecProcessManager::exec_command_to_completion(request, &context, timeout)
                     .await
@@ -276,7 +263,7 @@ impl ExecCommandHandler {
                     exit_code: Some(output.exit_code),
                     original_token_count: Some(original_token_count),
                     hook_command: Some(hook_command),
-                    tool_cwd: (!turn_environment.environment.is_remote()).then_some(cwd),
+                    tool_cwd,
                 }))
             }
             Err(err) => {

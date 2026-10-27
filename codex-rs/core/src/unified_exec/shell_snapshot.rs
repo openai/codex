@@ -11,11 +11,9 @@ use codex_protocol::sandbox::SandboxOverride;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxablePreference;
 use codex_tools::ToolName;
-use codex_utils_path_uri::PathUri;
 use tokio_util::task::AbortOnDropHandle;
 use uuid::Uuid;
 
-use super::ExecCommandRequest;
 use super::UnifiedExecContext;
 use super::process_manager::apply_unified_exec_env;
 use super::process_manager::exec_env_policy_from_shell_policy;
@@ -27,6 +25,7 @@ use crate::exec_env::inject_session_env;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::shell::ShellType;
+use crate::tools::handlers::unified_exec::preparation::PreparedExecCommand;
 use crate::tools::sandboxing::executor_windows_sandbox_selection;
 
 impl Session {
@@ -168,19 +167,18 @@ impl Session {
 }
 
 pub(super) fn shell_snapshot_request(
-    request: &ExecCommandRequest,
-    cwd: &PathUri,
+    request: &PreparedExecCommand,
     context: &UnifiedExecContext,
 ) -> Option<ShellSnapshotRequest> {
     if !context.session.features().enabled(Feature::ShellSnapshotV2)
         || !request.turn_environment.shell_snapshot_v2_supported
-        || request.turn_environment.selection.cwd != *cwd
-        || !request.shell.is_posix_login()
+        || request.turn_environment.selection.cwd != request.cwd
+        || !request.resolved.shell.is_posix_login()
     {
         return None;
     }
 
-    let shell = &request.shell.shell;
+    let shell = &request.resolved.shell.shell;
     Some(ShellSnapshotRequest {
         scope_id: format!(
             "{}:{}",
