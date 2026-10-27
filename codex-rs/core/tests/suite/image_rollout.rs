@@ -1,9 +1,11 @@
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_attachment_store::AttachmentMetadata;
 use codex_attachment_store::AttachmentStore;
 use codex_attachment_store::AttachmentStoreError;
 use codex_attachment_store::AttachmentStoreErrorKind;
+use codex_attachment_store::IsResolvableFuture;
 use codex_attachment_store::ResolveFuture;
 use codex_attachment_store::ResolveRequest;
 use codex_attachment_store::UploadFuture;
@@ -53,6 +55,7 @@ use image::ImageBuffer;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -64,9 +67,28 @@ const UPLOADED_FILE_ID: &str = "file_uploaded_image";
 #[derive(Default)]
 pub(super) struct RecordingFileAttachmentStore {
     pub(super) uploads: Mutex<Vec<UploadRequest>>,
+    pub(super) resolve_errors: Mutex<HashMap<String, AttachmentStoreErrorKind>>,
+    pub(super) resolves: Mutex<HashMap<String, usize>>,
+    pub(super) resolve_barrier: Option<Arc<tokio::sync::Barrier>>,
 }
 
 impl AttachmentStore for RecordingFileAttachmentStore {
+    fn is_resolvable<'a>(&'a self, file_id: &'a str) -> IsResolvableFuture<'a> {
+        Box::pin(async move {
+            match self
+                .resolve(ResolveRequest {
+                    file_id,
+                    tags: HashMap::new(),
+                    download_url_ttl: None,
+                })
+                .await
+            {
+                Ok(_) => true,
+                Err(error) => error.kind() != AttachmentStoreErrorKind::NotFound,
+            }
+        })
+    }
+
     fn upload(&self, request: UploadRequest) -> UploadFuture<'_> {
         self.uploads.lock().expect("uploads lock").push(request);
         Box::pin(async {
@@ -77,12 +99,27 @@ impl AttachmentStore for RecordingFileAttachmentStore {
     }
 
     fn resolve<'a>(&'a self, request: ResolveRequest<'a>) -> ResolveFuture<'a> {
-        let file_id = request.file_id;
+        *self
+            .resolves
+            .lock()
+            .expect("resolves lock")
+            .entry(request.file_id.to_string())
+            .or_default() += 1;
+        let error_kind = self
+            .resolve_errors
+            .lock()
+            .expect("resolve errors lock")
+            .get(request.file_id)
+            .copied();
+        let barrier = self.resolve_barrier.clone();
         Box::pin(async move {
-            Err(AttachmentStoreError::new(
-                AttachmentStoreErrorKind::NotFound,
-                format!("attachment `{file_id}` was not found"),
-            ))
+            if let Some(barrier) = barrier {
+                barrier.wait().await;
+            }
+            match error_kind {
+                Some(kind) => Err(AttachmentStoreError::new(kind, "attachment unavailable")),
+                None => Ok(AttachmentMetadata::default()),
+            }
         })
     }
 }

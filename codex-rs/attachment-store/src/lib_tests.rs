@@ -66,9 +66,11 @@ async fn inline_store_preserves_image_bytes() {
     }
 }
 
-/// The inline store reports file references as missing because it never uploads them.
+/// The inline store preserves opaque file references even though it cannot resolve them.
 #[tokio::test]
 async fn inline_store_cannot_resolve_file_references() {
+    assert!(InlineAttachmentStore.is_resolvable("file_123").await);
+
     let error = InlineAttachmentStore
         .resolve(ResolveRequest {
             file_id: "file_123",

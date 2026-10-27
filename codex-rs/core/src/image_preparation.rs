@@ -440,4 +440,4 @@ pub(crate) fn resize_image(
 
 #[cfg(test)]
 #[path = "image_preparation_tests.rs"]
-mod tests;
+pub(crate) mod tests;

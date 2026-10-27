@@ -88,7 +88,11 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
     let history = session
         .clone_history()
         .await
-        .for_prompt_annotated(&turn.model_info().input_modalities);
+        .for_prompt_annotated(
+            &turn.model_info().input_modalities,
+            session.services.image_store.as_ref(),
+        )
+        .await;
     context.retain_new_instructions(&history);
     context
         .retain_new_native_messages(&history)
@@ -151,7 +155,12 @@ pub(crate) async fn finalize(
         ));
     }
     let history_version = history.history_version();
-    let history = history.for_prompt_annotated(&model.input_modalities);
+    let history = history
+        .for_prompt_annotated(
+            &model.input_modalities,
+            session.services.image_store.as_ref(),
+        )
+        .await;
     // Use the history that will actually reach the model. Recompute after every
     // compaction retry; evidence removed by compaction must be delivered again.
     context.retain_new_instructions(&history);

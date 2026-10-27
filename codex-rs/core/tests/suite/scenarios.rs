@@ -1,6 +1,8 @@
 //! Multi-turn Astra scenarios snapshot the model-visible request history of shipped features.
 
+use super::image_rollout::RecordingFileAttachmentStore;
 use super::permissions_messages::PermissionPathScenario;
+use codex_attachment_store::AttachmentStoreErrorKind;
 use codex_protocol_test_support::ContentItemTestExt;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -44,6 +46,8 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::AgentMessageDelivery;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::CodeModeToolMessages;
@@ -523,6 +527,161 @@ async fn realtime_attachment_replacement_preserves_handoff_context() -> Result<(
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
+    Ok(())
+}
+
+/// Expiring files change request copies while canonical history retains the original references.
+/// A shared barrier requires the three distinct file IDs to resolve concurrently on each request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unavailable_images_are_rechecked_without_rewriting_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let image_store = Arc::new(RecordingFileAttachmentStore {
+        resolve_barrier: Some(Arc::new(tokio::sync::Barrier::new(/*n*/ 3))),
+        ..Default::default()
+    });
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_image_store(image_store.clone())
+        .with_config(configure_scenario_catalog)
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("first", "The images are available."),
+                ev_completed("first"),
+            ]),
+            sse(vec![
+                ev_assistant_message("second", "Some images are no longer available."),
+                ev_completed("second"),
+            ]),
+        ],
+    )
+    .await;
+    let file_ids = [
+        "file_expiring",
+        "file_available",
+        "file_expiring",
+        "file_backend_error",
+    ];
+    let mut input = vec![text("Compare these images.")];
+    input.extend(file_ids.map(|file_id| UserInput::Image {
+        image: ImageReference::File {
+            file_id: file_id.to_string(),
+        },
+        detail: Some(ImageDetail::High),
+    }));
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(input))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        *image_store.resolves.lock().expect("resolves lock"),
+        HashMap::from([
+            ("file_expiring".to_string(), 1),
+            ("file_available".to_string(), 1),
+            ("file_backend_error".to_string(), 1),
+        ])
+    );
+
+    image_store
+        .resolve_errors
+        .lock()
+        .expect("resolve errors lock")
+        .extend([
+            (
+                "file_expiring".to_string(),
+                AttachmentStoreErrorKind::NotFound,
+            ),
+            (
+                "file_backend_error".to_string(),
+                AttachmentStoreErrorKind::Backend,
+            ),
+        ]);
+    test.submit_text_turn("Compare them again.").await?;
+    assert_eq!(
+        *image_store.resolves.lock().expect("resolves lock"),
+        HashMap::from([
+            ("file_expiring".to_string(), 2),
+            ("file_available".to_string(), 2),
+            ("file_backend_error".to_string(), 2),
+        ])
+    );
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0]
+            .body_json()
+            .to_string()
+            .contains("file_expiring")
+    );
+    let unavailable_parts = requests[1]
+        .input()
+        .into_iter()
+        .filter_map(|item| {
+            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                .as_array()
+                .cloned()
+        })
+        .flatten()
+        .filter(|kind| kind == "images.unavailable")
+        .count();
+    assert_eq!(unavailable_parts, 2);
+    assert!(requests[1].body_contains_text("[image unavailable]"));
+    assert!(
+        !requests[1]
+            .body_json()
+            .to_string()
+            .contains("file_expiring")
+    );
+    assert!(
+        requests[1]
+            .body_json()
+            .to_string()
+            .contains("file_backend_error")
+    );
+    assert!(
+        requests[1]
+            .body_json()
+            .to_string()
+            .contains("file_available")
+    );
+
+    let recorded_images = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(envelope) => match envelope.item {
+                ResponseItem::Message { content, .. } => Some(content),
+                _ => None,
+            },
+            _ => None,
+        })
+        .flatten()
+        .filter(|content| matches!(content, ContentItem::InputImage { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recorded_images,
+        file_ids.map(|file_id| ContentItem::InputImage {
+            image: ImageReference::File {
+                file_id: file_id.to_string()
+            },
+            detail: Some(ImageDetail::High),
+        })
+    );
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "Available file references pass through. A later request replaces missing files, preserves references on backend errors, rechecks each distinct ID once, and keeps canonical history intact.",
+        &requests,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    ));
     Ok(())
 }
 
@@ -3021,6 +3180,109 @@ async fn async_compaction_test(
         .build_with_auto_env(&config_server)
         .await?;
     Ok((config_server, test))
+}
+
+/// Pending image checks for optional compaction do not delay foreground turn completion.
+/// Its request still replaces files that expire after the sampling request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_compaction_image_checks_do_not_block_turn_completion() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let barrier = Arc::new(tokio::sync::Barrier::new(/*n*/ 2));
+    let image_store = Arc::new(RecordingFileAttachmentStore {
+        resolve_barrier: Some(Arc::clone(&barrier)),
+        ..Default::default()
+    });
+    let (release_sampling, sampling_gate) = oneshot::channel();
+    let (streaming, _completions) = start_streaming_sse_server(vec![
+        vec![compaction_chunk(
+            Some(sampling_gate),
+            vec![
+                ev_assistant_message("answer", "I examined the image."),
+                ev_completed_with_tokens("answer", /*total_tokens*/ 70_000),
+            ],
+        )],
+        vec![compaction_chunk(
+            /*gate*/ None,
+            vec![
+                compaction_output("IMAGE_CHECKPOINT"),
+                ev_completed_with_tokens("compact", /*total_tokens*/ 3_000),
+            ],
+        )],
+    ])
+    .await;
+    let config_server = start_mock_server().await;
+    let base_url = format!("{}/v1", streaming.uri());
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_image_store(image_store.clone())
+        .with_config(move |config| {
+            configure_scenario_catalog(config);
+            config.model_provider.base_url = Some(base_url);
+            config.model_context_window = Some(100_000);
+            config.features.enable(Feature::AsyncCompaction).unwrap();
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .unwrap();
+        })
+        .with_model("gpt-6-astra")
+        .build_with_auto_env(&config_server)
+        .await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![
+            text("Describe this image."),
+            UserInput::Image {
+                image: ImageReference::File {
+                    file_id: "file_expiring".to_string(),
+                },
+                detail: Some(ImageDetail::High),
+            },
+        ]))
+        .await?;
+    // Release the sampling lookup, then expire the file before its response finishes.
+    barrier.wait().await;
+    image_store
+        .resolve_errors
+        .lock()
+        .expect("resolve errors lock")
+        .insert(
+            "file_expiring".to_string(),
+            AttachmentStoreErrorKind::NotFound,
+        );
+    release_sampling.send(()).expect("finish sampling");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(streaming.requests().await.len(), 1);
+
+    // The turn completed without releasing the optional compaction lookup.
+    barrier.wait().await;
+    tokio::time::timeout(
+        Duration::from_secs(/*secs*/ 20),
+        test.codex.wait_for_background_compaction_for_test(),
+    )
+    .await?;
+    let requests = streaming
+        .requests()
+        .await
+        .iter()
+        .map(|body| serde_json::from_slice::<serde_json::Value>(body))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        *image_store.resolves.lock().expect("resolves lock"),
+        HashMap::from([("file_expiring".to_string(), 2)])
+    );
+    assert!(requests[0]["input"].to_string().contains("file_expiring"));
+    assert!(
+        requests[1]["input"]
+            .to_string()
+            .contains("[image unavailable]")
+    );
+    assert!(!requests[1]["input"].to_string().contains("file_expiring"));
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

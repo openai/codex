@@ -299,7 +299,11 @@ async fn run_compact_task_inner_impl(
         // Clone is required because of the loop
         let mut turn_input = history
             .clone()
-            .for_prompt(&turn_context.model_info().input_modalities);
+            .for_prompt(
+                &turn_context.model_info().input_modalities,
+                sess.services.image_store.as_ref(),
+            )
+            .await;
         sess.services
             .executed_tool_calls
             .attach_to_compaction_prompt(&mut turn_input);

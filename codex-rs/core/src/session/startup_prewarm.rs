@@ -404,7 +404,11 @@ async fn schedule_startup_prewarm_inner(
             let mut history = session
                 .clone_history()
                 .await
-                .for_prompt(&step_context.settings.model_info.input_modalities);
+                .for_prompt(
+                    &step_context.settings.model_info.input_modalities,
+                    session.services.image_store.as_ref(),
+                )
+                .await;
             session
                 .services
                 .executed_tool_calls

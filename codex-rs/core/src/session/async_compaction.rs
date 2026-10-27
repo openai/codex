@@ -1,5 +1,6 @@
 //! Holds the current speculative request, polled at checkpoints or awaited when compaction is due.
 //! Discarded requests still charge completed usage; session shutdown cancels remaining network work.
+//! Snapshot capture and launch registration hold session state; prompt preparation does not.
 
 use std::sync::Arc;
 
@@ -81,42 +82,52 @@ pub(super) async fn maybe_start(
     }
 
     let base_instructions = sess.get_prompt_base_instructions().await;
-    let mut state = sess.state.lock().await;
-    let model_info = &step_context.settings.model_info;
-    let attempt = CompactionAttempt {
-        history_version: state.history.history_version(),
-        model_slug: model_info.slug.clone(),
-        compaction_hash: model_info.comp_hash.clone(),
-        auth_owner_generation,
-    };
-    // Stop blocks new launches; already-running compaction remains session-owned.
-    if turn_cancellation.is_cancelled()
-        || state.shutting_down
-        || state.async_compaction.last_attempt.as_ref() == Some(&attempt)
-        || state.history.annotated_items().is_empty()
-        || sess.services.model_client.auth_owner_generation() != auth_owner_generation
-    {
-        return;
-    }
+    let (prepared_input, tasks, shutdown_cancellation, launch, send) = {
+        let mut state = sess.state.lock().await;
+        let model_info = &step_context.settings.model_info;
+        let attempt = CompactionAttempt {
+            history_version: state.history.history_version(),
+            model_slug: model_info.slug.clone(),
+            compaction_hash: model_info.comp_hash.clone(),
+            auth_owner_generation,
+        };
+        // Stop blocks new launches; already-running compaction remains session-owned.
+        if turn_cancellation.is_cancelled()
+            || state.shutting_down
+            || state.async_compaction.last_attempt.as_ref() == Some(&attempt)
+            || state.history.annotated_items().is_empty()
+            || sess.services.model_client.auth_owner_generation() != auth_owner_generation
+        {
+            return;
+        }
 
-    // Capture and register without yielding, so shutdown or history replacement cannot
-    // overtake this request. Tool attribution still belongs to the foreground's current step.
-    let prepared_input = capture_background_input(
-        sess,
-        step_context,
-        state.history.clone(),
-        base_instructions,
-        turn_state,
-        auth_owner_generation,
-        sess.current_window_from_state(&state),
-    );
+        // Capture the arguments now; the async preparation body runs after the lock is released.
+        let prepared_input = capture_background_input(
+            sess,
+            step_context,
+            state.history.clone(),
+            base_instructions,
+            turn_state,
+            auth_owner_generation,
+            sess.current_window_from_state(&state),
+        );
+        let tasks = state.async_compaction.tasks.clone();
+        let shutdown_cancellation = state.async_compaction.shutdown_cancellation.clone();
+        // Register before unlocking so shutdown cannot finish between capture and spawning.
+        let launch = tasks.token();
+        state.async_compaction.last_attempt = Some(attempt);
+        let (send, result) = oneshot::channel();
+        state.async_compaction.result = Some(result);
+        (prepared_input, tasks, shutdown_cancellation, launch, send)
+    };
+
+    // Prepare outside the lock on the foreground task so its step cannot advance before tool
+    // attribution is captured. Keep normalization before attribution capture.
+    let prepared_input = prepared_input.await;
     let task_session = Arc::clone(sess);
     let task_step = Arc::clone(step_context);
     let cutoff_world_state = Arc::clone(world_state);
     let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
-    state.async_compaction.last_attempt = Some(attempt);
-    let (send, result) = oneshot::channel();
-    state.async_compaction.result = Some(result);
     let task = async move {
         match run_background_compaction(
             &task_session,
@@ -124,6 +135,7 @@ pub(super) async fn maybe_start(
             cutoff_world_state,
             phase,
             prepared_input,
+            &shutdown_cancellation,
         )
         .await
         {
@@ -135,10 +147,8 @@ pub(super) async fn maybe_start(
             }
         }
     };
-    state
-        .async_compaction
-        .tasks
-        .spawn(storage_originator.scope(task));
+    tasks.spawn(storage_originator.scope(task));
+    drop(launch);
 }
 
 pub(super) async fn take_ready(

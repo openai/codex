@@ -14,6 +14,7 @@ use crate::compact::CompactionAnalyticsDetails;
 use crate::compact_remote_history::trim_function_call_history_to_fit_context_window;
 use crate::context::world_state::WorldState;
 use crate::context_manager::ContextManager;
+use crate::context_manager::replace_unresolvable_image_files;
 use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::CompactionPrefix;
 use crate::session::session::Session;
@@ -23,12 +24,14 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_history::CodexHarnessMetadata;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::CompactionTraceContext;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 pub(super) struct RemoteCompactV2Attempt {
@@ -129,7 +132,11 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 .is_enabled()
                 .then(|| history.raw_items().cloned().collect());
             let (mut input, metadata): (Vec<_>, Vec<_>) = history
-                .for_prompt_annotated(&model_info.input_modalities)
+                .for_prompt_annotated(
+                    &model_info.input_modalities,
+                    sess.services.image_store.as_ref(),
+                )
+                .await
                 .into_iter()
                 .map(|envelope| (envelope.item, envelope.metadata))
                 .unzip();
@@ -232,7 +239,8 @@ pub(super) async fn run_remote_compact_v2_attempt(
     })
 }
 
-pub(crate) fn capture_background_input(
+// Defer normalization and attribution until the caller releases the session lock.
+pub(crate) async fn capture_background_input(
     sess: &Session,
     step_context: &StepContext,
     mut snapshot: ContextManager,
@@ -264,8 +272,9 @@ pub(crate) fn capture_background_input(
         step_context.settings.model_info.usable_context_window(),
         &base_instructions,
     );
+    snapshot.normalize_history(&step_context.settings.model_info.input_modalities);
     let (mut input, metadata): (Vec<_>, Vec<_>) = snapshot
-        .for_prompt_annotated(&step_context.settings.model_info.input_modalities)
+        .into_annotated_items()
         .into_iter()
         .map(|envelope| (envelope.item, envelope.metadata))
         .unzip();
@@ -287,8 +296,16 @@ pub(crate) async fn run_background_compaction(
     step_context: Arc<StepContext>,
     cutoff_world_state: Arc<WorldState>,
     phase: CompactionPhase,
-    prepared_input: BackgroundCompactionInput,
+    mut prepared_input: BackgroundCompactionInput,
+    shutdown_cancellation: &CancellationToken,
 ) -> CodexResult<BackgroundCompactionCandidate> {
+    tokio::select! {
+        _ = shutdown_cancellation.cancelled() => return Err(CodexErr::TurnAborted),
+        () = replace_unresolvable_image_files(
+            prepared_input.input.iter_mut(),
+            sess.services.image_store.as_ref(),
+        ) => {},
+    }
     let prefix = prepared_input.prefix;
     let metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Auto,

@@ -1,0 +1,82 @@
+---
+source: core/tests/suite/scenarios.rs
+assertion_line: 723
+expression: "context_snapshot::format_request_history_snapshot(\"Available file references pass through. A later request replaces missing files, preserves references on backend errors, rechecks each distinct ID once, and keeps canonical history intact.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Available file references pass through. A later request replaces missing files, preserves references on backend errors, rechecks each distinct ID once, and keeps canonical history intact.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user[5]:
+    [01] Compare these images.
+    [02] <input_image:file_id>
+    [03] <input_image:file_id>
+    [04] <input_image:file_id>
+    [05] <input_image:file_id>
+07:configuration_update:reasoning={"effort":"low"}
+
+## Window 2 (after request 1: input diverged at item 06)
+-- request 2 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user[5]:
+    [01] Compare these images.
+    [02] [image unavailable]
+    [03] <input_image:file_id>
+    [04] [image unavailable]
+    [05] <input_image:file_id>
+07:configuration_update:reasoning={"effort":"low"}
+08:message/assistant:
+    The images are available.
+09:message/user:
+    Compare them again.

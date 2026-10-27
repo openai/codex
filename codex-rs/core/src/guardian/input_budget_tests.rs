@@ -340,7 +340,11 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
     let persisted = session
         .clone_history()
         .await
-        .for_prompt(&step.settings.model_info.input_modalities);
+        .for_prompt(
+            &step.settings.model_info.input_modalities,
+            session.services.image_store.as_ref(),
+        )
+        .await;
     assert_eq!(prompt.input, persisted);
     assert!(
         persisted

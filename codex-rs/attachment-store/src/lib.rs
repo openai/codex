@@ -1,4 +1,4 @@
-//! Storage-neutral attachment persistence interfaces.
+//! Storage-neutral attachment persistence and availability checks.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -21,6 +21,9 @@ pub type UploadFuture<'a> =
 pub type ResolveFuture<'a> =
     Pin<Box<dyn Future<Output = AttachmentStoreResult<AttachmentMetadata>> + Send + 'a>>;
 
+/// Future returned by [`AttachmentStore::is_resolvable`].
+pub type IsResolvableFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
+
 /// Uploads attachments and resolves metadata for stored files.
 ///
 /// Implementations choose whether uploaded attachments remain inline or become file references.
@@ -32,6 +35,15 @@ pub trait AttachmentStore: Send + Sync {
 
     /// Resolves metadata and, when requested, a fresh URL for a stored attachment.
     fn resolve<'a>(&'a self, request: ResolveRequest<'a>) -> ResolveFuture<'a>;
+
+    /// Checks whether a file reference should be retained in a model request.
+    ///
+    /// The default retains all references, including provider-owned IDs this store cannot
+    /// resolve. Authoritative stores may opt in to checking and return `false` only when the
+    /// file is confirmed missing. Backend and access errors must retain the reference.
+    fn is_resolvable<'a>(&'a self, _file_id: &'a str) -> IsResolvableFuture<'a> {
+        Box::pin(async { true })
+    }
 }
 
 /// Attachment data supplied to [`AttachmentStore::upload`].

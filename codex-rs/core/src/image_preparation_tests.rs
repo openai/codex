@@ -5,6 +5,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_attachment_store::AttachmentStoreError;
 use codex_attachment_store::AttachmentStoreErrorKind;
 use codex_attachment_store::InlineAttachmentStore;
+use codex_attachment_store::IsResolvableFuture;
 use codex_attachment_store::ResolveFuture;
 use codex_attachment_store::ResolveRequest;
 use codex_attachment_store::UploadFuture;
@@ -25,9 +26,13 @@ use serde_json::json;
 
 use super::*;
 
-struct FailingAttachmentStore;
+pub(crate) struct FailingAttachmentStore;
 
 impl AttachmentStore for FailingAttachmentStore {
+    fn is_resolvable<'a>(&'a self, _file_id: &'a str) -> IsResolvableFuture<'a> {
+        Box::pin(async { false })
+    }
+
     fn upload(&self, _request: UploadRequest) -> UploadFuture<'_> {
         Box::pin(async {
             Err(AttachmentStoreError::new(
