@@ -322,7 +322,8 @@ impl RouteAwareClientPool {
         let client = self.windows_proxy_client(current_route, selected_tls_backend, &pipe)?;
         set_remaining_timeout(&mut request, timeout_deadline)?;
         // Keep the listener alive through a possible TLS retry.
-        match client.execute_without_request_logging(request).await {
+        let result = client.execute_without_request_logging(request).await;
+        match result {
             Ok(response) => Ok(response),
             Err(error) => {
                 self.retry_with_rustls(
