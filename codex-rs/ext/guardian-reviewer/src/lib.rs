@@ -19,6 +19,7 @@ mod feedback;
 mod metrics;
 mod model;
 mod outcome;
+mod planned_action;
 mod pool;
 mod prompt;
 mod reporting;
@@ -51,6 +52,7 @@ pub use model::select_review_model;
 pub use outcome::GuardianReviewError;
 pub use outcome::GuardianReviewOutcome;
 pub use outcome::GuardianReviewSessionOutcome;
+pub use planned_action::build_guardian_planned_action;
 pub use retry::GuardianReviewSessionLimits;
 pub use retry::run_with_retry;
 

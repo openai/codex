@@ -8,7 +8,6 @@ use codex_guardian_context::ContextProfile;
 use codex_guardian_context::ConversationTranscriptEntry;
 use codex_guardian_context::GuardianRootMessage;
 use codex_guardian_context::PlannedAction;
-use codex_guardian_context::PlannedActionKind;
 use codex_guardian_context::SectionError;
 use codex_guardian_context::SectionHistory;
 use codex_guardian_context::SectionInput;
@@ -20,7 +19,6 @@ use codex_guardian_reviewer::GuardianPromptItems;
 use codex_protocol::models::ResponseItem;
 
 use crate::context::GuardianPermissionContext;
-use crate::context::GuardianToolDescriptions;
 use crate::context::NodeReplReviewEvidence;
 use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::is_guardian_context_message;
@@ -33,7 +31,6 @@ use super::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS;
 use super::GUARDIAN_MAX_TOOL_ENTRY_TOKENS;
 use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
-use super::approval_request::format_guardian_action_pretty;
 
 // Bound both JSON and permission evidence without restricting manual approvals.
 const MAX_GUARDIAN_ENVIRONMENT_ID_BYTES: usize = 256;
@@ -114,40 +111,10 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         .retained_context()
         .map(codex_guardian_context::collect_verified_answer_candidates)
         .unwrap_or_default();
-    let planned_action = PlannedAction {
-        tool_descriptions: if let GuardianApprovalRequest::McpToolCall {
-            tool_description,
-            connector_description,
-            ..
-        } = &request
-        {
-            GuardianToolDescriptions::new(
-                tool_description.as_deref(),
-                connector_description.as_deref(),
-            )
-        } else {
-            None
-        },
-        kind: match &request {
-            GuardianApprovalRequest::NativeToolCall { call, .. } => {
-                PlannedActionKind::ToolCall(call.clone())
-            }
-            GuardianApprovalRequest::NetworkAccess { trigger, .. } => PlannedActionKind::Network {
-                json: format_guardian_action_pretty(&request)?,
-                has_trigger: trigger.is_some(),
-            },
-            GuardianApprovalRequest::WriteStdin { .. } => PlannedActionKind::TerminalInput {
-                json: format_guardian_action_pretty(&request)?,
-            },
-            GuardianApprovalRequest::ExecCommand { .. }
-            | GuardianApprovalRequest::ApplyPatch { .. }
-            | GuardianApprovalRequest::McpToolCall { .. }
-            | GuardianApprovalRequest::RequestPermissions { .. } => PlannedActionKind::Command {
-                json: format_guardian_action_pretty(&request)?,
-            },
-        },
-        reason: reasons.retry.or(reasons.approval),
-    };
+    let planned_action = codex_guardian_reviewer::build_guardian_planned_action(
+        &request,
+        reasons.retry.or(reasons.approval),
+    )?;
     let permissions = parent_context
         .map(|context| {
             super::permissions::for_environment(context, request.target_environment_id())
