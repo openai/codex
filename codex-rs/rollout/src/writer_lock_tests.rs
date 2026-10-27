@@ -109,6 +109,11 @@ fn publication_skips_live_writers_and_keeps_coordination_locked() {
         coordination.try_lock(),
         Err(fs::TryLockError::WouldBlock)
     ));
+    let error = writer
+        .acquire(ThreadId::default())
+        .err()
+        .expect("coordination contention must return an error instead of hanging");
+    assert_eq!(error.kind(), ErrorKind::TimedOut);
     drop(publication);
     coordination
         .try_lock()
