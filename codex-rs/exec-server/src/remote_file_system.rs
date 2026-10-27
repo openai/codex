@@ -330,6 +330,22 @@ impl RemoteFileSystem {
 }
 
 impl ExecutorFileSystem for RemoteFileSystem {
+    fn watch_missing(
+        &self,
+        missing: Vec<PathUri>,
+        present: Option<PathUri>,
+    ) -> ExecutorFileSystemFuture<'_, Option<tokio::sync::oneshot::Receiver<()>>> {
+        Box::pin(async move {
+            self.client
+                .get()
+                .await
+                .map_err(map_remote_error)?
+                .fs_watch_missing(missing, present)
+                .await
+                .map_err(map_remote_error)
+        })
+    }
+
     fn write_file_stream<'a>(
         &'a self,
         path: &'a PathUri,

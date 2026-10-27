@@ -2,13 +2,23 @@
 
 mod common;
 
+#[cfg(target_os = "linux")]
+use anyhow::Context;
+#[cfg(target_os = "linux")]
+use codex_exec_server::Environment;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use codex_exec_server_protocol::JSONRPCError;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
+#[cfg(target_os = "linux")]
+use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(target_os = "linux")]
+use codex_utils_path_uri::PathUri;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Error as WebSocketError;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -139,6 +149,102 @@ async fn exec_server_rejects_browser_origin_websocket_handshake() -> anyhow::Res
         anyhow::bail!("browser-origin websocket handshake failed unexpectedly: {error}");
     };
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_metadata_watch_invalidates_on_idle_websocket_and_recovery() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    let mut proxy = server.disconnectable_websocket_proxy().await?;
+    let environment = Environment::create_for_tests(Some(proxy.websocket_url().to_owned()))?;
+    let fs = environment.get_filesystem();
+    let repo = tempfile::tempdir()?;
+    let root = AbsolutePathBuf::try_from(repo.path().canonicalize()?)?;
+    let skills = root.join(".agents/skills");
+    let marker = root.join(".git");
+    std::fs::write(&marker, "")?;
+    let watch = || {
+        fs.watch_missing(
+            vec![PathUri::from_abs_path(&skills)],
+            Some(PathUri::from_abs_path(&marker)),
+        )
+    };
+    let superseded = watch().await?.context("first watch")?;
+    let mut invalidated = watch()
+        .await?
+        .context("executor accepted empty observation")?;
+    assert!(superseded.await.is_err());
+    std::fs::write(root.join(".agents-backup"), "")?;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut invalidated)
+            .await
+            .is_err()
+    );
+    std::fs::create_dir_all(&skills)?;
+    // The executor pushes this across the already open socket, without another RPC.
+    tokio::time::timeout(Duration::from_secs(5), invalidated).await??;
+    assert!(watch().await?.is_none());
+
+    std::fs::remove_dir(&skills)?;
+    let invalidated = watch().await?.context("watch after deletion")?;
+    std::fs::remove_file(&marker)?;
+    tokio::time::timeout(Duration::from_secs(5), invalidated).await??;
+    assert!(watch().await?.is_none());
+
+    std::fs::write(&marker, "")?;
+    let old = watch().await?.context("watch before disconnect")?;
+    proxy.pause_and_disconnect().await?;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), old)
+            .await?
+            .is_err()
+    );
+    std::fs::create_dir(&skills)?;
+    proxy.resume()?;
+    assert!(watch().await?.is_none());
+    std::fs::remove_dir(&skills)?;
+    let new = watch()
+        .await?
+        .context("new watch on recovered connection")?;
+    std::fs::create_dir(&skills)?;
+    tokio::time::timeout(Duration::from_secs(5), new).await??;
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_metadata_watch_invalidates_on_possible_casefold_aliases() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    let environment = Environment::create_for_tests(Some(server.websocket_url().to_owned()))?;
+    let fs = environment.get_filesystem();
+
+    // U+017F (long s) folds to ASCII s in a casefolded ext4 directory.
+    for (parent, missing, created) in [
+        ("", ".agents/skills", ".Agents"),
+        (".agents", "skills", "Skills"),
+        (".agents", "skills", "\u{017f}kills"),
+        (".agents", "\u{017f}kills", "skills"),
+    ] {
+        let repo = tempfile::tempdir()?;
+        let root = AbsolutePathBuf::try_from(repo.path().canonicalize()?)?;
+        let parent = root.join(parent);
+        std::fs::create_dir_all(&parent)?;
+        let missing = PathUri::from_abs_path(&parent.join(missing));
+        let invalidated = fs
+            .watch_missing(vec![missing], None)
+            .await?
+            .context("executor accepted empty observation")?;
+
+        std::fs::create_dir(parent.join(created))?;
+        tokio::time::timeout(Duration::from_secs(5), invalidated)
+            .await
+            .with_context(|| format!("watch missed {created}"))??;
+    }
 
     server.shutdown().await?;
     Ok(())

@@ -2,6 +2,9 @@ mod common;
 #[cfg(target_os = "linux")]
 #[path = "common/fake_bwrap.rs"]
 mod fake_bwrap;
+#[cfg(target_os = "linux")]
+#[path = "capability_discovery/mount_watch.rs"]
+mod mount_watch;
 
 #[cfg(target_os = "linux")]
 use anyhow::Context as _;

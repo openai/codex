@@ -1068,6 +1068,21 @@ impl ExecServerClient {
         .await
     }
 
+    pub(crate) async fn fs_watch_missing(
+        &self,
+        missing: Vec<codex_utils_path_uri::PathUri>,
+        present: Option<codex_utils_path_uri::PathUri>,
+    ) -> Result<Option<tokio::sync::oneshot::Receiver<()>>, ExecServerError> {
+        if !self.environment_info().await?.capabilities.fs_watch_missing {
+            return Ok(None);
+        }
+        Ok(self
+            .rpc_client()
+            .await?
+            .watch_missing(missing, present)
+            .await?)
+    }
+
     pub async fn fs_get_metadata(
         &self,
         params: FsGetMetadataParams,
@@ -2744,6 +2759,10 @@ mod tests {
         provider_id: Some("sha256:fb4f62da3e84f6864dcec8ede7bc66f1c96ecaeaf55f8a786b85df994057c8ac".to_string()),
         ..EnvironmentInfo::local()
     }); "with_executor_metadata")]
+    #[test_case::test_case(Some(EnvironmentInfo {
+        capabilities: Default::default(),
+        ..EnvironmentInfo::local()
+    }); "without_optional_methods")]
     #[test_case::test_case(None; "legacy_server")]
     #[tokio::test]
     async fn environment_info_is_cached(
@@ -2798,6 +2817,18 @@ mod tests {
         let cached_info = client.clone().environment_info().await?;
         assert_eq!(cached_info.as_ref(), &expected_info);
         assert!(Arc::ptr_eq(&info, &cached_info));
+        if !info.capabilities.fs_watch_missing {
+            // The old executor has disconnected: probing an unsupported RPC would fail.
+            assert!(
+                client
+                    .fs_watch_missing(
+                        vec![PathUri::parse("file:///workspace/.agents/skills")?],
+                        /*present*/ None
+                    )
+                    .await?
+                    .is_none()
+            );
+        }
         Ok(())
     }
 

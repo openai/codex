@@ -49,6 +49,10 @@ struct BlockingMetadataCalls {
     paths: Mutex<Vec<PathUri>>,
     started: Notify,
     release: Semaphore,
+    round_trip: std::time::Duration,
+    watch: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    supports_watch: bool,
+    watch_ready: Notify,
 }
 
 impl Default for BlockingMetadataCalls {
@@ -57,11 +61,44 @@ impl Default for BlockingMetadataCalls {
             paths: Mutex::new(Vec::new()),
             started: Notify::new(),
             release: Semaphore::new(0),
+            round_trip: std::time::Duration::ZERO,
+            watch: Mutex::default(),
+            supports_watch: true,
+            watch_ready: Notify::new(),
         }
     }
 }
 
 impl ExecutorFileSystem for BlockingMetadataFileSystem {
+    fn watch_missing(
+        &self,
+        missing: Vec<PathUri>,
+        present: Option<PathUri>,
+    ) -> ExecutorFileSystemFuture<'_, Option<tokio::sync::oneshot::Receiver<()>>> {
+        Box::pin(async move {
+            if !self.calls.supports_watch {
+                return Ok(None);
+            }
+            if !self.calls.round_trip.is_zero() {
+                tokio::time::sleep(self.calls.round_trip).await;
+            }
+            for path in missing {
+                if path.to_abs_path()?.exists() {
+                    return Ok(None);
+                }
+            }
+            if let Some(marker) = present
+                && !marker.to_abs_path()?.exists()
+            {
+                return Ok(None);
+            }
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            *self.calls.watch.lock().unwrap() = Some(tx);
+            self.calls.watch_ready.notify_one();
+            Ok(Some(rx))
+        })
+    }
+
     fn canonicalize<'a>(
         &'a self,
         path: &'a PathUri,
@@ -112,27 +149,27 @@ impl ExecutorFileSystem for BlockingMetadataFileSystem {
         options: GetMetadataOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
-        let Ok(path_abs) = path.to_abs_path() else {
-            return self.inner.get_metadata(path, options, sandbox);
-        };
-        let repo_skill_root_suffix = Path::new(".agents").join("skills");
-        if !path_abs.ends_with(repo_skill_root_suffix) {
-            return self.inner.get_metadata(path, options, sandbox);
-        }
-
-        self.calls
-            .paths
-            .lock()
-            .expect("metadata paths lock")
-            .push(path.clone());
-        self.calls.started.notify_one();
         Box::pin(async move {
-            self.calls
-                .release
-                .acquire()
-                .await
-                .expect("metadata release semaphore")
-                .forget();
+            if !self.calls.round_trip.is_zero() {
+                tokio::time::sleep(self.calls.round_trip).await;
+            }
+            if path
+                .to_abs_path()
+                .is_ok_and(|path| path.ends_with(Path::new(".agents").join("skills")))
+            {
+                self.calls
+                    .paths
+                    .lock()
+                    .expect("metadata paths lock")
+                    .push(path.clone());
+                self.calls.started.notify_one();
+                self.calls
+                    .release
+                    .acquire()
+                    .await
+                    .expect("metadata release semaphore")
+                    .forget();
+            }
             self.inner.get_metadata(path, options, sandbox).await
         })
     }
@@ -314,6 +351,7 @@ async fn plugin_roots_preserve_plugin_resolution_metadata() {
             discovery_mode: SkillDiscoveryMode::DirectChildren,
         }],
         Vec::new(),
+        /*empty_remote_roots*/ None,
     )
     .await;
 
@@ -354,6 +392,7 @@ async fn unique_extra_root_loads_as_recursive_user_root() {
         /*home_dir*/ None,
         Vec::new(),
         vec![extra_root.clone()],
+        /*empty_remote_roots*/ None,
     )
     .await;
 
@@ -406,13 +445,132 @@ async fn repo_ancestry_without_project_marker_does_not_walk_parents() {
     fs::create_dir_all(outer.join(".agents/skills")).expect("create outer skills");
     fs::create_dir_all(cwd.join(".agents/skills")).expect("create cwd skills");
 
-    let roots = repo_agents_skill_roots(Some(Arc::clone(&LOCAL_FS)), &stack(Vec::new()), &cwd)
-        .await
-        .into_iter()
-        .map(|root| root.path)
-        .collect::<Vec<_>>();
+    let roots = repo_agents_skill_roots(
+        Some(Arc::clone(&LOCAL_FS)),
+        &stack(Vec::new()),
+        &cwd,
+        /*empty_remote_roots*/ None,
+    )
+    .await
+    .into_iter()
+    .map(|root| root.path)
+    .collect::<Vec<_>>();
 
     assert_eq!(roots, vec![cwd.join(".agents/skills")]);
+}
+
+/// Repeat the two remote metadata rounds with 74 ms per RPC and no repository skills.
+#[tokio::test]
+#[ignore = "manual remote filesystem latency comparison"]
+async fn time_empty_remote_repo_skill_discovery() {
+    let temp = TempDir::new().unwrap();
+    let root = absolute(temp.path());
+    let cwd = root.join("workspace/nested");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(root.join(".git"), "gitdir: repo\n").unwrap();
+    let calls = Arc::new(BlockingMetadataCalls {
+        round_trip: std::time::Duration::from_millis(74),
+        ..Default::default()
+    });
+    calls.release.add_permits(100);
+    let remote: Arc<dyn ExecutorFileSystem> = Arc::new(BlockingMetadataFileSystem {
+        inner: Arc::clone(&LOCAL_FS),
+        calls: Arc::clone(&calls),
+    });
+    let config = stack(Vec::new());
+    let cache = Mutex::new(super::EmptyRemoteRootsCache::default());
+    for (label, cache) in [("baseline", None), ("warm", Some(&cache))] {
+        // Prewarm before measuring admission, as session initialization does.
+        let setup = std::time::Instant::now();
+        assert!(
+            repo_agents_skill_roots(Some(remote.clone()), &config, &cwd, cache)
+                .await
+                .is_empty()
+        );
+        eprintln!("{label} first scan: {:?}", setup.elapsed());
+        if cache.is_some() {
+            let registration = std::time::Instant::now();
+            calls.watch_ready.notified().await;
+            eprintln!("background registration: {:?}", registration.elapsed());
+        }
+        let mut times = Vec::new();
+        for _ in 0..20 {
+            let start = std::time::Instant::now();
+            assert!(
+                repo_agents_skill_roots(Some(remote.clone()), &config, &cwd, cache)
+                    .await
+                    .is_empty()
+            );
+            times.push(start.elapsed());
+        }
+        times.sort_unstable();
+        eprintln!("{label}, n=20, p50={:?}, p95={:?}", times[9], times[18]);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn empty_remote_repo_skills_are_reused_until_watch_invalidation() {
+    let temp = TempDir::new().unwrap();
+    let cwd = absolute(temp.path());
+    fs::write(cwd.join(".git"), "gitdir: repo\n").unwrap();
+    let calls = Arc::new(BlockingMetadataCalls::default());
+    calls.release.add_permits(10);
+    let remote: Arc<dyn ExecutorFileSystem> = Arc::new(BlockingMetadataFileSystem {
+        inner: Arc::clone(&LOCAL_FS),
+        calls: Arc::clone(&calls),
+    });
+    let cache = Mutex::new(super::EmptyRemoteRootsCache::default());
+    let config = stack(Vec::new());
+    let discover =
+        || repo_agents_skill_roots(Some(Arc::clone(&remote)), &config, &cwd, Some(&cache));
+    assert!(discover().await.is_empty());
+    calls.watch_ready.notified().await;
+    // No clock deadline or polling during an idle connection.
+    tokio::time::advance(std::time::Duration::from_secs(3600)).await;
+    assert!(discover().await.is_empty());
+    assert_eq!(calls.paths.lock().unwrap().len(), 1);
+
+    let skills = cwd.join(".agents/skills");
+    fs::create_dir_all(&skills).unwrap();
+    calls.watch.lock().unwrap().take();
+    assert_eq!(discover().await[0].path, skills);
+    fs::remove_dir(&skills).unwrap();
+    assert!(discover().await.is_empty());
+    fs::create_dir(&skills).unwrap();
+    cache.lock().unwrap().clear();
+    assert_eq!(discover().await[0].path, skills);
+}
+
+#[tokio::test(start_paused = true)]
+async fn newly_created_roots_are_visible_before_watch_ack_or_without_watch_support() {
+    for supports_watch in [true, false] {
+        let temp = TempDir::new().unwrap();
+        let cwd = absolute(temp.path());
+        fs::write(cwd.join(".git"), "").unwrap();
+        let calls = Arc::new(BlockingMetadataCalls {
+            supports_watch,
+            round_trip: std::time::Duration::from_millis(74),
+            ..Default::default()
+        });
+        calls.release.add_permits(2);
+        let remote: Arc<dyn ExecutorFileSystem> = Arc::new(BlockingMetadataFileSystem {
+            inner: Arc::clone(&LOCAL_FS),
+            calls,
+        });
+        let cache = Mutex::new(super::EmptyRemoteRootsCache::default());
+        let config = stack(Vec::new());
+        assert!(
+            repo_agents_skill_roots(Some(remote.clone()), &config, &cwd, Some(&cache))
+                .await
+                .is_empty()
+        );
+        let skills = cwd.join(".agents/skills");
+        fs::create_dir_all(&skills).unwrap();
+        assert_eq!(
+            repo_agents_skill_roots(Some(remote), &config, &cwd, Some(&cache)).await[0].path,
+            skills
+        );
+    }
 }
 
 #[tokio::test]
@@ -428,11 +586,16 @@ async fn repo_ancestry_stops_at_project_root_and_preserves_root_to_cwd_order() {
     fs::create_dir_all(repository.join("nested/.agents/skills")).expect("create nested skills");
     let config_stack = stack(Vec::new());
 
-    let roots = repo_agents_skill_roots(Some(Arc::clone(&LOCAL_FS)), &config_stack, &nested)
-        .await
-        .into_iter()
-        .map(|root| root.path)
-        .collect::<Vec<_>>();
+    let roots = repo_agents_skill_roots(
+        Some(Arc::clone(&LOCAL_FS)),
+        &config_stack,
+        &nested,
+        /*empty_remote_roots*/ None,
+    )
+    .await
+    .into_iter()
+    .map(|root| root.path)
+    .collect::<Vec<_>>();
 
     assert_eq!(
         roots,
@@ -460,6 +623,7 @@ async fn resolved_project_layer_loads_skill_without_git_marker() {
         /*home_dir*/ None,
         Vec::new(),
         Vec::new(),
+        /*empty_remote_roots*/ None,
     )
     .await;
     let outcome = load_and_merge_host_skill_roots(
@@ -497,6 +661,7 @@ async fn resolved_project_layer_loads_skill_when_cwd_is_file() {
         /*home_dir*/ None,
         Vec::new(),
         Vec::new(),
+        /*empty_remote_roots*/ None,
     )
     .await;
     let outcome = load_and_merge_host_skill_roots(
@@ -584,7 +749,12 @@ async fn repo_ancestry_limits_concurrent_probes_and_preserves_order() {
     };
     let config_stack = stack(Vec::new());
     let (roots, ()) = tokio::join!(
-        repo_agents_skill_roots(Some(file_system), &config_stack, &cwd),
+        repo_agents_skill_roots(
+            Some(file_system),
+            &config_stack,
+            &cwd,
+            /*empty_remote_roots*/ None
+        ),
         assertions,
     );
 
@@ -651,6 +821,7 @@ async fn resolved_config_and_repo_roots_preserve_order_and_dedupe_paths_not_name
         Some(&home_folder),
         Vec::new(),
         vec![user_skills],
+        /*empty_remote_roots*/ None,
     )
     .await;
     assert_eq!(roots.len(), 8);

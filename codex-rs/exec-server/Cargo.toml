@@ -50,6 +50,7 @@ codex-websocket-client = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+notify = { workspace = true }
 opentelemetry = { workspace = true }
 prost = "0.14.3"
 serde = { workspace = true, features = ["derive"] }

@@ -642,6 +642,17 @@ impl Stream for FileSystemReadStream {
 /// Abstract filesystem access used by components that may operate locally or via
 /// a remote environment.
 pub trait ExecutorFileSystem: Send + Sync {
+    /// Watches an unsandboxed observation: every `missing` path is absent and `present`
+    /// (if supplied) exists. Change, disconnection or supersession completes the receiver.
+    /// Unsupported filesystems and observations that cannot be verified return `None`.
+    fn watch_missing(
+        &self,
+        _missing: Vec<PathUri>,
+        _present: Option<PathUri>,
+    ) -> ExecutorFileSystemFuture<'_, Option<tokio::sync::oneshot::Receiver<()>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Resolves a path within this filesystem.
     fn canonicalize<'a>(
         &'a self,

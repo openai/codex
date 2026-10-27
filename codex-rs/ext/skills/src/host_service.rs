@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::Weak;
 
@@ -31,6 +32,7 @@ use codex_skills::install_system_skills;
 
 use crate::HostSkillsSnapshot;
 use crate::SkillLoadOutcome;
+use crate::host_roots::EmptyRemoteRootsCache;
 use crate::host_roots::resolve_skill_roots;
 use crate::loader::HostSkillRoot;
 use crate::loader::HostSkillRootSnapshot;
@@ -86,6 +88,7 @@ pub struct HostSkillsService {
     extra_roots: RwLock<Vec<AbsolutePathBuf>>,
     cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, HostSkillsSnapshot>>,
     cache_by_config: RwLock<VecDeque<ConfigSkillsCacheEntry>>,
+    empty_remote_roots: Mutex<EmptyRemoteRootsCache>,
     // Shared across cwds so root scheduling cannot multiply per-root I/O fanout.
     root_scan_slots: Arc<Semaphore>,
 }
@@ -133,6 +136,7 @@ impl HostSkillsService {
             extra_roots: RwLock::new(Vec::new()),
             cache_by_cwd: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(VecDeque::new()),
+            empty_remote_roots: Mutex::default(),
             root_scan_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
         };
         // The cache is shared by every process using this CODEX_HOME. Disabled services filter
@@ -179,7 +183,9 @@ impl HostSkillsService {
         input: &HostSkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> HostSkillsSnapshot {
-        let roots = self.skill_roots_for_config(input, fs).await;
+        let roots = self
+            .skill_roots_for_config(input, fs, Some(&self.empty_remote_roots))
+            .await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let cache_key = config_skills_cache_key(
             &roots,
@@ -206,7 +212,7 @@ impl HostSkillsService {
         input: &HostSkillsLoadInput,
         fs: Arc<dyn ExecutorFileSystem>,
     ) -> Vec<AbsolutePathBuf> {
-        self.skill_roots_for_config(input, Some(fs))
+        self.skill_roots_for_config(input, Some(fs), /*empty_remote_roots*/ None)
             .await
             .into_iter()
             .filter(|root| root.plugin_identity().is_none() && root.scope != SkillScope::System)
@@ -218,6 +224,7 @@ impl HostSkillsService {
         &self,
         input: &HostSkillsLoadInput,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
+        empty_remote_roots: Option<&Mutex<EmptyRemoteRootsCache>>,
     ) -> Vec<HostSkillRoot> {
         let bundled_skills_enabled = bundled_skills_enabled_from_stack(&input.config_layer_stack);
         if bundled_skills_enabled {
@@ -229,6 +236,7 @@ impl HostSkillsService {
             &input.cwd,
             input.effective_skill_roots.clone(),
             self.extra_roots(),
+            empty_remote_roots,
         )
         .await;
         if !bundled_skills_enabled {
@@ -257,12 +265,19 @@ impl HostSkillsService {
             return snapshot;
         }
 
+        if force_reload {
+            self.empty_remote_roots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
+        }
         let mut roots = resolve_skill_roots(
             fs.clone(),
             &input.config_layer_stack,
             &input.cwd,
             input.effective_skill_roots.clone(),
             self.extra_roots(),
+            Some(&self.empty_remote_roots),
         )
         .await;
         if !bundled_skills_enabled {
@@ -373,6 +388,10 @@ impl HostSkillsService {
     }
 
     pub fn clear_cache(&self) {
+        self.empty_remote_roots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         let cleared_cwd = {
             let mut cache = self
                 .cache_by_cwd

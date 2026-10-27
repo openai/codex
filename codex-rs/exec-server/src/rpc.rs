@@ -322,7 +322,14 @@ where
     }
 }
 
+#[derive(Default)]
+struct MissingWatch {
+    id: u64,
+    invalidated: Option<oneshot::Sender<()>>,
+}
+
 pub(crate) struct RpcClient {
+    missing_watch: Arc<StdMutex<MissingWatch>>,
     metrics: Option<MetricsClient>,
     write_tx: mpsc::Sender<JSONRPCMessage>,
     pending: Arc<StdMutex<HashMap<RequestId, PendingRequest>>>,
@@ -353,6 +360,8 @@ impl RpcClient {
         let closed = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::channel(128);
 
+        let missing_watch = Arc::new(StdMutex::new(MissingWatch::default()));
+        let reader_watch = Arc::clone(&missing_watch);
         let pending_for_reader = Arc::clone(&pending);
         let closed_for_reader = Arc::clone(&closed);
         let transport_for_reader = transport.clone();
@@ -362,6 +371,25 @@ impl RpcClient {
                     break None;
                 };
                 match event {
+                    JsonRpcConnectionEvent::Message(JSONRPCMessage::Notification(notification))
+                        if notification.method == crate::protocol::FS_MISSING_CHANGED_METHOD =>
+                    {
+                        let changed = serde_json::from_value::<
+                            crate::protocol::FsMissingChangedNotification,
+                        >(
+                            notification.params.unwrap_or(Value::Null)
+                        );
+                        let mut watch = reader_watch
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if changed
+                            .as_ref()
+                            .map_or(true, |changed| changed.watch_id == watch.id)
+                            && let Some(invalidated) = watch.invalidated.take()
+                        {
+                            let _ = invalidated.send(());
+                        }
+                    }
                     JsonRpcConnectionEvent::Message(message) => {
                         if let Err(err) =
                             handle_server_message(&pending_for_reader, &event_tx, message).await
@@ -396,6 +424,11 @@ impl RpcClient {
                 }
             };
 
+            reader_watch
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .invalidated
+                .take();
             closed_for_reader.store(true, Ordering::Release);
             drain_pending(&pending_for_reader);
             let _ = event_tx
@@ -409,6 +442,7 @@ impl RpcClient {
         (
             Self {
                 metrics: codex_otel::global(),
+                missing_watch,
                 write_tx,
                 pending,
                 inbound_request_ids: Arc::new(StdMutex::new(HashSet::new())),
@@ -516,12 +550,45 @@ impl RpcClient {
             .map_err(|_| RpcCallError::Closed)
     }
 
+    pub(crate) async fn watch_missing(
+        &self,
+        missing: Vec<codex_utils_path_uri::PathUri>,
+        present: Option<codex_utils_path_uri::PathUri>,
+    ) -> Result<Option<oneshot::Receiver<()>>, RpcCallError> {
+        let (tx, rx) = oneshot::channel();
+        let watch_id = {
+            let mut watch = self
+                .missing_watch
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            watch.id += 1;
+            watch.invalidated = Some(tx);
+            watch.id
+        };
+        let response: crate::protocol::FsWatchMissingResponse = self
+            .call(
+                crate::protocol::FS_WATCH_MISSING_METHOD,
+                &crate::protocol::FsWatchMissingParams {
+                    watch_id,
+                    missing,
+                    present,
+                },
+            )
+            .await?;
+        Ok(response.watching.then_some(rx))
+    }
+
     pub(crate) fn is_disconnected(&self) -> bool {
         self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow()
     }
 
     pub(crate) async fn close_transport(&self) {
         self.closed.store(true, Ordering::Release);
+        self.missing_watch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .invalidated
+            .take();
         self.transport.terminate();
         for task in &self.transport_tasks {
             task.abort();
@@ -727,6 +794,11 @@ impl RpcClient {
 
 impl Drop for RpcClient {
     fn drop(&mut self) {
+        self.missing_watch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .invalidated
+            .take();
         self.transport.terminate();
         for task in &self.transport_tasks {
             task.abort();

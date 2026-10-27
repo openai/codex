@@ -3286,6 +3286,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "libc",
+ "notify",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",

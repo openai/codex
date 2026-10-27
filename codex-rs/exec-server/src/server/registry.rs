@@ -188,6 +188,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         },
     );
     router.request(
+        crate::protocol::FS_WATCH_MISSING_METHOD,
+        |handler: Arc<ExecServerHandler>, params: crate::protocol::FsWatchMissingParams| async move {
+            handler.fs_watch_missing(params).await
+        },
+    );
+    router.request(
         FS_GET_METADATA_METHOD,
         |handler: Arc<ExecServerHandler>, params: WireFsGetMetadataParams| async move {
             let params = params.try_into_request(resolve_filesystem_sandbox)?;
