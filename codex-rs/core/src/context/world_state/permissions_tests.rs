@@ -263,6 +263,7 @@ fn permissions_state(
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
+        granular: None,
     };
     let permission_messages = PermissionMessages {
         danger_full_access: Some("Full access.".to_string()),

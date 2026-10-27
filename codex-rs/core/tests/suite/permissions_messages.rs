@@ -89,6 +89,7 @@ fn model_with_approval_messages(
             on_request_auto_review: Some(on_request_auto_review.to_string()),
             never: None,
             unless_trusted: None,
+            granular: None,
         }),
         ..Default::default()
     });
@@ -223,6 +224,7 @@ async fn catalog_non_on_request_approval_messages_are_sent_in_initial_permission
                 on_request_auto_review: None,
                 never: Some("catalog never approval instructions".to_string()),
                 unless_trusted: None,
+                granular: None,
             },
             "catalog never approval instructions",
             "Approval policy is currently never",
@@ -234,6 +236,7 @@ async fn catalog_non_on_request_approval_messages_are_sent_in_initial_permission
                 on_request_auto_review: None,
                 never: None,
                 unless_trusted: Some("catalog unless-trusted approval instructions".to_string()),
+                granular: None,
             },
             "catalog unless-trusted approval instructions",
             "`approval_policy` is `unless-trusted`",

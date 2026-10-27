@@ -426,6 +426,7 @@ fn catalog_approval_messages_select_reviewer_variant() {
         on_request_auto_review: Some("auto-review catalog approvals".to_string()),
         never: Some("never catalog approvals".to_string()),
         unless_trusted: Some("unless-trusted catalog approvals".to_string()),
+        granular: None,
     };
 
     for (approval_policy, reviewer, expected) in [
@@ -474,6 +475,7 @@ fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
+        granular: None,
     };
     let approved_command_prefixes = vec![vec!["git".to_string(), "pull".to_string()]];
     let writable_root = "/tmp/repo".to_string();
@@ -514,6 +516,7 @@ fn missing_catalog_key_uses_legacy_approval_text() {
                 on_request_auto_review: Some("unused catalog approvals".to_string()),
                 never: None,
                 unless_trusted: None,
+                granular: None,
             },
         ),
         (
@@ -523,6 +526,7 @@ fn missing_catalog_key_uses_legacy_approval_text() {
                 on_request_auto_review: None,
                 never: None,
                 unless_trusted: None,
+                granular: None,
             },
         ),
     ] {
@@ -566,6 +570,7 @@ fn empty_catalog_non_on_request_approval_messages_suppress_legacy_approval_text(
         on_request_auto_review: None,
         never: Some(String::new()),
         unless_trusted: Some(String::new()),
+        granular: None,
     };
 
     for approval_policy in [AskForApproval::Never, AskForApproval::UnlessTrusted] {
@@ -734,6 +739,7 @@ fn preserves_supplied_path_spellings_and_order() {
         on_request_auto_review: None,
         never: None,
         unless_trusted: None,
+        granular: None,
     };
     let permission_messages = PermissionMessages {
         danger_full_access: None,

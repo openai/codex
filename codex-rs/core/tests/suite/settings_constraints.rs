@@ -137,6 +137,7 @@ async fn protected_model_settings_use_the_proposed_permissions(
         on_request_auto_review: Some(REVIEW_INSTRUCTIONS.to_string()),
         never: None,
         unless_trusted: None,
+        granular: None,
     });
     messages.permissions = Some(PermissionMessages {
         danger_full_access: None,

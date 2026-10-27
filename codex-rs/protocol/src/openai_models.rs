@@ -775,6 +775,27 @@ pub struct ApprovalMessages {
     pub on_request_auto_review: Option<String>,
     pub never: Option<String>,
     pub unless_trusted: Option<String>,
+    /// Optional catalog templates for harness-owned granular approval facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granular: Option<GranularApprovalMessages>,
+}
+
+/// Catalog presentation for granular approval policy; the harness owns the policy and lists.
+/// This wire type preserves templates verbatim; validation and rendering are consumer concerns.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct GranularApprovalMessages {
+    /// Rendering contract: at most 500 UTF-8 bytes with exactly one `{{ policy }}` marker.
+    /// Consumers must use bundled text for missing, null, empty, invalid, or oversized templates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intro: Option<String>,
+    /// Presentation around `{{ categories }}`, including the fixed prompted-bucket label.
+    /// Uses the same byte limit and fallback rules as `intro`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompted_categories: Option<String>,
+    /// Presentation around `{{ categories }}`, including the fixed rejected-bucket label.
+    /// Uses the same byte limit and fallback rules as `intro`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_categories: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
@@ -1277,8 +1298,51 @@ mod tests {
                 on_request_auto_review: None,
                 never: Some(String::new()),
                 unless_trusted: None,
+                granular: None,
             })
         );
+
+        for (granular, expected) in [
+            (serde_json::json!(null), None),
+            (serde_json::json!({}), Some(serde_json::json!({}))),
+            (
+                serde_json::json!({"intro": null, "prompted_categories": null, "rejected_categories": null}),
+                Some(serde_json::json!({})),
+            ),
+            (
+                serde_json::json!({"intro": ""}),
+                Some(serde_json::json!({"intro": ""})),
+            ),
+            (
+                serde_json::json!({
+                    "intro": "Catalog: {{ policy }}",
+                    "prompted_categories": "Allowed: {{ categories }}",
+                    "rejected_categories": "Denied: {{ categories }}",
+                }),
+                Some(serde_json::json!({
+                    "intro": "Catalog: {{ policy }}",
+                    "prompted_categories": "Allowed: {{ categories }}",
+                    "rejected_categories": "Denied: {{ categories }}",
+                })),
+            ),
+        ] {
+            let wire = serde_json::json!({"approvals": {
+                "on_request": "existing override", "granular": granular,
+            }});
+            let messages: ModelMessages =
+                serde_json::from_value(wire).expect("sparse granular messages");
+            let roundtrip = serde_json::to_value(messages.approvals).expect("serialize approvals");
+            let mut expected_approvals = serde_json::json!({
+                "on_request": "existing override",
+                "on_request_auto_review": null,
+                "never": null,
+                "unless_trusted": null,
+            });
+            if let Some(expected) = expected {
+                expected_approvals["granular"] = expected;
+            }
+            assert_eq!(roundtrip, expected_approvals);
+        }
     }
 
     #[test]
@@ -1605,6 +1669,11 @@ mod tests {
                 on_request_auto_review: None,
                 never: Some("never approval".to_string()),
                 unless_trusted: Some("unless-trusted approval".to_string()),
+                granular: Some(GranularApprovalMessages {
+                    intro: Some("Catalog: {{ policy }}".to_string()),
+                    prompted_categories: Some("Allowed: {{ categories }}".to_string()),
+                    rejected_categories: Some("Denied: {{ categories }}".to_string()),
+                }),
             }),
             collaboration_modes: Some(CollaborationModeMessages {
                 default: Some("default collaboration".to_string()),

@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::ConfirmationPolicies;
+use codex_protocol::openai_models::GranularApprovalMessages;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::MultiAgentMessages;
@@ -35,6 +36,11 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         on_request_auto_review: Some("auto approvals".to_string()),
         never: Some("never approvals".to_string()),
         unless_trusted: Some("unless-trusted approvals".to_string()),
+        granular: Some(GranularApprovalMessages {
+            intro: Some("Catalog: {{ policy }}".to_string()),
+            prompted_categories: Some("Allowed: {{ categories }}".to_string()),
+            rejected_categories: Some("Denied: {{ categories }}".to_string()),
+        }),
     };
     let collaboration_modes = CollaborationModeMessages {
         default: Some("default instructions".to_string()),
@@ -167,6 +173,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
                 on_request_auto_review: None,
                 never: None,
                 unless_trusted: None,
+                granular: None,
             }),
             ..Default::default()
         };
