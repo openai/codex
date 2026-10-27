@@ -1543,7 +1543,7 @@ fn guardian_write_stdin_preserves_input_and_foreign_cwd(
     }
     assert_eq!(guardian_approval_request_to_json(&action)?, expected);
     assert_eq!(
-        guardian_assessment_action(&action),
+        guardian_assessment_action(&action).expect("reported approval action"),
         GuardianAssessmentAction::WriteStdin {
             approval_id: "terminal-write".to_string(),
             process_id: "1000".to_string(),
@@ -1599,7 +1599,7 @@ fn guardian_exec_command_uses_executor_cwd_convention(
         }),
     );
     assert_eq!(
-        guardian_assessment_action(&action),
+        guardian_assessment_action(&action).expect("reported approval action"),
         GuardianAssessmentAction::Command {
             source: codex_protocol::approvals::GuardianCommandSource::UnifiedExec,
             command: "git status".to_string(),
@@ -3314,30 +3314,68 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
         ],
     )
     .await;
-    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let config = Arc::make_mut(&mut Arc::get_mut(&mut turn).unwrap().config);
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     seed_guardian_parent_history(&session, &turn).await;
-
-    let (outcome, metadata) = run_guardian_review_session_for_test(
-        Arc::clone(&session),
-        Arc::clone(&turn),
-        guardian_exec_command_request("shell-parse-retry"),
-        ApprovalRequestReasons::default(),
-        /*external_cancel*/ None,
-        /*max_attempts*/ 3,
-    )
-    .await;
-
-    let GuardianReviewOutcome::Completed(assessment) = outcome else {
-        panic!("expected guardian assessment");
+    let original = serde_json::json!({
+        "type": "function_call", "id": "fc_action", "call_id": "action",
+        "namespace": "team", "name": "send_message",
+        "arguments": r#"{"target":"worker","message":"opaque-message"}"#,
+        "encrypted_content": "opaque-replay", "encrypted_function_args": ["message"],
+    });
+    session
+        .record_conversation_items(
+            &turn,
+            turn.model_info(),
+            &[serde_json::from_value(original.clone())?],
+        )
+        .await;
+    let mut expected = original;
+    expected
+        .as_object_mut()
+        .unwrap()
+        .remove("encrypted_content");
+    expected["arguments"] = serde_json::json!(r#"{"target":"/root","message":"opaque-message"}"#);
+    let invocation = crate::tools::context::ToolInvocation {
+        session: Arc::clone(&session),
+        step_context: crate::session::step_context::StepContext::for_test(Arc::clone(&turn)),
+        turn,
+        cancellation_token: CancellationToken::new(),
+        tracker: Arc::new(tokio::sync::Mutex::new(
+            crate::turn_diff_tracker::TurnDiffTracker::new(),
+        )),
+        call_id: "action".to_owned(),
+        tool_name: codex_tools::ToolName::namespaced("team", "send_message"),
+        source: crate::tools::context::ToolCallSource::Direct,
+        environments: Default::default(),
+        payload: crate::tools::context::ToolPayload::Function {
+            arguments: expected["arguments"].as_str().unwrap().to_owned(),
+        },
     };
-    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
-    assert_eq!(assessment.rationale, "retry succeeded");
-    assert_eq!(metadata.attempt_count, 3);
-    assert!(matches!(
-        metadata.guardian_session_kind,
-        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
-    ));
-    assert_eq!(request_log.requests().len(), 3);
+    crate::tools::review_native_tool_call(&invocation).await?;
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+    let reviewer = requests[0].body_json()["client_metadata"]["thread_id"].clone();
+    for request in &requests {
+        assert_eq!(
+            request.body_json()["client_metadata"]["thread_id"],
+            reviewer
+        );
+        let calls = request
+            .inputs_of_type("function_call")
+            .into_iter()
+            .map(|mut item| {
+                item.as_object_mut()
+                    .unwrap()
+                    .remove("internal_chat_message_metadata_passthrough");
+                item
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls, vec![expected.clone()]);
+        assert_eq!(request.inputs_of_type("function_call_output").len(), 1);
+    }
     Ok(())
 }
 

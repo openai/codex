@@ -64,10 +64,10 @@ impl ReviewHost for GatedHost {
                 script_path: None,
                 approval_request_source: GuardianApprovalRequestSource::MainTurn,
                 reviewed_action: GuardianReviewedAction::RequestPermissions {},
-                action: GuardianAssessmentAction::RequestPermissions {
+                action: Some(GuardianAssessmentAction::RequestPermissions {
                     reason: None,
                     permissions: Default::default(),
-                },
+                }),
                 review_reason: reason,
                 timeout: Some(crate::REVIEW_TIMEOUT),
                 model_context: ModelInvocationContext {

@@ -11,6 +11,8 @@ pub(crate) mod hosted_spec;
 pub(crate) mod lifecycle;
 pub(crate) mod metadata_metrics;
 mod multi_agent_tool;
+mod native_tool_review;
+pub(crate) use native_tool_review::review as review_native_tool_call;
 pub(crate) mod network_approval;
 pub(crate) mod orchestrator;
 pub(crate) mod parallel;

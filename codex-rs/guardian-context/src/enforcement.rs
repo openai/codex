@@ -3,7 +3,7 @@
 //! hosts may shorten historical instructions after compaction cannot make room.
 //! Every reduction reserves an omission notice and preserves source order.
 //! JSON recovery shortens only the body; line mode shortens the whole rendered entry.
-//! Native agent messages are reconciled with current history before budgeting.
+//! Native messages and tool calls are reconciled with current history before budgeting.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -96,11 +96,11 @@ pub enum HistoryTruncation {
 }
 
 impl ComposedContext {
-    /// Omits native agent messages already present in the effective reviewer history
+    /// Omits native messages and tool calls already present in the effective reviewer history
     /// or earlier in this input. Hosts must repeat this check after compaction;
     /// missing evidence may be delivered again. Identity excludes host annotations.
     /// Conflicting payloads under one ID reject the input without changing it.
-    pub fn retain_new_agent_messages(
+    pub fn retain_new_native_messages(
         &mut self,
         reviewer_history: &[ResponseItemEnvelope],
     ) -> Result<(), SectionError> {
@@ -108,12 +108,14 @@ impl ComposedContext {
             matches!(
                 &section.delivery,
                 SectionDelivery::Message(message)
-                    if matches!(message.content.item, ResponseItem::AgentMessage { .. })
+                    if matches!(message.content.item,
+                        ResponseItem::AgentMessage { .. } | ResponseItem::FunctionCall { .. })
             )
         }) {
             return Ok(());
         }
-        let mut seen = HashMap::new();
+        let mut seen_messages = HashMap::new();
+        let mut seen_calls = HashMap::new();
         let mut duplicates = HashSet::new();
         let pending =
             self.sections
@@ -128,27 +130,49 @@ impl ComposedContext {
             .map(|item| (None, &item.item))
             .chain(pending)
         {
-            let ResponseItem::AgentMessage {
-                id: Some(id),
-                author,
-                recipient,
-                content,
-                ..
-            } = item
-            else {
-                continue;
+            let duplicate = match item {
+                ResponseItem::AgentMessage {
+                    id: Some(id),
+                    author,
+                    recipient,
+                    content,
+                    ..
+                } if !id.is_empty() => {
+                    let payload = (author, recipient, content);
+                    seen_messages
+                        .insert(id, payload)
+                        .map(|previous| previous == payload)
+                }
+                ResponseItem::FunctionCall {
+                    call_id,
+                    name,
+                    namespace,
+                    arguments,
+                    encrypted_content,
+                    encrypted_function_args,
+                    ..
+                } => {
+                    let payload = (
+                        name,
+                        namespace,
+                        arguments,
+                        encrypted_content,
+                        encrypted_function_args,
+                    );
+                    seen_calls
+                        .insert(call_id, payload)
+                        .map(|previous| previous == payload)
+                }
+                _ => None,
             };
-            if id.is_empty() {
-                continue;
-            }
-            let payload = (author, recipient, content);
-            if let Some(previous) = seen.insert(id, payload) {
-                if previous != payload {
-                    return Err(SectionError::ConflictingAgentMessage);
+            match duplicate {
+                Some(false) => return Err(SectionError::ConflictingNativeMessage),
+                Some(true) => {
+                    if let Some(index) = index {
+                        duplicates.insert(index);
+                    }
                 }
-                if let Some(index) = index {
-                    duplicates.insert(index);
-                }
+                None => {}
             }
         }
         let mut index = 0;

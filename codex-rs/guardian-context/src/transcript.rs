@@ -24,6 +24,8 @@ use codex_protocol::protocol::InterAgentCommunication;
 use crate::ContextSection;
 use crate::ConversationTranscriptEntry;
 use crate::ConversationTranscriptEntryKind;
+use crate::PlannedAction;
+use crate::PlannedActionKind;
 use crate::SectionContributor;
 use crate::SectionError;
 use crate::SectionHistory;
@@ -117,8 +119,23 @@ impl SectionContributor for ConversationTranscriptSection {
     }
 
     fn contribute(&self, input: &SectionInput<'_>) -> Result<Option<ContextSection>, SectionError> {
+        let proposed_call_id = if let Some(PlannedAction {
+            kind: PlannedActionKind::ToolCall(call),
+            ..
+        }) = input.planned_action
+            && let ResponseItem::FunctionCall { call_id, .. } = call.as_ref()
+        {
+            Some(call_id.as_str())
+        } else {
+            None
+        };
         Ok(Some(ContextSection::ConversationTranscript {
-            items: collect_transcript_for_target(input.history, input.transcript, input.target),
+            items: collect_transcript_for_review(
+                input.history,
+                input.transcript,
+                input.target,
+                proposed_call_id,
+            ),
         }))
     }
 }
@@ -138,6 +155,15 @@ fn collect_transcript_for_target(
     history: &dyn SectionHistory,
     config: &ConversationTranscriptConfig,
     target: crate::ContextTarget,
+) -> Vec<ConversationTranscriptEntry> {
+    collect_transcript_for_review(history, config, target, /*proposed_call_id*/ None)
+}
+
+fn collect_transcript_for_review(
+    history: &dyn SectionHistory,
+    config: &ConversationTranscriptConfig,
+    target: crate::ContextTarget,
+    proposed_call_id: Option<&str>,
 ) -> Vec<ConversationTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
@@ -240,6 +266,16 @@ fn collect_transcript_for_target(
                 (
                     ConversationTranscriptEntryKind::Assistant,
                     format!("Agent message from {author}:\n{text}"),
+                )
+            }
+            // The proposed call is delivered separately; preserve this cursor position.
+            ResponseItem::FunctionCall { name, call_id, .. }
+                if config.options.include_tool_calls
+                    && proposed_call_id == Some(call_id.as_str()) =>
+            {
+                (
+                    ConversationTranscriptEntryKind::ToolCall(format!("tool {name} call")),
+                    TRANSCRIPT_OMISSION_NOTICE.to_owned(),
                 )
             }
             ResponseItem::FunctionCall {

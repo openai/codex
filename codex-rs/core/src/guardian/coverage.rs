@@ -12,6 +12,7 @@ impl GuardianApprovalRequest {
             Self::McpToolCall { server, .. } => GuardianScope::for_mcp_server(server),
             Self::NetworkAccess { .. } => GuardianScope::Network,
             Self::RequestPermissions { .. } => GuardianScope::Permissions,
+            Self::NativeToolCall { .. } => GuardianScope::NativeTool,
         }
     }
 }

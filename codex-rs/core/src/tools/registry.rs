@@ -62,6 +62,11 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    /// Opts this invocation into synchronous native-call review before the handler runs.
+    fn requires_guardian_review(&self, _invocation: &ToolInvocation) -> bool {
+        false
+    }
+
     /// The handler observes its cancellation token and must finish before dispatch is aborted.
     fn finishes_on_cancellation(&self) -> bool {
         false
@@ -867,6 +872,12 @@ impl ToolRegistry {
                     updated_input: None,
                 } => {}
             }
+        }
+
+        if tool.requires_guardian_review(&invocation)
+            && let Err(err) = super::review_native_tool_call(&invocation).await
+        {
+            return Err(fail_before_execution(&invocation, err).await);
         }
 
         if tool.mcp_server_name().is_none() {

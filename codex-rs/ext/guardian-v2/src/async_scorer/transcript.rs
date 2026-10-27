@@ -190,7 +190,7 @@ impl CollectedTranscript {
         };
         let transcript = self.profile.prepare_transcript(entries, offset);
         let mut context = self.context.compose(presentation, transcript)?;
-        context.retain_new_agent_messages(reviewer_history)?;
+        context.retain_new_native_messages(reviewer_history)?;
         Ok((context, next))
     }
 }

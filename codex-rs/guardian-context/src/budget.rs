@@ -192,7 +192,11 @@ impl ComposedContext {
                         .iter()
                         .fold(SectionCost::default(), SectionCost::add_content),
                     item => SectionCost {
-                        text_bytes: ByteCount::item(item),
+                        text_bytes: ByteCount::item(item).saturating_add(
+                            crate::native_tool_call::evidence_output(item)
+                                .as_ref()
+                                .map_or(0, ByteCount::item),
+                        ),
                         ..SectionCost::default()
                     },
                 },
@@ -289,7 +293,9 @@ pub(super) fn section_tokens(section: &SectionOutput) -> usize {
             .iter()
             .map(|item| section_content_tokens(&item.content))
             .fold(content_framing_tokens(content.len()), usize::saturating_add),
-        SectionDelivery::Message(message) => estimate_input_tokens(&message.content.item),
+        SectionDelivery::Message(message) => {
+            crate::native_tool_call::estimate_tokens(&message.content.item)
+        }
     }
 }
 
@@ -320,10 +326,10 @@ fn adjusted_tokens(mut bytes: usize, content: &[ContentItem]) -> usize {
 }
 
 #[derive(Default)]
-struct ByteCount(usize);
+pub(crate) struct ByteCount(usize);
 
 impl ByteCount {
-    fn item(item: &ResponseItem) -> usize {
+    pub(crate) fn item(item: &ResponseItem) -> usize {
         Self::measure(|counter| serde_json::to_writer(counter, item))
     }
 

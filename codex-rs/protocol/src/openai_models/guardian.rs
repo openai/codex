@@ -73,6 +73,7 @@ impl GuardianModelPolicy {
             GuardianScope::Mcp => self.mcp,
             GuardianScope::Network => self.network,
             GuardianScope::Permissions => self.permissions,
+            GuardianScope::NativeTool => Some(GuardianReviewMode::Synchronous),
         }
         .unwrap_or(GuardianReviewMode::Disabled)
     }
@@ -120,6 +121,7 @@ pub enum GuardianScope {
     Mcp,
     Network,
     Permissions,
+    NativeTool,
 }
 
 impl GuardianScope {

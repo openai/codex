@@ -650,10 +650,10 @@ async fn run_review_on_session(
             let items = match prompt_items.context.clone().into_user_inputs() {
                 Ok(items) => items,
                 Err(codex_guardian_context::SectionError::UnsupportedDelivery {
-                    section: "conversation_transcript",
+                    section: "conversation_transcript" | "planned_action",
                 }) => {
                     // Final admission replaces this turn-start marker with the complete,
-                    // budgeted context, including native encrypted agent-message evidence.
+                    // budgeted context, including native encrypted messages and tool calls.
                     vec![codex_protocol::user_input::UserInput::Text {
                         text: super::prompt::GUARDIAN_TRANSCRIPT_START.to_owned(),
                         text_elements: Vec::new(),

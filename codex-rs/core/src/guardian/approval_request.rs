@@ -9,8 +9,12 @@ use codex_utils_path_uri::PathUri;
 use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) enum GuardianApprovalRequest {
+    NativeToolCall {
+        id: String,
+        call: Box<codex_protocol::models::ResponseItem>,
+    },
     ExecCommand {
         id: String,
         environment_id: String,
@@ -73,6 +77,16 @@ pub(crate) enum GuardianApprovalRequest {
     },
 }
 
+// Approval arguments may contain credentials or encrypted tool messages.
+impl std::fmt::Debug for GuardianApprovalRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GuardianApprovalRequest")
+            .field("kind", &std::mem::discriminant(self))
+            .finish_non_exhaustive()
+    }
+}
+
 impl GuardianApprovalRequest {
     /// The environment owning this action, independent of the reviewer's default environment.
     pub(super) fn target_environment_id(&self) -> Option<&str> {
@@ -82,7 +96,7 @@ impl GuardianApprovalRequest {
             | Self::ApplyPatch { environment_id, .. }
             | Self::RequestPermissions { environment_id, .. }
             | Self::NetworkAccess { environment_id, .. } => Some(environment_id),
-            Self::McpToolCall { .. } => None,
+            Self::McpToolCall { .. } | Self::NativeToolCall { .. } => None,
         }
     }
 }
@@ -231,6 +245,7 @@ pub(crate) fn guardian_approval_request_to_json(
     action: &GuardianApprovalRequest,
 ) -> serde_json::Result<Value> {
     let mut value = match action {
+        GuardianApprovalRequest::NativeToolCall { call, .. } => serde_json::to_value(call.as_ref()),
         GuardianApprovalRequest::ExecCommand {
             id: _,
             environment_id: _,
@@ -348,8 +363,9 @@ pub(crate) fn guardian_approval_request_to_json(
 
 pub(crate) fn guardian_assessment_action(
     action: &GuardianApprovalRequest,
-) -> GuardianAssessmentAction {
-    match action {
+) -> Option<GuardianAssessmentAction> {
+    Some(match action {
+        GuardianApprovalRequest::NativeToolCall { .. } => return None,
         GuardianApprovalRequest::ExecCommand {
             command,
             guardian_cwd,
@@ -410,13 +426,14 @@ pub(crate) fn guardian_assessment_action(
             reason: reason.clone(),
             permissions: permissions.clone(),
         },
-    }
+    })
 }
 
 pub(crate) fn guardian_reviewed_action(
     request: &GuardianApprovalRequest,
 ) -> GuardianReviewedAction {
     match request {
+        GuardianApprovalRequest::NativeToolCall { .. } => GuardianReviewedAction::NativeToolCall {},
         GuardianApprovalRequest::ExecCommand {
             sandbox_permissions,
             additional_permissions,
@@ -463,7 +480,8 @@ pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest)
         | GuardianApprovalRequest::WriteStdin { id, .. }
         | GuardianApprovalRequest::ApplyPatch { id, .. }
         | GuardianApprovalRequest::McpToolCall { id, .. }
-        | GuardianApprovalRequest::RequestPermissions { id, .. } => Some(id),
+        | GuardianApprovalRequest::RequestPermissions { id, .. }
+        | GuardianApprovalRequest::NativeToolCall { id, .. } => Some(id),
         GuardianApprovalRequest::NetworkAccess { .. } => None,
     }
 }
@@ -478,7 +496,8 @@ pub(crate) fn guardian_request_turn_id<'a>(
         GuardianApprovalRequest::ExecCommand { .. }
         | GuardianApprovalRequest::WriteStdin { .. }
         | GuardianApprovalRequest::ApplyPatch { .. }
-        | GuardianApprovalRequest::McpToolCall { .. } => default_turn_id,
+        | GuardianApprovalRequest::McpToolCall { .. }
+        | GuardianApprovalRequest::NativeToolCall { .. } => default_turn_id,
     }
 }
 

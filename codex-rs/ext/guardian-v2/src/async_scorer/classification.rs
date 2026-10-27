@@ -213,9 +213,10 @@ impl Classification {
             ..score_authorization
         };
         let action_section = PlannedAction {
-            json: planned_action.clone(),
             tool_descriptions: None,
-            kind: PlannedActionKind::Command,
+            kind: PlannedActionKind::Command {
+                json: planned_action.clone(),
+            },
             reason: None,
         };
         let review_fragments = sync_reviews

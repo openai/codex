@@ -34,9 +34,10 @@ impl ConversationHistorySnapshot for History {
 
 fn collect(history: &History, images: &[ContentItem]) -> CollectedTranscript {
     let action = PlannedAction {
-        json: r#"{"tool":"read_file","path":"README.md"}"#.to_owned(),
         tool_descriptions: None,
-        kind: PlannedActionKind::Command,
+        kind: PlannedActionKind::Command {
+            json: r#"{"tool":"read_file","path":"README.md"}"#.to_owned(),
+        },
         reason: None,
     };
     let reviews =

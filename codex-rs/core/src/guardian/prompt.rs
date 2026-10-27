@@ -118,9 +118,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         .retained_context()
         .map(codex_guardian_context::collect_verified_answer_candidates)
         .unwrap_or_default();
-    let planned_action_json = format_guardian_action_pretty(&request)?;
     let planned_action = PlannedAction {
-        json: planned_action_json,
         tool_descriptions: if let GuardianApprovalRequest::McpToolCall {
             tool_description,
             connector_description,
@@ -135,14 +133,22 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
             None
         },
         kind: match &request {
+            GuardianApprovalRequest::NativeToolCall { call, .. } => {
+                PlannedActionKind::ToolCall(call.clone())
+            }
             GuardianApprovalRequest::NetworkAccess { trigger, .. } => PlannedActionKind::Network {
+                json: format_guardian_action_pretty(&request)?,
                 has_trigger: trigger.is_some(),
             },
-            GuardianApprovalRequest::WriteStdin { .. } => PlannedActionKind::TerminalInput,
+            GuardianApprovalRequest::WriteStdin { .. } => PlannedActionKind::TerminalInput {
+                json: format_guardian_action_pretty(&request)?,
+            },
             GuardianApprovalRequest::ExecCommand { .. }
             | GuardianApprovalRequest::ApplyPatch { .. }
             | GuardianApprovalRequest::McpToolCall { .. }
-            | GuardianApprovalRequest::RequestPermissions { .. } => PlannedActionKind::Command,
+            | GuardianApprovalRequest::RequestPermissions { .. } => PlannedActionKind::Command {
+                json: format_guardian_action_pretty(&request)?,
+            },
         },
         reason: reasons.retry.or(reasons.approval),
     };

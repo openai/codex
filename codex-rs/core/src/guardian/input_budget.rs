@@ -91,7 +91,7 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
         .for_prompt_annotated(&turn.model_info().input_modalities);
     context.retain_new_instructions(&history);
     context
-        .retain_new_agent_messages(&history)
+        .retain_new_native_messages(&history)
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     if context.estimated_tokens().saturating_add(minimum_prefix) > maximum {
         context
@@ -156,7 +156,7 @@ pub(crate) async fn finalize(
     // compaction retry; evidence removed by compaction must be delivered again.
     context.retain_new_instructions(&history);
     context
-        .retain_new_agent_messages(&history)
+        .retain_new_native_messages(&history)
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     let prompt = build_prompt(
         history
@@ -285,14 +285,14 @@ pub(crate) async fn finalize(
             }
         }
         Err(codex_guardian_context::SectionError::UnsupportedDelivery {
-            section: "conversation_transcript",
+            section: "conversation_transcript" | "planned_action",
         }) => {
             *input = context
                 .into_annotated_messages()
                 .into_iter()
                 .map(|mut envelope| {
                     // Preserve the ordinary user-content annotations on each text segment;
-                    // native messages retain the original author, recipient and ciphertext.
+                    // native evidence retains its original identity and ciphertext.
                     if let ResponseItem::Message { role, content, .. } = &envelope.item
                         && role == "user"
                     {

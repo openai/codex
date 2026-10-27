@@ -144,8 +144,7 @@ async fn finalization_exports_loss_totals_only_for_accepted_input(window: i64) {
 fn required_context(text: String) -> ComposedContext {
     let action = PlannedAction {
         tool_descriptions: None,
-        json: text,
-        kind: PlannedActionKind::Command,
+        kind: PlannedActionKind::Command { json: text },
         reason: None,
     };
     let context = super::super::prompt::collect_guardian_context(

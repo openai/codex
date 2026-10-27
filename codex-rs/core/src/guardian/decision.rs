@@ -71,6 +71,7 @@ pub(crate) fn decide_approval(
                 | GuardianApprovalRequest::WriteStdin { .. }
                 | GuardianApprovalRequest::ApplyPatch { .. }
                 | GuardianApprovalRequest::McpToolCall { .. }
+                | GuardianApprovalRequest::NativeToolCall { .. }
                 | GuardianApprovalRequest::RequestPermissions { .. },
             )
             | Err(_) => request.tool_call_id.as_deref(),

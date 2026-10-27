@@ -216,6 +216,7 @@ fn approval_request_source_tag(source: GuardianApprovalRequestSource) -> &'stati
 
 fn reviewed_action_tag(action: &GuardianReviewedAction) -> &'static str {
     match action {
+        GuardianReviewedAction::NativeToolCall {} => "native_tool_call",
         GuardianReviewedAction::Shell { .. } => "shell",
         GuardianReviewedAction::UnifiedExec { .. } => "unified_exec",
         GuardianReviewedAction::WriteStdin { .. } => "write_stdin",

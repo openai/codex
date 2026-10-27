@@ -23,6 +23,8 @@ use retained_instructions::RetainedUserInstructionsSection;
 use sender_user_messages::SenderUserMessagesSection;
 use transcript::ConversationTranscriptSection;
 
+mod native_tool_call;
+
 pub use action::ActionPresentation;
 pub use action::PlannedAction;
 pub use action::PlannedActionKind;
@@ -271,8 +273,8 @@ pub trait SectionContributor: Send + Sync {
 /// A section could not provide the evidence needed for a valid review context.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SectionError {
-    /// One native agent-message ID identifies different authors, recipients or content.
-    ConflictingAgentMessage,
+    /// One native message or tool-call ID identifies different evidence.
+    ConflictingNativeMessage,
     /// Evidence required by this contributor for the current input is missing.
     MissingRequiredEvidence { section: &'static str },
     /// A section cannot be delivered by the requested consumer.
@@ -284,8 +286,8 @@ pub enum SectionError {
 impl std::fmt::Display for SectionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ConflictingAgentMessage => {
-                formatter.write_str("conflicting native agent messages share an ID")
+            Self::ConflictingNativeMessage => {
+                formatter.write_str("conflicting native messages or tool calls share an ID")
             }
             Self::MissingRequiredEvidence { section } => {
                 write!(formatter, "missing required evidence for section {section}")
@@ -327,7 +329,8 @@ pub fn default_registry() -> &'static SectionRegistry {
         registry.register(images::TranscriptImagesSection);
         registry.register(node_repl::NodeReplEvidenceSection);
         registry.register(permissions::PermissionContextSection);
-        registry.register(action::PlannedActionSection);
+        registry.register(action::PlannedActionSection(SectionScope::Shared));
+        registry.register(action::PlannedActionSection(SectionScope::SyncOnly));
         registry
     });
     &REGISTRY

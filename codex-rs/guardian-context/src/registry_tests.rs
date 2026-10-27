@@ -212,8 +212,9 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
     };
     let action = super::PlannedAction {
         tool_descriptions: None,
-        json: r#"{"tool":"read_file","path":"debug-secret.json"}"#.into(),
-        kind: super::PlannedActionKind::Command,
+        kind: super::PlannedActionKind::Command {
+            json: r#"{"tool":"read_file","path":"debug-secret.json"}"#.into(),
+        },
         reason: Some("debug-secret reason".into()),
     };
     let tool = super::TrustedTool {
@@ -346,6 +347,27 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
         }
         expected.push(ContextSection::PlannedAction(action.clone()));
         assert_eq!(context, expected);
+        if target == ContextTarget::Sync {
+            let oversized = super::PlannedAction {
+                kind: super::PlannedActionKind::ToolCall(Box::new(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "function_call", "call_id": "large", "name": "send_message",
+                        "arguments": "x".repeat(40_000),
+                    }))
+                    .unwrap(),
+                )),
+                ..action.clone()
+            };
+            assert_eq!(
+                super::default_registry().collect(&SectionInput {
+                    planned_action: Some(&oversized),
+                    ..input
+                }),
+                Err(SectionError::EvidenceLimitExceeded {
+                    section: "native_tool_call"
+                })
+            );
+        }
         if target == ContextTarget::Async {
             let oversized = super::PermissionContext {
                 denied_paths: vec!["x".repeat(/*n*/ 3_001)],

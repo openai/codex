@@ -444,6 +444,25 @@ impl CollectedContext {
                             )
                         });
                     }
+                    if let crate::PlannedActionKind::ToolCall(call) = &planned.kind {
+                        sections.push((
+                            11,
+                            SectionOutput {
+                                id: "planned_action",
+                                delivery: text_content(planned.render(action)),
+                            },
+                        ));
+                        sections.push((
+                            11,
+                            SectionOutput {
+                                id: "planned_action",
+                                delivery: SectionDelivery::Message(Budgeted::required(Box::new(
+                                    ResponseItemEnvelope::new(call.as_ref().clone()),
+                                ))),
+                            },
+                        ));
+                        continue;
+                    }
                     let mut items = planned
                         .render(action)
                         .into_iter()
@@ -564,7 +583,11 @@ impl ComposedContext {
                             std::mem::take(&mut metadata),
                         ));
                     }
+                    let output = crate::native_tool_call::evidence_output(&message.content.item);
                     messages.push(*message.content);
+                    if let Some(output) = output {
+                        messages.push(ResponseItemEnvelope::new(output));
+                    }
                 }
             }
         }
