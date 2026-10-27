@@ -181,6 +181,9 @@ mod credential_masking;
 #[path = "scenarios_provider_capabilities.rs"]
 mod provider_capabilities;
 
+#[path = "scenarios_web_search.rs"]
+mod web_search;
+
 #[path = "scenarios_shared_instructions.rs"]
 mod shared_instructions;
 

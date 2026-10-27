@@ -1,0 +1,320 @@
+---
+source: core/tests/suite/scenarios_web_search.rs
+expression: "serde_json::to_string_pretty(&parameters)?"
+---
+{
+  "properties": {
+    "click": {
+      "description": "Open links from previously opened pages.",
+      "items": {
+        "properties": {
+          "id": {
+            "description": "Numbered link id to open.",
+            "type": "integer"
+          },
+          "ref_id": {
+            "description": "Reference id containing the numbered link.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ref_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "finance": {
+      "description": "Look up prices for the given stock symbols.",
+      "items": {
+        "properties": {
+          "market": {
+            "description": "ISO 3166-1 alpha-3 country code, \"OTC\", or \"\" for cryptocurrency.",
+            "type": "string"
+          },
+          "ticker": {
+            "description": "Ticker symbol to look up.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Asset type to look up.",
+            "enum": [
+              "equity",
+              "fund",
+              "crypto",
+              "index"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticker",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "find": {
+      "description": "Find text patterns in pages.",
+      "items": {
+        "properties": {
+          "pattern": {
+            "description": "Text pattern to find.",
+            "type": "string"
+          },
+          "ref_id": {
+            "description": "Reference id or URL to search within.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern",
+          "ref_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "image_query": {
+      "description": "Query the image search engine for a given list of queries.",
+      "items": {
+        "properties": {
+          "domains": {
+            "description": "Whether to filter by a specific list of domains.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "q": {
+            "description": "Search query.",
+            "type": "string"
+          },
+          "recency": {
+            "description": "Whether to filter by recency, as a number of recent days.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "literature_search_query": {
+      "description": "Search for scientific papers. Open relevant papers and cite the primary sources you use.",
+      "items": {
+        "properties": {
+          "domains": {
+            "description": "Whether to filter by a specific list of domains.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "q": {
+            "description": "Search query.",
+            "type": "string"
+          },
+          "recency": {
+            "description": "Whether to filter by recency, as a number of recent days.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "open": {
+      "description": "Open pages by reference id or URL.",
+      "items": {
+        "properties": {
+          "lineno": {
+            "description": "Line number to position the page at.",
+            "type": "integer"
+          },
+          "ref_id": {
+            "description": "Reference id or URL to open.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "response_length": {
+      "description": "Set the length of the response to be returned.",
+      "enum": [
+        "short",
+        "medium",
+        "long"
+      ],
+      "type": "string"
+    },
+    "screenshot": {
+      "description": "Take screenshots of PDF pages.",
+      "items": {
+        "properties": {
+          "pageno": {
+            "description": "Zero-indexed PDF page number.",
+            "type": "integer"
+          },
+          "ref_id": {
+            "description": "Reference id or URL to screenshot.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pageno",
+          "ref_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "search_query": {
+      "description": "Query the internet search engine for a given list of queries.",
+      "items": {
+        "properties": {
+          "domains": {
+            "description": "Whether to filter by a specific list of domains.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "q": {
+            "description": "Search query.",
+            "type": "string"
+          },
+          "recency": {
+            "description": "Whether to filter by recency, as a number of recent days.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "sports": {
+      "description": "Look up sports schedules and standings.",
+      "items": {
+        "properties": {
+          "date_from": {
+            "description": "Start date in YYYY-MM-DD format.",
+            "type": "string"
+          },
+          "date_to": {
+            "description": "End date in YYYY-MM-DD format.",
+            "type": "string"
+          },
+          "fn": {
+            "description": "Sports function to call.",
+            "enum": [
+              "schedule",
+              "standings"
+            ],
+            "type": "string"
+          },
+          "league": {
+            "description": "League to look up.",
+            "enum": [
+              "nba",
+              "wnba",
+              "nfl",
+              "nhl",
+              "mlb",
+              "epl",
+              "ncaamb",
+              "ncaawb",
+              "ipl"
+            ],
+            "type": "string"
+          },
+          "locale": {
+            "description": "Locale for the lookup.",
+            "type": "string"
+          },
+          "num_games": {
+            "description": "Number of games to return.",
+            "type": "integer"
+          },
+          "opponent": {
+            "description": "Opponent to use with `team` when narrowing the lookup.",
+            "type": "string"
+          },
+          "team": {
+            "description": "Team to look up, using the common 3 or 4 letter alias used in broadcasts.",
+            "type": "string"
+          },
+          "tool": {
+            "description": "Tool name for sports requests.",
+            "enum": [
+              "sports"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "fn",
+          "league"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "time": {
+      "description": "Get time for the given UTC offsets.",
+      "items": {
+        "properties": {
+          "utc_offset": {
+            "description": "UTC offset formatted like \"+03:00\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "utc_offset"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "weather": {
+      "description": "Look up weather forecasts.",
+      "items": {
+        "properties": {
+          "duration": {
+            "description": "Number of days to return. Defaults to 7.",
+            "type": "integer"
+          },
+          "location": {
+            "description": "Location in \"Country, Area, City\" format.",
+            "type": "string"
+          },
+          "start": {
+            "description": "Start date in YYYY-MM-DD format. Defaults to today.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "location"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "type": "object"
+}

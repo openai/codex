@@ -3,7 +3,9 @@ use schemars::r#gen::SchemaSettings;
 use serde_json::Map;
 use serde_json::Value;
 
-pub(crate) fn commands_schema() -> Value {
+pub(crate) const LITERATURE_SEARCH_QUERY: &str = "literature_search_query";
+
+pub(crate) fn commands_schema(supports_literature_search: bool) -> Value {
     let schema = SchemaSettings::draft2019_09()
         .with(|settings| {
             settings.inline_subschemas = true;
@@ -18,6 +20,11 @@ pub(crate) fn commands_schema() -> Value {
     let Value::Object(mut schema) = schema else {
         unreachable!("search commands schema must be an object");
     };
+    if !supports_literature_search
+        && let Some(Value::Object(properties)) = schema.get_mut("properties")
+    {
+        properties.remove(LITERATURE_SEARCH_QUERY);
+    }
 
     let mut tool_schema = Map::new();
     for key in [

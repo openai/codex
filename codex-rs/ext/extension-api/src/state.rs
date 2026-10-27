@@ -99,8 +99,16 @@ impl ExtensionData {
     where
         T: Any + Send + Sync,
     {
+        self.insert_arc(Arc::new(value))
+    }
+
+    /// Stores a shared attachment without cloning its contents.
+    pub fn insert_arc<T>(&self, value: Arc<T>) -> Option<Arc<T>>
+    where
+        T: Any + Send + Sync,
+    {
         self.entries()
-            .insert(TypeId::of::<T>(), Arc::new(value))
+            .insert(TypeId::of::<T>(), value)
             .map(downcast_data)
     }
 

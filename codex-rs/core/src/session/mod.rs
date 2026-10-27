@@ -4118,6 +4118,7 @@ impl Session {
             }
             let extension_data =
                 codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
+            extension_data.insert_arc(Arc::clone(&settings.model_info));
             if let Some(messages) = settings
                 .model_info
                 .model_messages

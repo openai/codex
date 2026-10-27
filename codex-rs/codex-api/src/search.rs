@@ -33,6 +33,9 @@ pub struct SearchCommands {
     /// Query the internet search engine for a given list of queries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search_query: Option<Vec<SearchQuery>>,
+    /// Search for scientific papers. Open relevant papers and cite the primary sources you use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub literature_search_query: Option<Vec<SearchQuery>>,
     /// Query the image search engine for a given list of queries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_query: Option<Vec<SearchQuery>>,
