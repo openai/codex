@@ -5,6 +5,7 @@ use crate::app::app_server_requests::BufferedServerRequest;
 #[path = "agent_center_tests.rs"]
 mod command_center;
 
+use super::super::agents_overview_view::AgentsOverviewGroup;
 use super::super::agents_overview_view::AgentsOverviewGrouping;
 use super::*;
 use crate::app::tests::make_test_app_with_channels;
@@ -782,7 +783,7 @@ async fn check_hidden_thread_does_not_refresh_shared_overview(source: &str) {
 async fn agents_overview_details_show_available_attention_without_expanding_rows() -> Result<()> {
     let mut app = make_test_app().await;
     let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-    let [root, child, unloaded] = std::array::from_fn(|_| ThreadId::new());
+    let [root, failed_agent, child, unloaded] = std::array::from_fn(|_| ThreadId::new());
     let waiting = ThreadStatus::Active {
         active_flags: vec![
             ThreadActiveFlag::WaitingOnApproval,
@@ -792,12 +793,18 @@ async fn agents_overview_details_show_available_attention_without_expanding_rows
     // The child question takes priority over the generic waiting parent.
     let mut threads = [
         (root, None, "Repair authentication", waiting.clone()),
-        (child, Some(root), "Check dependencies", waiting),
+        (child, Some(failed_agent), "Check dependencies", waiting),
         (
             unloaded,
             None,
             "Investigate parser",
             ThreadStatus::NotLoaded,
+        ),
+        (
+            failed_agent,
+            Some(root),
+            "Failed agent",
+            ThreadStatus::SystemError,
         ),
     ]
     .map(|(id, parent, title, status)| overview_thread(id, parent, title, status))
@@ -1346,10 +1353,6 @@ async fn overview_model_grouping_shows_details_and_preserves_selection() {
 
 #[tokio::test]
 async fn shared_overview_shows_only_root_sessions() {
-    assert_eq!(
-        AgentsOverviewGroup::for_status(&ThreadStatus::SystemError),
-        AgentsOverviewGroup::NeedsYou
-    );
     let mut app = make_test_app().await;
     let first_root = ThreadId::from_string("00000000-0000-0000-0000-000000000101").unwrap();
     let unloaded_root = ThreadId::from_string("00000000-0000-0000-0000-000000000102").unwrap();

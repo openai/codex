@@ -1224,8 +1224,11 @@ fn agents_overview_group(
     thread: &Thread,
     children: &HashMap<String, Vec<&Thread>>,
 ) -> AgentsOverviewGroup {
-    children.get(&thread.id).into_iter().flatten().fold(
-        AgentsOverviewGroup::for_status(&thread.status),
-        |group, child| group.min(agents_overview_group(child, children)),
-    )
+    children
+        .get(&thread.id)
+        .into_iter()
+        .flatten()
+        .fold(AgentsOverviewGroup::for_thread(thread), |group, child| {
+            group.min(agents_overview_group(child, children))
+        })
 }

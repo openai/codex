@@ -91,11 +91,55 @@ async fn live_center_keeps_status_order_across_progress_refreshes() {
             .unwrap();
         assert_eq!(app.agents_overview.visible_thread_ids[selected], ids[0]);
     }
+    for parent in [ids[0], ids[3]] {
+        threads.push(overview_thread(
+            ThreadId::new(),
+            Some(parent),
+            "Failed subagent",
+            ThreadStatus::SystemError,
+        ));
+    }
     let view = app.agents_overview_view(threads, Some(ids[0]));
+    assert!(
+        view.rows[view.selected_index().unwrap()]
+            .details
+            .lines
+            .is_empty()
+    );
     let after = screen(&view, /*width*/ 100, /*height*/ 18);
     insta::assert_snapshot!(format!(
-        "Initial display:\n{before}\n\nAfter progress updates:\n{after}"
+        "Initial display:\n{before}\n\nAfter subagents fail under Alpha and Ready task:\n{after}"
     ));
+}
+
+#[tokio::test]
+async fn failed_background_worker_only_needs_attention_for_a_pending_request() {
+    let app = make_test_app().await;
+    let worker_id = ThreadId::new();
+    let mut worker = overview_thread(
+        worker_id,
+        /*parent_thread_id*/ None,
+        "Background review",
+        ThreadStatus::SystemError,
+    );
+    worker.source = SessionSource::SubAgent(SubAgentSource::Review);
+    let view = app.agents_overview_view(vec![worker.clone()], Some(worker_id));
+    assert_eq!(view.rows[0].group, AgentsOverviewGroup::Finished);
+    assert!(view.rows[0].details.lines.is_empty());
+
+    let child = overview_thread(
+        ThreadId::new(),
+        Some(worker_id),
+        "Check dependencies",
+        ThreadStatus::Active {
+            active_flags: vec![ThreadActiveFlag::WaitingOnApproval],
+        },
+    );
+    let view = app.agents_overview_view(vec![worker, child], Some(worker_id));
+    assert_eq!(view.rows[0].group, AgentsOverviewGroup::NeedsYou);
+    let rendered = screen(&view, /*width*/ 100, /*height*/ 32);
+    assert!(rendered.contains("● Needs input"));
+    assert!(rendered.contains("Waiting for approval."));
 }
 
 #[tokio::test]
@@ -133,24 +177,29 @@ async fn live_center_appends_arrivals_and_status_transitions() {
     let mut arrival = overview_thread(delta, /*parent_thread_id*/ None, "Delta", working);
     arrival.updated_at += 100;
     threads.push(arrival);
+    let mut child = overview_thread(
+        child,
+        /*parent_thread_id*/ None,
+        "Child",
+        ThreadStatus::SystemError,
+    );
+    child.parent_thread_id = Some(bravo.to_string());
+    threads.push(child);
     assert_eq!(
         app.agents_overview_view(threads.clone(), Some(bravo))
             .thread_ids(),
         vec![alpha, bravo, delta, charlie]
     );
     threads[1].status = ThreadStatus::Idle;
-    assert_eq!(
-        app.agents_overview_view(threads.clone(), Some(bravo))
-            .thread_ids(),
-        vec![alpha, delta, charlie, bravo]
-    );
-    // A descendant can change the root's effective group without changing its own status.
-    threads.push(overview_thread(
-        child,
-        Some(bravo),
-        "Child",
-        ThreadStatus::SystemError,
-    ));
+    let view = app.agents_overview_view(threads.clone(), Some(bravo));
+    assert_eq!(view.thread_ids(), vec![alpha, delta, charlie, bravo]);
+    let selected = &view.rows[view.selected_index().unwrap()];
+    assert_eq!(selected.group, AgentsOverviewGroup::Ready);
+    assert!(selected.details.lines.is_empty());
+    // A request from a descendant can still bring its idle parent to the top.
+    threads.last_mut().unwrap().status = ThreadStatus::Active {
+        active_flags: vec![ThreadActiveFlag::WaitingOnApproval],
+    };
     assert_eq!(
         app.agents_overview_view(threads.clone(), Some(bravo))
             .thread_ids(),

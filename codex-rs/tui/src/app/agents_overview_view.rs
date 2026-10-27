@@ -36,6 +36,7 @@ use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::terminal_hyperlinks::visible_lines;
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadStatus;
@@ -74,8 +75,8 @@ pub(super) enum AgentsOverviewGroup {
 }
 
 impl AgentsOverviewGroup {
-    pub(super) fn for_status(status: &ThreadStatus) -> Self {
-        match status {
+    pub(super) fn for_thread(thread: &Thread) -> Self {
+        match &thread.status {
             ThreadStatus::Active { active_flags }
                 if active_flags.contains(&ThreadActiveFlag::WaitingOnApproval)
                     || active_flags.contains(&ThreadActiveFlag::WaitingOnUserInput) =>
@@ -84,8 +85,9 @@ impl AgentsOverviewGroup {
             }
             ThreadStatus::Active { .. } => Self::Working,
             ThreadStatus::Idle => Self::Ready,
-            ThreadStatus::SystemError => Self::NeedsYou,
-            ThreadStatus::NotLoaded => Self::Finished,
+            // A subagent failure ends its work without asking the user to act.
+            ThreadStatus::SystemError if !is_subagent(thread) => Self::NeedsYou,
+            ThreadStatus::SystemError | ThreadStatus::NotLoaded => Self::Finished,
         }
     }
 
@@ -97,6 +99,10 @@ impl AgentsOverviewGroup {
             Self::Finished => "Inactive",
         }
     }
+}
+
+fn is_subagent(thread: &Thread) -> bool {
+    thread.parent_thread_id.is_some() || matches!(thread.source, SessionSource::SubAgent(_))
 }
 
 #[derive(Clone)]
@@ -427,7 +433,9 @@ impl AgentsOverviewView {
 
     fn status(row: &AgentsOverviewRow) -> (&'static str, Span<'static>) {
         match row.group {
-            AgentsOverviewGroup::NeedsYou if row.thread.status == ThreadStatus::SystemError => {
+            AgentsOverviewGroup::NeedsYou
+                if row.thread.status == ThreadStatus::SystemError && !is_subagent(&row.thread) =>
+            {
                 ("Error", "!".red())
             }
             AgentsOverviewGroup::NeedsYou => ("Needs input", "●".red()),

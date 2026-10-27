@@ -139,7 +139,7 @@ impl App {
         let mut lines = Vec::new();
         // Urgency comes first; on ties, prefer available current detail over history.
         let priority = |thread: &Thread| {
-            let group = AgentsOverviewGroup::for_status(&thread.status);
+            let group = AgentsOverviewGroup::for_thread(thread);
             let has_detail = ThreadId::from_string(&thread.id).is_ok_and(|id| match group {
                 AgentsOverviewGroup::NeedsYou => self.agents_overview_request_preview(id).is_some(),
                 AgentsOverviewGroup::Working => {
@@ -180,7 +180,7 @@ impl App {
             lines.push(Line::default());
             lines.push(vec!["Agent: ".dim(), preview_text(name).into()].into());
         }
-        if AgentsOverviewGroup::for_status(&source.status) == AgentsOverviewGroup::NeedsYou {
+        if AgentsOverviewGroup::for_thread(source) == AgentsOverviewGroup::NeedsYou {
             if !is_child {
                 lines.extend([Line::default(), "Needs attention".red().into()]);
             }

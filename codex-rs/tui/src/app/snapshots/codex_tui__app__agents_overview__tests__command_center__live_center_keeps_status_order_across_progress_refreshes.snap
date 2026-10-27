@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/agent_center_tests.rs
-expression: "format!(\"Initial display:\\n{before}\\n\\nAfter progress updates:\\n{after}\")"
+expression: "format!(\"Initial display:\\n{before}\\n\\nAfter subagents fail under Alpha and Ready task:\\n{after}\")"
 ---
 Initial display:
   Agent command center  Group: Status  g
@@ -22,7 +22,7 @@ Initial display:
                                                           │
   ? help  esc back  ↑/↓ move  enter open  n new
 
-After progress updates:
+After subagents fail under Alpha and Ready task:
   Agent command center  Group: Status  g
    All 5   Needs you 1   Working 3   Ready 1   Inactive 0                          tab/⇧tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────
