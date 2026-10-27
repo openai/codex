@@ -5,6 +5,10 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::common::SafetyBufferingTreatment;
 use crate::common::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
+use crate::endpoint::responses_websocket_probe::ResponsesWebsocketClose;
+use crate::endpoint::responses_websocket_probe::ResponsesWebsocketProbe;
+use crate::endpoint::responses_websocket_probe::ResponsesWebsocketProbeError;
+use crate::endpoint::responses_websocket_probe::ResponsesWebsocketProbeFailureStage;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
@@ -37,6 +41,7 @@ use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tracing::Instrument;
 use tracing::Span;
@@ -395,30 +400,6 @@ pub struct ResponsesWebsocketClient {
     auth: SharedAuthProvider,
 }
 
-/// Close frame information captured by a handshake probe.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponsesWebsocketClose {
-    /// WebSocket close code returned by the server.
-    pub code: String,
-    /// Human-readable close reason returned by the server.
-    pub reason: String,
-}
-
-/// Result of a handshake-only Responses WebSocket probe.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponsesWebsocketProbe {
-    /// Redacted by callers before displaying or serializing support reports.
-    pub url: String,
-    /// HTTP status returned by the successful WebSocket upgrade.
-    pub status: StatusCode,
-    /// Whether the server reported reasoning support in the upgrade response.
-    pub reasoning_included: bool,
-    /// Whether the server returned a server-selected model in the upgrade response.
-    pub server_model_present: bool,
-    /// Close frame received immediately after upgrade, when one arrives quickly.
-    pub immediate_close: Option<ResponsesWebsocketClose>,
-}
-
 impl ResponsesWebsocketClient {
     /// Creates a Responses WebSocket client for an already-resolved provider and auth source.
     pub fn new(provider: Provider, auth: SharedAuthProvider) -> Self {
@@ -458,35 +439,67 @@ impl ResponsesWebsocketClient {
         extra_headers: HeaderMap,
         default_headers: HeaderMap,
         immediate_close_timeout: Duration,
-    ) -> Result<ResponsesWebsocketProbe, ApiError> {
+    ) -> Result<ResponsesWebsocketProbe, ResponsesWebsocketProbeError> {
         let ws_url = self
             .provider
             .websocket_url_for_path("/responses")
-            .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+            .map_err(|err| {
+                ResponsesWebsocketProbeError::before_upgrade(
+                    ApiError::Stream(format!("failed to build websocket URL: {err}")),
+                    ResponsesWebsocketProbeFailureStage::Unknown,
+                )
+            })?;
 
         let headers = merge_request_headers(&self.provider.headers, extra_headers, default_headers);
-        let headers = self.auth.apply_auth_headers(headers).await?;
+        let headers = self.auth.apply_auth_headers(headers).await.map_err(|err| {
+            ResponsesWebsocketProbeError::before_upgrade(
+                err.into(),
+                ResponsesWebsocketProbeFailureStage::Unknown,
+            )
+        })?;
 
-        let connector = WebSocketConnector::new(http_client_factory)
-            .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
-        let (mut stream, status, reasoning_included, server_model) = connect_websocket(
+        let connector = WebSocketConnector::new(http_client_factory).map_err(|err| {
+            ResponsesWebsocketProbeError::before_upgrade(
+                ApiError::Stream(format!("failed to configure websocket TLS: {err}")),
+                ResponsesWebsocketProbeFailureStage::Tls,
+            )
+        })?;
+        let (mut stream, response, reasoning_included, server_model) = connect_websocket(
             ws_url.clone(),
             headers,
             &connector,
             /*turn_state*/ None,
         )
         .await?;
+        let status = response.status();
+        let mut headers = HeaderMap::new();
+        for name in [
+            "x-request-id",
+            "x-oai-request-id",
+            "cf-ray",
+            "x-ms-request-id",
+        ] {
+            for value in response.headers().get_all(name) {
+                headers.append(name, value.clone());
+            }
+        }
         let immediate_close = tokio::time::timeout(immediate_close_timeout, stream.next())
             .await
             .ok()
             .flatten()
             .transpose()
-            .map_err(map_ws_stream_error)?
+            .map_err(|error| ResponsesWebsocketProbeError {
+                error: Box::new(map_ws_stream_error(error)),
+                stage: ResponsesWebsocketProbeFailureStage::Unknown,
+                status: Some(status),
+                headers: Some(headers.clone()),
+            })?
             .and_then(immediate_close_from_message);
 
         Ok(ResponsesWebsocketProbe {
             url: ws_url.to_string(),
             status,
+            headers,
             reasoning_included,
             server_model_present: server_model.is_some(),
             immediate_close,
@@ -498,7 +511,13 @@ fn immediate_close_from_message(message: Message) -> Option<ResponsesWebsocketCl
     let Message::Close(frame) = message else {
         return None;
     };
-    frame.map(close_frame_to_probe)
+    Some(match frame {
+        Some(frame) => close_frame_to_probe(frame),
+        None => ResponsesWebsocketClose {
+            code: "1005".to_string(),
+            reason: String::new(),
+        },
+    })
 }
 
 fn close_frame_to_probe(frame: CloseFrame) -> ResponsesWebsocketClose {
@@ -528,25 +547,46 @@ async fn connect_websocket(
     headers: HeaderMap,
     connector: &WebSocketConnector,
     turn_state: Option<Arc<OnceLock<String>>>,
-) -> Result<(WsStream, StatusCode, bool, Option<String>), ApiError> {
-    info!("connecting to websocket: {url}");
+) -> Result<(WsStream, Response, bool, Option<String>), ResponsesWebsocketProbeError> {
+    info!("connecting to Responses WebSocket");
 
-    let mut request = url
-        .as_str()
-        .into_client_request()
-        .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
+    let mut request = url.as_str().into_client_request().map_err(|err| {
+        ResponsesWebsocketProbeError::before_upgrade(
+            ApiError::Stream(format!("failed to build websocket request: {err}")),
+            ResponsesWebsocketProbeFailureStage::Unknown,
+        )
+    })?;
     request.headers_mut().extend(headers);
 
     let response = connector.connect(request, websocket_config()).await;
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
-            info!("successfully connected to websocket: {url}");
+            info!(
+                status = response.status().as_u16(),
+                "successfully connected to Responses WebSocket"
+            );
             (stream, response)
         }
         Err(err) => {
-            error!("failed to connect to websocket: {err}, url: {url}");
-            return Err(map_ws_error(err, &url));
+            // Tokio-rustls wraps certificate failures in I/O errors.
+            let is_tls = match &err {
+                WsError::Tls(_) => true,
+                WsError::Io(error) => {
+                    matches!(error.get_ref(), Some(source) if source.is::<rustls::Error>())
+                }
+                _ => false,
+            };
+            let stage = if is_tls {
+                ResponsesWebsocketProbeFailureStage::Tls
+            } else {
+                ResponsesWebsocketProbeFailureStage::Unknown
+            };
+            error!(?stage, "failed to connect to Responses WebSocket");
+            return Err(ResponsesWebsocketProbeError::before_upgrade(
+                map_ws_error(err, &url),
+                stage,
+            ));
         }
     };
 
@@ -566,7 +606,7 @@ async fn connect_websocket(
     }
     Ok((
         WsStream::new(stream),
-        response.status(),
+        response,
         reasoning_included,
         server_model,
     ))

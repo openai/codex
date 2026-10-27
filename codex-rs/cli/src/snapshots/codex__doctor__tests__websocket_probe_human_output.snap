@@ -1,0 +1,67 @@
+---
+source: cli/src/doctor.rs
+expression: rendered
+---
+successful handshake
+Codex Doctor v0.0.0
+
+Connectivity
+  [ok] network      network environment is readable
+      HTTPS proxy              not set
+  [ok] websocket    Responses WebSocket handshake succeeded
+      handshake result         HTTP 101
+      reasoning header         true
+      server model present     true
+  [ok] reachability active provider endpoints are reachable over HTTP
+      OpenAI endpoint          HTTP 200
+
+-------------------------------------------------------------
+3 ok | 0 warn | 0 fail ok
+
+--summary compact output           --all expand truncated lists
+--json redacted report
+
+immediate close
+Codex Doctor v0.0.0
+
+Notes
+   [!!] websocket    Responses WebSocket closed immediately after handshake - Check proxy, VPN, firewall, DNS, custom CA, and WebSocket policy support.
+-------------------------------------------------------------
+
+Connectivity
+  [ok] network      network environment is readable
+      HTTPS proxy              not set
+  [!!] websocket    Responses WebSocket closed immediately after handshake - Check proxy, VPN, firewall, DNS, custom CA, and WebSocket policy support.
+      handshake result         HTTP 101
+      immediate close code     1008
+      immediate close reason   present (redacted)
+  [ok] reachability active provider endpoints are reachable over HTTP
+      OpenAI endpoint          HTTP 200
+
+-------------------------------------------------------------
+2 ok | 1 notes | 1 warn | 0 fail degraded
+
+--summary compact output           --all expand truncated lists
+--json redacted report
+
+stream failure
+Codex Doctor v0.0.0
+
+Notes
+   [!!] websocket    Responses WebSocket failed; HTTPS fallback may still work - Check proxy, VPN, firewall, DNS, custom CA, and WebSocket policy support.
+-------------------------------------------------------------
+
+Connectivity
+  [ok] network      network environment is readable
+      HTTPS proxy              not set
+  [!!] websocket    Responses WebSocket failed; HTTPS fallback may still work - Check proxy, VPN, firewall, DNS, custom CA, and WebSocket policy support.
+      endpoint                 wss://example.com/responses
+      handshake stream error   [redacted]
+  [ok] reachability active provider endpoints are reachable over HTTP
+      OpenAI endpoint          HTTP 200
+
+-------------------------------------------------------------
+2 ok | 1 notes | 1 warn | 0 fail degraded
+
+--summary compact output           --all expand truncated lists
+--json redacted report

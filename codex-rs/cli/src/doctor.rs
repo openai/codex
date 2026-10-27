@@ -30,6 +30,7 @@ use anyhow::Context;
 use clap::Parser;
 use codex_api::ApiError;
 use codex_api::ResponsesWebsocketClient;
+use codex_api::TransportError;
 use codex_api::is_azure_responses_provider;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::ConfigLoadError;
@@ -2373,7 +2374,10 @@ async fn websocket_reachability_check(
             ));
             if let Some(close) = probe.immediate_close {
                 details.push(format!("immediate close code: {}", close.code));
-                details.push(format!("immediate close reason: {}", close.reason));
+                details.push(format!(
+                    "immediate close reason: {}",
+                    close_reason_detail(&close.reason)
+                ));
                 return DoctorCheck::new(
                     "network.websocket_reachability",
                     "websocket",
@@ -2396,7 +2400,7 @@ async fn websocket_reachability_check(
         Ok(Err(err)) => websocket_probe_warning(
             "Responses WebSocket failed; HTTPS fallback may still work",
             details,
-            websocket_error_detail(&err),
+            websocket_error_detail(&err.error),
         ),
         Err(_) => websocket_probe_warning(
             "Responses WebSocket timed out; HTTPS fallback may still work",
@@ -2424,28 +2428,60 @@ fn websocket_probe_warning(
 
 fn websocket_error_detail(err: &ApiError) -> String {
     match err {
-        ApiError::Transport(transport) => format!("handshake transport error: {transport}"),
-        ApiError::Api { status, message } => {
-            format!("handshake API error: {status} {message}")
+        ApiError::Transport(transport) => {
+            let detail = match transport {
+                // Policy denials contain only fixed descriptions, without wire values.
+                TransportError::Policy(denied) => denied.to_string(),
+                TransportError::Http { status, .. } => format!("http {status}: [redacted]"),
+                TransportError::RetryLimit => "retry limit reached".to_string(),
+                TransportError::Timeout => "timeout".to_string(),
+                TransportError::Connection(_) => "connection failed: [redacted]".to_string(),
+                TransportError::Network(_) => "network error: [redacted]".to_string(),
+                TransportError::Build(_) => "request build error: [redacted]".to_string(),
+                TransportError::ResponseTooLarge { max_bytes } => {
+                    format!("response body exceeds the {max_bytes} byte limit")
+                }
+            };
+            format!("handshake transport error: {detail}")
         }
-        ApiError::Stream(message) => format!("handshake stream error: {message}"),
+        ApiError::Api { status, .. } => format!("handshake API error: {status} [redacted]"),
+        ApiError::Stream(_) => "handshake stream error: [redacted]".to_string(),
+        ApiError::ResponseIncomplete(_) => {
+            "handshake error: incomplete response: [redacted]".to_string()
+        }
+        // These variants format fixed text; retry metadata is typed and never printed.
         ApiError::ContentFilter
-        | ApiError::ResponseIncomplete(_)
         | ApiError::ContextWindowExceeded
         | ApiError::QuotaExceeded
         | ApiError::UsageNotIncluded
-        | ApiError::Retryable { .. }
-        | ApiError::RateLimitExceeded { .. }
-        | ApiError::RateLimit(_)
-        | ApiError::InvalidRequest { .. }
-        | ApiError::ModelNotFound { .. }
-        | ApiError::InvalidPrompt { .. }
-        | ApiError::CyberPolicy { .. }
-        | ApiError::BioPolicy { .. }
-        | ApiError::MisalignmentPolicyViolation { .. }
         | ApiError::FlexUnavailable
         | ApiError::ServerOverloaded { .. }
         | ApiError::PolicyCapacityUnavailable { .. } => format!("handshake error: {err}"),
+        ApiError::Retryable { .. } => "handshake error: retryable error: [redacted]".to_string(),
+        ApiError::RateLimitExceeded { .. } => {
+            "handshake error: rate limit exceeded: [redacted]".to_string()
+        }
+        ApiError::RateLimit(_) => "handshake error: rate limit: [redacted]".to_string(),
+        ApiError::InvalidRequest { .. } => {
+            "handshake error: invalid request: [redacted]".to_string()
+        }
+        ApiError::ModelNotFound { .. } => {
+            "handshake error: model not found: [redacted]".to_string()
+        }
+        ApiError::InvalidPrompt { .. } => "handshake error: invalid prompt: [redacted]".to_string(),
+        ApiError::CyberPolicy { .. } => "handshake error: cyber policy: [redacted]".to_string(),
+        ApiError::BioPolicy { .. } => "handshake error: bio policy: [redacted]".to_string(),
+        ApiError::MisalignmentPolicyViolation { .. } => {
+            "handshake error: misalignment policy violation: [redacted]".to_string()
+        }
+    }
+}
+
+fn close_reason_detail(reason: &str) -> &'static str {
+    if reason.is_empty() {
+        "empty"
+    } else {
+        "present (redacted)"
     }
 }
 
@@ -3142,6 +3178,163 @@ mod tests {
             DoctorCheck::new("b", "auth", CheckStatus::Fail, "fail"),
         ];
         assert_eq!(overall_status(&checks), CheckStatus::Fail);
+    }
+
+    #[test]
+    fn websocket_probe_human_output() {
+        let report = |websocket: DoctorCheck| DoctorReport {
+            schema_version: 1,
+            generated_at: "0s since unix epoch".to_string(),
+            overall_status: websocket.status,
+            codex_version: "0.0.0".to_string(),
+            checks: vec![
+                DoctorCheck::new(
+                    "network.environment",
+                    "network",
+                    CheckStatus::Ok,
+                    "network environment is readable",
+                )
+                .detail("HTTPS proxy: not set"),
+                websocket,
+                DoctorCheck::new(
+                    "network.provider_reachability",
+                    "reachability",
+                    CheckStatus::Ok,
+                    "active provider endpoints are reachable over HTTP",
+                )
+                .detail("OpenAI endpoint: HTTP 200"),
+            ],
+        };
+        let options = HumanOutputOptions {
+            show_details: true,
+            show_all: true,
+            ascii: true,
+            color_enabled: false,
+        };
+        let success = render_human_report(
+            &report(
+                DoctorCheck::new(
+                    "network.websocket_reachability",
+                    "websocket",
+                    CheckStatus::Ok,
+                    "Responses WebSocket handshake succeeded",
+                )
+                .detail("handshake result: HTTP 101")
+                .detail("reasoning header: true")
+                .detail("server model present: true"),
+            ),
+            options,
+        );
+        let immediate_close = render_human_report(
+            &report(
+                DoctorCheck::new(
+                    "network.websocket_reachability",
+                    "websocket",
+                    CheckStatus::Warning,
+                    "Responses WebSocket closed immediately after handshake",
+                )
+                .detail("handshake result: HTTP 101")
+                .detail("immediate close code: 1008")
+                .detail(format!(
+                    "immediate close reason: {}",
+                    close_reason_detail("private-close-reason")
+                ))
+                .remediation(
+                    "Check proxy, VPN, firewall, DNS, custom CA, and WebSocket policy support.",
+                ),
+            ),
+            options,
+        );
+        let generic_failure = render_human_report(
+            &report(websocket_probe_warning(
+                "Responses WebSocket failed; HTTPS fallback may still work",
+                vec!["endpoint: wss://example.com/responses".to_string()],
+                websocket_error_detail(&ApiError::Stream("private-stream-error".to_string())),
+            )),
+            options,
+        );
+        let rendered = format!(
+            "successful handshake\n{success}\nimmediate close\n{immediate_close}\nstream failure\n{generic_failure}"
+        );
+
+        assert!(!rendered.contains("private-close-reason"));
+        assert!(!rendered.contains("private-stream-error"));
+        insta::assert_snapshot!("websocket_probe_human_output", rendered);
+    }
+
+    #[test]
+    fn websocket_error_detail_preserves_categories_without_wire_values() {
+        let secret = "private-wire-value";
+        let message = || secret.to_string();
+        let cases = [
+            ApiError::Transport(TransportError::Http {
+                status: http::StatusCode::FORBIDDEN,
+                url: Some(format!("https://example.com/?token={secret}")),
+                headers: Some(HeaderMap::from_iter([(
+                    http::header::SET_COOKIE,
+                    HeaderValue::from_static(secret),
+                )])),
+                body: Some(message()),
+                retry_after: None,
+            }),
+            ApiError::Transport(TransportError::Network(message())),
+            ApiError::Transport(TransportError::Build(message())),
+            ApiError::Api {
+                status: http::StatusCode::UNAUTHORIZED,
+                message: message(),
+            },
+            ApiError::Stream(message()),
+            ApiError::ResponseIncomplete(Box::new(
+                codex_protocol::error::ResponseIncompleteError {
+                    reason: message(),
+                    response_id: Some(message()),
+                    token_usage: None,
+                },
+            )),
+            ApiError::Retryable {
+                message: message(),
+                retry_after: None,
+            },
+            ApiError::RateLimitExceeded {
+                message: message(),
+                retry_after: None,
+            },
+            ApiError::RateLimit(message()),
+            ApiError::InvalidRequest { message: message() },
+            ApiError::ModelNotFound {
+                message: message(),
+                status: Some(http::StatusCode::NOT_FOUND),
+            },
+            ApiError::InvalidPrompt { message: message() },
+            ApiError::CyberPolicy { message: message() },
+            ApiError::BioPolicy { message: message() },
+            ApiError::MisalignmentPolicyViolation {
+                message: message(),
+                misalignment: None,
+            },
+        ];
+        let details = cases.iter().map(websocket_error_detail).collect::<Vec<_>>();
+        assert!(!details.join("\n").contains(secret));
+        assert_eq!(
+            details,
+            [
+                "handshake transport error: http 403 Forbidden: [redacted]",
+                "handshake transport error: network error: [redacted]",
+                "handshake transport error: request build error: [redacted]",
+                "handshake API error: 401 Unauthorized [redacted]",
+                "handshake stream error: [redacted]",
+                "handshake error: incomplete response: [redacted]",
+                "handshake error: retryable error: [redacted]",
+                "handshake error: rate limit exceeded: [redacted]",
+                "handshake error: rate limit: [redacted]",
+                "handshake error: invalid request: [redacted]",
+                "handshake error: model not found: [redacted]",
+                "handshake error: invalid prompt: [redacted]",
+                "handshake error: cyber policy: [redacted]",
+                "handshake error: bio policy: [redacted]",
+                "handshake error: misalignment policy violation: [redacted]",
+            ]
+        );
     }
 
     #[test]

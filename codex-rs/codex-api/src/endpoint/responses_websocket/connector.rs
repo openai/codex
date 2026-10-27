@@ -35,8 +35,10 @@ impl ResponsesWebsocketClient {
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
         let headers = merge_request_headers(&self.provider.headers, extra_headers, default_headers);
         let headers = self.auth.apply_auth_headers(headers).await?;
-        let (stream, _status, server_reasoning_included, server_model) =
-            connect_websocket(ws_url, headers, connector, turn_state).await?;
+        let (stream, _response, server_reasoning_included, server_model) =
+            connect_websocket(ws_url, headers, connector, turn_state)
+                .await
+                .map_err(|failure| *failure.error)?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
