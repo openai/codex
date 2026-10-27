@@ -258,14 +258,17 @@ impl ChatWidget {
             options.separate_status_line = options.command_popup_placement
                 != crate::bottom_pane::CommandPopupPlacement::AboveComposer;
             let bottom_pane = self.bottom_pane.backdrop_with_options(options);
-            if !self.quick_dial_menu {
+            let above_composer = if self.quick_dial_menu {
+                RenderableItem::Owned(Box::new(self.quick_dial_hud()))
+            } else if let Some(pending) = &self.safety_recourse
+                && !self.bottom_pane.has_active_view()
+            {
+                RenderableItem::Borrowed(&pending.notice)
+            } else {
                 return bottom_pane;
-            }
+            };
             let mut column = FlexRenderable::new();
-            column.push(
-                /*flex*/ 1,
-                RenderableItem::Owned(Box::new(self.quick_dial_hud())),
-            );
+            column.push(/*flex*/ 1, above_composer);
             column.push(/*flex*/ 0, bottom_pane);
             RenderableItem::Owned(Box::new(column))
         }

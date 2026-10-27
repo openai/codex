@@ -1,0 +1,20 @@
+---
+source: tui/src/app/tests/safety_buffering.rs
+expression: "format!(\"{loading}\\n\\n{notice}\")"
+---
+ⓘ This content can’t be shown
+  We take extra care with some cybersecurity requests. If you’re doing
+  authorized security work, apply for Daybreak to get broader access.
+  Learn more: https://help.openai.com/en/articles/20001326
+  Apply for Daybreak: https://openai.com/form/enterprise-trusted-access-for-
+  cyber/
+• Finding an explanation and safer ways to continue…
+
+ⓘ This content can’t be shown
+  We take extra caution with requests that could enable access to accounts or
+  systems beyond permitted scope. We can still help with an overview of
+  account security and recovery. If you’re doing authorized security work,
+  apply for Daybreak to get broader access.
+  Learn more: https://help.openai.com/en/articles/20001326
+  Apply for Daybreak: https://openai.com/form/enterprise-trusted-access-for-
+  cyber/

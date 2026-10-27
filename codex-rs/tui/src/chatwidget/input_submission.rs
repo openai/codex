@@ -140,7 +140,10 @@ impl ChatWidget {
             return (false, None);
         }
         self.empty_state_animation.borrow_mut().dismiss();
-        if self.input_queue.rate_limit_recovery_pending || self.pending_image_submission.is_some() {
+        if self.input_queue.rate_limit_recovery_pending
+            || self.pending_image_submission.is_some()
+            || self.safety_recourse.is_some()
+        {
             let model_prompt = source == UserMessageSource::Prompt
                 && (shell_escape_policy == ShellEscapePolicy::Disallow
                     || !user_message.text.starts_with('!'));
@@ -154,6 +157,7 @@ impl ChatWidget {
                 queue_index,
                 QueuedUserMessage {
                     source,
+                    prepared_images,
                     ..QueuedUserMessage::new(
                         user_message,
                         match shell_escape_policy {

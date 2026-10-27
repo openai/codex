@@ -169,6 +169,109 @@ async fn wait_for_turn_completed(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn safety_recourse_handles_a_policy_block() -> Result<()> {
+    let (mut app, mut events, _) = make_test_app_with_channels().await;
+    let model = responses::start_mock_server().await;
+    app_test_support::MockResponsesConfig::new(&model.uri())
+        .write(app.config.codex_home.as_path())?;
+    app.config = app
+        .rebuild_config_for_cwd(app.config.cwd.to_path_buf())
+        .await?;
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    for (domain, error_domain) in [("cyber", "cyber"), ("bio", "bio"), ("cyber", "bio")] {
+        let topic = if domain == "cyber" {
+            "unauthorized_account_or_system_access"
+        } else {
+            "risky_biological_activities"
+        };
+        let bio_message = "This request has been flagged for possible biological risk.";
+        let before_block = if domain == "bio" {
+            ev_assistant_message("partial", "Checking the request.")
+        } else {
+            serde_json::json!({"type": "response.metadata", "metadata": {
+                "type": "safety_buffering", "use_cases": [domain], "reasons": ["policy-check"]
+            }})
+        };
+        let _model_requests = responses::mount_sse_once(
+            &model,
+            responses::sse(vec![
+                ev_response_created("blocked"),
+                before_block,
+                serde_json::json!({"type": "response.metadata", "metadata": {
+                    "openai_chatgpt_moderation_metadata": {"safety_block": {
+                        "schema_version": 1, "domain": domain, "status": "loading"
+                    }}
+                }}),
+                serde_json::json!({"type": "response.metadata", "metadata": {
+                    "openai_chatgpt_moderation_metadata": {"safety_recourse": {
+                        "schema_version": 1, "domain": domain, "source": "user_request",
+                        "source_message": {"id": format!("{}🔒", "a".repeat(255)), "kind": "ordinary_message", "role": "user"},
+                        "topic": topic,
+                        "suggestions": [
+                            {"label": "Recover an account", "prompt_text": "Help me recover my account safely."},
+                            {"label": "Protect a system", "prompt_text": "Explain system protection."},
+                            {"label": "Understand risks", "prompt_text": "Explain account security risks."}
+                        ]
+                    }}
+                }}),
+                serde_json::json!({"type": "response.failed", "response": {
+                    "id": "blocked", "status": "failed",
+                    "error": {"code": format!("{error_domain}_policy"), "message": (error_domain == "bio").then_some(bio_message)}
+                }}),
+            ]),
+        )
+        .await;
+        let started = server.start_thread(&app.config).await?;
+        let source_id = started.session.thread_id;
+        app.replace_chat_widget_with_app_server_thread(
+            &mut tui,
+            started,
+            ThreadAttachPresentation::SessionLineage,
+            /*initial_user_message*/ None,
+        )
+        .await?;
+        submit_prompt(&mut app, "Blocked original prompt");
+        app.submit_thread_op(&mut server, source_id, next_user_turn_event(&mut events))
+            .await?;
+        loop {
+            let event = server.next_event().await.expect("moderation metadata");
+            let is_metadata = matches!(&event.event, AppServerEvent::ServerNotification(notification)
+            if matches!(notification.as_ref(), ServerNotification::TurnModerationMetadata(_)));
+            app.handle_backend_event(&server, event).await;
+            drain_active_thread_events(&mut app);
+            if is_metadata {
+                break;
+            }
+        }
+        let loading = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+        let loading = loading.split(" (").next().unwrap_or_default();
+        while let Ok(event) = events.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                assert!(!cell.as_any().is::<history_cell::SafetyAccessBlockCell>());
+            }
+        }
+        wait_for_turn_completed(&mut app, &mut server, source_id).await;
+        let notice = next_history_message(&mut events);
+        assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("This content can"));
+        if domain != error_domain {
+            let generic =
+                history_cell::new_safety_access_block_event().display_lines(/*width*/ 80);
+            assert_eq!(notice, lines_to_single_string(&generic));
+            continue;
+        }
+        if domain == "bio" {
+            assert!(loading.contains("Finding an explanation and safer ways to continue…"));
+            assert!(notice.contains("research and safety considerations."));
+            continue;
+        }
+        insta::assert_snapshot!("safety_recourse", format!("{loading}\n\n{notice}"));
+    }
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn active_turn_interrupt_is_nonblocking_and_coalesces_repeated_requests() -> Result<()> {
     Box::pin(interrupt_after_inactive_steer(SteerSwitch::WithinTask)).await
 }

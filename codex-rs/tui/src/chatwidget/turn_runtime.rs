@@ -11,9 +11,20 @@ const LEGACY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
 const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "This content was flagged for possible biological risk.";
 
+pub(super) fn is_bio_policy_error(message: &str) -> bool {
+    is_safety_access_block_message(message)
+        || serde_json::from_str::<serde_json::Value>(message).is_ok_and(|response| {
+            response["error"]["code"].as_str() == Some("bio_policy")
+                || response["error"]["message"]
+                    .as_str()
+                    .is_some_and(is_safety_access_block_message)
+        })
+}
+
 fn is_safety_access_block_message(message: &str) -> bool {
     message.starts_with(LEGACY_SAFETY_ACCESS_BLOCK_PREFIX)
         || message.starts_with(BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX)
+        || message.starts_with("This request has been flagged for possible biological risk.")
 }
 
 impl ChatWidget {
@@ -341,6 +352,7 @@ impl ChatWidget {
         self.reasoning_header = None;
         self.clear_context_compaction();
         self.clear_safety_buffering();
+        self.safety_recourse = None;
         // Drop preview-only stream tail content on any termination path before
         // failed-cell finalization, so transient tail cells are never persisted.
         self.clear_active_stream_tail();
@@ -414,15 +426,19 @@ impl ChatWidget {
         true
     }
 
-    pub(super) fn on_cyber_policy_error(&mut self) {
+    pub(super) fn cyber_policy_notice(&self) -> crate::daybreak::Notice {
         let can_enable_daybreak =
             self.daybreak_account_eligible() && !self.side_conversation_active();
-        let notice = crate::daybreak::notice_for_setting(
+        crate::daybreak::notice_for_setting(
             &self.model_catalog.models,
             self.current_model(),
             self.daybreak_enabled && can_enable_daybreak,
             can_enable_daybreak,
-        );
+        )
+    }
+
+    pub(super) fn on_cyber_policy_error(&mut self) {
+        let notice = self.cyber_policy_notice();
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_cyber_policy_error_event(notice));
@@ -539,14 +555,7 @@ impl ChatWidget {
             .is_some_and(is_app_server_cyber_policy_error)
         {
             self.on_cyber_policy_error();
-        } else if is_safety_access_block_message(&message)
-            || serde_json::from_str::<serde_json::Value>(&message).is_ok_and(|response| {
-                response["error"]["code"].as_str() == Some("bio_policy")
-                    || response["error"]["message"]
-                        .as_str()
-                        .is_some_and(is_safety_access_block_message)
-            })
-        {
+        } else if is_bio_policy_error(&message) {
             self.input_queue.submit_pending_steers_after_interrupt = false;
             self.finalize_turn();
             self.add_to_history(history_cell::new_safety_access_block_event());
