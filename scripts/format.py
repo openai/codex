@@ -41,11 +41,44 @@ def just_formatter_group(*, check: bool) -> FormatterGroup:
 
 
 def rust_formatter_group(*, check: bool) -> FormatterGroup:
-    args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+    rust_workspace = REPO_ROOT / "codex-rs"
+    repository_files = subprocess.check_output(
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "*.rs",
+        ],
+        cwd=REPO_ROOT,
+    ).split(b"\0")
+    rust_files = sorted(
+        os.path.relpath(REPO_ROOT / os.fsdecode(encoded_path), rust_workspace)
+        for encoded_path in repository_files
+        if encoded_path and (REPO_ROOT / os.fsdecode(encoded_path)).is_file()
+    )
+    # Git supplies every source file, including files Cargo cannot discover.
+    # Do not recursively format child modules again or include ignored files.
+    args = [
+        "rustfmt",
+        "--edition",
+        "2024",
+        "--config-path",
+        str(rust_workspace / "rustfmt.toml"),
+        "--config",
+        "imports_granularity=Item,skip_children=true",
+    ]
     if check:
         args.append("--check")
-    command = Command(tuple(args), REPO_ROOT / "codex-rs")
-    return FormatterGroup("Rust", (command,))
+    # Batch relative paths to stay below Windows command-line limits.
+    commands = tuple(
+        Command(tuple(args + rust_files[start : start + 64]), rust_workspace)
+        for start in range(0, len(rust_files), 64)
+    )
+    return FormatterGroup("Rust", commands)
 
 
 def buildifier_formatter_group(*, check: bool) -> FormatterGroup:
