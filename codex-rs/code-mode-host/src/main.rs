@@ -18,6 +18,13 @@ const OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 5);
 
 #[derive(Debug, Parser)]
 struct Cli {
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with_all = ["listen", "otel_trace_listen", "otel_trace_exporter"]
+    )]
+    codex_ui_plugin_process: bool,
+
     /// Transport endpoint: `stdio`, `stdio://`, `grpc+stdio://`, or `grpc://IP:PORT`.
     #[arg(
         long,
@@ -37,8 +44,7 @@ struct Cli {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+async fn run(cli: Cli) -> anyhow::Result<()> {
     let mut trace_transport = if let Some(trace_listen) = cli.otel_trace_listen.as_deref() {
         Some(TraceWebSocket::start(trace_listen).await?)
     } else {
@@ -86,6 +92,14 @@ async fn main() -> anyhow::Result<()> {
     }
     drop(trace_transport);
     result
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    if cli.codex_ui_plugin_process {
+        return codex_code_mode_runtime::run_ui_sandbox().map_err(Into::into);
+    }
+    run(cli)
 }
 
 fn build_trace_provider(endpoint: &str) -> anyhow::Result<OtelProvider> {

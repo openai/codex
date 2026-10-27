@@ -2,10 +2,13 @@
 
 pub mod framing;
 mod process;
+pub mod protocol;
 
 pub use process::PluginExit;
 pub use process::PluginProcess;
 pub use process::PluginProcessError;
 
 pub const HELPER_ARGUMENT: &str = "--codex-ui-plugin-process";
-pub const READY: &[u8] = b"codex-ui-plugin-process/2";
+pub const READY: &[u8] = b"codex-ui-plugin-process/3";
+
+pub const MAX_INSTANCES: usize = 32;

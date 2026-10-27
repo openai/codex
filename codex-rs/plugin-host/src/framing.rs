@@ -2,7 +2,7 @@
 
 use tokio_util::codec::LengthDelimitedCodec;
 
-pub const MAX_FRAME: usize = 256 * 1024;
+pub const MAX_FRAME: usize = 1024 * 1024;
 
 pub fn codec() -> LengthDelimitedCodec {
     LengthDelimitedCodec::builder()

@@ -15,13 +15,14 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 codex-code-mode-protocol = { workspace = true }
+codex-plugin-host = { workspace = true }
 codex-protocol = { workspace = true }
 deno_core_icudata = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor", "std"] }
 opentelemetry = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["codec", "compat", "rt"] }
 tracing = { workspace = true }
 v8 = { workspace = true, features = ["v8_enable_sandbox"] }
 
