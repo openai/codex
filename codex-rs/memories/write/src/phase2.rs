@@ -365,6 +365,7 @@ mod agent {
                 .unwrap_or_else(|| provider.memory_consolidation_preferred_model().to_string()),
         );
         agent_config.model_reasoning_effort = Some(crate::stage_two::REASONING_EFFORT);
+        agent_config.service_tier = Some(config.memories.consolidation_service_tier.clone());
 
         Some(agent_config)
     }

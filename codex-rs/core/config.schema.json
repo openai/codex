@@ -2840,6 +2840,10 @@
           "description": "Model used for memory consolidation.",
           "type": "string"
         },
+        "consolidation_service_tier": {
+          "description": "Service tier for memory consolidation. Defaults to Standard (`\"default\"`).",
+          "type": "string"
+        },
         "dedicated_tools": {
           "description": "When `true`, expose dedicated memory tools through the extension tool surface.",
           "type": "boolean"
