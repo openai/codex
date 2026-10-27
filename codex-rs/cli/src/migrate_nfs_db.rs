@@ -85,6 +85,7 @@ pub(crate) async fn run(
         "Migration cancelled. No databases were changed."
     );
     let mut migration = NfsDbMigration::lock(sqlite.home())?;
+    let mut databases_found = 0;
     for database in sqlite.runtime_db_paths() {
         if skip_logs && database.path == sqlite.logs_db_path() {
             println!("Skipped logs database: log_dir is configured.");
@@ -95,7 +96,7 @@ pub(crate) async fn run(
             database.path.display()
         ))?;
         match outcome {
-            NfsDbMigrationOutcome::Missing => {}
+            NfsDbMigrationOutcome::Missing => continue,
             NfsDbMigrationOutcome::AlreadyDelete => {
                 println!("Already in DELETE mode: {}", database.path.display())
             }
@@ -105,6 +106,11 @@ pub(crate) async fn run(
                 backup_directory.display()
             ),
         }
+        databases_found += 1;
+    }
+    if databases_found == 0 {
+        println!("No databases found.");
+        return Ok(());
     }
     println!("Migration completed successfully. You can restart Codex.");
     Ok(())
