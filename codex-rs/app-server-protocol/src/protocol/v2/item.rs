@@ -240,11 +240,11 @@ pub struct ThreadItem {
     pub payload: ThreadItemPayload,
     /// Unix timestamp in milliseconds when the item started, if recorded.
     #[serde(default)]
-    #[ts(type = "number | null")]
+    #[ts(type = "number | null", optional)]
     pub started_at_ms: Option<i64>,
     /// Unix timestamp in milliseconds when the item completed, if recorded.
     #[serde(default)]
-    #[ts(type = "number | null")]
+    #[ts(type = "number | null", optional)]
     pub completed_at_ms: Option<i64>,
 }
 
