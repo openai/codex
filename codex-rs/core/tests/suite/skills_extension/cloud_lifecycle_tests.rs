@@ -113,6 +113,7 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
         |_config: &Config| SkillsExtensionConfig {
             include_instructions: true,
             catalog_deltas_enabled: false,
+            omit_descriptions: false,
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,

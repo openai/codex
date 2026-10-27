@@ -207,6 +207,9 @@ fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
     install(&mut extensions, |config: &Config| SkillsExtensionConfig {
         include_instructions: config.include_skill_instructions,
         catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
+        omit_descriptions: config
+            .features
+            .enabled(codex_features::Feature::OmitSkillDescriptions),
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: config.bundled_skills_enabled(),
         cloud_skill_enabled: config.cloud_skill_enabled,
@@ -937,8 +940,10 @@ async fn astra_kickoff_with_skills_plugins_and_remote_compaction() -> Result<()>
     Ok(())
 }
 
+#[test_case::test_case(false; "descriptions")]
+#[test_case::test_case(true; "omit_descriptions")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn astra_plugin_policy_limits_visible_skills() -> Result<()> {
+async fn astra_plugin_policy_limits_visible_skills(omit_descriptions: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -996,6 +1001,10 @@ enabled = true
         .with_extensions(skills_extensions())
         .with_config(move |config| {
             configure_scenario_catalog(config);
+            config
+                .features
+                .set_enabled(Feature::OmitSkillDescriptions, omit_descriptions)
+                .expect("set omit_skill_descriptions feature");
             config.chatgpt_base_url = chatgpt_base_url;
             config.workspace_roots = vec![config.cwd.clone()];
         })
@@ -1011,7 +1020,11 @@ enabled = true
 
     let requests = mock.requests();
     insta::assert_snapshot!(
-        "astra_plugin_policy_limits_visible_skills",
+        if omit_descriptions {
+            "astra_plugin_policy_without_skill_descriptions"
+        } else {
+            "astra_plugin_policy_limits_visible_skills"
+        },
         context_snapshot::format_request_history_snapshot(
             "Astra sees the permitted calendar plugin and standalone skills, but not the unlisted notes plugin.",
             &requests,
@@ -1122,6 +1135,9 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context(
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
+            omit_descriptions: config
+                .features
+                .enabled(codex_features::Feature::OmitSkillDescriptions),
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
@@ -1610,6 +1626,9 @@ async fn skill_read_recovers_omitted_installation_and_reads_selected_environment
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
+            omit_descriptions: config
+                .features
+                .enabled(codex_features::Feature::OmitSkillDescriptions),
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,

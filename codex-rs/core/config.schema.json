@@ -1194,6 +1194,9 @@
             "omit_app_server_notification_media": {
               "type": "boolean"
             },
+            "omit_skill_descriptions": {
+              "type": "boolean"
+            },
             "output_token_replay": {
               "type": "boolean"
             },
@@ -7837,6 +7840,9 @@
           "type": "boolean"
         },
         "omit_app_server_notification_media": {
+          "type": "boolean"
+        },
+        "omit_skill_descriptions": {
           "type": "boolean"
         },
         "output_token_replay": {

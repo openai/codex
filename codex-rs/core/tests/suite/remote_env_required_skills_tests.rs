@@ -76,6 +76,7 @@ async fn required_environment_skill_gates_inference(availability: Availability) 
         |_: &Config| SkillsExtensionConfig {
             include_instructions: false,
             catalog_deltas_enabled: false,
+            omit_descriptions: false,
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,

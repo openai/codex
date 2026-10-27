@@ -44,6 +44,45 @@ async fn skill_sources_spend_the_same_remaining_budget() -> TestResult {
     let empty = render_catalogs(&[], &disabled, &mut previous).await?;
     assert!(empty.contains("skills are currently available"), "{empty}");
     assert_eq!(render_catalogs(&[], &disabled, &mut previous).await?, "");
+    let omitted = TestConfig {
+        omit_descriptions: true,
+        ..enabled
+    };
+    previous.clear();
+    let emitted =
+        render_catalogs(&[("notes", "Hidden description.")], &enabled, &mut previous).await?;
+    assert!(emitted.contains("description shown above"), "{emitted}");
+    assert!(
+        emitted.contains("- host-notes: Hidden description."),
+        "{emitted}"
+    );
+    // Resume a snapshot written before the description policy was persisted.
+    for snapshot in previous.values_mut() {
+        snapshot.as_object_mut().unwrap().remove("omitDescriptions");
+    }
+    let emitted =
+        render_catalogs(&[("notes", "Hidden description.")], &omitted, &mut previous).await?;
+    assert!(
+        emitted.contains("OR the task clearly matches a skill's name shown above, you must use that skill for that turn."),
+        "{emitted}"
+    );
+    assert!(emitted.contains("- executor-notes: "), "{emitted}");
+    assert!(!emitted.contains("Hidden description."), "{emitted}");
+    assert_eq!(
+        render_catalogs(&[("notes", "Edited description.")], &omitted, &mut previous).await?,
+        ""
+    );
+    // A policy change still refreshes instructions when no more rows fit the budget.
+    let emitted =
+        render_catalogs(&[("notes", "Edited description.")], &enabled, &mut previous).await?;
+    assert!(emitted.contains("description shown above"), "{emitted}");
+    assert!(!emitted.contains("- executor-notes:"), "{emitted}");
+    assert!(!emitted.contains("- cloud-notes:"), "{emitted}");
+    assert!(!emitted.contains("- host-notes:"), "{emitted}");
+    assert_eq!(
+        render_catalogs(&[("notes", "Edited description.")], &enabled, &mut previous).await?,
+        ""
+    );
     Ok(())
 }
 
@@ -116,6 +155,7 @@ async fn render_catalogs(
             step_store: &ExtensionData::new("step"),
             model_info: &ModelInfo {
                 context_window: Some(5_000),
+                include_skills_usage_instructions: true,
                 ..catalog_model_info()
             },
             thread_id: codex_protocol::ThreadId::new(),

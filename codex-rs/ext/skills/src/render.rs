@@ -14,6 +14,7 @@ use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillSourceKind;
 use crate::catalog_delta::CatalogSkill;
+use crate::catalog_prompt::SkillPrompt;
 use crate::catalog_prompt::SkillPromptKind;
 use crate::catalog_prompt::render_available_skills_body;
 use crate::fragments::AvailableSkillsInstructions;
@@ -32,26 +33,64 @@ pub(crate) const MAX_SKILL_NAME_BYTES: usize = 256;
 pub(crate) const MAX_SKILL_PATH_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SkillCatalogRenderPolicy {
+enum SkillCatalogRenderStyle {
     CoreCompatible,
     ExtensionCompatible,
     DiscoveryV2,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SkillCatalogRenderPolicy {
+    style: SkillCatalogRenderStyle,
+    omit_descriptions: bool,
+}
+
 impl SkillCatalogRenderPolicy {
-    fn description(self, entry: &SkillCatalogEntry) -> &str {
-        match self {
-            Self::CoreCompatible => entry.description.as_str(),
-            Self::ExtensionCompatible | Self::DiscoveryV2 => entry
-                .short_description
-                .as_deref()
-                .unwrap_or(entry.description.as_str()),
+    pub(crate) const CORE_COMPATIBLE: Self = Self {
+        style: SkillCatalogRenderStyle::CoreCompatible,
+        omit_descriptions: false,
+    };
+    pub(crate) const EXTENSION_COMPATIBLE: Self = Self {
+        style: SkillCatalogRenderStyle::ExtensionCompatible,
+        omit_descriptions: false,
+    };
+    pub(crate) const DISCOVERY_V2: Self = Self {
+        style: SkillCatalogRenderStyle::DiscoveryV2,
+        omit_descriptions: false,
+    };
+
+    pub(crate) fn with_omitted_descriptions(self, omit_descriptions: bool) -> Self {
+        Self {
+            omit_descriptions,
+            ..self
+        }
+    }
+
+    fn prompt(self, kind: SkillPromptKind) -> SkillPrompt {
+        SkillPrompt {
+            kind,
+            omit_descriptions: self.omit_descriptions,
+        }
+    }
+
+    pub(crate) fn description(self, entry: &SkillCatalogEntry) -> &str {
+        if self.omit_descriptions {
+            return "";
+        }
+        match self.style {
+            SkillCatalogRenderStyle::CoreCompatible => entry.description.as_str(),
+            SkillCatalogRenderStyle::ExtensionCompatible | SkillCatalogRenderStyle::DiscoveryV2 => {
+                entry
+                    .short_description
+                    .as_deref()
+                    .unwrap_or(entry.description.as_str())
+            }
         }
     }
 
     fn order_entries(self, entries: &mut [&SkillCatalogEntry]) {
-        match self {
-            Self::CoreCompatible => {
+        match self.style {
+            SkillCatalogRenderStyle::CoreCompatible => {
                 let scope_rank = |entry: &SkillCatalogEntry| match entry.prompt_scope() {
                     Some(SkillScope::System) => 0,
                     Some(SkillScope::Admin) => 1,
@@ -66,14 +105,17 @@ impl SkillCatalogRenderPolicy {
                         .then_with(|| a.main_prompt.as_str().cmp(b.main_prompt.as_str()))
                 });
             }
-            Self::ExtensionCompatible | Self::DiscoveryV2 => {}
+            SkillCatalogRenderStyle::ExtensionCompatible | SkillCatalogRenderStyle::DiscoveryV2 => {
+            }
         }
     }
 
     fn includes_omission_notice(self) -> bool {
-        match self {
-            Self::CoreCompatible => false,
-            Self::ExtensionCompatible | Self::DiscoveryV2 => true,
+        match self.style {
+            SkillCatalogRenderStyle::CoreCompatible => false,
+            SkillCatalogRenderStyle::ExtensionCompatible | SkillCatalogRenderStyle::DiscoveryV2 => {
+                true
+            }
         }
     }
 }
@@ -466,7 +508,7 @@ fn allocate_description_chars(
 }
 
 struct RenderedCatalog {
-    prompt_kind: SkillPromptKind,
+    prompt: SkillPrompt,
     skill_root_lines: Vec<String>,
     skill_lines: Vec<String>,
     included_ids: Option<Vec<String>>,
@@ -474,7 +516,7 @@ struct RenderedCatalog {
 }
 
 pub(crate) struct AvailableSkillsRender {
-    pub(crate) prompt_kind: SkillPromptKind,
+    pub(crate) prompt: SkillPrompt,
     pub(crate) skill_root_lines: Vec<String>,
     skill_lines: Vec<String>,
     included_ids: Option<Vec<String>>,
@@ -508,7 +550,7 @@ impl AvailableSkillsRender {
         } else {
             aliased_metadata_overhead_cost(
                 budget,
-                self.prompt_kind,
+                self.prompt,
                 &self.skill_root_lines,
                 include_skills_usage_instructions,
             )
@@ -524,7 +566,7 @@ impl AvailableSkillsRender {
     ) -> Option<AvailableSkillsInstructions> {
         (self.preserve_empty_fragment || !self.skill_lines.is_empty()).then(|| {
             AvailableSkillsInstructions::from_skill_lines(
-                self.prompt_kind,
+                self.prompt,
                 self.skill_root_lines,
                 self.skill_lines,
                 include_skills_usage_instructions,
@@ -642,7 +684,7 @@ struct CombinedAvailableSkillsRender {
 }
 
 struct CatalogLines<'a> {
-    prompt_kind: SkillPromptKind,
+    prompt: SkillPrompt,
     skills: Vec<SkillLine<'a>>,
     root_lines: Vec<String>,
 }
@@ -650,7 +692,7 @@ struct CatalogLines<'a> {
 impl<'a> CatalogLines<'a> {
     fn unaliased(entries: &[&'a SkillCatalogEntry], policy: SkillCatalogRenderPolicy) -> Self {
         Self {
-            prompt_kind: SkillPromptKind::Unaliased,
+            prompt: policy.prompt(SkillPromptKind::Unaliased),
             skills: entries
                 .iter()
                 .map(|entry| SkillLine::new(entry, policy))
@@ -680,19 +722,21 @@ impl<'a> CatalogLines<'a> {
             })
             .collect();
         Self {
-            prompt_kind: entries
-                .first()
-                .map(|entry| {
-                    let kind = SkillPromptKind::for_aliased_source(&entry.authority.kind);
-                    if policy == SkillCatalogRenderPolicy::DiscoveryV2
-                        && kind == SkillPromptKind::ResourceAliases
-                    {
-                        SkillPromptKind::ResourceAliasesV2
-                    } else {
-                        kind
-                    }
-                })
-                .unwrap_or(SkillPromptKind::Unaliased),
+            prompt: policy.prompt(
+                entries
+                    .first()
+                    .map(|entry| {
+                        let kind = SkillPromptKind::for_aliased_source(&entry.authority.kind);
+                        if policy.style == SkillCatalogRenderStyle::DiscoveryV2
+                            && kind == SkillPromptKind::ResourceAliases
+                        {
+                            SkillPromptKind::ResourceAliasesV2
+                        } else {
+                            kind
+                        }
+                    })
+                    .unwrap_or(SkillPromptKind::Unaliased),
+            ),
             skills,
             root_lines: match plan {
                 Cow::Borrowed(plan) => plan.root_lines_for(&used_roots),
@@ -726,21 +770,21 @@ fn render_combined_lines(
         executor: render_combined_group(
             &lines[..executor_end],
             &allocations[..executor_end],
-            executor.prompt_kind,
+            executor.prompt,
             executor.root_lines,
             executor_omission_marker,
         ),
         cloud: render_combined_group(
             &lines[executor_end..cloud_end],
             &allocations[executor_end..cloud_end],
-            cloud.prompt_kind,
+            cloud.prompt,
             cloud.root_lines,
             cloud_omission_marker,
         ),
         host: render_combined_group(
             &lines[cloud_end..],
             &allocations[cloud_end..],
-            host.prompt_kind,
+            host.prompt,
             host.root_lines,
             /*omission_marker*/ None,
         ),
@@ -750,7 +794,7 @@ fn render_combined_lines(
 fn render_combined_group(
     skill_lines: &[SkillLine<'_>],
     allocations: &[SkillLineAllocation],
-    prompt_kind: SkillPromptKind,
+    prompt: SkillPrompt,
     skill_root_lines: Vec<String>,
     omission_marker: Option<String>,
 ) -> AvailableSkillsRender {
@@ -765,7 +809,7 @@ fn render_combined_group(
         lines.push(marker);
     }
     AvailableSkillsRender {
-        prompt_kind,
+        prompt,
         skill_root_lines,
         entries: BTreeMap::new(),
         skill_lines: lines,
@@ -801,7 +845,7 @@ fn build_aliased_combined_catalog(
         .map(|catalog| {
             aliased_metadata_overhead_cost(
                 budget,
-                catalog.prompt_kind,
+                catalog.prompt,
                 &catalog.root_lines,
                 include_skills_usage_instructions,
             )
@@ -927,7 +971,7 @@ fn render_catalog(
     skill_lines: Vec<SkillLine<'_>>,
     budget: SkillMetadataBudget,
     skill_root_lines: Vec<String>,
-    prompt_kind: SkillPromptKind,
+    prompt: SkillPrompt,
     policy: SkillCatalogRenderPolicy,
 ) -> RenderedCatalog {
     let total_count = skill_lines.len();
@@ -961,7 +1005,7 @@ fn render_catalog(
     }
 
     RenderedCatalog {
-        prompt_kind,
+        prompt,
         skill_root_lines,
         skill_lines: rendered_lines,
         included_ids,
@@ -1003,7 +1047,7 @@ fn build_aliased_catalog(
     }
     let table_cost = aliased_metadata_overhead_cost(
         budget,
-        catalog.prompt_kind,
+        catalog.prompt,
         &catalog.root_lines,
         include_skills_usage_instructions,
     );
@@ -1020,7 +1064,7 @@ fn build_aliased_catalog(
         catalog.skills,
         adjusted_budget,
         catalog.root_lines,
-        catalog.prompt_kind,
+        catalog.prompt,
         policy,
     ))
 }
@@ -1066,17 +1110,23 @@ fn render_skill_locator_with_aliases(
 
 pub(crate) fn aliased_metadata_overhead_cost(
     budget: SkillMetadataBudget,
-    prompt_kind: SkillPromptKind,
+    prompt: SkillPrompt,
     skill_root_lines: &[String],
     include_skills_usage_instructions: bool,
 ) -> usize {
     let empty_skill_lines: &[String] = &[];
-    let absolute_body =
-        render_available_skills_body(SkillPromptKind::Unaliased, &[], empty_skill_lines);
-    let aliased_body =
-        render_available_skills_body(prompt_kind, skill_root_lines, empty_skill_lines);
+    let absolute_body = render_available_skills_body(
+        SkillPrompt {
+            kind: SkillPromptKind::Unaliased,
+            ..prompt
+        },
+        &[],
+        empty_skill_lines,
+    );
+    let aliased_body = render_available_skills_body(prompt, skill_root_lines, empty_skill_lines);
     let alias_instruction_cost = if include_skills_usage_instructions {
-        prompt_kind
+        prompt
+            .kind
             .alias_instructions()
             .map_or(0, |instructions| metadata_line_cost(budget, instructions))
     } else {
@@ -1115,7 +1165,7 @@ fn rendered_catalog_cost(
     } else {
         aliased_metadata_overhead_cost(
             budget,
-            rendered.prompt_kind,
+            rendered.prompt,
             &rendered.skill_root_lines,
             include_skills_usage_instructions,
         )

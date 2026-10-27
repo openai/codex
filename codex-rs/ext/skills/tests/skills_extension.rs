@@ -3614,6 +3614,7 @@ fn test_entry(
 struct TestConfig {
     include_instructions: bool,
     catalog_deltas_enabled: bool,
+    omit_descriptions: bool,
     bundled_skills_enabled: bool,
     cloud_skill_enabled: bool,
     shadow_selection_enabled: bool,
@@ -3623,6 +3624,7 @@ fn default_config() -> TestConfig {
     TestConfig {
         include_instructions: true,
         catalog_deltas_enabled: false,
+        omit_descriptions: false,
         bundled_skills_enabled: true,
         cloud_skill_enabled: true,
         shadow_selection_enabled: false,
@@ -3633,6 +3635,7 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
     SkillsExtensionConfig {
         include_instructions: config.include_instructions,
         catalog_deltas_enabled: config.catalog_deltas_enabled,
+        omit_descriptions: config.omit_descriptions,
         max_context_tokens: None,
         bundled_skills_enabled: config.bundled_skills_enabled,
         cloud_skill_enabled: config.cloud_skill_enabled,

@@ -64,15 +64,6 @@ impl SkillPromptKind {
         }
     }
 
-    pub(crate) fn usage_instructions(self) -> &'static str {
-        match self {
-            Self::Unaliased | Self::ResourceAliases | Self::ResourceAliasesV2 => {
-                SKILLS_HOW_TO_USE_WITH_SOURCE_LOCATORS
-            }
-            Self::HostAliases => SKILLS_HOW_TO_USE_WITH_HOST_ALIASES,
-        }
-    }
-
     pub(crate) fn alias_instructions(self) -> Option<&'static str> {
         match self {
             Self::ResourceAliases | Self::ResourceAliasesV2 => Some(RESOURCE_ALIAS_INSTRUCTIONS),
@@ -81,17 +72,47 @@ impl SkillPromptKind {
     }
 }
 
+/// Prompt layout and description policy shared by rendering and budget accounting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SkillPrompt {
+    pub(crate) kind: SkillPromptKind,
+    pub(crate) omit_descriptions: bool,
+}
+
+impl SkillPrompt {
+    pub(crate) fn usage_instructions(self) -> String {
+        let instructions = match self.kind {
+            SkillPromptKind::Unaliased
+            | SkillPromptKind::ResourceAliases
+            | SkillPromptKind::ResourceAliasesV2 => SKILLS_HOW_TO_USE_WITH_SOURCE_LOCATORS,
+            SkillPromptKind::HostAliases => SKILLS_HOW_TO_USE_WITH_HOST_ALIASES,
+        };
+        if self.omit_descriptions {
+            instructions
+                .replace("name + description +", "name +")
+                .replace("description shown above", "name shown above")
+        } else {
+            instructions.to_owned()
+        }
+    }
+}
+
 pub(crate) fn render_available_skills_body(
-    prompt_kind: SkillPromptKind,
+    prompt: SkillPrompt,
     skill_root_lines: &[String],
     skill_lines: &[String],
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push("## Skills".to_string());
-    lines.push(prompt_kind.intro().to_string());
+    let intro = prompt.kind.intro();
+    lines.push(if prompt.omit_descriptions {
+        intro.replace("name, description, and", "name and")
+    } else {
+        intro.to_string()
+    });
     if !skill_root_lines.is_empty() {
         lines.push("### Skill roots".to_string());
-        if prompt_kind == SkillPromptKind::ResourceAliasesV2 {
+        if prompt.kind == SkillPromptKind::ResourceAliasesV2 {
             lines.push("For each alias listed below, this mapping replaces any earlier mapping for that alias. Use it for subsequent skill calls.".to_string());
         }
         lines.extend(skill_root_lines.iter().cloned());

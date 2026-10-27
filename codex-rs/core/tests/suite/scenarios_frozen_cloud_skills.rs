@@ -35,6 +35,7 @@ async fn frozen_cloud_skills_with_named_executor_request_history() -> Result<()>
             )),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: true,
+            omit_descriptions: false,
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,

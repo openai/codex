@@ -46,7 +46,7 @@ fn empty_catalog_records_zero_metrics_without_a_fragment() {
         CatalogSurface::ThreadContext,
         &SkillCatalog::default(),
         /*include_skills_usage_instructions*/ false,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Characters(8_000),
     );
 

@@ -31,10 +31,13 @@ fn render_combined_available_skills(
     render_prepared_skill_catalogs(
         &PreparedSkillCatalog::new(
             executor_catalog,
-            SkillCatalogRenderPolicy::ExtensionCompatible,
+            SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         ),
-        &PreparedSkillCatalog::new(cloud_catalog, SkillCatalogRenderPolicy::ExtensionCompatible),
-        &PreparedSkillCatalog::new(host_catalog, SkillCatalogRenderPolicy::CoreCompatible),
+        &PreparedSkillCatalog::new(
+            cloud_catalog,
+            SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
+        ),
+        &PreparedSkillCatalog::new(host_catalog, SkillCatalogRenderPolicy::CORE_COMPATIBLE),
         budget,
         include_skills_usage_instructions,
     )
@@ -53,7 +56,7 @@ fn edits_beyond_the_catalog_description_cap_keep_the_same_fingerprint() {
             ..SkillCatalog::default()
         };
         let prepared =
-            PreparedSkillCatalog::new(&catalog, SkillCatalogRenderPolicy::CoreCompatible);
+            PreparedSkillCatalog::new(&catalog, SkillCatalogRenderPolicy::CORE_COMPATIBLE);
         let rendered = prepared
             .render(
                 SkillMetadataBudget::Characters(8_000),
@@ -112,7 +115,7 @@ fn prebudget_dedup_can_choose_full_locators_over_preserved_aliases() {
         warnings: Vec::new(),
     };
     let mut prepared =
-        PreparedSkillCatalog::new(&executor, SkillCatalogRenderPolicy::ExtensionCompatible);
+        PreparedSkillCatalog::new(&executor, SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE);
     prepared.prefer_cloud_skills(&cloud);
     let rendered = prepared
         .render(
@@ -217,9 +220,9 @@ fn ordering_follows_render_policy() {
     };
 
     assert_eq!(
-        render(SkillCatalogRenderPolicy::CoreCompatible),
+        render(SkillCatalogRenderPolicy::CORE_COMPATIBLE),
         render_available_skills_body(
-            SkillPromptKind::Unaliased,
+            SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE.prompt(SkillPromptKind::Unaliased),
             &[],
             &[
                 "- system-zeta: Description. (file: /skills/system-zeta/SKILL.md)".to_string(),
@@ -232,9 +235,9 @@ fn ordering_follows_render_policy() {
         )
     );
     assert_eq!(
-        render(SkillCatalogRenderPolicy::ExtensionCompatible),
+        render(SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE),
         render_available_skills_body(
-            SkillPromptKind::Unaliased,
+            SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE.prompt(SkillPromptKind::Unaliased),
             &[],
             &[
                 "- repo-zeta: Description. (file: /skills/repo-zeta/SKILL.md)".to_string(),
@@ -266,14 +269,14 @@ fn description_selection_follows_render_policy() {
     let core = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ false,
-        SkillCatalogRenderPolicy::CoreCompatible,
+        SkillCatalogRenderPolicy::CORE_COMPATIBLE,
         SkillMetadataBudget::Characters(8_000),
     )
     .expect("catalog should render");
     let extension = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ false,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Characters(8_000),
     )
     .expect("catalog should render");
@@ -281,7 +284,7 @@ fn description_selection_follows_render_policy() {
     assert_eq!(
         core.body().expect_text(),
         render_available_skills_body(
-            SkillPromptKind::Unaliased,
+            SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE.prompt(SkillPromptKind::Unaliased),
             &[],
             &[
                 "- fallback: fallback description (file: /skills/fallback/SKILL.md)".to_string(),
@@ -292,7 +295,7 @@ fn description_selection_follows_render_policy() {
     assert_eq!(
         extension.body().expect_text(),
         render_available_skills_body(
-            SkillPromptKind::Unaliased,
+            SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE.prompt(SkillPromptKind::Unaliased),
             &[],
             &[
                 "- shortened: short description (file: /skills/shortened/SKILL.md)".to_string(),
@@ -366,7 +369,7 @@ fn host_only_prompts_preserve_existing_behavior_with_and_without_aliases() {
     let unaliased = available_skills_fragment(
         &unaliased_catalog,
         /*include_skills_usage_instructions*/ true,
-        SkillCatalogRenderPolicy::CoreCompatible,
+        SkillCatalogRenderPolicy::CORE_COMPATIBLE,
         SkillMetadataBudget::Characters(usize::MAX),
     )
     .expect("unaliased host catalog should render");
@@ -401,7 +404,7 @@ fn host_only_prompts_preserve_existing_behavior_with_and_without_aliases() {
     let aliased = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ true,
-        SkillCatalogRenderPolicy::CoreCompatible,
+        SkillCatalogRenderPolicy::CORE_COMPATIBLE,
         SkillMetadataBudget::Characters(200),
     )
     .expect("aliased host catalog should render");
@@ -455,7 +458,7 @@ fn path_aliases_are_used_without_budget_pressure_when_they_reduce_prompt_size() 
     let fragment = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ false,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Characters(usize::MAX),
     )
     .expect("catalog should render");
@@ -489,7 +492,7 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
     let plan = build_alias_plan(&visible_entries).expect("alias plan should build");
     let table_cost = aliased_metadata_overhead_cost(
         SkillMetadataBudget::Characters(usize::MAX),
-        SkillPromptKind::HostAliases,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE.prompt(SkillPromptKind::HostAliases),
         &plan.root_lines(),
         /*include_skills_usage_instructions*/ true,
     );
@@ -497,7 +500,7 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
         cost.saturating_add(
             SkillLine::with_locator(
                 entry,
-                SkillCatalogRenderPolicy::ExtensionCompatible,
+                SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
                 render_skill_locator_with_aliases(entry, &plan, &mut HashSet::new()),
             )
             .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
@@ -505,7 +508,7 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
     });
     let absolute_minimum = visible_entries.iter().fold(0usize, |cost, entry| {
         cost.saturating_add(
-            SkillLine::new(entry, SkillCatalogRenderPolicy::ExtensionCompatible)
+            SkillLine::new(entry, SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE)
                 .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
         )
     });
@@ -514,7 +517,7 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
     let fragment = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ true,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Characters(alias_minimum),
     )
     .expect("catalog should render");
@@ -525,6 +528,54 @@ fn path_aliases_retain_every_skill_under_budget_pressure() {
     assert!(body.contains("(file: r0/skill-11/SKILL.md)"));
     assert!(body.contains("Skill bodies live on disk at the listed paths after expanding"));
     assert!(!body.contains("additional skills omitted"));
+
+    // With descriptions omitted, alias overhead is 30 tokens and each row is 8.
+    // Charging the description-bearing intro rounds overhead up to 31 and drops both rows.
+    let root = format!("/{}", "a".repeat(250));
+    let catalog = SkillCatalog {
+        entries: ["one", "two"]
+            .into_iter()
+            .map(|name| {
+                entry_with_path(
+                    name,
+                    "Full description.",
+                    Some("Short description."),
+                    &format!("{root}/{name}/SKILL.md"),
+                )
+                .with_alias_root(root.clone())
+            })
+            .collect(),
+        ..SkillCatalog::default()
+    };
+    let budget = SkillMetadataBudget::Tokens(46);
+    let rendered = render_available_skills(
+        &catalog,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE
+            .with_omitted_descriptions(/*omit_descriptions*/ true),
+        budget,
+        /*include_skills_usage_instructions*/ true,
+        /*alias_plan*/ None,
+    )
+    .expect("both skills should fit using aliases");
+    assert_eq!(
+        (
+            rendered.metadata_cost(budget, /*include_skills_usage_instructions*/ true),
+            rendered.skill_lines,
+            rendered.report
+        ),
+        (
+            46,
+            vec![
+                "- one: (file: r0/one/SKILL.md)".to_string(),
+                "- two: (file: r0/two/SKILL.md)".to_string(),
+            ],
+            SkillRenderReport {
+                total_count: 2,
+                included_count: 2,
+                ..SkillRenderReport::default()
+            }
+        )
+    );
 }
 
 #[test]
@@ -600,7 +651,7 @@ async fn host_alias_roots_follow_core_discovery_order() -> Result<(), Box<dyn st
         })
         .await?;
     let mut entries = catalog.entries.iter().collect::<Vec<_>>();
-    SkillCatalogRenderPolicy::CoreCompatible.order_entries(&mut entries);
+    SkillCatalogRenderPolicy::CORE_COMPATIBLE.order_entries(&mut entries);
     let actual = build_alias_plan(&entries)
         .expect("alias plan should build")
         .root_lines();
@@ -651,7 +702,7 @@ fn mixed_catalogs_keep_absolute_authority_aware_rendering_under_budget_pressure(
     let visible_entries = catalog.entries.iter().collect::<Vec<_>>();
     let absolute_minimum = visible_entries.iter().fold(0usize, |cost, entry| {
         cost.saturating_add(
-            SkillLine::new(entry, SkillCatalogRenderPolicy::ExtensionCompatible)
+            SkillLine::new(entry, SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE)
                 .minimum_cost(SkillMetadataBudget::Characters(usize::MAX)),
         )
     });
@@ -661,7 +712,7 @@ fn mixed_catalogs_keep_absolute_authority_aware_rendering_under_budget_pressure(
     let fragment = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ true,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Characters(absolute_minimum),
     )
     .expect("catalog should render");
@@ -1021,14 +1072,14 @@ fn omission_notice_follows_render_policy_and_is_charged_to_catalog_budget() {
     let core_fragment = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ false,
-        SkillCatalogRenderPolicy::CoreCompatible,
+        SkillCatalogRenderPolicy::CORE_COMPATIBLE,
         SkillMetadataBudget::Tokens(100),
     )
     .expect("core-compatible catalog should render");
     let fragment = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ false,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Tokens(100),
     )
     .expect("catalog should render");
@@ -1078,7 +1129,7 @@ fn character_fallback_counts_multibyte_metadata_by_characters() {
     let fragment = available_skills_fragment(
         &catalog,
         /*include_skills_usage_instructions*/ false,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Characters(8_000),
     )
     .expect("catalog should render");
@@ -1112,7 +1163,7 @@ fn catalog_report_counts_partial_description_truncation() {
 
     let render = render_available_skills(
         &catalog,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         budget,
         /*include_skills_usage_instructions*/ false,
         /*alias_plan*/ None,
@@ -1157,7 +1208,7 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
     };
     let core_render = render_available_skills(
         &catalog,
-        SkillCatalogRenderPolicy::CoreCompatible,
+        SkillCatalogRenderPolicy::CORE_COMPATIBLE,
         SkillMetadataBudget::Tokens(100),
         /*include_skills_usage_instructions*/ false,
         /*alias_plan*/ None,
@@ -1189,7 +1240,7 @@ fn catalog_emits_omission_marker_when_every_minimum_skill_line_exceeds_budget() 
     assert!(!core_fragment.body().expect_text().contains("- oversized:"));
     let render = render_available_skills(
         &catalog,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Tokens(100),
         /*include_skills_usage_instructions*/ false,
         /*alias_plan*/ None,
@@ -1225,7 +1276,7 @@ fn catalog_preserves_report_when_no_fragment_fits_budget() {
 
     let render = render_available_skills(
         &catalog,
-        SkillCatalogRenderPolicy::ExtensionCompatible,
+        SkillCatalogRenderPolicy::EXTENSION_COMPATIBLE,
         SkillMetadataBudget::Tokens(1),
         /*include_skills_usage_instructions*/ false,
         /*alias_plan*/ None,

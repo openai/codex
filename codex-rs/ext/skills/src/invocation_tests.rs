@@ -46,6 +46,7 @@ fn detect_executor_skill(command: &str, environments: &[&str]) -> Option<SkillIn
         config: crate::SkillsExtensionConfig {
             include_instructions: true,
             catalog_deltas_enabled: false,
+            omit_descriptions: false,
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,

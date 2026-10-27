@@ -350,6 +350,7 @@ async fn guardian_reviews_with_offline_primary_executor() -> Result<()> {
             catalog_deltas_enabled: config
                 .features
                 .enabled(codex_features::Feature::SkillCatalogDeltas),
+            omit_descriptions: false,
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,

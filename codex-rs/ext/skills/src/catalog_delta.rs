@@ -18,6 +18,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::aliases::AliasRoot;
+use crate::catalog_prompt::SkillPrompt;
 use crate::catalog_prompt::SkillPromptKind;
 use crate::fragments::AvailableSkillsInstructions;
 use crate::render::AvailableSkillsRender;
@@ -75,6 +76,8 @@ struct CatalogSnapshot {
     roots: BTreeMap<String, String>,
     usage: CatalogUsage,
     instructions_sent: bool,
+    #[serde(default)]
+    omit_descriptions: bool,
     allocation: Option<CatalogBudgetAllocation>,
 }
 
@@ -142,6 +145,7 @@ fn build_initial_catalog(source: &str, catalog: CatalogDelta) -> CatalogResult {
         let usage =
             CatalogUsage::measure(|budget| rendered.metadata_cost(budget, catalog.include_usage));
         let entries = std::mem::take(&mut rendered.entries);
+        snapshot.omit_descriptions = rendered.prompt.omit_descriptions;
         let fragment = rendered.into_fragment(catalog.include_usage);
         for (id, skill) in entries {
             if fragment.is_some()
@@ -169,16 +173,24 @@ fn build_catalog_update(
     mut previous: CatalogSnapshot,
     remaining: &mut SkillMetadataBudget,
 ) -> CatalogResult {
+    let usage_update = catalog.rendered.as_ref().filter(|rendered| {
+        previous.instructions_sent
+            && catalog.include_usage
+            && previous.omit_descriptions != rendered.prompt.omit_descriptions
+    });
     let message = if previous.instructions_sent {
         CatalogMessage::Update {
             heading: format!("\n## {source} skills update\n"),
         }
     } else {
         CatalogMessage::FirstListing {
-            prompt_kind: catalog
-                .rendered
-                .as_ref()
-                .map_or(SkillPromptKind::Unaliased, |r| r.prompt_kind),
+            prompt: catalog.rendered.as_ref().map_or(
+                SkillPrompt {
+                    kind: SkillPromptKind::Unaliased,
+                    omit_descriptions: false,
+                },
+                |r| r.prompt,
+            ),
             include_usage: catalog.include_usage,
         }
     };
@@ -209,7 +221,15 @@ fn build_catalog_update(
             },
         );
     }
-    let body = draft.into_body(source);
+    let mut body = draft.into_body(source);
+    if let Some(rendered) = usage_update {
+        let instructions = rendered.prompt.usage_instructions();
+        body.get_or_insert_with(|| format!("\n## {source} skills update\n"))
+            .push_str(&format!("\n### How to use skills\n{instructions}\n"));
+    }
+    if let Some(rendered) = &catalog.rendered {
+        previous.omit_descriptions = rendered.prompt.omit_descriptions;
+    }
     previous.entries = entries;
     previous.instructions_sent |= body.is_some();
     previous.allocation = catalog.allocation;
@@ -229,7 +249,7 @@ fn listing_body(source: &str, instructions: AvailableSkillsInstructions) -> Stri
 
 enum CatalogMessage {
     FirstListing {
-        prompt_kind: SkillPromptKind,
+        prompt: SkillPrompt,
         include_usage: bool,
     },
     Update {
@@ -267,11 +287,11 @@ impl UpdateDraft {
             if let Some((_, line)) = &new_mapping {
                 cost += match &self.message {
                     CatalogMessage::FirstListing {
-                        prompt_kind,
+                        prompt,
                         include_usage,
                     } if self.root_lines.is_empty() => aliased_metadata_overhead_cost(
                         budget,
-                        *prompt_kind,
+                        *prompt,
                         std::slice::from_ref(line),
                         *include_usage,
                     ),
@@ -308,18 +328,16 @@ impl UpdateDraft {
         }
         Some(match self.message {
             CatalogMessage::FirstListing {
-                prompt_kind,
+                mut prompt,
                 include_usage,
             } => {
-                let kind = if self.root_lines.is_empty() {
-                    SkillPromptKind::Unaliased
-                } else {
-                    prompt_kind
-                };
+                if self.root_lines.is_empty() {
+                    prompt.kind = SkillPromptKind::Unaliased;
+                }
                 listing_body(
                     source,
                     AvailableSkillsInstructions::from_skill_lines(
-                        kind,
+                        prompt,
                         self.root_lines,
                         self.skill_lines,
                         include_usage,

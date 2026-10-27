@@ -586,6 +586,7 @@ async fn check_acquisition(enabled: bool, version: &'static str) -> Result<()> {
         |config: &Config| codex_skills_extension::SkillsExtensionConfig {
             include_instructions: true,
             catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
+            omit_descriptions: false,
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
@@ -1102,6 +1103,7 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
         |_config: &Config| SkillsExtensionConfig {
             include_instructions: true,
             catalog_deltas_enabled: false,
+            omit_descriptions: false,
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,

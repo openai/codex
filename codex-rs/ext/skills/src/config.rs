@@ -7,6 +7,8 @@ pub struct SkillsExtensionConfig {
     pub include_instructions: bool,
     /// Whether skill additions and edits share a cumulative metadata budget until compaction.
     pub catalog_deltas_enabled: bool,
+    /// Whether descriptions are omitted from rendered catalogs only.
+    pub omit_descriptions: bool,
     /// Optional token budget override for the available-skills catalog.
     pub max_context_tokens: Option<NonZeroUsize>,
     /// Whether bundled skills are eligible for discovery.

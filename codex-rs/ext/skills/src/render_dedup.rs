@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use super::AvailableSkillsRender;
 use super::CatalogLines;
 use super::SkillCatalogRenderPolicy;
+use super::SkillCatalogRenderStyle;
 use super::SkillMetadataBudget;
 use super::aliased_render_is_better;
 use super::build_alias_plan;
@@ -141,7 +142,7 @@ impl<'a> PreparedSkillCatalog<'a> {
             self.unaliased().skills,
             budget,
             Vec::new(),
-            SkillPromptKind::Unaliased,
+            self.policy.prompt(SkillPromptKind::Unaliased),
             self.policy,
         );
         let selected = if let Some(aliased) = build_aliased_catalog(
@@ -161,12 +162,12 @@ impl<'a> PreparedSkillCatalog<'a> {
         };
 
         Some(AvailableSkillsRender {
-            prompt_kind: selected.prompt_kind,
+            prompt: selected.prompt,
             skill_root_lines: selected.skill_root_lines,
             skill_lines: selected.skill_lines,
             included_ids: selected.included_ids,
             entries: BTreeMap::new(),
-            preserve_empty_fragment: self.policy == SkillCatalogRenderPolicy::CoreCompatible,
+            preserve_empty_fragment: self.policy.style == SkillCatalogRenderStyle::CoreCompatible,
             report: selected.report,
         })
     }
