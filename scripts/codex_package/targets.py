@@ -45,6 +45,7 @@ class PackageVariant:
 class PackageInputs:
     entrypoint_bin: Path
     code_mode_host_bin: Path
+    exec_server_bin: Path
     rg_bin: Path
     bwrap_bin: Path | None
     codex_command_runner_bin: Path | None

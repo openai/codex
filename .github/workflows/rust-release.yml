@@ -96,50 +96,50 @@ jobs:
             target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
 
     steps:
@@ -398,9 +398,9 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
-            # Both variants package the host, but only the primary bundle publishes
+            # Both variants package the host and executor; only the primary publishes
             # standalone binary archives to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
@@ -662,19 +662,19 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -907,22 +907,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
 
     steps:
@@ -1001,9 +1001,9 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
-            # Both variants package the host, but only the primary bundle publishes
+            # Both variants package the host and executor; only the primary publishes
             # standalone binary archives to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
@@ -1300,22 +1300,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             verify_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             verify_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             verify_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             verify_dmg: "false"
 
     steps:
@@ -1376,6 +1376,15 @@ jobs:
             normalized_actual="$(mktemp)"
             normalized_expected="$(mktemp)"
             codesign -d --entitlements :- "$path" >"$actual_entitlements"
+            # An omitted entitlement blob is valid only when the expected plist is empty.
+            python3 - "$expected_entitlements" "$actual_entitlements" <<'PY'
+          import plistlib
+          import sys
+          from pathlib import Path
+          expected, actual = map(Path, sys.argv[1:])
+          if not actual.stat().st_size and plistlib.loads(expected.read_bytes()) == {}:
+              actual.write_bytes(expected.read_bytes())
+          PY
             plutil -convert xml1 -o "$normalized_actual" "$actual_entitlements"
             plutil -convert xml1 -o "$normalized_expected" "$expected_entitlements"
             diff -u "$normalized_expected" "$normalized_actual"
@@ -1386,9 +1395,9 @@ jobs:
             binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
             verify_signed_binary "$binary_path" "$binary"
 
-            # The app-server package contains the host, but its standalone archives
+            # The app-server package contains both helpers, but their standalone archives
             # are omitted above to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
 
@@ -1424,6 +1433,7 @@ jobs:
           tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
           verify_signed_binary "${package_dir}/bin/${package_entrypoint}" "$package_entrypoint"
           verify_signed_binary "${package_dir}/bin/codex-code-mode-host" "codex-code-mode-host"
+          verify_signed_binary "${package_dir}/bin/codex-exec-server" "codex-exec-server"
 
           for resource in \
             "${package_dir}/codex-path/rg"

@@ -141,6 +141,11 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--exec-server-bin",
+        type=Path,
+        help="Optional prebuilt codex-exec-server executable. If omitted, build it with Cargo.",
+    )
+    parser.add_argument(
         "--bwrap-bin",
         type=Path,
         help=(
@@ -210,6 +215,11 @@ def assemble_package(args: argparse.Namespace) -> Path:
             "prebuilt code-mode host executable",
             "--code-mode-host-bin",
         ),
+        exec_server_bin=resolve_optional_input_path(
+            args.exec_server_bin,
+            "prebuilt executor executable",
+            "--exec-server-bin",
+        ),
         bwrap_bin=resolve_optional_input_path(
             args.bwrap_bin,
             "prebuilt Linux bwrap executable",
@@ -229,6 +239,7 @@ def assemble_package(args: argparse.Namespace) -> Path:
     inputs = PackageInputs(
         entrypoint_bin=source_outputs.entrypoint_bin,
         code_mode_host_bin=source_outputs.code_mode_host_bin,
+        exec_server_bin=source_outputs.exec_server_bin,
         rg_bin=resolve_rg_bin(spec, args.rg_bin),
         bwrap_bin=source_outputs.bwrap_bin,
         codex_command_runner_bin=source_outputs.codex_command_runner_bin,
@@ -239,6 +250,7 @@ def assemble_package(args: argparse.Namespace) -> Path:
     for filename, prebuilt in (
         (variant.entrypoint_name(spec), args.entrypoint_bin),
         (f"codex-code-mode-host{spec.exe_suffix}", args.code_mode_host_bin),
+        (f"codex-exec-server{spec.exe_suffix}", args.exec_server_bin),
     ):
         if args.strip == "all" or (
             args.strip == "auto"

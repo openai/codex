@@ -1,4 +1,6 @@
 load("//:defs.bzl", "codex_rust_crate")
+load("//bazel/platforms:release_binaries.bzl", "multiplatform_binaries")
+load("//bazel/rules:runtime_package.bzl", "release_binary")
 
 codex_rust_crate(
     name = "exec-server-cli",
@@ -9,3 +11,7 @@ codex_rust_crate(
     # The standalone integration test launches native OS sandboxes itself.
     test_tags = ["no-sandbox"],
 )
+
+release_binary(binary = ":codex-exec-server")
+
+multiplatform_binaries(name = "codex-exec-server")

@@ -19,7 +19,8 @@ The builder creates a canonical Codex package directory:
 ├── codex-package.json
 ├── bin
 │   ├── <entrypoint>[.exe]
-│   └── codex-code-mode-host[.exe]
+│   ├── codex-code-mode-host[.exe]
+│   └── codex-exec-server[.exe]
 ├── codex-resources
 │   ├── bwrap                             # Linux only
 │   ├── codex-command-runner.exe          # Windows only
@@ -30,6 +31,9 @@ The builder creates a canonical Codex package directory:
 
 The package directory is the primary artifact. Archive formats such as
 `.tar.gz`, `.tar.zst`, and `.zip` are serializations of that directory.
+The `execServer` field in `codex-package.json` advertises the packaged executor.
+Installers use its presence to repair a missing executor while accepting older
+packages that predate the standalone binary.
 
 If `--target` is omitted, the builder uses the release target for the current
 host platform. On Linux, that default is a musl target to match Codex release
@@ -50,6 +54,7 @@ override was provided:
 
 - all targets: the selected entrypoint, unless `--entrypoint-bin` is provided
 - all targets: `codex-code-mode-host`, unless `--code-mode-host-bin` is provided
+- all targets: `codex-exec-server`, unless `--exec-server-bin` is provided
 - Linux targets: `bwrap`, unless `--bwrap-bin` is provided
 - Windows targets: `codex-command-runner` and `codex-windows-sandbox-setup`,
   unless the corresponding prebuilt helper flags are provided
@@ -60,15 +65,15 @@ explicit target. Release jobs that already built and signed/notarized the
 entrypoint should pass `--entrypoint-bin` so the package contains that exact
 binary instead of rebuilding it.
 
-Release jobs should likewise pass `--code-mode-host-bin` so the package contains
-the signed host executable beside the signed entrypoint.
+Release jobs should likewise pass `--code-mode-host-bin` and `--exec-server-bin`
+so the package preserves the signed host and executor beside the entrypoint.
 
 On Linux and macOS, the builder strips symbols from the **package copies** of
-source-built release-profile entrypoint and code-mode host binaries. Cargo outputs
+source-built release-profile entrypoint, code-mode host, and executor binaries. Cargo outputs
 retain their symbols for debugging. The default `--strip auto` also preserves
 development/profiling builds and prebuilt inputs
 byte-for-byte, including signatures. Use `--strip all` to also strip prebuilt
-entrypoint/host copies, or `--strip none` to keep symbols in every package copy.
+first-party executable copies, or `--strip none` to keep symbols in every package copy.
 Strip before production signing; `--strip all` is not appropriate for inputs
 whose release signatures must be preserved. Windows MSVC symbols are separate
 PDB files and are not included in the package.
