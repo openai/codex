@@ -17,8 +17,6 @@ use codex_windows_sandbox::resolve_windows_deny_read_paths;
 use mxc_sdk::mxc_common::cmdline::CommandLineContext;
 use mxc_sdk::mxc_common::cmdline::CommandLineError;
 use mxc_sdk::mxc_common::cmdline::cmdline_from_argv_for_context;
-use mxc_sdk::mxc_common::filesystem_object::ExistingObjectComparison;
-use mxc_sdk::mxc_common::filesystem_object::compare_existing_filesystem_objects;
 use mxc_sdk::mxc_common::models::BaseProcessUiConfig;
 use mxc_sdk::mxc_common::models::ContainerPolicy;
 use mxc_sdk::mxc_common::models::ExecutionRequest;
@@ -373,10 +371,10 @@ fn expand_volume_roots(
                         if child.to_str().is_none() {
                             continue;
                         }
-                        // A self-comparison is MXC's public object-identity probe.
-                        // Generated grants can be skipped; explicit paths go to BaseContainer.
-                        if compare_existing_filesystem_objects(&child, &child)
-                            != ExistingObjectComparison::Same
+                        // Windows supplies the file type with directory entries.
+                        // Only resolve links: broken targets prevent PSEC startup.
+                        if entry.file_type().is_ok_and(|kind| kind.is_symlink())
+                            && std::fs::metadata(&child).is_err()
                         {
                             continue;
                         }

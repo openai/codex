@@ -324,11 +324,16 @@ fn volume_expansion_does_not_turn_read_only_child_writable() -> Result<()> {
 
 #[cfg(unix)]
 #[test]
-fn volume_expansion_skips_uninspectable_children() -> Result<()> {
+fn volume_expansion_skips_broken_links_and_preserves_other_grants() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let root = canonical_root(&temp)?;
     let uninspectable = root.join("loop");
     std::os::unix::fs::symlink(&uninspectable, &uninspectable)?;
+    std::os::unix::fs::symlink(root.join("missing"), root.join("dangling"))?;
+    let readable = root.join("readable");
+    std::fs::write(&readable, "readable")?;
+    let alias = root.join("alias");
+    std::os::unix::fs::symlink(&readable, &alias)?;
     let denied = root.join("secret");
     std::fs::write(&denied, "secret")?;
     let fs = FileSystemSandboxPolicy::restricted(vec![
@@ -347,7 +352,11 @@ fn volume_expansion_skips_uninspectable_children() -> Result<()> {
     assert_eq!(
         (request.policy.readwrite_paths, request.policy.denied_paths),
         (
-            vec![root.to_str().unwrap().to_owned()],
+            vec![
+                root.to_str().unwrap().to_owned(),
+                alias.to_str().unwrap().to_owned(),
+                readable.to_str().unwrap().to_owned()
+            ],
             vec![denied.to_str().unwrap().to_owned()],
         )
     );
