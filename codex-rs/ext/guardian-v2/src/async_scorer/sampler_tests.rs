@@ -8,6 +8,7 @@ use codex_guardian_context::PreviousReviews;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AgentIdentityAuthPolicy;
+use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
@@ -541,10 +542,22 @@ async fn classifier_sends_guardian_header_only_with_codex_backend_auth() -> Resu
             None,
         ),
         (
-            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-            "/v1",
+            CodexAuth::Headers(AuthHeaders::new(http::HeaderMap::new())),
+            "/api/codex",
+            Some("classifier"),
+            None,
+        ),
+        (
+            CodexAuth::from_api_key("test-api-key"),
+            "/api/codex",
             None,
             Some("priority"),
+        ),
+        (
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            "/v1",
+            Some("classifier"),
+            None,
         ),
         (
             CodexAuth::from_api_key("test-api-key"),

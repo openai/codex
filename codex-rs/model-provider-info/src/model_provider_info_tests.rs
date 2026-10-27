@@ -245,6 +245,8 @@ fn codex_backend_routes_require_codex_base_url() {
         (None, true),
         (Some(CHATGPT_CODEX_BASE_URL), true),
         (Some("https://chatgpt-staging.com/backend-api/codex/"), true),
+        (Some("https://backend.example.com/api/codex"), false),
+        (Some("https://backend.example.com/api/codex/"), false),
         (Some("https://proxy.example.com/v1"), false),
     ] {
         let provider = ModelProviderInfo::create_openai_provider(base_url.map(str::to_owned));

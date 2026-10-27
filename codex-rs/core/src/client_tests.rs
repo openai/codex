@@ -2097,7 +2097,7 @@ fn thread_responses_headers_are_scoped_to_model_and_backend_auth() {
     let chatgpt_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let api_key_auth = CodexAuth::from_api_key("test-api-key");
     for (auth, model, expected) in [
-        (Some(&chatgpt_auth), "selected-model", headers),
+        (Some(&chatgpt_auth), "selected-model", headers.clone()),
         (Some(&chatgpt_auth), "other-model", http::HeaderMap::new()),
         (
             Some(&api_key_auth),
@@ -2117,7 +2117,7 @@ fn thread_responses_headers_are_scoped_to_model_and_backend_auth() {
     );
     assert_eq!(
         model_client.responses_headers(Some(&chatgpt_auth), "selected-model"),
-        http::HeaderMap::new(),
+        headers,
     );
 }
 

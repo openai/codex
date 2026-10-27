@@ -439,7 +439,7 @@ impl ConnectionPool {
             .await
             .as_ref()
             .is_some_and(CodexAuth::uses_codex_backend)
-            && provider.supports_codex_backend_routes()
+            && provider.is_openai()
             && provider.requires_openai_auth
             && provider.env_key.is_none()
             && provider.experimental_bearer_token.is_none()
