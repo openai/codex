@@ -321,12 +321,55 @@ class InstallShTest(unittest.TestCase):
             self.assertEqual(guarded.returncode, 0, guarded.stderr)
             self.assertTrue(managed.exists())
 
+    def test_macos_release_inspection_preserves_lsof_matches(self) -> None:
+        # Exercise the macOS branch on every platform, including lsof's absolute path.
+        function = (
+            INSTALL_SCRIPT.read_text()
+            .split("record_standalone_releases_in_use() {", 1)[1]
+            .split("\n}\n", 1)[0]
+        )
+        function = "record_standalone_releases_in_use() {" + function + "\n}\n"
+        function = function.replace("/usr/sbin/lsof ", "mock_lsof ")
+        matches = "p123\nn/releases/active/bin/codex\n"
+        for status, output, error, expected in (
+            (0, matches, "", 0),
+            (1, "", "", 0),
+            (1, matches, "", 0),
+            (0, matches, "inspection failed\n", 1),
+            (1, matches, "inspection failed\n", 1),
+            (2, "", "", 1),
+            (2, matches, "", 1),
+        ):
+            with self.subTest(status=status, output=output, error=error):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    script = (
+                        "set -eu\n"
+                        "os=macos\n"
+                        "releases=/releases\n"
+                        f"tmp_dir={shlex.quote(temp_dir)}\n"
+                        # Avoid depending on other processes on the test host.
+                        'ps() { printf "%s codex\\n" "$(id -u)"; }\n'
+                        "mock_lsof() {\n"
+                        f"  printf '%s' {shlex.quote(output)}\n"
+                        f"  printf '%s' {shlex.quote(error)} >&2\n"
+                        f"  return {status}\n"
+                        "}\n" + function + "record_standalone_releases_in_use\n"
+                    )
+                    result = subprocess.run(
+                        ["sh"], input=script, text=True, capture_output=True
+                    )
+                    self.assertEqual(
+                        (result.returncode, result.stdout, result.stderr),
+                        (expected, "", ""),
+                    )
+                    self.assertEqual((Path(temp_dir) / "in-use").read_text(), output)
+
     def test_standalone_retains_previous_and_running_releases_across_installs(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Exercise real process inspection, including paths containing spaces.
-            root = Path(temp_dir).resolve() / "codex install"
+            # macOS lsof can escape the non-ASCII bytes in the installation path.
+            root = Path(temp_dir).resolve() / "André codex install"
             root.mkdir()
             system = os.uname()
             if system.sysname == "Linux":
@@ -516,6 +559,15 @@ class InstallShTest(unittest.TestCase):
                 os.close(ready_fd)
                 os.close(resume_fd)
                 fake_mv.unlink()
+
+            if system.sysname == "Darwin":
+                # An external process can hold just the release directory open.
+                with subprocess.Popen(["/bin/cat"], stdin=subprocess.PIPE, cwd=oldest):
+                    held, _ = run_installer_in(
+                        root, "latest", **install_options[VERSION]
+                    )
+                    self.assertEqual(held.returncode, 0, held.stderr)
+                    self.assertTrue(oldest.is_dir(), held.stderr)
 
             # A no-op latest install (also the codex update path) cleans up the
             # now-unused release without rotating previous to current.
