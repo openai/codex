@@ -322,6 +322,62 @@ fn configure_scenario_catalog(config: &mut Config) {
     config.cloud_skill_enabled = false;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn admitted_prompt_id_reaches_responses() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config.include_environment_context = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("first")]),
+            sse(vec![ev_completed("second")]),
+        ],
+    )
+    .await;
+    let uuid = uuid::Uuid::new_v4();
+    for id in [Some(uuid), None] {
+        let mut request = TurnInputRequest::user_input(vec![text("Repeat this input.")]);
+        request.user_item_uuid = id;
+        test.codex.start_or_steer_turn(request).await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let reserved = codex_protocol::ResponseItemId::for_admitted_user_input(uuid);
+    for (index, request) in requests.iter().enumerate() {
+        let input = request.input();
+        let prompts: Vec<_> = input
+            .iter()
+            .filter(|item| {
+                item["role"] == "user" && item["content"][0]["text"] == "Repeat this input."
+            })
+            .collect();
+        assert_eq!(prompts.len(), index + 1);
+        assert_eq!(prompts[0]["id"], reserved.as_str());
+        if let Some(legacy) = prompts.get(1) {
+            let id = legacy["id"].as_str().expect("legacy message id");
+            assert!(id.starts_with("msg_") && !id.starts_with("msg_input_"));
+        }
+    }
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "An admitted prompt and an ordinary prompt with identical text reach Responses on successive turns.",
+        &requests,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    ));
+    Ok(())
+}
+
 #[test_case::test_case(false; "messages")]
 #[test_case::test_case(true; "tool_outputs")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1133,8 +1133,108 @@ async fn steer_preserves_request_origin(
             metadata: crate::session::UserInputMetadata {
                 acceptance_order: Some(0),
                 origin,
+                ..Default::default()
             },
         }]
     );
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
+async fn scored_prompt_keeps_its_submission_item_id() {
+    let (session, turn, events) = make_session_and_context_with_rx().await;
+    session
+        .spawn_task(
+            Arc::clone(&turn),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    // A legacy steer can present the same UI client ID as an admitted steer.
+    for id in [Some(first), None, Some(second)] {
+        let mut request = TurnInputRequest::new(SubmittedTurnInput::UserInput {
+            content: vec![UserInput::Text {
+                text: "identical input".into(),
+                text_elements: vec![],
+            }],
+            client_id: Some("same-client-id".into()),
+        });
+        request.user_item_uuid = id;
+        handle(
+            &session,
+            request,
+            TurnInputMode::Steer {
+                expected_turn_id: turn.sub_id.clone(),
+            },
+            Uuid::now_v7().to_string(),
+        )
+        .await
+        .unwrap();
+    }
+    let (pending, _) = session
+        .input_queue
+        .get_pending_input(&session.active_turn)
+        .await;
+    for input in pending {
+        let TurnInput::UserInput {
+            content,
+            client_id,
+            metadata,
+        } = input
+        else {
+            panic!("expected admitted user input");
+        };
+        session
+            .record_user_prompt_and_emit_turn_item(
+                &turn,
+                turn.model_info(),
+                &content,
+                client_id,
+                metadata,
+                codex_thread_store::PersistContext::Standard,
+            )
+            .await;
+    }
+    let history = session.clone_history().await;
+    let ids: Vec<_> = history
+        .raw_items()
+        .filter_map(|item| {
+            if let ResponseItem::Message { role, id, .. } = item
+                && role == "user"
+            {
+                id.as_ref().map(ToString::to_string)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(ids.len(), 3);
+    assert_eq!(ids[0], format!("msg_input_{first}"));
+    assert!(!ids[1].starts_with("msg_input_"));
+    assert_eq!(ids[2], format!("msg_input_{second}"));
+    let ui_ids = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event.msg {
+            codex_protocol::protocol::EventMsg::ItemCompleted(event) => {
+                let item = codex_app_server_protocol::ThreadItemPayload::from(event.item);
+                if let codex_app_server_protocol::ThreadItemPayload::UserMessage {
+                    id,
+                    client_id,
+                    ..
+                } = item
+                {
+                    assert_eq!(client_id.as_deref(), Some("same-client-id"));
+                    return Some(id);
+                }
+                None
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(ui_ids.len(), 3);
     session.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
