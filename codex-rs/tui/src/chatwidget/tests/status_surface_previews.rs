@@ -219,6 +219,8 @@ async fn status_line_setup_popup_hardcoded_only_snapshot() {
         "project-name".to_string(),
         "git-branch".to_string(),
         "thread-title".to_string(),
+        "profile".to_string(),
+        "provider".to_string(),
     ]);
 
     assert_chatwidget_snapshot!(

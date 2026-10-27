@@ -107,6 +107,9 @@ async fn session_header_uses_catalog_display_name_without_changing_model() {
 async fn session_and_settings_sync_server_provider_id() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.config.model_provider.base_url = Some("https://local-provider.example/v1".to_string());
+    chat.local_settings.tui.status_line = Some(vec!["profile".into(), "provider".into()]);
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), None);
     let status = |chat: &mut ChatWidget| {
         chat.add_status_output(
             /*refreshing_rate_limits*/ false, /*request_id*/ None,
@@ -138,6 +141,10 @@ async fn session_and_settings_sync_server_provider_id() {
     assert!(displayed.contains("Model provider:") && displayed.contains("server-ollama"));
     assert!(!displayed.contains("local-provider.example"));
     assert!(!displayed.contains("ChatGPT workspace:"));
+    assert_eq!(
+        status_line_text(&chat).as_deref(),
+        Some("provider: server-ollama")
+    );
 
     let mut other = configured_thread_session(ThreadId::new());
     other.model_provider_id = "server-bedrock".to_string();
@@ -149,6 +156,15 @@ async fn session_and_settings_sync_server_provider_id() {
     chat.handle_thread_session_quiet(first);
     assert_eq!(chat.config.model_provider_id, "server-ollama");
 
+    chat.config.config_layer_stack = chat
+        .config
+        .config_layer_stack
+        .with_user_config_profile(
+            &chat.config.codex_home.join("work.config.toml"),
+            Some(&"work".parse().unwrap()),
+            toml::Table::new().into(),
+        )
+        .unwrap();
     let mut updated = thread_settings_for_test("gpt-5.4", first_id);
     updated.thread_settings.model_provider = "server-updated".to_string();
     chat.handle_server_notification(
@@ -156,6 +172,10 @@ async fn session_and_settings_sync_server_provider_id() {
         /*replay_kind*/ None,
     );
     assert!(status(&mut chat).contains("server-updated"));
+    insta::assert_snapshot!(
+        status_line_text(&chat).unwrap(),
+        @"profile: work · provider: server-updated"
+    );
 }
 
 fn start_safety_buffering_test_turn(
