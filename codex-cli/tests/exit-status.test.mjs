@@ -81,25 +81,26 @@ test(
           }
         }
         assert.ok(prompted, "migration must reach its confirmation prompt");
-        if (signal === "SIGHUP") {
-          // The wrapper must forward the signal and retain signal termination.
+        const processes = execFileSync("ps", ["-axo", "pid=,ppid="], {
+          encoding: "utf8",
+        });
+        const children = processes
+          .trim()
+          .split("\n")
+          .map((line) => line.trim().split(/\s+/).map(Number))
+          .filter(([, parent]) => parent === child.pid);
+        const usesExecve = typeof process.execve === "function";
+        assert.equal(
+          children.length,
+          usesExecve ? 0 : 1,
+          "execve must replace the wrapper; spawn must create one native child",
+        );
+        if (usesExecve || signal === "SIGHUP") {
+          // Signal the native process directly, or let the wrapper forward it.
           child.kill(signal);
           assert.deepEqual(await exited, [null, signal]);
         } else {
           // A native child can die from a signal that Node ignores by default.
-          const processes = execFileSync("ps", ["-axo", "pid=,ppid="], {
-            encoding: "utf8",
-          });
-          const children = processes
-            .trim()
-            .split("\n")
-            .map((line) => line.trim().split(/\s+/).map(Number))
-            .filter(([, parent]) => parent === child.pid);
-          assert.equal(
-            children.length,
-            1,
-            "wrapper must have one native child",
-          );
           process.kill(children[0][0], signal);
           assert.deepEqual(await exited, [
             128 + constants.signals[signal],

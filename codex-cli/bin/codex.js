@@ -112,12 +112,6 @@ function findCodexExecutable() {
 
 const binaryPath = findCodexExecutable();
 
-// Use an asynchronous spawn instead of spawnSync so that Node is able to
-// respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
-// executing. This allows us to forward those signals to the child process
-// and guarantees that when either the child terminates or the parent
-// receives a fatal signal, both processes exit in a predictable manner.
-
 function isPnpmOwnedCodexInstall(nodeModulesDir) {
   if (!existsSync(path.join(nodeModulesDir, ".modules.yaml"))) {
     return false;
@@ -239,6 +233,17 @@ delete env.CODEX_MANAGED_BY_PNPM;
 delete env.CODEX_MANAGED_BY_VITE_PLUS;
 env[packageManagerEnvVar] = "1";
 
+// Replace Node so the native binary receives signals and exits directly.
+// Node exposes execve on Windows too, but calling it there is unsupported.
+if (process.platform !== "win32" && typeof process.execve === "function") {
+  // Node ignores SIGXFSZ, and ignored signals survive execve. Installing a
+  // handler lets execve restore the default disposition in the native binary.
+  process.on("SIGXFSZ", () => {});
+  process.execve(binaryPath, [binaryPath, ...process.argv.slice(2)], env);
+}
+
+// Older Node versions and Windows need a child process. Spawn asynchronously
+// so Node can forward signals while the native binary is executing.
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
   env,
