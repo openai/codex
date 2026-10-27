@@ -77,21 +77,16 @@ impl GuardianV2Extension {
                 GuardianScope::for_mcp_connector(&info.server_name, info.connector_id.as_deref())
             })
             .or_else(|| {
-                if guardian_config.review_multi_agent_calls
-                    && match guardian_config.multi_agent_namespace.as_deref() {
-                        Some(namespace) => input.tool_name.namespace.as_deref() == Some(namespace),
-                        None => input.tool_name.is_default_namespace(),
-                    }
-                    && matches!(
-                        input.tool_name.name.as_str(),
-                        "spawn_agent" | "send_message" | "followup_task" | "interrupt_agent"
+                if guardian_config.review_multi_agent_calls {
+                    GuardianScope::for_multi_agent_tool(
+                        input.tool_name,
+                        guardian_config.multi_agent_namespace.as_deref(),
                     )
-                {
-                    Some(GuardianScope::NativeTool)
                 } else {
-                    GuardianScope::for_tool(input.tool_name)
+                    None
                 }
-            });
+            })
+            .or_else(|| GuardianScope::for_tool(input.tool_name));
         // Model policies review nested actions; the Code Mode wrapper leaves their scores alone.
         // The legacy all-tools policy still scores wrappers through `other_tools`.
         if scope.is_none()

@@ -138,6 +138,25 @@ impl GuardianScope {
         }
     }
 
+    /// Classifies state-changing MAv2 calls in the configured namespace.
+    /// An absent namespace accepts the default namespace spellings; callers gate this lookup.
+    pub fn for_multi_agent_tool(tool: &ToolName, namespace: Option<&str>) -> Option<Self> {
+        let matches_namespace = match namespace {
+            Some(namespace) => tool.namespace.as_deref() == Some(namespace),
+            None => tool.is_default_namespace(),
+        };
+        if matches_namespace
+            && matches!(
+                tool.name.as_str(),
+                "spawn_agent" | "send_message" | "followup_task" | "interrupt_agent"
+            )
+        {
+            Some(Self::NativeTool)
+        } else {
+            None
+        }
+    }
+
     pub fn for_tool(tool: &ToolName) -> Option<Self> {
         if is_node_repl_backed_tool(&tool.name, tool.namespace.as_deref()) {
             return Some(Self::ComputerUse);
