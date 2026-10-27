@@ -284,7 +284,7 @@ pub(crate) fn normalize_and_validate_additional_permissions(
     }
 }
 
-pub(super) struct EffectiveAdditionalPermissions {
+pub(crate) struct EffectiveAdditionalPermissions {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
     pub permissions_preapproved: bool,

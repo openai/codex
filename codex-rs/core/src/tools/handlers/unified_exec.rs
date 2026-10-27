@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod exec_command;
+pub(crate) mod preparation;
 mod write_stdin;
 
 pub use exec_command::ExecCommandHandler;
