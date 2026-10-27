@@ -3,6 +3,7 @@
 //! The host supplies review attempts and enforces the resulting decision on the bound action.
 
 mod approval_request;
+mod approval_request_json;
 mod assessment;
 mod blocking;
 pub use blocking::ReviewBlocking;
@@ -30,6 +31,8 @@ mod settings;
 pub use approval_request::GuardianApprovalRequest;
 pub use approval_request::GuardianMcpAnnotations;
 pub use approval_request::GuardianNetworkAccessTrigger;
+pub use approval_request_json::format_guardian_action_pretty;
+pub use approval_request_json::guardian_approval_request_to_json;
 pub use assessment::GuardianAssessment;
 pub use assessment::guardian_output_contract_prompt;
 pub use assessment::guardian_output_schema;
