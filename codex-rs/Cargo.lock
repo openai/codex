@@ -3612,6 +3612,7 @@ dependencies = [
  "codex-otel",
  "codex-prompts",
  "codex-protocol",
+ "codex-shell-command",
  "codex-utils-path-uri",
  "opentelemetry",
  "opentelemetry_sdk",
