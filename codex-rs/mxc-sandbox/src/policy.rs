@@ -1,5 +1,6 @@
-//! Translate canonical permissions into native MXC grants without expanding
-//! access. Denies and read-only carveouts remain separate kernel policy lists.
+//! Translate canonical permissions into MXC path grants.
+//! Denies and read-only carveouts remain separate kernel policy lists.
+//! Alias limitations are documented in the crate README.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -18,9 +19,6 @@ use mxc_sdk::mxc_common::cmdline::CommandLineError;
 use mxc_sdk::mxc_common::cmdline::cmdline_from_argv_for_context;
 use mxc_sdk::mxc_common::filesystem_object::ExistingObjectComparison;
 use mxc_sdk::mxc_common::filesystem_object::compare_existing_filesystem_objects;
-use mxc_sdk::mxc_common::filesystem_object::normalize_object_conflicts;
-use mxc_sdk::mxc_common::logger::Logger;
-use mxc_sdk::mxc_common::logger::Mode;
 use mxc_sdk::mxc_common::models::BaseProcessUiConfig;
 use mxc_sdk::mxc_common::models::ContainerPolicy;
 use mxc_sdk::mxc_common::models::ExecutionRequest;
@@ -205,20 +203,10 @@ pub(super) fn build_request(
         .collect::<std::io::Result<HashSet<_>>>()?;
     prune_unavailable_volume_roots(&mut write, &volume_roots);
     prune_unavailable_volume_roots(&mut read, &volume_roots);
-    // Normalize pre-expansion aliases so generated children inherit
-    // any tightened access applied to their volume root.
-    let normalized = normalize_policy(ContainerPolicy {
-        readwrite_paths: unicode_paths(write)?,
-        readonly_paths: unicode_paths(read)?,
-        denied_paths: unicode_paths(deny)?,
-        ..Default::default()
-    })?;
-    let write = collect_paths(normalized.readwrite_paths.into_iter().map(PathBuf::from))?;
-    let read = collect_paths(normalized.readonly_paths.into_iter().map(PathBuf::from))?;
-    let deny = collect_paths(normalized.denied_paths.into_iter().map(PathBuf::from))?;
-    // If expansion skips an unavailable writable volume, its generated read-only
-    // carveouts remain below. Pruning them requires retaining their root provenance,
-    // so we accept that rare normalization failure for now.
+    // BaseContainer owns alias precedence for the emitted paths. Do not call
+    // MXC's object normalizer: its metadata preflight rejects usable SMB grants
+    // and inaccessible deny paths before the native API can evaluate them.
+    // The hard-link and volume-root alias tradeoffs are intentional; see README.
     let mut write = expand_volume_roots(write, &volume_roots)?;
     write.retain(|key, _| !carveouts.contains_key(key) && !deny.contains_key(key));
     let mut read = expand_volume_roots(read, &volume_roots)?;
@@ -269,7 +257,7 @@ pub(super) fn build_request(
             ports: Vec::new(),
         });
     }
-    let mut request = ExecutionRequest {
+    Ok(ExecutionRequest {
         script_code: cmdline_from_argv_for_context(
             &command.command,
             CommandLineContext::WindowsCreateProcess,
@@ -311,21 +299,7 @@ pub(super) fn build_request(
             ..Default::default()
         },
         ..Default::default()
-    };
-    // Reconcile aliases introduced by expansion. MXC/PSEC separately enforces
-    // restrictions on junction-resolved targets at access time.
-    request.policy = normalize_policy(request.policy)?;
-    Ok(request)
-}
-
-fn normalize_policy(mut policy: ContainerPolicy) -> Result<ContainerPolicy, PolicyError> {
-    let mut logger = Logger::new(Mode::Buffer);
-    if let Some(normalized) =
-        normalize_object_conflicts(&policy, &mut logger).map_err(PolicyError::PolicyResolution)?
-    {
-        policy = normalized;
-    }
-    Ok(policy)
+    })
 }
 
 fn prune_unavailable_volume_roots(paths: &mut NativePaths, volume_roots: &HashSet<PathUri>) {
@@ -400,7 +374,7 @@ fn expand_volume_roots(
                             continue;
                         }
                         // A self-comparison is MXC's public object-identity probe.
-                        // Generated grants can be skipped; explicit paths fail closed below.
+                        // Generated grants can be skipped; explicit paths go to BaseContainer.
                         if compare_existing_filesystem_objects(&child, &child)
                             != ExistingObjectComparison::Same
                         {
