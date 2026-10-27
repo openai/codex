@@ -1,5 +1,3 @@
-#![allow(clippy::double_must_use)] // Emitted by async_trait in the generated tonic service.
-
 #[cfg(codex_bazel)]
 pub use code_mode_proto::codex::code_mode::v1::*;
 

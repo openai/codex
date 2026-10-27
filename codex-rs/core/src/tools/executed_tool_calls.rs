@@ -369,7 +369,7 @@ impl ExecutedToolCalls {
     fn reserve_direct_call(&self) -> Option<DirectCallPermit> {
         let recording = Arc::downgrade(&self.lock_state().as_ref()?.recording);
         self.pending_direct_calls
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |pending| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |pending| {
                 (pending < MAX_PENDING_EXECUTED_TOOL_CALLS).then_some(pending + 1)
             })
             .ok()?;

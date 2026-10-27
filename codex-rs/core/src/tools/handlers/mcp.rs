@@ -278,7 +278,8 @@ impl McpHandler {
             .map(TruncationPolicy::Tokens)
             .unwrap_or(step_context.settings.model_info.truncation_policy.into());
         let started = Instant::now();
-        let result = handle_mcp_tool_call(
+        // Bound the compiler's async-layout query depth for approval and dispatch.
+        let result = Box::pin(handle_mcp_tool_call(
             Arc::clone(&session),
             &step_context,
             &cancellation_token,
@@ -290,7 +291,7 @@ impl McpHandler {
             tool_name,
             &source,
             payload,
-        )
+        ))
         .await;
 
         Ok(boxed_tool_output(McpToolOutput {

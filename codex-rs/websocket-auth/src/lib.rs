@@ -444,7 +444,7 @@ fn sha256_digest_arg(flag_name: &str, value: &str) -> anyhow::Result<[u8; 32]> {
     }
 
     let mut digest = [0u8; 32];
-    for (index, pair) in trimmed.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+    for (index, pair) in trimmed.as_bytes().chunks_exact(2).enumerate() {
         let high = hex_nibble(flag_name, pair[0])?;
         let low = hex_nibble(flag_name, pair[1])?;
         digest[index] = (high << 4) | low;

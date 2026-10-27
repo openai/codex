@@ -19,7 +19,6 @@ use super::ThreadConfigSource;
 use super::UserThreadConfig;
 use proto::thread_config_loader_client::ThreadConfigLoaderClient;
 
-#[allow(clippy::double_must_use)] // Emitted by async_trait in the generated tonic service.
 #[path = "proto/codex.thread_config.v1.rs"]
 mod proto;
 

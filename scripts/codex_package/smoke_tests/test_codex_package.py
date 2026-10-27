@@ -18,6 +18,7 @@ Each package contains one entrypoint, not both codex and codex-app-server.
 """
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -176,7 +177,7 @@ def _code_mode_host_symbol_address(
         for line in symbol_output.splitlines()
         if len(parts := line.split(maxsplit=2)) == 3
         and parts[1].lower() == "t"
-        and parts[2] == "codex_code_mode_host::main"
+        and re.fullmatch(r"codex_code_mode_host::main(?:::h[0-9a-f]{16})?", parts[2])
     )
 
 

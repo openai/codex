@@ -269,13 +269,10 @@ pub enum ExecPolicyUpdateError {
     JoinBlockingTask { source: tokio::task::JoinError },
 
     #[error("failed to update in-memory rules: {source}")]
-    AddRule { source: ExecPolicyRuleError },
-}
-
-impl From<ExecPolicyRuleError> for ExecPolicyUpdateError {
-    fn from(source: ExecPolicyRuleError) -> Self {
-        Self::AddRule { source }
-    }
+    AddRule {
+        #[from]
+        source: ExecPolicyRuleError,
+    },
 }
 
 pub(crate) struct ExecPolicyManager {

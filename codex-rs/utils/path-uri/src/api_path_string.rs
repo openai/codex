@@ -263,9 +263,7 @@ fn render_windows_opaque_fallback(path_bytes: &[u8]) -> Option<String> {
         return None;
     }
     let path_wide = path_bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
+        .chunks_exact(2)
         .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
         .collect::<Vec<_>>();
 

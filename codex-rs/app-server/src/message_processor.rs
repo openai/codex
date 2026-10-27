@@ -1244,7 +1244,7 @@ impl MessageProcessor {
                 .clients_revoke(params)
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::ConfigRequirementsRead { .. } => self
+            ClientRequest::ConfigRequirementsRead { params: _, .. } => self
                 .config_processor
                 .config_requirements_read()
                 .await
@@ -1303,7 +1303,7 @@ impl MessageProcessor {
                 .unwatch(connection_id, params)
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::ModelProviderCapabilitiesRead { .. } => self
+            ClientRequest::ModelProviderCapabilitiesRead { params: _, .. } => self
                 .config_processor
                 .model_provider_capabilities_read()
                 .await
@@ -1741,7 +1741,7 @@ impl MessageProcessor {
             ClientRequest::ThreadTimelineList { params, .. } => {
                 self.thread_processor.thread_timeline_list(params).await
             }
-            ClientRequest::ThreadRealtimeListVoices { .. } => {
+            ClientRequest::ThreadRealtimeListVoices { params: _, .. } => {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {

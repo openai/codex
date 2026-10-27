@@ -543,7 +543,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                     .as_ref()
                     .is_some_and(|remaining| {
                         remaining
-                            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                                 remaining.checked_sub(1)
                             })
                             .is_ok()

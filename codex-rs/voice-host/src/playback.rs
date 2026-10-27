@@ -67,8 +67,8 @@ impl PlaybackWriter {
             at: Instant::now(),
             generation: self.epoch,
         };
-        for (sample, bytes) in frame.samples.iter_mut().zip(bytes.as_chunks::<4>().0) {
-            *sample = f32::from_le_bytes(*bytes);
+        for (sample, bytes) in frame.samples.iter_mut().zip(bytes.chunks_exact(4)) {
+            *sample = f32::from_le_bytes(bytes.try_into().map_err(|_| "invalid speaker buffer")?);
             if !sample.is_finite() {
                 return Err("invalid speaker sample");
             }
