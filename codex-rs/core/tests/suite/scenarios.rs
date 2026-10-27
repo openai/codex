@@ -102,6 +102,9 @@ use tokio::sync::oneshot;
 
 const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
+#[path = "scenarios_dynamic_tools.rs"]
+mod dynamic_tools;
+
 #[path = "scenarios_retained_tool_outputs.rs"]
 mod retained_tool_outputs;
 

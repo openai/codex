@@ -82,7 +82,10 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
         RolloutItem::TurnContext(_) | RolloutItem::WorldState(_) => preserve_context_baselines,
         // Child threads inherit model context, not the parent's cumulative usage state.
         RolloutItem::TokenUsageRecord(_) => false,
-        RolloutItem::Compacted(_) | RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => true,
+        RolloutItem::DynamicToolsUpdated { .. }
+        | RolloutItem::Compacted(_)
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::SessionMeta(_) => true,
     }
 }
 
@@ -417,7 +420,8 @@ pub(super) async fn prepare_forked_history(
                 true
             }
             RolloutItem::RealtimeItem(_) => false,
-            RolloutItem::EventMsg(_)
+            RolloutItem::DynamicToolsUpdated { .. }
+            | RolloutItem::EventMsg(_)
             | RolloutItem::SessionMeta(_)
             | RolloutItem::TurnContext(_)
             | RolloutItem::InterAgentCommunication(_)

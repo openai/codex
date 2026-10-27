@@ -1,0 +1,112 @@
+---
+source: core/tests/suite/scenarios_dynamic_tools.rs
+assertion_line: 173
+expression: "context_snapshot::format_request_history_snapshot(\"A pending release call survives replacement with deployment. The next step uses deployment. Replacement and clearing each survive restart.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: A pending release call survives replacement with deployment. The next step uses deployment. Replacement and clearing each survive restart.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-6-astra"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"low"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (10; hash=39aa00a8736bb135):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - function/request_user_input_async: Ask the user one or more questions during ongoing work. Use this tool only to request missing inf...; args=[questions]; hash=d6d74f33db330162
+    - namespace/clock: Tools for reading and waiting on time.; hash=a80435c7a3a3943f
+      - function/curr_time
+      - function/sleep
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+      - function/followup_task
+      - function/interrupt_agent
+      - function/list_agents
+      - function/send_message
+      - function/spawn_agent
+      - function/wait_agent
+    - function/release: Check release.; args=[]; hash=4c6f91a1a21d2a65
+    - web_search; hash=f103e327c6870a46
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+02:message/developer:
+    <MULTI_AGENT_ROLE>
+03:message/developer:
+    <MULTI_AGENT_MODE>
+04:message/user:
+    Check the release and deployment.
+05:configuration_update:reasoning={"effort":"low"}
+
+## Window 2 (after request 1)
+Settings: relative to window 1
+  tools (10; hash=f9e31c2361b9bc7d):
+    - removed function/release
+    + function/deployment: Check deployment.; args=[]; hash=2e9a71e9a20e43ad
+-- request 2 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+02:message/developer:
+    <MULTI_AGENT_ROLE>
+03:message/developer:
+    <MULTI_AGENT_MODE>
+04:message/user:
+    Check the release and deployment.
+05:configuration_update:reasoning={"effort":"low"}
+06:function_call/release:{}
+07:function_call_output:Release ready.
+-- request 3 (turn) --
+08:function_call/deployment:{}
+09:function_call_output:Deployment ready.
+-- request 4 (turn) --
+10:message/assistant:
+    Both checks passed.
+11:message/user:
+    Which check is available now?
+12:configuration_update:reasoning={"effort":"low"}
+
+## Window 3 (after request 4)
+Settings: relative to window 2
+  tools (9; hash=4f2e62909d4cf2eb):
+    - removed function/deployment
+-- request 5 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+02:message/developer:
+    <MULTI_AGENT_ROLE>
+03:message/developer:
+    <MULTI_AGENT_MODE>
+04:message/user:
+    Check the release and deployment.
+05:configuration_update:reasoning={"effort":"low"}
+06:function_call/release:{}
+07:function_call_output:Release ready.
+08:function_call/deployment:{}
+09:function_call_output:Deployment ready.
+10:message/assistant:
+    Both checks passed.
+11:message/user:
+    Which check is available now?
+12:configuration_update:reasoning={"effort":"low"}
+13:message/assistant:
+    The deployment tool is available.
+14:message/user:
+    Summarize the checks.
+15:configuration_update:reasoning={"effort":"low"}

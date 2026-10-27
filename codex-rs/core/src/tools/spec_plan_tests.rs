@@ -601,6 +601,7 @@ async fn reviewer_tool_policy_exclude_optional_core_tools() {
         /*apps_enabled*/ false,
         &turn.extension_data,
         /*tool_suggest_candidates*/ None,
+        session.dynamic_tools().await.as_ref(),
     )
     .expect("build internal Guardian tool router");
 
@@ -653,6 +654,7 @@ async fn reviewer_tool_policy_respect_managed_shell_restrictions() {
             /*apps_enabled*/ false,
             &turn.extension_data,
             /*tool_suggest_candidates*/ None,
+            session.dynamic_tools().await.as_ref(),
         )
         .expect("build internal Guardian tool router");
 
@@ -689,6 +691,7 @@ async fn reviewer_tool_policy_preserve_code_mode() {
         /*apps_enabled*/ false,
         &turn.extension_data,
         /*tool_suggest_candidates*/ None,
+        session.dynamic_tools().await.as_ref(),
     )
     .expect("build internal Guardian tool router");
 
@@ -759,6 +762,7 @@ async fn reviewer_tool_policy_require_managed_secondary_environments() {
             /*apps_enabled*/ false,
             &turn.extension_data,
             /*tool_suggest_candidates*/ None,
+            session.dynamic_tools().await.as_ref(),
         )
         .expect("build internal Guardian tool router");
 

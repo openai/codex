@@ -405,7 +405,8 @@ mod job {
                 RolloutItem::InterAgentCommunication(communication) => {
                     Some(communication.to_model_input_item())
                 }
-                RolloutItem::SessionMeta(_)
+                RolloutItem::DynamicToolsUpdated { .. }
+                | RolloutItem::SessionMeta(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)

@@ -742,7 +742,8 @@ impl LocalAgentControl {
                     if multi_agent_version == MultiAgentVersion::V2
                         && config.features.enabled(Feature::MultiAgentV2DynamicTools)
                     {
-                        start_options.dynamic_tools = parent_thread.session.dynamic_tools().await;
+                        start_options.dynamic_tools =
+                            parent_thread.session.dynamic_tools().await.to_vec();
                     }
                 }
                 None

@@ -491,6 +491,7 @@ impl ThreadHistoryBuilder {
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::RetainedContext(_)
             | RolloutItem::SecurityRiskScore(_)
+            | RolloutItem::DynamicToolsUpdated { .. }
             | RolloutItem::SessionMeta(_) => {}
         }
     }

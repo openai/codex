@@ -253,6 +253,7 @@ impl Write for CountingWriter {
 
 fn rollout_item_type(item: &RolloutItem) -> String {
     match item {
+        RolloutItem::DynamicToolsUpdated { .. } => "dynamic_tools_updated".to_string(),
         RolloutItem::SessionMeta(_) => "session_meta".to_string(),
         RolloutItem::ResponseItem(item) => response_item_type(item).to_string(),
         RolloutItem::InterAgentCommunication(_) => "inter_agent_communication".to_string(),

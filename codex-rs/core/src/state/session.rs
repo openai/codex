@@ -1,11 +1,13 @@
 //! Session-wide mutable state.
 
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructionsProvenance;
 #[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use super::AdditionalContextStore;
 use super::auto_compact_window::AutoCompactWindow;
@@ -68,6 +70,8 @@ impl ReasoningEffortPin {
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
+    /// Catalog to carry across compaction, independent of an explicit resume override.
+    pub(crate) persisted_dynamic_tools: Arc<[DynamicToolSpec]>,
     /// Plugin selection of the last admitted task; settings updates take effect on the next task.
     pub(crate) active_disabled_plugin_ids: Vec<String>,
     /// Persisted origin of the session base instructions, when known.
@@ -125,6 +129,7 @@ impl SessionState {
     ) -> Self {
         Self {
             active_disabled_plugin_ids: Vec::new(),
+            persisted_dynamic_tools: Arc::clone(&session_configuration.dynamic_tools),
             session_configuration,
             base_instructions_provenance: None,
             history,

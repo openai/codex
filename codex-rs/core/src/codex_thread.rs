@@ -719,6 +719,24 @@ impl CodexThread {
         self.session.update_settings(updates).await.map(|_| ())
     }
 
+    /// Replaces tools for subsequent model steps and future turns, preserving in-flight calls.
+    /// An empty list removes all dynamic tools. Persistent threads require host opt-in
+    /// so every reader can restore successful updates on resume.
+    ///
+    /// Once queued, stopping the caller does not cancel the update.
+    /// A persistence error can leave the durable result indeterminate; retry the same replacement
+    /// before continuing.
+    pub async fn replace_dynamic_tools(
+        &self,
+        tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    ) -> CodexResult<()> {
+        let (reply, result) = oneshot::channel();
+        self.io
+            .submit(Op::ReplaceDynamicTools { tools, reply })
+            .await?;
+        result.await.unwrap_or(Err(CodexErr::InternalAgentDied))
+    }
+
     /// Persists current settings without emitting a live settings event.
     ///
     /// Serializes snapshot capture and persistence with accepted settings updates.

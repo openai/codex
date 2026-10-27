@@ -127,6 +127,7 @@ pub(crate) fn build_tool_router(
     apps_enabled: bool,
     step_store: &ExtensionData,
     tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
+    dynamic_tools: &[DynamicToolSpec],
 ) -> CodexResult<ToolRouter> {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
@@ -170,7 +171,7 @@ pub(crate) fn build_tool_router(
         extension_tool_executors(session, step_store),
         &mut registry,
     );
-    append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
+    append_dynamic_tool_runtimes(dynamic_tools, &mut registry);
     let hosted_specs = hosted_model_tool_specs(
         turn_context,
         model_info,

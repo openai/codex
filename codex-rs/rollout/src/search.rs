@@ -335,7 +335,8 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
                 Some(text)
             }
         }
-        RolloutItem::SessionMeta(_)
+        RolloutItem::DynamicToolsUpdated { .. }
+        | RolloutItem::SessionMeta(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::ResponseItem(_)

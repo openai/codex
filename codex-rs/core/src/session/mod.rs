@@ -353,6 +353,7 @@ use codex_git_utils::get_git_repo_root;
 use codex_history::CodexHarnessMetadata;
 use codex_history::CompactedItem;
 use codex_history::CompactionResumeMetadata;
+use codex_history::DynamicToolsSnapshot;
 use codex_history::InitialHistory;
 pub(crate) use codex_history::PreviousTurnSettings;
 use codex_history::ResponseItemEnvelope;
@@ -845,8 +846,10 @@ impl Session {
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| render_model_instructions(&model_info));
 
-        // Dynamic tools are defined at thread start and persisted in rollout session metadata.
-        let dynamic_tools = if dynamic_tools.is_empty() {
+        // A fork records its initial catalog in the new thread's creation metadata.
+        let dynamic_tools = if dynamic_tools.is_empty()
+            && matches!(conversation_history, InitialHistory::Forked(_))
+        {
             conversation_history.get_dynamic_tools().unwrap_or_default()
         } else {
             dynamic_tools
@@ -4073,6 +4076,7 @@ impl Session {
                 settings = Arc::new(inherited_settings);
             }
         }
+        let dynamic_tools = self.dynamic_tools().await;
         let token_budget = token_budget::resolve_token_budget(
             turn_context.configured_token_budget.as_ref(),
             turn_context.use_model_token_budget_defaults,
@@ -4200,6 +4204,7 @@ impl Session {
                 &mcp,
                 &extension_data,
                 prepared_recommendations,
+                &dynamic_tools,
             )
             .await?;
             Ok::<_, CodexErr>((executor_hook_sources, mcp, tool_router, extension_data))
@@ -4550,6 +4555,10 @@ impl Session {
                 compaction_response_id: metadata.compaction_response_id,
                 latest_token_usage_record: state.latest_token_usage_record.clone(),
                 resume_metadata: Some(CompactionResumeMetadata {
+                    dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
+                        thread_id: self.thread_id(),
+                        tools: state.persisted_dynamic_tools.to_vec(),
+                    })),
                     multi_agent_version: self.multi_agent_version(),
                     last_started_turn_id: state.last_started_turn_id.clone(),
                     turn_attribution: state.turn_attribution.clone(),

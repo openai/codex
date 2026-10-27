@@ -164,14 +164,14 @@ fn test_tool_router(
 
 #[tokio::test]
 async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
-    let (_, turn) = make_session_and_context().await;
+    let (session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
     let router = test_tool_router(
         step_context.as_ref(),
         Vec::new(),
         Vec::new(),
-        &turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
 
     let parallel_tool_name = ["exec_command"]
@@ -313,7 +313,7 @@ fn build_tool_call_normalizes_default_function_and_custom_namespaces() -> anyhow
 
 #[tokio::test]
 async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
-    let (_, turn) = make_session_and_context().await;
+    let (session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
     let router = test_tool_router(
@@ -354,7 +354,7 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             },
         ],
         Vec::new(),
-        &turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
 
     let call = ToolCall {
@@ -415,14 +415,14 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
-    let (_, turn) = make_session_and_context().await;
+    let (session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
     let router = test_tool_router(
         step_context.as_ref(),
         Vec::new(),
         Vec::new(),
-        &turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
 
     assert!(!router.tool_supports_parallel(&ToolCall {
@@ -573,7 +573,7 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             &session,
             &codex_extension_api::ExtensionData::new(turn.sub_id.clone()),
         ),
-        &turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
 
     assert!(

@@ -1,6 +1,8 @@
 //! Defines resume metadata stored directly on a compaction.
 
 use crate::RolloutItem;
+use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::turn_input::TurnAttribution;
@@ -11,9 +13,12 @@ use serde::Serialize;
 /// Resume metadata that is not represented by the companion records after a compaction.
 ///
 /// Presence distinguishes compactions that explicitly persisted these values from older
-/// compactions that did not. Each field is authoritative, including an intentionally absent value.
+/// compactions that did not.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CompactionResumeMetadata {
+    /// Catalog owned by the producing thread; absent in older checkpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_tools: Option<Box<DynamicToolsSnapshot>>,
     /// Selected runtime, including when the companion turn context is absent.
     pub multi_agent_version: Option<MultiAgentVersion>,
     /// Turn identity used to admit continuations after cold resume.
@@ -22,6 +27,13 @@ pub struct CompactionResumeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_attribution: Option<TurnAttribution>,
     pub previous_turn_settings: Option<PreviousTurnSettings>,
+}
+
+/// A thread's dynamic-tool catalog, including an empty catalog after a clear.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DynamicToolsSnapshot {
+    pub thread_id: ThreadId,
+    pub tools: Vec<DynamicToolSpec>,
 }
 
 /// Previous user-turn settings used to reconstruct context changes after resume.
@@ -43,7 +55,8 @@ pub fn resume_multi_agent_version(item: &RolloutItem) -> Option<MultiAgentVersio
             .resume_metadata
             .as_ref()
             .and_then(|metadata| metadata.multi_agent_version),
-        RolloutItem::SessionMeta(_)
+        RolloutItem::DynamicToolsUpdated { .. }
+        | RolloutItem::SessionMeta(_)
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }

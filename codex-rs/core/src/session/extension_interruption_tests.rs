@@ -2,16 +2,10 @@
 #![cfg(test)]
 
 use super::*;
-use crate::session::SessionIo;
-use crate::session::completed_session_loop_termination;
 use crate::session::tests::HeldStepTask;
 use crate::session::tests::make_session_and_context_with_rx;
+use crate::session::tests::make_thread_for_session;
 use crate::state::TaskKind;
-use crate::thread_startup_metadata::ThreadStartupMetadata;
-use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::protocol::AgentStatus;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::trace::InMemorySpanExporter;
@@ -19,7 +13,6 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tokio::sync::Notify;
-use tokio::sync::watch;
 use tracing::Instrument;
 use tracing_subscriber::prelude::*;
 
@@ -136,37 +129,13 @@ async fn interrupt_if_no_pending_input_handles_cancelled_submission() {
         .expect("active task")
         .cancellation_token
         .clone();
-    let (tx_sub, rx_sub) = async_channel::bounded(/*cap*/ 1);
-    let thread = CodexThread::new(
+    let (thread, rx_sub) = make_thread_for_session(
         Arc::clone(&session),
-        SessionIo {
-            tx_sub,
-            rx_event,
-            agent_status: watch::channel(AgentStatus::PendingInit).1,
-            session_loop_termination: completed_session_loop_termination(),
-        },
-        ThreadStartupMetadata::from(&SessionConfiguredEvent {
-            session_id: session.session_id(),
-            thread_id: session.thread_id(),
-            forked_from_id: None,
-            parent_thread_id: None,
-            thread_source: None,
-            thread_name: None,
-            model: "test".to_string(),
-            model_provider_id: "test".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: ApprovalsReviewer::User,
-            permission_profile: turn_context.permission_profile(),
-            active_permission_profile: None,
-            cwd: turn_context.config.cwd.clone(),
-            reasoning_effort: None,
-            network_proxy: None,
-            rollout_path: None,
-        }),
-        /*rollout_path*/ None,
+        &turn_context,
+        rx_event,
         SessionSource::Cli,
-    );
+    )
+    .await;
     thread.submit(Op::Interrupt).await.expect("fill the queue");
 
     let interrupt = thread.interrupt_if_no_pending_input(&turn_context.sub_id);

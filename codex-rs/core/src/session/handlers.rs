@@ -643,6 +643,10 @@ pub(super) async fn submission_loop(
                     }
                     false
                 }
+                Op::ReplaceDynamicTools { tools, reply } => {
+                    let _ = reply.send(sess.replace_dynamic_tools(tools).await);
+                    false
+                }
                 Op::TurnSettings {
                     turn_id,
                     update,

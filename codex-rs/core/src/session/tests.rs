@@ -330,6 +330,8 @@ impl StepContext {
     }
 }
 
+#[path = "dynamic_tools_tests.rs"]
+mod dynamic_tools_tests;
 mod guardian_tests;
 
 fn user_message(text: &str) -> ResponseItem {
@@ -1054,7 +1056,8 @@ async fn preview_session_start_hooks(
     )
 }
 
-pub(crate) fn tool_registry_for_test_step(
+pub(crate) async fn tool_registry_for_test_step(
+    session: &Session,
     step_context: &StepContext,
 ) -> (ToolRegistry, Vec<ToolSpec>) {
     let mut registry = crate::tools::spec_plan::build_core_tool_registry(
@@ -1071,14 +1074,18 @@ pub(crate) fn tool_registry_for_test_step(
         &mut registry,
         Vec::new(),
         Vec::new(),
-        &step_context.turn.dynamic_tools,
+        session.dynamic_tools().await.as_ref(),
     );
     (registry, hosted_specs)
 }
 
-fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
+async fn test_tool_runtime(
+    session: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+) -> ToolCallRuntime {
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
+    let (registry, hosted_specs) =
+        tool_registry_for_test_step(&session, step_context.as_ref()).await;
     let router = Arc::new(ToolRouter::from_registry(
         step_context.turn.as_ref(),
         step_context.turn.model_info(),
@@ -4113,16 +4120,46 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     );
 }
 
+#[test_case::test_case(false; "replacement")]
+#[test_case::test_case(true; "cleared")]
 #[tokio::test]
-async fn start_new_context_window_persists_checkpoint_state() {
+async fn start_new_context_window_persists_checkpoint_state(clear_tools: bool) {
     let (mut session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
-        |_| {},
+        |config| config.allow_persistent_dynamic_tool_updates = true,
     )
     .await;
+    let dynamic_tools = vec![codex_protocol::dynamic_tools::DynamicToolSpec::Function(
+        codex_protocol::dynamic_tools::DynamicToolFunctionSpec {
+            name: "check_release".into(),
+            description: "Check the release.".into(),
+            input_schema: json!({"type": "object", "properties": {}}),
+            defer_loading: false,
+        },
+    )];
+    let mut initial_tools = dynamic_tools.clone();
+    if let codex_protocol::dynamic_tools::DynamicToolSpec::Function(tool) = &mut initial_tools[0] {
+        tool.name = "original_tool".into();
+    }
+    session
+        .state
+        .lock()
+        .await
+        .session_configuration
+        .dynamic_tools = initial_tools.into();
     let rollout_path =
         attach_thread_persistence(Arc::get_mut(&mut session).expect("unique session")).await;
+    session
+        .replace_dynamic_tools(dynamic_tools.clone())
+        .await
+        .unwrap();
+    let dynamic_tools = if clear_tools {
+        session.replace_dynamic_tools(Vec::new()).await.unwrap();
+        Vec::new()
+    } else {
+        dynamic_tools
+    };
     let thread_id = ThreadId::new();
     let token_usage_record = TokenUsageRecord {
         thread_id,
@@ -4165,6 +4202,29 @@ async fn start_new_context_window_persists_checkpoint_state() {
     else {
         panic!("expected resumed rollout history");
     };
+    let checkpoint = resumed
+        .history
+        .iter()
+        .rposition(|item| matches!(item, RolloutItem::Compacted(_)))
+        .unwrap();
+    assert_eq!(
+        codex_history::latest_dynamic_tools(&resumed.history[checkpoint..]),
+        Some(dynamic_tools.as_slice())
+    );
+    // A crash can leave only the compaction record, without its following companions.
+    let mut scan = codex_rollout::ModelContextScan::default();
+    for item in resumed.history[..=checkpoint].iter().rev() {
+        if scan.push(item.clone()) == codex_rollout::ModelContextScanProgress::Complete {
+            break;
+        }
+    }
+    let mut recovered = scan.finish();
+    assert!(matches!(recovered.as_slice(), [RolloutItem::Compacted(_)]));
+    recovered.insert(0, resumed.history[0].clone());
+    assert_eq!(
+        codex_history::latest_dynamic_tools(&recovered),
+        Some(dynamic_tools.as_slice())
+    );
     let persisted_world_state = resumed
         .history
         .iter()
@@ -4178,7 +4238,8 @@ async fn start_new_context_window_persists_checkpoint_state() {
     assert_eq!(persisted_world_state.state, expected_snapshot);
     let persisted_compacted = resumed.history.iter().rev().find_map(|item| match item {
         RolloutItem::Compacted(compacted) => Some(compacted),
-        RolloutItem::SessionMeta(_)
+        RolloutItem::DynamicToolsUpdated { .. }
+        | RolloutItem::SessionMeta(_)
         | RolloutItem::ResponseItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
@@ -4278,7 +4339,8 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
     };
     let persisted_item = resumed.history.iter().find_map(|item| match item {
         RolloutItem::ResponseItem(response_item) => Some(response_item),
-        RolloutItem::SessionMeta(_)
+        RolloutItem::DynamicToolsUpdated { .. }
+        | RolloutItem::SessionMeta(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)
@@ -4999,7 +5061,7 @@ async fn open_thread_persistence(session: &mut Session) -> PathBuf {
             thread_source: None,
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
-            dynamic_tools: Vec::new(),
+            dynamic_tools: session.dynamic_tools().await.to_vec(),
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
             history_mode: Default::default(),
@@ -6299,6 +6361,10 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
 
     session.multi_agent_version = std::sync::OnceLock::from(MultiAgentVersion::V2);
     let expected = CompactionResumeMetadata {
+        dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
+            thread_id: session.thread_id(),
+            tools: Vec::new(),
+        })),
         multi_agent_version: Some(MultiAgentVersion::V2),
         last_started_turn_id: Some(turn_context.sub_id.clone()),
         turn_attribution: Some(codex_history::TurnAttribution {
@@ -9453,6 +9519,49 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
+}
+
+// Wrap an existing session without starting a submission loop, so tests control its queue.
+pub(super) async fn make_thread_for_session(
+    session: Arc<Session>,
+    turn_context: &TurnContext,
+    rx_event: async_channel::Receiver<Event>,
+    session_source: SessionSource,
+) -> (crate::CodexThread, async_channel::Receiver<Submission>) {
+    let rollout_path = session.current_rollout_path().await.expect("rollout path");
+    let event = SessionConfiguredEvent {
+        session_id: session.session_id(),
+        thread_id: session.thread_id(),
+        forked_from_id: None,
+        parent_thread_id: None,
+        thread_source: None,
+        thread_name: None,
+        model: "test".into(),
+        model_provider_id: "test".into(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: turn_context.permission_profile(),
+        active_permission_profile: None,
+        cwd: turn_context.config.cwd.clone(),
+        reasoning_effort: None,
+        network_proxy: None,
+        rollout_path: rollout_path.clone(),
+    };
+    let (tx_sub, rx_sub) = async_channel::bounded(/*cap*/ 1);
+    let thread = crate::CodexThread::new(
+        session,
+        SessionIo {
+            tx_sub,
+            rx_event,
+            agent_status: watch::channel(AgentStatus::PendingInit).1,
+            session_loop_termination: completed_session_loop_termination(),
+        },
+        crate::ThreadStartupMetadata::from(&event),
+        rollout_path,
+        session_source,
+    );
+    (thread, rx_sub)
 }
 
 #[tokio::test]
@@ -13183,7 +13292,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         sess: Arc::clone(&sess),
         step_context: StepContext::for_test(Arc::clone(&tc)),
         turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),
-        tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
+        tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)).await,
         defer_tool_dispatch: false,
         cancellation_token: CancellationToken::new(),
     };
@@ -13282,7 +13391,8 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
 async fn fatal_tool_error_stops_turn_and_reports_error() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
-    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
+    let (registry, hosted_specs) =
+        tool_registry_for_test_step(&session, step_context.as_ref()).await;
     let router = ToolRouter::from_registry(
         step_context.turn.as_ref(),
         step_context.turn.model_info(),

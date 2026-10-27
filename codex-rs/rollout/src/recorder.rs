@@ -2260,7 +2260,8 @@ async fn resume_candidate_matches_cwd(
     if let Ok((items, _, _)) = RolloutRecorder::load_rollout_items(rollout_path).await
         && let Some(latest_turn_context_cwd) = items.iter().rev().find_map(|item| match item {
             RolloutItem::TurnContext(turn_context) => Some(&turn_context.cwd),
-            RolloutItem::SessionMeta(_)
+            RolloutItem::DynamicToolsUpdated { .. }
+            | RolloutItem::SessionMeta(_)
             | RolloutItem::ResponseItem(_)
             | RolloutItem::InterAgentCommunication(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
