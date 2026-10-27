@@ -35,6 +35,7 @@ fn explicit_plugin_instructions_use_manifest_namespace_for_skills() {
         },
         &[],
         &[],
+        &Features::default(),
     )
     .expect("skill capability should render");
 
@@ -53,6 +54,7 @@ fn explicit_plugin_instructions_search_available_apps_before_fallback() {
         },
         &[],
         &["Adobe".to_string()],
+        &Features::default(),
     )
     .expect("app capability should render");
 
@@ -85,6 +87,7 @@ fn explicit_plugin_instructions_are_bounded() {
         },
         &servers,
         &apps,
+        &Features::default(),
     )
     .expect("MCP capability should render");
 

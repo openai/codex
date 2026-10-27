@@ -2394,15 +2394,21 @@ text(result.tools[0].description);"#,
     Ok(())
 }
 
+#[test_case::test_case(false; "simplified_selection_hints_off")]
+#[test_case::test_case(true; "simplified_selection_hints_on")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Result<()> {
+async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread(
+    simplified_selection_hints: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     core_test_support::skip_if_remote!(Ok(()), "plugin and MCP fixtures use host-local paths");
 
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
-    let config = "[features]\nplugins = true\n\n[skills.bundled]\nenabled = false\n";
-    fs::write(home.path().join("config.toml"), config)?;
+    let config = format!(
+        "[features]\nplugins = true\nsimplified_selection_hints = {simplified_selection_hints}\n\n[skills.bundled]\nenabled = false\n"
+    );
+    fs::write(home.path().join("config.toml"), &config)?;
     let lookup = r#"text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));"#;
     let mock = mount_sse_sequence(
         &server,
@@ -2498,8 +2504,13 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Resu
     test.submit_text_turn("Use the Notes tool again to check that the kickoff is Friday.")
         .await?;
 
+    let snapshot_name = if simplified_selection_hints {
+        "astra_plugin_refresh_simplified_selection_hints_on"
+    } else {
+        "astra_plugin_refresh_simplified_selection_hints_off"
+    };
     insta::assert_snapshot!(
-        "astra_plugin_refresh",
+        snapshot_name,
         context_snapshot::format_request_history_snapshot(
             "Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.",
             &mock.requests(),

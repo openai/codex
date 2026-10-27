@@ -1305,6 +1305,9 @@
             "shell_zsh_fork": {
               "type": "boolean"
             },
+            "simplified_selection_hints": {
+              "type": "boolean"
+            },
             "skill_catalog_deltas": {
               "type": "boolean"
             },
@@ -7942,6 +7945,9 @@
           "type": "boolean"
         },
         "shell_zsh_fork": {
+          "type": "boolean"
+        },
+        "simplified_selection_hints": {
           "type": "boolean"
         },
         "skill_catalog_deltas": {

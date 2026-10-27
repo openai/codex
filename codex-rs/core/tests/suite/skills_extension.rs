@@ -874,7 +874,7 @@ async fn explicit_skill_prompt_precedes_plugin_instructions() -> Result<()> {
     )?;
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "[features]\nplugins = true\n\n[plugins.\"sample@test\"]\nenabled = true\n",
+        "[features]\nplugins = true\nsimplified_selection_hints = true\n\n[plugins.\"sample@test\"]\nenabled = true\n",
     )?;
     let skill_path = dunce::canonicalize(skill_dir.join("SKILL.md"))?;
     let (extensions, _) =
@@ -917,7 +917,8 @@ async fn explicit_skill_prompt_precedes_plugin_instructions() -> Result<()> {
             .unwrap_or_else(|| panic!("missing prompt containing `{expected}`: {input:?}"))
     };
     let skill_position = prompt_position("<skill>\n<name>sample:sample-search</name>");
-    let plugin_position = prompt_position("Capabilities from the `sample` plugin:");
+    let plugin_position = prompt_position("The user selected the `sample` plugin.");
+    assert_eq!(input[plugin_position]["role"], "developer");
     assert!(
         skill_position < plugin_position,
         "host skill prompts should precede plugin instructions: {input:?}"
