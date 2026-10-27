@@ -143,19 +143,19 @@ async fn bedrock_ultrafast_slash_command_selects_and_clears_tier() {
             "mantle_sol61",
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             "openai.gpt-6.1-sol",
-            "openai.gpt-6-sol",
+            "openai.gpt-6.1-terra",
         ),
         (
             "runtime_global_sol61",
             ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
             "global.openai.gpt-6.1-sol",
-            "global.openai.gpt-6-sol",
+            "global.openai.gpt-6.1-terra",
         ),
         (
             "runtime_us_sol61",
             ModelProviderInfo::create_amazon_bedrock_runtime_provider(/*aws*/ None),
             "us.openai.gpt-6.1-sol",
-            "us.openai.gpt-6-sol",
+            "us.openai.gpt-6.1-terra",
         ),
     ] {
         let presets = create_model_provider(provider_info.clone(), /*auth_manager*/ None)

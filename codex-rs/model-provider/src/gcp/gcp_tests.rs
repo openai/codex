@@ -91,7 +91,7 @@ async fn bundled_vertex_models_filter_catalog_and_normalize_unsupported_tool_met
     let bundled_models = codex_models_manager::bundled_models_response()
         .expect("bundled model catalog should deserialize")
         .models;
-    let mut expected: Vec<_> = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]
+    let mut expected: Vec<_> = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]
         .into_iter()
         .map(|slug| {
             bundled_models
@@ -119,39 +119,42 @@ async fn bundled_vertex_models_filter_catalog_and_normalize_unsupported_tool_met
             ("gpt-6.1-sol".to_string(), true),
             ("gpt-6-astra".to_string(), true),
             ("gpt-6-luna".to_string(), true),
+            ("gpt-6.1-terra".to_string(), true),
         ]
     );
 }
 
 #[tokio::test]
 async fn configured_vertex_models_filter_catalog_and_normalize_tool_metadata_without_cache() {
-    let provider = GcpModelProvider::new(
-        ModelProviderInfo::create_gcp_provider(),
-        /*auth_manager*/ None,
-    );
-    let mut configured_model = codex_models_manager::bundled_models_response()
-        .expect("bundled model catalog should deserialize")
-        .models
-        .into_iter()
-        .find(|model| model.slug == "gpt-6.1-sol")
-        .expect("bundled model catalog should contain gpt-6.1-sol");
-    configured_model.use_responses_lite = true;
-    configured_model.tool_mode = Some(ToolMode::CodeModeOnly);
-    configured_model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
-    configured_model.multi_agent_version = Some(MultiAgentVersion::V2);
-    let mut expected_model = configured_model.clone();
-    expected_model.use_responses_lite = false;
-    expected_model.tool_mode = Some(ToolMode::Direct);
-    expected_model.apply_patch_tool_type = None;
-    let mut unsupported_model = configured_model.clone();
-    unsupported_model.slug = "gpt-6-sol".to_string();
-    let mut unsupported_variant = configured_model.clone();
-    unsupported_variant.slug = "gpt-6.1-sol-extra".to_string();
-    let manager = provider.models_manager_without_cache(Some(ModelsResponse {
-        models: vec![unsupported_model, configured_model, unsupported_variant],
-    }));
+    for model in ["gpt-6.1-sol", "gpt-6.1-terra"] {
+        let provider = GcpModelProvider::new(
+            ModelProviderInfo::create_gcp_provider(),
+            /*auth_manager*/ None,
+        );
+        let mut configured_model = codex_models_manager::bundled_models_response()
+            .expect("bundled model catalog should deserialize")
+            .models
+            .into_iter()
+            .find(|info| info.slug == model)
+            .expect("bundled model catalog should contain the supported Vertex model");
+        configured_model.use_responses_lite = true;
+        configured_model.tool_mode = Some(ToolMode::CodeModeOnly);
+        configured_model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        configured_model.multi_agent_version = Some(MultiAgentVersion::V2);
+        let mut expected_model = configured_model.clone();
+        expected_model.use_responses_lite = false;
+        expected_model.tool_mode = Some(ToolMode::Direct);
+        expected_model.apply_patch_tool_type = None;
+        let mut unsupported_model = configured_model.clone();
+        unsupported_model.slug = "gpt-6-sol".to_string();
+        let mut unsupported_variant = configured_model.clone();
+        unsupported_variant.slug = format!("{model}-extra");
+        let manager = provider.models_manager_without_cache(Some(ModelsResponse {
+            models: vec![unsupported_model, configured_model, unsupported_variant],
+        }));
 
-    assert_eq!(manager.get_remote_models().await, vec![expected_model]);
+        assert_eq!(manager.get_remote_models().await, vec![expected_model]);
+    }
 }
 
 #[tokio::test]
