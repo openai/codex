@@ -290,6 +290,41 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
     );
     assert_eq!(root_messages(&leaf).await, expected);
 
+    // An old ID-less checkpoint stores an excerpt beside the original legacy backup.
+    // The worker must receive one capped copy and preserve both evidence gaps.
+    let original = "Never publish project details. ".repeat(200);
+    let excerpt = codex_guardian_context::truncate_text(&original, /*max_tokens*/ 900);
+    let history = serde_json::from_value(json!([{"type":"compacted", "payload": {
+        "message":"Old ID-less checkpoint.", "replacement_history":[],
+        "guardian_history":[{"type":"message", "role":"user",
+            "content":[{"type":"input_text", "text":original}]}],
+        "retained_context":{
+            "user_messages":[{"turn_id":"", "text":excerpt, "complete":false}],
+            "user_messages_incomplete":true, "incomplete":false,
+            "verified_answers":[{"turn_id":"large", "call_id":"large", "questions":[{
+                "question":"Publish?", "answer":"Only if conditions hold. ".repeat(200)
+            }]}]
+        }
+    }}]))?;
+    test.codex =
+        crate::suite::guardian_checkpoint_migration::resume(&test, &test.codex, history).await?;
+    let snapshot = leaf.guardian_root_snapshot().await.expect("migrated root");
+    assert_eq!(
+        (
+            snapshot.messages,
+            snapshot.authorization_version.retained_context_complete
+        ),
+        (
+            vec![
+                GuardianRootMessage::RetainedContextScope,
+                GuardianRootMessage::IncompleteRootInstructions,
+                GuardianRootMessage::IncompleteVerifiedAnswers,
+                GuardianRootMessage::User(excerpt),
+            ],
+            false
+        )
+    );
+
     let shutdown = test
         .thread_manager
         .shutdown_all_threads_bounded(Duration::from_secs(/*secs*/ 10))

@@ -8,6 +8,7 @@ use codex_history::RetainedUserMessage;
 use codex_protocol::models::ContentItem;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 #[derive(Clone, PartialEq)]
 pub struct RootMessageCandidate {
@@ -42,11 +43,33 @@ pub struct RootDeliveredMessage<'a> {
     pub text: &'a str,
 }
 
+/// Unselected evidence from the same snapshot as the root authorization metadata.
+#[derive(Clone, PartialEq)]
+pub struct RootConversationCandidates<'a> {
+    pub user_messages: Vec<RootMessageCandidate>,
+    pub assistant_messages: Vec<RootAssistantCandidate<'a>>,
+    pub retained_assistants: Vec<RootRetainedAssistant<'a>>,
+    /// Newest first, preserving host-confirmed delivery lookup order.
+    pub delivered_messages: Vec<RootDeliveredMessage<'a>>,
+    /// Retained identities used for legacy matching after request-size preparation.
+    pub retained_user_sources: Vec<RetainedUserMessage>,
+    pub handoff_boundaries: Vec<RetainedContextOrder>,
+    pub missing_root_instructions: bool,
+    pub missing_assistant_context: bool,
+    pub missing_verified_answers: bool,
+}
+
+impl std::fmt::Debug for RootConversationCandidates<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RootConversationCandidates(..)")
+    }
+}
+
 const ROOT_CONTEXT_WINDOW: usize = 3;
 
 /// Preserves the current handoff windows, latest context and all user restrictions.
-pub fn select_root_handoff_indices(
-    messages: &[(Option<RetainedContextOrder>, GuardianRootMessage)],
+fn select_root_handoff_indices(
+    messages: &[RootMessageCandidate],
     boundaries: &[RetainedContextOrder],
 ) -> Option<BTreeSet<usize>> {
     let mut selected = BTreeSet::new();
@@ -56,11 +79,14 @@ pub fn select_root_handoff_indices(
                 .iter()
                 .enumerate()
                 .rev()
-                .filter_map(|(index, (order, message))| {
-                    if matches!(message, GuardianRootMessage::UserInput(_)) {
+                .filter_map(|(index, message)| {
+                    if matches!(message.message, GuardianRootMessage::UserInput(_)) {
                         return None;
                     }
-                    order.filter(|order| order <= boundary).map(|_| index)
+                    message
+                        .order
+                        .filter(|order| order <= boundary)
+                        .map(|_| index)
                 })
                 .take(ROOT_CONTEXT_WINDOW),
         );
@@ -72,64 +98,35 @@ pub fn select_root_handoff_indices(
                 .iter()
                 .enumerate()
                 .rev()
-                .filter_map(|(index, (order, message))| {
-                    (order.is_some() && !matches!(message, GuardianRootMessage::UserInput(_)))
-                        .then_some(index)
+                .filter_map(|(index, message)| {
+                    (message.order.is_some()
+                        && !matches!(message.message, GuardianRootMessage::UserInput(_)))
+                    .then_some(index)
                 })
                 .take(ROOT_CONTEXT_WINDOW),
         );
         // Later user inputs can restrict an earlier handoff even when they are not recent.
         // Leave all user inputs, verified answers, and unordered legacy evidence to the shared cap.
-        selected.extend(
-            messages
-                .iter()
-                .enumerate()
-                .filter_map(|(index, (order, message))| {
-                    (order.is_none()
-                        || matches!(
-                            message,
-                            GuardianRootMessage::User(_) | GuardianRootMessage::UserInput(_)
-                        ))
-                    .then_some(index)
-                }),
-        );
+        selected.extend(messages.iter().enumerate().filter_map(|(index, message)| {
+            (message.order.is_none()
+                || matches!(
+                    message.message,
+                    GuardianRootMessage::User(_) | GuardianRootMessage::UserInput(_)
+                ))
+            .then_some(index)
+        }));
     }
     (!selected.is_empty()).then_some(selected)
 }
 
 const MAX_ROOT_MESSAGE_TOKENS: usize = 900;
 
-/// Bounds root user text and admits verified answers only as whole records.
-pub fn prepare_root_user_messages(
-    input: &[crate::RootMessageCandidate],
-) -> Vec<crate::RootMessageCandidate> {
-    input
-        .iter()
-        .filter_map(|candidate| {
-            if let GuardianRootMessage::UserInput(text) = &candidate.message
-                && !crate::verified_answers::answer_fits(text.len())
-            {
-                return None;
-            }
-            let message = if let GuardianRootMessage::User(text) = &candidate.message {
-                GuardianRootMessage::User(crate::truncate_text(text, MAX_ROOT_MESSAGE_TOKENS))
-            } else {
-                candidate.message.clone()
-            };
-            Some(crate::RootMessageCandidate {
-                order: candidate.order,
-                message,
-            })
-        })
-        .collect()
-}
-
 const MAX_ROOT_MESSAGES: usize = 16;
 
 /// Root assistant evidence after delivery lookup, original admission and live fallback.
-pub struct PreparedRootAssistants {
-    pub messages: Vec<crate::RootMessageCandidate>,
-    pub missing_context: bool,
+struct PreparedRootAssistants {
+    messages: Vec<crate::RootMessageCandidate>,
+    missing_context: bool,
 }
 
 struct LiveRootMessage {
@@ -138,7 +135,7 @@ struct LiveRootMessage {
 }
 
 /// Prepares assistant evidence without changing which sources were captured.
-pub fn prepare_root_assistant_messages(
+fn prepare_root_assistant_messages(
     assistant_messages: &[crate::RootAssistantCandidate<'_>],
     retained_assistants: &[crate::RootRetainedAssistant<'_>],
     delivered_messages: &[crate::RootDeliveredMessage<'_>],
@@ -215,4 +212,147 @@ pub fn prepare_root_assistant_messages(
 
 fn root_retained_assistant(message: &codex_history::RetainedUserMessage) -> Option<String> {
     crate::retained_assistant_message(message).map(|_| message.text.clone())
+}
+
+/// Bounded root view plus the existing cache and skill-scope selection metadata.
+pub struct PreparedRootContext {
+    pub messages: Vec<GuardianRootMessage>,
+    pub missing_root_instructions: bool,
+    pub handoff_selection: Option<BTreeSet<usize>>,
+    pub latest_legacy_turn_id: Option<String>,
+}
+
+/// Applies the fixed root request policy without discarding the captured sources.
+pub fn prepare_root_context(
+    input: &RootConversationCandidates<'_>,
+    legacy_candidates: impl IntoIterator<Item = RetainedUserMessage>,
+) -> PreparedRootContext {
+    let mut missing_root_instructions = input.missing_root_instructions;
+    let mut missing_verified_answers = input.missing_verified_answers;
+    // Verified answers stay whole; ordinary root user text keeps its existing cap.
+    let mut messages = input
+        .user_messages
+        .iter()
+        .filter_map(|candidate| {
+            if let GuardianRootMessage::UserInput(text) = &candidate.message
+                && !crate::verified_answers::answer_fits(text.len())
+            {
+                return None;
+            }
+            let message = if let GuardianRootMessage::User(text) = &candidate.message {
+                GuardianRootMessage::User(crate::truncate_text(text, MAX_ROOT_MESSAGE_TOKENS))
+            } else {
+                candidate.message.clone()
+            };
+            Some(crate::RootMessageCandidate {
+                order: candidate.order,
+                message,
+            })
+        })
+        .collect::<Vec<_>>();
+    missing_verified_answers |= messages.len() != input.user_messages.len();
+    let legacy_capacity = MAX_ROOT_MESSAGES.saturating_sub(messages.len());
+    let mut legacy_messages = VecDeque::new();
+    let mut latest_legacy_turn_id = None;
+    if missing_root_instructions && legacy_capacity > 0 {
+        for candidate in legacy_candidates {
+            let text = crate::truncate_text(&candidate.text, MAX_ROOT_MESSAGE_TOKENS);
+            // Legacy records without IDs historically match after the request-size cap.
+            if input.retained_user_sources.iter().any(|source| {
+                if let Some(id) = &source.message_id {
+                    candidate.message_id.as_ref() == Some(id)
+                } else {
+                    candidate.turn_id == source.turn_id && text == source.text
+                }
+            }) {
+                continue;
+            }
+            latest_legacy_turn_id =
+                (!candidate.turn_id.is_empty()).then(|| candidate.turn_id.clone());
+            legacy_messages.push_back(GuardianRootMessage::User(text));
+            if legacy_messages.len() > legacy_capacity {
+                legacy_messages.pop_front();
+            }
+        }
+    }
+    let assistants = prepare_root_assistant_messages(
+        &input.assistant_messages,
+        &input.retained_assistants,
+        &input.delivered_messages,
+        input.missing_assistant_context,
+    );
+    let mut missing_assistant_context = assistants.missing_context;
+    messages.extend(assistants.messages);
+    messages.sort_by_key(|message| message.order);
+    let handoff_selection = select_root_handoff_indices(&messages, &input.handoff_boundaries);
+    if let Some(selected) = &handoff_selection {
+        messages = messages
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                if selected.contains(&index) {
+                    Some(message)
+                } else {
+                    missing_assistant_context |= matches!(
+                        message.message,
+                        GuardianRootMessage::Assistant(_)
+                            | GuardianRootMessage::UnorderedAssistant(_)
+                    );
+                    None
+                }
+            })
+            .collect();
+    }
+    let removed = messages.len().saturating_sub(MAX_ROOT_MESSAGES);
+    for message in &messages[..removed] {
+        missing_root_instructions |= matches!(
+            message.message,
+            GuardianRootMessage::User(_) | GuardianRootMessage::UserInput(_)
+        );
+        missing_assistant_context |= matches!(
+            message.message,
+            GuardianRootMessage::Assistant(_) | GuardianRootMessage::UnorderedAssistant(_)
+        );
+    }
+    messages.drain(..removed);
+    messages.sort_by_key(|message| (message.order.is_none(), message.order));
+    legacy_messages.drain(
+        ..legacy_messages
+            .len()
+            .saturating_sub(MAX_ROOT_MESSAGES - messages.len()),
+    );
+    let mut messages = messages
+        .into_iter()
+        .map(|message| message.message)
+        .collect::<Vec<_>>();
+    if missing_assistant_context {
+        messages.insert(
+            /*index*/ 0,
+            GuardianRootMessage::IncompleteAssistantContext,
+        );
+    }
+    if missing_verified_answers {
+        messages.insert(
+            /*index*/ 0,
+            GuardianRootMessage::IncompleteVerifiedAnswers,
+        );
+    }
+    if missing_root_instructions {
+        messages.insert(
+            /*index*/ 0,
+            GuardianRootMessage::IncompleteRootInstructions,
+        );
+    }
+    messages.insert(/*index*/ 0, GuardianRootMessage::RetainedContextScope);
+    if !legacy_messages.is_empty() {
+        legacy_messages.push_front(GuardianRootMessage::LegacyContextScope);
+        legacy_messages.extend(messages);
+        messages = legacy_messages.into_iter().collect();
+    }
+    PreparedRootContext {
+        messages,
+        missing_root_instructions,
+        handoff_selection,
+        latest_legacy_turn_id,
+    }
 }

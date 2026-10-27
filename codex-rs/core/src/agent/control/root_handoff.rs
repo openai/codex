@@ -2,27 +2,12 @@
 //! History position approximates dispatch order; absent calls leave the existing context unchanged.
 //! User inputs bypass relevance filtering; only assistant context is narrowed.
 
-use std::collections::BTreeSet;
-
-use crate::codex_thread::GuardianRootMessage;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContextOrder;
 use codex_protocol::AgentPath;
 use codex_protocol::ToolName;
 use codex_protocol::models::ExecutedToolCallArguments;
 use codex_protocol::models::ResponseItem;
-
-pub(super) fn selected_message_indices(
-    history: &[ResponseItemEnvelope],
-    messages: &[(Option<RetainedContextOrder>, GuardianRootMessage)],
-    worker: &AgentPath,
-    tool_namespace: Option<&str>,
-) -> Option<BTreeSet<usize>> {
-    codex_guardian_context::select_root_handoff_indices(
-        messages,
-        &handoff_boundaries(history, worker, tool_namespace),
-    )
-}
 
 pub(super) fn handoff_boundaries(
     history: &[ResponseItemEnvelope],

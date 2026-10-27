@@ -10,7 +10,6 @@
 //! Handoff projection preserves saved heartbeat instructions and the active turn's skills.
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -26,6 +25,7 @@ use crate::context::is_contextual_user_fragment;
 use crate::event_mapping::parse_turn_item;
 use codex_guardian_context::RootAssistantCandidate;
 use codex_guardian_context::RootAssistantContent;
+use codex_guardian_context::RootConversationCandidates;
 use codex_guardian_context::RootDeliveredMessage;
 use codex_guardian_context::RootMessageCandidate;
 use codex_guardian_context::RootRetainedAssistant;
@@ -40,8 +40,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::MultiAgentVersion;
-
-const MAX_ROOT_MESSAGES: usize = 16;
 
 impl LocalAgentControl {
     /// Returns bounded root conversation and authorization state for a MultiAgent V2 worker.
@@ -189,27 +187,15 @@ impl LocalAgentControl {
                 RetainedContextEntry::AssistantMessage(_) => None,
             })
             .collect::<Vec<_>>();
-        let mut messages = codex_guardian_context::prepare_root_user_messages(&user_candidates)
-            .into_iter()
-            .map(|message| (message.order, message.message))
-            .collect::<Vec<_>>();
-        // Old opt-out checkpoints have genuine instructions but no retained source order.
-        // Keep them separately bounded and explicitly unordered; never replace newer facts.
-        let mut legacy_messages = VecDeque::new();
-        let legacy_capacity = MAX_ROOT_MESSAGES.saturating_sub(messages.len());
-        if missing_root_instructions && legacy_capacity > 0 {
-            let mut latest_legacy_turn_id = None;
-            for message in reconciled.unmatched_user_messages(root_history.legacy_user_messages()) {
-                latest_legacy_turn_id = (!message.turn_id.is_empty()).then_some(message.turn_id);
-                legacy_messages.push_back(GuardianRootMessage::User(message.text));
-                if legacy_messages.len() > legacy_capacity {
-                    legacy_messages.pop_front();
-                }
-            }
-            if latest_user_turn_id.is_none() {
-                latest_user_turn_id = latest_legacy_turn_id;
-            }
-        }
+        let original_missing_root_instructions = missing_root_instructions;
+        let retained_user_sources = reconciled
+            .ordered_entries()
+            .filter_map(|(_, entry)| match entry {
+                RetainedContextEntry::UserMessage(message) => Some(message.clone()),
+                RetainedContextEntry::AssistantMessage(_)
+                | RetainedContextEntry::VerifiedAnswer(_) => None,
+            })
+            .collect();
         let assistant_candidates = root_history
             .annotated_items()
             .iter()
@@ -272,26 +258,9 @@ impl LocalAgentControl {
                 })
             })
             .collect::<Vec<_>>();
-        let assistants = codex_guardian_context::prepare_root_assistant_messages(
-            &assistant_candidates,
-            &retained_assistant_candidates,
-            &delivered_candidates,
-            retained_context.has_omitted_assistant_messages(),
-        );
-        let mut missing_assistant_context = assistants.missing_context;
-        messages.extend(
-            assistants
-                .messages
-                .into_iter()
-                .map(|message| (message.order, message.message)),
-        );
-        // Unknown order cannot establish recency; prune these assistants first.
-        messages.sort_by_key(|(order, _)| *order);
-        let mut review_context_revision = history.guardian_review_context_revision();
-        if let Some(worker) = worker_path
-            && let Some(selected) = super::root_handoff::selected_message_indices(
+        let handoff_boundaries = if let Some(worker) = worker_path {
+            super::root_handoff::handoff_boundaries(
                 root_history.annotated_items(),
-                &messages,
                 &worker,
                 root_thread
                     .config()
@@ -300,80 +269,37 @@ impl LocalAgentControl {
                     .tool_namespace
                     .as_deref(),
             )
-        {
-            // A handoff can change the selection without adding a new root user message.
+        } else {
+            Vec::new()
+        };
+        let request_candidates = RootConversationCandidates {
+            user_messages: user_candidates,
+            assistant_messages: assistant_candidates,
+            retained_assistants: retained_assistant_candidates,
+            delivered_messages: delivered_candidates,
+            retained_user_sources,
+            handoff_boundaries,
+            missing_root_instructions: original_missing_root_instructions,
+            missing_assistant_context: retained_context.has_omitted_assistant_messages(),
+            missing_verified_answers: !retained_context.verified_answers_complete(),
+        };
+        let prepared = codex_guardian_context::prepare_root_context(
+            &request_candidates,
+            root_history.original_legacy_user_messages(),
+        );
+        let mut authorization_version = root_evidence.authorization_version(history.as_ref());
+        if prepared.missing_root_instructions {
+            authorization_version.retained_context_complete = false;
+        }
+        let mut review_context_revision = history.guardian_review_context_revision();
+        if let Some(selected) = &prepared.handoff_selection {
             let mut revision = DefaultHasher::new();
             review_context_revision.hash(&mut revision);
             selected.hash(&mut revision);
             review_context_revision = revision.finish();
-            missing_assistant_context |=
-                messages.iter().enumerate().any(|(index, (_, message))| {
-                    !selected.contains(&index)
-                        && matches!(
-                            message,
-                            GuardianRootMessage::Assistant(_)
-                                | GuardianRootMessage::UnorderedAssistant(_)
-                        )
-                });
-            messages = messages
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, message)| selected.contains(&index).then_some(message))
-                .collect();
         }
-        // Apply one shared cap so user records and confirmed questions compete
-        // while keeping omissions explicit for authorization and assistant context.
-        let removed = messages.len().saturating_sub(MAX_ROOT_MESSAGES);
-        missing_root_instructions |= messages[..removed].iter().any(|(_, message)| {
-            matches!(
-                message,
-                GuardianRootMessage::User(_) | GuardianRootMessage::UserInput(_)
-            )
-        });
-        missing_assistant_context |= messages[..removed].iter().any(|(_, message)| {
-            matches!(
-                message,
-                GuardianRootMessage::Assistant(_) | GuardianRootMessage::UnorderedAssistant(_)
-            )
-        });
-        messages.drain(..removed);
-        // Keep the existing presentation of unordered evidence after ordered records.
-        messages.sort_by_key(|(order, _)| (order.is_none(), *order));
-        legacy_messages.drain(
-            ..legacy_messages
-                .len()
-                .saturating_sub(MAX_ROOT_MESSAGES - messages.len()),
-        );
-        let mut messages = messages
-            .into_iter()
-            .map(|(_, message)| message)
-            .collect::<Vec<_>>();
-        if missing_assistant_context {
-            messages.insert(
-                /*index*/ 0,
-                GuardianRootMessage::IncompleteAssistantContext,
-            );
-        }
-        let mut authorization_version = root_evidence.authorization_version(history.as_ref());
-        let missing_verified_answers = !authorization_version.retained_context_complete;
-        if missing_verified_answers {
-            messages.insert(
-                /*index*/ 0,
-                GuardianRootMessage::IncompleteVerifiedAnswers,
-            );
-        }
-        if missing_root_instructions {
-            authorization_version.retained_context_complete = false;
-            messages.insert(
-                /*index*/ 0,
-                GuardianRootMessage::IncompleteRootInstructions,
-            );
-        }
-        messages.insert(/*index*/ 0, GuardianRootMessage::RetainedContextScope);
-        if !legacy_messages.is_empty() {
-            legacy_messages.push_front(GuardianRootMessage::LegacyContextScope);
-            legacy_messages.extend(messages);
-            messages = legacy_messages.into_iter().collect();
+        if latest_user_turn_id.is_none() {
+            latest_user_turn_id = prepared.latest_legacy_turn_id;
         }
         let trusted_skill_paths = latest_user_turn_id
             .as_deref()
@@ -384,7 +310,7 @@ impl LocalAgentControl {
             history_reset_version: root_history.reset_version,
             authorization_version,
             review_context_revision,
-            messages,
+            messages: prepared.messages,
             trusted_skill_paths,
         })
     }

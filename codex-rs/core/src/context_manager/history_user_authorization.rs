@@ -37,6 +37,17 @@ impl ContextManager {
 
     /// Bounded instruction candidates from the legacy backup; their ordering is unknown.
     pub(crate) fn legacy_user_messages(&self) -> impl Iterator<Item = RetainedUserMessage> + '_ {
+        self.original_legacy_user_messages().map(|mut message| {
+            message.text =
+                guardian_truncate_text(&message.text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0;
+            message
+        })
+    }
+
+    /// Original legacy candidates for request preparation; storage remains independently bounded.
+    pub(crate) fn original_legacy_user_messages(
+        &self,
+    ) -> impl Iterator<Item = RetainedUserMessage> + '_ {
         self.guardian_history_items()
             .into_iter()
             .flatten()
@@ -54,7 +65,6 @@ impl ContextManager {
                 {
                     return None;
                 }
-                let text = guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0;
                 Some(RetainedUserMessage {
                     phase: None,
                     origin: codex_history::UserInputOrigin::from_message(item),
