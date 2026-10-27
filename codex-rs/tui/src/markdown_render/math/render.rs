@@ -232,6 +232,7 @@ impl MathParser<'_> {
             return match self.take()? {
                 ',' | ';' | ':' | ' ' => Some(Layout::text(" ")),
                 '!' => Some(Layout::text("")),
+                '%' => Some(Layout::text("%")),
                 '{' => Some(Layout::text("{")),
                 '}' => Some(Layout::text("}")),
                 '|' => Some(Layout::text("‖")),

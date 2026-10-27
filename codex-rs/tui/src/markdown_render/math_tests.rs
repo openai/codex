@@ -17,6 +17,7 @@ fn unicode_math_inline_snapshot() {
     insta::assert_snapshot!(plain(
         r"Inline $\alpha^2 + \beta_{10}$ on $\mathbb{R}^n$.
 Root $\sqrt{x^2+y^2}$ and fraction $a/\frac{b}{c}$.
+Percent: $3.8\%$ and $100000 \times 3.8\% \times \frac{360}{365} \approx 3747.95$.
 Unsupported: $\unknown{x_y}$ and $\frac{a}{b}^2$.
 Angles: <$x$>, <\(\alpha\)>, and <$\unknown{x}$>.
 Code: `$\alpha$`; money: $5 and $10; shell: $HOME.",
