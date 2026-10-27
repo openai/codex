@@ -1,6 +1,7 @@
 //! Clipboard copy backend for the TUI's `/copy` command and `Ctrl+O` hotkey.
 //!
 //! Local copying uses the native clipboard, or the Windows clipboard directly on WSL.
+//! WSL sessions over SSH with a forwarded X11 display use the native clipboard instead.
 //! In tmux and Herdr, also forward to the attached terminal so clients attached after Codex
 //! started receive the copy. Over SSH without a multiplexer, send OSC 52 directly.
 //!
@@ -100,15 +101,18 @@ fn copy_to_clipboard(
     osc52: impl Fn(&str) -> Result<(), String>,
 ) -> Result<CopyOutcome, String> {
     let wsl_deadline = std::time::Instant::now() + std::time::Duration::from_secs(/*secs*/ 5);
+    let ssh_session = is_ssh_session();
     let environment = CopyEnvironment {
         herdr_session: std::env::var("HERDR_ENV").is_ok_and(|value| value == "1"),
-        ssh_session: is_ssh_session(),
+        ssh_session,
+        forwarded_x11: ssh_session
+            && std::env::var("DISPLAY").is_ok_and(|display| !display.is_empty()),
         wsl_session: is_wsl_session(),
         tmux_session: is_tmux_session(),
     };
     #[cfg(not(target_os = "android"))]
     let native_copy = {
-        // Never contact WSLg before trying Windows: even native setup can block forever.
+        // Bound WSL native setup: even initialization can block forever.
         let clipboard = (!environment.wsl_session).then(arboard::Clipboard::new);
         move |text: &str, html: Option<&str>| {
             let clipboard = match clipboard {
@@ -172,6 +176,7 @@ impl ClipboardLease {
 struct CopyEnvironment {
     herdr_session: bool,
     ssh_session: bool,
+    forwarded_x11: bool,
     wsl_session: bool,
     tmux_session: bool,
 }
@@ -218,7 +223,7 @@ fn copy_to_clipboard_with(
         };
         arboard_copy_fn(text, html.as_deref()).map_err(|error| format!("native clipboard: {error}"))
     };
-    let native_result = if environment.wsl_session {
+    let native_result = if environment.wsl_session && !environment.forwarded_x11 {
         wsl_copy_fn(text).map(|()| None).or_else(|windows_error| {
             native_copy().map_err(|native_error| {
                 format!("Windows clipboard: {windows_error}; {native_error}")
@@ -353,6 +358,7 @@ mod tests {
         CopyEnvironment {
             herdr_session: false,
             ssh_session: true,
+            forwarded_x11: false,
             wsl_session: true,
             tmux_session: false,
         }
@@ -369,6 +375,7 @@ mod tests {
         CopyEnvironment {
             herdr_session: false,
             ssh_session: false,
+            forwarded_x11: false,
             wsl_session: false,
             tmux_session: false,
         }
@@ -421,6 +428,24 @@ mod tests {
         let mut output = Vec::new();
         assert_eq!(write_osc52_to_writer(&mut output, sequence), Ok(()));
         assert_eq!(output, sequence.as_bytes());
+    }
+
+    #[test]
+    fn ssh_on_wsl_with_forwarded_x11_uses_native_clipboard() {
+        let result = copy_to_clipboard_with(
+            "hello",
+            CopyFormat::PlainText,
+            CopyEnvironment {
+                forwarded_x11: true,
+                ..remote_tmux_environment()
+            },
+            |_| Ok(()),
+            |_| Ok(()),
+            |_, _| Ok(Some(super::ClipboardLease::test())),
+            |_| panic!("forwarded X11 must not write to the Windows host clipboard"),
+        );
+
+        assert!(matches!(result, Ok(CopyOutcome::Copied(Some(_)))));
     }
 
     #[test]

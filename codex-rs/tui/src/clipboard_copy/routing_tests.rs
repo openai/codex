@@ -19,6 +19,7 @@ fn local_tmux_preserves_native_html_when_terminal_silently_rejects_copy() {
         CopyEnvironment {
             herdr_session: false,
             ssh_session: false,
+            forwarded_x11: false,
             tmux_session: true,
             wsl_session: false,
         },
@@ -51,6 +52,7 @@ fn copy_uses_osc52_when_tmux_fails_even_if_native_copy_succeeds() {
         CopyEnvironment {
             herdr_session: false,
             ssh_session: false,
+            forwarded_x11: false,
             tmux_session: true,
             wsl_session: false,
         },
@@ -78,6 +80,7 @@ fn local_tmux_environment() -> CopyEnvironment {
         herdr_session: false,
         tmux_session: true,
         ssh_session: false,
+        forwarded_x11: false,
         wsl_session: false,
     }
 }
@@ -91,6 +94,7 @@ fn herdr_forwards_to_osc52_even_when_native_copy_succeeds() {
         CopyEnvironment {
             herdr_session: true,
             ssh_session: false,
+            forwarded_x11: false,
             tmux_session: false,
             wsl_session: false,
         },
