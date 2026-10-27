@@ -704,6 +704,26 @@ impl McpConnectionSet {
         Ok(tools)
     }
 
+    pub(crate) async fn apps_tools_from_mcp_client(&self) -> Vec<ToolInfo> {
+        let Some(client) = self
+            .servers
+            .get(crate::CODEX_APPS_MCP_SERVER_NAME)
+            .filter(|view| {
+                view.connection
+                    .client
+                    .codex_apps_tools_cache_context
+                    .is_none()
+            })
+            .and_then(|view| view.connection.client.ready_client())
+        else {
+            return Vec::new();
+        };
+        client
+            .tool_catalog
+            .read(|catalog| catalog.tools.to_vec())
+            .await
+    }
+
     /// Publishes the exact client catalog and returns both raw inventories.
     async fn refresh_codex_apps_tool_catalog(&self) -> Result<(Vec<ToolInfo>, Vec<ToolInfo>)> {
         let view = self

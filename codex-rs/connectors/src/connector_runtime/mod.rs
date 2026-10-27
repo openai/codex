@@ -143,19 +143,21 @@ impl<T> ConnectorRuntimeSnapshot<T> {
     }
 }
 
+type RuntimeEntries<T> = HashMap<ConnectorRuntimeIdentity, Arc<ConnectorRuntimeEntry<T>>>;
+
 /// Process-scoped registry of connector runtime state by account and workspace.
 ///
 /// Contexts with the same identity share one live entry. Different identities
 /// remain independently available for clients that already hold their context.
 pub struct ConnectorRuntimeManager<T: ConnectorRuntimePayload> {
-    entries: Arc<Mutex<HashMap<ConnectorRuntimeIdentity, Arc<ConnectorRuntimeEntry<T>>>>>,
+    entries: Option<Arc<Mutex<RuntimeEntries<T>>>>,
     disk_cache: ConnectorRuntimeDiskCache,
 }
 
 impl<T: ConnectorRuntimePayload> Clone for ConnectorRuntimeManager<T> {
     fn clone(&self) -> Self {
         Self {
-            entries: Arc::clone(&self.entries),
+            entries: self.entries.clone(),
             disk_cache: self.disk_cache,
         }
     }
@@ -164,7 +166,7 @@ impl<T: ConnectorRuntimePayload> Clone for ConnectorRuntimeManager<T> {
 impl<T: ConnectorRuntimePayload> Default for ConnectorRuntimeManager<T> {
     fn default() -> Self {
         Self {
-            entries: Arc::new(Mutex::new(HashMap::new())),
+            entries: Some(Arc::new(Mutex::new(HashMap::new()))),
             disk_cache: ConnectorRuntimeDiskCache::Enabled,
         }
     }
@@ -174,9 +176,21 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeManager<T> {
     /// Constructs a process-local connector runtime that never reads or writes the disk cache.
     pub fn new_without_cache() -> Self {
         Self {
-            entries: Arc::new(Mutex::new(HashMap::new())),
+            entries: Some(Arc::new(Mutex::new(HashMap::new()))),
             disk_cache: ConnectorRuntimeDiskCache::Disabled,
         }
+    }
+
+    /// Keeps no snapshots between clients and never reads or writes disk.
+    pub fn without_shared_snapshot() -> Self {
+        Self {
+            entries: None,
+            disk_cache: ConnectorRuntimeDiskCache::Disabled,
+        }
+    }
+
+    pub fn shares_snapshot(&self) -> bool {
+        self.entries.is_some()
     }
 
     pub fn current_snapshot(
@@ -184,6 +198,9 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeManager<T> {
         codex_home: PathBuf,
         key: ConnectorRuntimeContextKey,
     ) -> Option<Arc<ConnectorRuntimeSnapshot<T>>> {
+        if !self.shares_snapshot() {
+            return None;
+        }
         self.context(codex_home, key).current_snapshot()
     }
 
@@ -193,8 +210,13 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeManager<T> {
         key: ConnectorRuntimeContextKey,
     ) -> ConnectorRuntimeContext<T> {
         let identity = ConnectorRuntimeIdentity { codex_home, key };
-        let mut entries = lock_unpoisoned(&self.entries);
-        let entry = entries
+        let Some(entries) = &self.entries else {
+            return ConnectorRuntimeContext {
+                entry: Arc::new(ConnectorRuntimeEntry::new(identity, self.disk_cache)),
+                live_catalog: None,
+            };
+        };
+        let entry = lock_unpoisoned(entries)
             .entry(identity.clone())
             .or_insert_with(|| Arc::new(ConnectorRuntimeEntry::new(identity, self.disk_cache)))
             .clone();

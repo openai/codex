@@ -538,9 +538,11 @@ impl McpConnectionSet {
                 McpServerTransportConfig::Stdio { .. } => false,
             };
             // Filtered catalogs must not read or populate an unrestricted shared cache.
-            let shares_codex_apps_tools_cache = is_host_owned_codex_apps
+            let eligible_for_apps_cache = is_host_owned_codex_apps
                 && !server.requires_read_only_mcp_tools()
                 && should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
+            let shares_codex_apps_tools_cache =
+                eligible_for_apps_cache && codex_apps_tools_cache.shares_snapshot();
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
                 // Only equivalent discovery inputs may share executable Apps tools.
                 let mut transport = configured_config.transport.clone();
@@ -620,7 +622,7 @@ impl McpConnectionSet {
                 &runtime_context,
                 runtime_auth_provider.as_ref(),
                 auth,
-                shares_codex_apps_tools_cache
+                eligible_for_apps_cache
                     .then(|| (codex_home.clone(), codex_apps_tools_cache_key.clone())),
                 client_elicitation_capability.clone(),
                 client_mcp_extensions.clone(),

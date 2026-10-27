@@ -3589,3 +3589,19 @@ async fn async_compaction_reuses_pending_work(
     assert_eq!(summaries, [&json!(if succeeds { "ASYNC" } else { "SYNC" })]);
     Ok(())
 }
+
+#[tokio::test]
+async fn unshared_apps_catalog_across_turns() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let requests =
+        super::mcp_tool_cache::apps_requests_during_peer_discovery(/*share*/ false).await?;
+    let snapshot = context_snapshot::format_request_history_snapshot(
+        "A peer finishes Apps discovery during submit. The thread uses its own catalog on its first and second model requests.",
+        &requests,
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .include_request_settings(),
+    );
+    insta::assert_snapshot!("unshared_apps_catalog_across_turns", snapshot);
+    Ok(())
+}

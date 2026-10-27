@@ -294,6 +294,17 @@ impl CodexThread {
         &self.session.services.thread_extension_data
     }
 
+    /// Returns tools from this thread’s ready, unshared Apps MCP client.
+    /// Returns an empty list if the client is absent, still starting, or uses
+    /// a shared catalog. Does not start or wait for discovery.
+    pub async fn apps_tools_from_mcp_client(&self) -> Vec<codex_mcp::ToolInfo> {
+        self.session
+            .services
+            .mcp_runtime
+            .apps_tools_from_mcp_client()
+            .await
+    }
+
     /// Returns data captured by the named running turn, not newer thread settings.
     pub async fn current_turn_extension_data<T>(&self, expected_turn_id: &str) -> Option<Arc<T>>
     where

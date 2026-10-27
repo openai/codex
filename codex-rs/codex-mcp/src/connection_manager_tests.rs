@@ -2058,22 +2058,28 @@ fn codex_apps_env_bearer_token_bypasses_shared_tools_cache() {
 }
 
 #[tokio::test]
-async fn read_only_apps_discovery_never_uses_a_shared_writable_catalog() -> anyhow::Result<()> {
+async fn shared_apps_snapshot_requires_writable_discovery_and_a_shared_cache() -> anyhow::Result<()>
+{
     let codex_home = tempdir()?;
-    let cache = ConnectorRuntimeManager::new_without_cache();
     let cache_key = ConnectorRuntimeContextKey::personal(
         /*account_id*/ None, /*chatgpt_user_id*/ None,
-    );
-    let cache_context = cache.context(codex_home.path().to_path_buf(), cache_key.clone());
-    store_current_tools(
-        &cache_context,
-        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "write")],
     );
     let server_config: McpServerConfig = serde_json::from_value(serde_json::json!({
         "url": "http://127.0.0.1:1/mcp",
         "http_headers": {"authorization": "Bearer fixture"},
     }))?;
-    for read_only in [false, true] {
+    for (read_only, shared) in [(false, true), (true, true), (false, false)] {
+        let cache = if shared {
+            ConnectorRuntimeManager::new_without_cache()
+        } else {
+            ConnectorRuntimeManager::without_shared_snapshot()
+        };
+        let cache_context = cache.context(codex_home.path().to_path_buf(), cache_key.clone());
+        store_current_tools(
+            &cache_context,
+            vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "write")],
+        );
+
         let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
         config.requires_read_only_mcp_tools = read_only;
         let mut catalog = crate::ResolvedMcpCatalog::builder();
@@ -2122,7 +2128,11 @@ async fn read_only_apps_discovery_never_uses_a_shared_writable_catalog() -> anyh
                 .iter()
                 .map(|tool| tool.callable_name.as_str())
                 .collect::<Vec<_>>(),
-            if read_only { vec![] } else { vec!["write"] },
+            if shared && !read_only {
+                vec!["write"]
+            } else {
+                vec![]
+            },
         );
     }
     Ok(())

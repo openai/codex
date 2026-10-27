@@ -739,6 +739,13 @@ impl McpRuntime {
             .await
     }
 
+    /// Returns tools from this thread’s ready, unshared Apps MCP client.
+    /// Returns an empty list if the client is absent, still starting, or uses
+    /// a shared catalog. Does not start or wait for discovery.
+    pub async fn apps_tools_from_mcp_client(&self) -> Vec<ToolInfo> {
+        self.latest_connections().apps_tools_from_mcp_client().await
+    }
+
     /// Lists the latest known tools for non-model discovery surfaces.
     ///
     /// Unlike [`Self::current_binding`], this may return cached tools while their
