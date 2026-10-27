@@ -329,6 +329,19 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         (outcome, analytics)
     }
 
+    /// Reviews in a temporary session without reading or changing the reusable reviewer.
+    /// The request builds its context without a previous session or cached snapshot.
+    pub async fn review_isolated<R>(
+        &self,
+        request: &R,
+    ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult)
+    where
+        R: ReviewerRequest<Session = S>,
+    {
+        let context = request.context(/*previous*/ None);
+        Box::pin(self.review_ephemeral(request, context, /*snapshot*/ None)).await
+    }
+
     async fn review_ephemeral<R>(
         &self,
         request: &R,
