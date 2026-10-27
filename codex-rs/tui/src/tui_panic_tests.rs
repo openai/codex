@@ -45,6 +45,9 @@ fn caught_panic_rehides_cursor_before_repainting_and_restores_its_shape() {
     let mut master = unsafe { File::from_raw_fd(master) };
     // SAFETY: the slave descriptor is distinct from the master and is likewise newly owned.
     let slave = unsafe { File::from_raw_fd(slave) };
+    master
+        .write_all(b"\x1b[<51;2;56M\n")
+        .expect("queue mouse report");
     let child = Command::new(std::env::current_exe().expect("current test binary"))
         .args([
             "--exact",
@@ -157,7 +160,17 @@ async fn caught_panic_pty_child() {
     mark(BEFORE_VISIBLE_FRAME).expect("mark before visible frame");
     draw(&mut tui, "after panic", Some((4, 1))).expect("draw recovered visible cursor");
     mark(AFTER_VISIBLE_FRAME).expect("mark after visible frame");
-    super::restore_after_exit().expect("restore terminal after test");
+    assert!(super::terminal_input_is_readable().expect("caught panic preserves pending input"));
+    let events = tui.event_broker.clone();
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _guard = crate::TerminalRestoreGuard {
+            active: true,
+            events: Some(events),
+        };
+        panic!("unwind the terminal owner");
+    }));
+    assert!(unwind.is_err());
+    assert!(!super::terminal_input_is_readable().expect("check shell input after unwind"));
 }
 
 fn draw(tui: &mut super::Tui, text: &str, cursor: Option<(u16, u16)>) -> std::io::Result<()> {

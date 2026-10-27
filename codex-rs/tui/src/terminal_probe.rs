@@ -1,4 +1,4 @@
-//! Short, best-effort terminal response probes for TUI startup and resume.
+//! Short, best-effort terminal response probes for TUI startup, resume, and exit.
 //!
 //! Crossterm's public helpers wait up to two seconds for terminal responses. That is too long for
 //! TUI startup and resume, where unsupported terminals should simply fall back to conservative
@@ -48,6 +48,8 @@ mod imp {
     use std::io::Write;
     use std::os::fd::AsRawFd;
     use std::os::fd::FromRawFd;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -58,6 +60,8 @@ mod imp {
     const MAX_TERMINAL_PROBE_BYTES: usize = 1024;
     const MAX_STARTUP_PROBE_BYTES: usize = 64 * 1024;
     const MAX_TERMINAL_CSI_BYTES: usize = 64;
+
+    static DA1_SUPPORTED: AtomicBool = AtomicBool::new(false);
 
     /// Results from the TUI's one-shot startup terminal probe.
     #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -253,10 +257,7 @@ mod imp {
     pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
         let mut tty = Tty::open()?;
         tty.write_all(b"\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
-        let Some(colors) = read_until(&mut tty, timeout, parse_default_colors)? else {
-            return Ok(None);
-        };
-        Ok(Some(colors))
+        read_until(&mut tty, timeout, |buffer| parse_default_colors(buffer))
     }
 
     /// Queries the terminal cursor position while normal input polling is paused.
@@ -267,7 +268,24 @@ mod imp {
     pub(crate) fn cursor_position(timeout: Duration) -> io::Result<Option<Position>> {
         let mut tty = Tty::open()?;
         tty.write_all(b"\x1B[6n")?;
-        read_until(&mut tty, timeout, parse_cursor_position)
+        read_until(&mut tty, timeout, |buffer| parse_cursor_position(buffer))
+    }
+
+    /// A DA1 reply follows reports the terminal generated before we disabled reporting.
+    pub(crate) fn wait_for_exit_reports() -> io::Result<()> {
+        if !DA1_SUPPORTED.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let mut tty = Tty::open()?;
+        tty.write_all(b"\x1b[c")?;
+        read_until(&mut tty, Duration::from_secs(/*secs*/ 2), |buffer| {
+            let reply = find_primary_device_attributes(buffer);
+            // Keep a possible split reply and discard older input so bursts cannot fill the probe.
+            let keep = b"\x1b[?".len() + MAX_TERMINAL_CSI_BYTES;
+            buffer.drain(..buffer.len().saturating_sub(keep));
+            reply
+        })?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "no DA1 reply"))
     }
 
     /// Runs the optional terminal queries needed during TUI startup under one shared deadline.
@@ -278,20 +296,19 @@ mod imp {
         timeout: Duration,
         keyboard_probe: StartupKeyboardEnhancementProbe,
     ) -> io::Result<StartupProbe> {
+        DA1_SUPPORTED.store(false, Ordering::Relaxed);
         let mut tty = Tty::open()?;
         let query_identity = codex_terminal_detection::terminal_info()
             .multiplexer
             .is_none()
             && (std::env::var_os("SSH_TTY").is_some()
                 || std::env::var_os("SSH_CONNECTION").is_some());
-        let mut query = b"\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\".to_vec();
+        let mut query = Vec::new();
         if keyboard_probe == StartupKeyboardEnhancementProbe::Query {
             query.extend_from_slice(b"\x1B[?u");
         }
-        // DA1 must follow the keyboard query: its reply also finishes keyboard detection.
-        if keyboard_probe == StartupKeyboardEnhancementProbe::Query || query_identity {
-            query.extend_from_slice(b"\x1B[c");
-        }
+        // DA1 finishes keyboard detection and establishes whether we can use it at exit.
+        query.extend_from_slice(b"\x1B[c\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\");
         if query_identity {
             query.extend_from_slice(b"\x1B[>c");
         }
@@ -306,24 +323,27 @@ mod imp {
             &mut buffer,
         );
         crossterm::event::buffer_input(&startup_replay_input(&buffer))?;
+        let saw_da1 = find_primary_device_attributes(&buffer).is_some();
+        DA1_SUPPORTED.store(saw_da1, Ordering::Relaxed);
         result
     }
 
     /// Reads available terminal bytes until `parse` recognizes a probe response or time expires.
     ///
+    /// A parser can discard bytes it has ruled out to continue past the byte budget at exit.
     /// The accumulated buffer may include unrelated terminal input. This helper intentionally does
     /// not try to replay those bytes, so callers must use it only during short, exclusive probe
     /// windows before normal crossterm input polling begins or while that polling is paused.
     fn read_until<T>(
         tty: &mut Tty,
         timeout: Duration,
-        mut parse: impl FnMut(&[u8]) -> Option<T>,
+        mut parse: impl FnMut(&mut Vec<u8>) -> Option<T>,
     ) -> io::Result<Option<T>> {
         let deadline = Instant::now() + timeout;
         let mut buffer = Vec::new();
         loop {
             tty.read_available(&mut buffer, deadline, MAX_TERMINAL_PROBE_BYTES)?;
-            if let Some(value) = parse(&buffer) {
+            if let Some(value) = parse(&mut buffer) {
                 return Ok(Some(value));
             }
             let now = Instant::now();

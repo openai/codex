@@ -1677,6 +1677,8 @@ See the Codex keymap documentation for supported actions and examples."
                 }
             }
         };
+        // Let the pending terminal poll unwind while the app server shuts down.
+        tui.pause_events();
         app.chat_widget.mention_usage_mut().flush().await;
         if let Err(err) = backends.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
