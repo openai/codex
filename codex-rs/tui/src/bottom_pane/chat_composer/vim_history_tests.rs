@@ -604,7 +604,7 @@ fn undo_and_redo_restore_deleted_image_attachment() {
 }
 
 #[test]
-fn vim_replace_yank_preserves_existing_image_and_recovery() {
+fn vim_replace_yank_preserves_existing_image_and_recovers_atomically() {
     let mut composer = vim_composer("");
     keys(&mut composer, "i");
     composer.attach_image(PathBuf::from("killed.png"));
@@ -615,9 +615,7 @@ fn vim_replace_yank_preserves_existing_image_and_recovery() {
     escape(&mut composer);
     keys(&mut composer, "0R");
     composer.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-    for _ in 0.."[Image #1]".len() {
-        composer.handle_key_event(KeyEvent::from(KeyCode::Backspace));
-    }
+    composer.handle_key_event(KeyEvent::from(KeyCode::Backspace));
     assert_eq!(
         (composer.current_text(), composer.local_image_paths()),
         before

@@ -819,3 +819,11 @@ fn search_skips_atomic_elements_and_partial_graphemes() {
     keys(&mut area, "/e\u{301}\n");
     assert_eq!(area.cursor(), "[photo.png]é ".len());
 }
+
+#[test]
+fn yank_capture_debug_redacts_register_contents() {
+    let mut textarea = vim_textarea("private-register-marker", /*cursor*/ 0);
+    keys(&mut textarea, "y$");
+    let action = VimAction::Yank(std::sync::Arc::new(textarea.register_snapshot()));
+    assert!(!format!("{action:?}").contains("private-register-marker"));
+}

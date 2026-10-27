@@ -75,6 +75,7 @@ pub(super) enum VimAction {
     Change(VimEditTarget),
     Replace(char),
     PasteAfter,
+    Yank(std::sync::Arc<super::register::RegisterSnapshot>),
     DeleteBackward,
     DeleteForward,
     DeleteBackwardWord,
@@ -240,6 +241,9 @@ impl TextArea {
     }
 
     pub(super) fn apply_vim_insert_action(&mut self, action: VimAction) -> bool {
+        if matches!(action, VimAction::Yank(_)) && self.kill_buffer.is_empty() {
+            return false;
+        }
         let deletion = matches!(
             action,
             VimAction::DeleteBackward
@@ -259,7 +263,13 @@ impl TextArea {
             }
             return true;
         }
-        self.mouse_selection = None;
+        let selection_yank =
+            matches!(action, VimAction::Yank(_)) && self.mouse_selection_range().is_some();
+        if selection_yank {
+            self.vim_commands = VimCommandState::default();
+        } else {
+            self.mouse_selection = None;
+        }
         let recording = self.vim_enabled
             && matches!(self.vim_mode, VimMode::Insert | VimMode::Replace)
             && !self.vim_commands.replaying
@@ -268,8 +278,9 @@ impl TextArea {
         if !self.apply_vim_editor_action(action.clone()) {
             return false;
         }
-        let changed =
-            self.text.len() != prior_len || matches!(action, VimAction::RestoreReplacedCharacter);
+        let changed = self.text.len() != prior_len
+            || matches!(action, VimAction::RestoreReplacedCharacter)
+            || (matches!(action, VimAction::Yank(_)) && !self.kill_buffer.is_empty());
         if recording && (changed || !deletion) {
             self.vim_commands
                 .pending_change
@@ -332,8 +343,12 @@ impl TextArea {
     }
 
     fn apply_vim_editor_action(&mut self, action: VimAction) -> bool {
-        // Editor actions invalidate contiguous Replace offsets, including during replay.
-        if !matches!(action, VimAction::RestoreReplacedCharacter) {
+        // Plain yanks extend contiguous Replace recovery through insert_str. Rich yanks reset
+        // recovery through replace_range, just like inserting an element.
+        if !matches!(
+            action,
+            VimAction::RestoreReplacedCharacter | VimAction::Yank(_)
+        ) {
             self.clear_vim_replace_recovery();
         }
         let prior_len = self.text.len();
@@ -443,6 +458,7 @@ impl TextArea {
                 self.paste_after_cursor();
                 return self.text.len() != prior_len;
             }
+            VimAction::Yank(snapshot) => self.yank_snapshot(&snapshot),
             VimAction::DeleteBackward => self.delete_backward(/*n*/ 1),
             VimAction::DeleteForward => self.delete_forward(/*n*/ 1),
             VimAction::DeleteBackwardWord => self.delete_backward_word(),

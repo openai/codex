@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 5389
+expression: terminal.backend()
+---
+"                                                                                                    "
+"› $skill$skill [Image #2][Pasted Content 1001 chars] #2 [Image #1][Pasted Content 1001 chars]       "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                   100% context left | Vim: Normal  "

@@ -2,7 +2,6 @@
 //! remote-image rows, and keyboard selection over those rows.
 
 use std::collections::HashSet;
-use std::ops::Range;
 use std::path::PathBuf;
 
 use crossterm::event::KeyCode;
@@ -99,33 +98,6 @@ impl AttachmentState {
         let placeholder = local_image_label_text(image_number);
         textarea.insert_element(&placeholder);
         self.local_images.push(AttachedImage { placeholder, path });
-    }
-
-    pub(super) fn restore_killed_images(
-        &mut self,
-        textarea: &mut TextArea,
-        start: usize,
-        images: &[(Range<usize>, PathBuf)],
-    ) {
-        let mut position = start;
-        let mut previous_end = 0;
-        for (range, path) in images {
-            position += range.start - previous_end;
-            let placeholder =
-                local_image_label_text(self.remote_image_urls.len() + self.local_images.len() + 1);
-            let cursor_at_start = textarea.cursor() == position;
-            textarea.replace_range(position..position + range.len(), &placeholder);
-            let _ = textarea.add_element_range(position..position + placeholder.len());
-            if cursor_at_start {
-                textarea.set_cursor(position);
-            }
-            position += placeholder.len();
-            self.local_images.push(AttachedImage {
-                placeholder,
-                path: path.clone(),
-            });
-            previous_end = range.end;
-        }
     }
 
     pub(super) fn prune_local_images_for_submission(
