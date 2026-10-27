@@ -47,6 +47,7 @@ pub use sqlite::SqliteConfig;
 pub use sqlite::SqlitePoolWriteExt;
 
 pub use audit::ThreadStateAuditRow;
+pub use audit::read_thread_rollout_paths;
 pub use audit::read_thread_state_audit_rows;
 pub use delegated_preview::delegated_output_preview;
 pub use extract::GUARDIAN_THREAD_PREVIEW;

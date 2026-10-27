@@ -10,6 +10,7 @@
 //! Compression and decompression workers retain these locks if their async caller is cancelled.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -347,6 +348,28 @@ impl LocalThreadStore {
             }
             RolloutMigrationPaths::Known(paths) => paths,
         };
+        if !options.thread_ids.is_empty()
+            && let Ok(rows) = codex_state::read_thread_rollout_paths(&self.config.sqlite).await
+        {
+            let selected = options.thread_ids.iter().copied().collect::<HashSet<_>>();
+            let mut needs_header = HashMap::with_capacity(rows.len());
+            for (owner, path) in rows {
+                let inspect = selected.contains(&owner)
+                    || codex_rollout::thread_id_from_rollout_path(&path) != Some(owner);
+                // Conflicting rows can name the same plain or compressed file.
+                needs_header
+                    .entry(codex_rollout::plain_rollout_path(&path))
+                    .and_modify(|inspect| *inspect = true)
+                    .or_insert(inspect);
+            }
+            paths.retain(|path| {
+                // Unindexed files may have been renamed. Their header still decides ownership.
+                needs_header
+                    .get(&codex_rollout::plain_rollout_path(path))
+                    .copied()
+                    .unwrap_or(true)
+            });
+        }
         if options.mode == RolloutMigrationMode::Apply {
             let pending_thread_ids = pending_migration_thread_ids(&self.config.codex_home).await?;
             paths.sort_by_key(|path| {

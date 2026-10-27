@@ -1,8 +1,10 @@
-//! Read-only state database queries for diagnostics.
+//! Read-only queries against an existing state database.
 
 use anyhow::Result;
+use codex_protocol::ThreadId;
 use sqlx::Row;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::SqliteConfig;
 
@@ -44,5 +46,20 @@ FROM threads
                 model_provider: row.try_get("model_provider")?,
             })
         })
+        .collect()
+}
+
+/// Reads only the thread IDs and selected paths, without creating or migrating the state DB.
+pub async fn read_thread_rollout_paths(sqlite: &SqliteConfig) -> Result<Vec<(ThreadId, PathBuf)>> {
+    // Migration can scan the rollout headers immediately if the index is locked.
+    let pool = sqlite
+        .open_read_only_pool(&sqlite.state_db_path(), Some(Duration::ZERO))
+        .await?;
+    let rows = sqlx::query_as::<_, (String, String)>("SELECT id, rollout_path FROM threads")
+        .fetch_all(&pool)
+        .await?;
+    pool.close().await;
+    rows.into_iter()
+        .map(|(id, path)| Ok((ThreadId::from_string(&id)?, PathBuf::from(path))))
         .collect()
 }
