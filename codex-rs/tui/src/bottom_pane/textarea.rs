@@ -153,6 +153,7 @@ pub(crate) struct TextArea {
     next_element_id: u64,
     kill_buffer: String,
     kill_buffer_kind: KillBufferKind,
+    kill_buffer_edit: Option<KillBufferEdit>,
     vim_enabled: bool,
     vim_mode: VimMode,
     vim_pending: VimPending,
@@ -201,6 +202,14 @@ pub(crate) struct KillBufferSnapshot {
     kind: KillBufferKind,
 }
 
+#[derive(Debug)]
+pub(super) enum KillBufferEdit {
+    /// Atomic elements with ranges relative to the newly stored kill buffer.
+    Stored(Vec<(Range<usize>, String)>),
+    /// Start of the kill buffer's contents in the visible draft.
+    Inserted(usize),
+}
+
 impl Default for TextArea {
     fn default() -> Self {
         Self::new()
@@ -223,6 +232,7 @@ impl TextArea {
             next_element_id: 1,
             kill_buffer: String::new(),
             kill_buffer_kind: KillBufferKind::Characterwise,
+            kill_buffer_edit: None,
             vim_enabled: false,
             vim_mode: VimMode::Insert,
             vim_pending: VimPending::None,
@@ -632,6 +642,7 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
+        self.kill_buffer_edit = None;
         // Only process key presses or repeats; ignore releases to avoid inserting
         // characters on key-up events when modifiers are no longer reported.
         if !matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
@@ -1322,7 +1333,17 @@ impl TextArea {
             return;
         }
         let text = self.kill_buffer.clone();
-        self.insert_str(&text);
+        let target = self.edit_target();
+        let start = target.start();
+        self.insert_str_at_target(target, &text);
+        // Rehydrating elements would invalidate Vim Replace's per-character recovery.
+        if !self.is_vim_replace_mode() {
+            self.kill_buffer_edit = Some(KillBufferEdit::Inserted(start));
+        }
+    }
+
+    pub(super) fn take_kill_buffer_edit(&mut self) -> Option<KillBufferEdit> {
+        self.kill_buffer_edit.take()
     }
 
     pub(crate) fn take_kill_buffer_snapshot(&mut self) -> KillBufferSnapshot {
@@ -1351,12 +1372,7 @@ impl TextArea {
             return;
         }
 
-        let removed = self.text[range.clone()].to_string();
-        if removed.is_empty() {
-            return;
-        }
-
-        self.store_kill_buffer(removed, kind);
+        self.store_kill_buffer(range.clone(), kind);
         self.replace_range_raw(range, "");
     }
 
@@ -1373,16 +1389,22 @@ impl TextArea {
         if range.start >= range.end {
             return;
         }
-        let removed = self.text[range].to_string();
-        if removed.is_empty() {
-            return;
-        }
-        self.store_kill_buffer(removed, kind);
+        self.store_kill_buffer(range, kind);
     }
 
-    fn store_kill_buffer(&mut self, text: String, kind: KillBufferKind) {
-        self.kill_buffer = text;
+    fn store_kill_buffer(&mut self, range: Range<usize>, kind: KillBufferKind) {
+        let elements = self
+            .text_element_ranges_overlapping(range.clone())
+            .map(|element| {
+                (
+                    element.start - range.start..element.end - range.start,
+                    self.text[element.clone()].to_string(),
+                )
+            })
+            .collect();
+        self.kill_buffer = self.text[range].to_string();
         self.kill_buffer_kind = kind;
+        self.kill_buffer_edit = Some(KillBufferEdit::Stored(elements));
     }
 
     fn paste_after_cursor(&mut self) {
@@ -1395,8 +1417,7 @@ impl TextArea {
         }
         let insert_at = self.next_atomic_boundary(self.cursor_pos);
         self.set_cursor(insert_at);
-        let text = self.kill_buffer.clone();
-        self.insert_str(&text);
+        self.yank();
     }
 
     fn paste_line_after_current_line(&mut self) {
@@ -1417,6 +1438,7 @@ impl TextArea {
             format!("\n{}", self.kill_buffer.trim_end_matches('\n'))
         };
         self.insert_str_at(insert_at, &text);
+        self.kill_buffer_edit = Some(KillBufferEdit::Inserted(cursor));
         self.set_cursor(cursor.min(self.text.len()));
     }
 

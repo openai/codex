@@ -149,7 +149,9 @@
 //! dispatch, they intentionally preserve the textarea kill buffer. That lets users `Ctrl+K` part
 //! of a draft, perform a composer action such as changing reasoning level, and then `Ctrl+Y` the
 //! killed text back into the now-empty draft. Replacing the chat widget carries that buffer into
-//! the fresh composer so Vim yanks survive `/new` and thread switches.
+//! the fresh composer so Vim yanks survive `/new` and thread switches. Local images in the killed
+//! text retain their attachment paths and receive fresh labels when restored outside Vim Replace
+//! mode, whose per-character recovery requires plain text.
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
@@ -426,7 +428,7 @@ use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
-use crate::bottom_pane::textarea::KillBufferSnapshot;
+use crate::bottom_pane::textarea::KillBufferEdit;
 use crate::bottom_pane::textarea::TextArea;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
@@ -631,6 +633,7 @@ pub(crate) struct ChatComposer {
     effort_observed: bool,
     luna_reserve_active: bool,
     attachments: AttachmentState,
+    kill_buffer_images: Vec<(Range<usize>, PathBuf)>,
     placeholder_text: String,
     blocks_direct_input: bool,
     is_task_running: bool,
@@ -666,6 +669,11 @@ pub(crate) struct ChatComposer {
     history_search_next_keys: Vec<KeyBinding>,
     editor_keymap: Arc<EditorKeymap>,
     vim_normal_keymap: VimNormalKeymap,
+}
+
+pub(crate) struct KillBufferSnapshot {
+    textarea: crate::bottom_pane::textarea::KillBufferSnapshot,
+    images: Vec<(Range<usize>, PathBuf)>,
 }
 
 /// A resolved legacy `$` target plus any catalog built while disambiguating shell syntax.
@@ -809,6 +817,7 @@ impl ChatComposer {
             effort_observed: false,
             luna_reserve_active: false,
             attachments: AttachmentState::default(),
+            kill_buffer_images: Vec::new(),
             placeholder_text,
             blocks_direct_input: false,
             is_task_running: false,
@@ -1390,11 +1399,17 @@ impl ChatComposer {
     }
 
     pub(crate) fn take_kill_buffer_snapshot(&mut self) -> KillBufferSnapshot {
-        self.draft.textarea.take_kill_buffer_snapshot()
+        KillBufferSnapshot {
+            textarea: self.draft.textarea.take_kill_buffer_snapshot(),
+            images: std::mem::take(&mut self.kill_buffer_images),
+        }
     }
 
     pub(crate) fn restore_kill_buffer_snapshot(&mut self, snapshot: KillBufferSnapshot) {
-        self.draft.textarea.restore_kill_buffer_snapshot(snapshot);
+        self.draft
+            .textarea
+            .restore_kill_buffer_snapshot(snapshot.textarea);
+        self.kill_buffer_images = snapshot.images;
     }
 
     /// Restore draft history transferred from the startup composer.
@@ -3763,8 +3778,27 @@ impl ChatComposer {
 
         self.begin_vim_edit(input);
         self.draft.textarea.input(input);
+        match self.draft.textarea.take_kill_buffer_edit() {
+            Some(KillBufferEdit::Stored(elements)) => {
+                self.kill_buffer_images = elements
+                    .into_iter()
+                    .filter_map(|(range, text)| {
+                        self.attachments
+                            .local_images
+                            .iter()
+                            .find(|image| image.placeholder == text)
+                            .map(|image| (range, image.path.clone()))
+                    })
+                    .collect();
+            }
+            Some(KillBufferEdit::Inserted(start)) => self.attachments.restore_killed_images(
+                &mut self.draft.textarea,
+                start,
+                &self.kill_buffer_images,
+            ),
+            None => {}
+        }
         self.sync_bash_mode_from_text();
-
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
         }
@@ -9327,7 +9361,11 @@ mod tests {
             "image_placeholder_single",
             /*enhanced_keys_supported*/ false,
             |composer| {
-                composer.attach_image(PathBuf::from("/tmp/image1.png"));
+                let (mut previous, _rx) = new_test_composer();
+                previous.attach_image(PathBuf::from("/tmp/image1.png"));
+                previous.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+                composer.restore_kill_buffer_snapshot(previous.take_kill_buffer_snapshot());
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
             },
         );
 
@@ -9568,7 +9606,7 @@ mod tests {
     }
 
     #[test]
-    fn kill_buffer_persists_after_submit() {
+    fn kill_buffer_preserves_image_after_submit() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -9583,11 +9621,12 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
         composer.set_steer_enabled(true);
-        composer.draft.textarea.insert_str("restore me");
-        composer.draft.textarea.set_cursor(/*pos*/ 0);
+        composer.draft.textarea.insert_str("restore me ");
+        let image_path = PathBuf::from("/tmp/killed-image.png");
+        composer.attach_image(image_path.clone());
 
         let (_result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         assert!(composer.draft.textarea.is_empty());
 
         composer.draft.textarea.insert_str("hello");
@@ -9596,9 +9635,27 @@ mod tests {
         assert!(matches!(result, InputResult::Submitted { .. }));
         assert!(composer.draft.textarea.is_empty());
 
+        let other_image_path = PathBuf::from("/tmp/other-image.png");
+        composer.attach_image(other_image_path.clone());
+        composer.handle_paste(" ".into());
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-        assert_eq!(composer.draft.textarea.text(), "restore me");
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            InputResult::Submitted {
+                text: "[Image #1] restore me [Image #2]".into(),
+                text_elements: vec![
+                    TextElement::new((0..10).into(), Some("[Image #1]".into())),
+                    TextElement::new((22..32).into(), Some("[Image #2]".into())),
+                ],
+            }
+        );
+        assert_eq!(
+            composer.take_recent_submission_images(),
+            vec![other_image_path, image_path]
+        );
     }
 
     #[test]
