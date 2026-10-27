@@ -22,6 +22,7 @@ mod reporting;
 mod retry;
 mod review;
 mod routing;
+mod session;
 mod settings;
 
 pub use assessment::GuardianAssessment;
@@ -63,6 +64,9 @@ pub use execution::ReviewTurnResult;
 pub use execution::ReviewerRuntime;
 pub use execution::start_review_turn;
 pub use execution::wait_for_guardian_review;
+pub use session::GUARDIAN_REVIEWER_NAME;
+pub use session::is_basic_session_source;
+pub use session::prompt_cache_key_override_for_review_session;
 pub use settings::ReviewerConfig;
 pub use settings::ReviewerTurn;
 pub use settings::guardian_cyber_access_program;

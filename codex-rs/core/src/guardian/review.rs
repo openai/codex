@@ -20,10 +20,7 @@ use codex_guardian_reviewer::run_with_retry;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -36,7 +33,6 @@ use crate::session::session::Session;
 use super::ApprovalRequestReasons;
 #[cfg(test)]
 use super::GUARDIAN_REVIEW_TIMEOUT;
-use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
 use super::approval_request::format_guardian_action_pretty;
@@ -88,14 +84,6 @@ pub(crate) fn new_guardian_review_id() -> String {
 }
 
 pub(crate) use codex_guardian_reviewer::routes_approval_policy_to_guardian;
-
-pub(crate) fn is_basic_session_source(session_source: &SessionSource) -> bool {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::Other(label)) => label == GUARDIAN_REVIEWER_NAME,
-        SessionSource::Internal(InternalSessionSource::Guardian) => true,
-        _ => false,
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct GuardianReviewOptions {

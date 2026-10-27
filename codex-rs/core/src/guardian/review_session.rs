@@ -33,7 +33,6 @@ use codex_guardian_reviewer::SessionDisposition;
 use codex_guardian_reviewer::token_usage_delta;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
-use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -48,7 +47,6 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -266,20 +264,6 @@ impl GuardianReviewSessionReuseKey {
         self.node_repl_policy = policy.body().into_text().unwrap_or_default();
         self
     }
-}
-
-pub(crate) fn prompt_cache_key_override_for_review_session(
-    session_source: &SessionSource,
-    parent_thread_id: Option<ThreadId>,
-) -> Option<String> {
-    let SessionSource::SubAgent(SubAgentSource::Other(name)) = session_source else {
-        return None;
-    };
-    if name != GUARDIAN_REVIEWER_NAME {
-        return None;
-    }
-    let parent_thread_id = parent_thread_id?;
-    Some(format!("guardian:{parent_thread_id}"))
 }
 
 impl GuardianReviewSession {

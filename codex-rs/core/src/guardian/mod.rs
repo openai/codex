@@ -48,11 +48,11 @@ pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::GuardianNetworkAccessTrigger;
 #[cfg(test)]
 pub(crate) use approval_request::guardian_approval_request_to_json;
+pub(crate) use codex_guardian_reviewer::is_basic_session_source;
 pub(crate) use decision::decide_approval;
 pub(crate) use decision::spawn_approval_decision;
 pub(crate) use prompt::guardian_truncate_text;
 pub(crate) use review::GuardianReviewOptions;
-pub(crate) use review::is_basic_session_source;
 pub(crate) use review::new_guardian_review_id;
 pub(crate) use review::routes_approval_policy_to_guardian;
 pub use review_session::GuardianReviewSession;
@@ -61,11 +61,11 @@ pub use review_session::GuardianReviewState;
 pub use review_session::PreparedGuardianContext;
 pub use review_session::prepare_review_prewarm;
 
-pub(crate) use review_session::prompt_cache_key_override_for_review_session;
+pub(crate) use codex_guardian_reviewer::prompt_cache_key_override_for_review_session;
 pub(crate) use runtime::ReviewAction;
 
+pub(crate) use codex_guardian_reviewer::GUARDIAN_REVIEWER_NAME;
 pub(crate) use codex_guardian_reviewer::REVIEW_TIMEOUT as GUARDIAN_REVIEW_TIMEOUT;
-pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";
 pub(crate) const AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX: &str =
     codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX;
 const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = {
