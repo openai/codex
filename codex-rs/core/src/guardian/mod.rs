@@ -68,10 +68,11 @@ pub(crate) use codex_guardian_reviewer::REVIEW_TIMEOUT as GUARDIAN_REVIEW_TIMEOU
 pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";
 pub(crate) const AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX: &str =
     codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX;
-const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = codex_guardian_context::ContextProfile::synchronous()
-    .transcript
-    .entry_limits
-    .tool_tokens;
+const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = {
+    const PROFILE: &codex_guardian_context::ContextProfile =
+        &codex_guardian_context::ContextProfile::synchronous();
+    PROFILE.transcript.entry_limits.tool_tokens
+};
 pub(crate) const GUARDIAN_MAX_ROOT_MESSAGE_TOKENS: usize = 900;
 pub(crate) const GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS: usize = 6_000;
 

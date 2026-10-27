@@ -46,7 +46,7 @@ pub enum TranscriptContent {
     Text(String),
     /// Host-attributed text prepared by the profile, rendered at delivery.
     Record(crate::TranscriptRecord),
-    AgentMessage(Box<codex_protocol::models::ResponseItem>),
+    NativeMessage(Box<codex_protocol::models::ResponseItem>),
 }
 
 impl std::fmt::Debug for TranscriptContent {
@@ -54,7 +54,7 @@ impl std::fmt::Debug for TranscriptContent {
         formatter.write_str(match self {
             Self::Text(_) => "Text(..)",
             Self::Record(_) => "Record(..)",
-            Self::AgentMessage(_) => "AgentMessage(..)",
+            Self::NativeMessage(_) => "NativeMessage(..)",
         })
     }
 }

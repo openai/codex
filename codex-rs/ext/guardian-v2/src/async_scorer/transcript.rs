@@ -26,23 +26,16 @@ use codex_guardian_context::TranscriptSelection;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::default_registry;
 
-pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize = ContextProfile::asynchronous()
-    .transcript
-    .entry_limits
-    .message_tokens;
-pub(crate) const MAX_TOOL_ENTRY_TOKENS: usize = ContextProfile::asynchronous()
-    .transcript
-    .entry_limits
-    .tool_tokens;
-pub(crate) const MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = ContextProfile::asynchronous()
-    .retention
-    .max_message_transcript_tokens;
-pub(crate) const MAX_TOOL_TRANSCRIPT_TOKENS: usize = ContextProfile::asynchronous()
-    .retention
-    .max_tool_transcript_tokens;
-pub(crate) const MAX_RECENT_NON_USER_ENTRIES: usize = ContextProfile::asynchronous()
-    .retention
-    .max_recent_non_user_entries;
+const DEFAULT_PROFILE: &ContextProfile = &ContextProfile::asynchronous();
+pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize =
+    DEFAULT_PROFILE.transcript.entry_limits.message_tokens;
+pub(crate) const MAX_TOOL_ENTRY_TOKENS: usize = DEFAULT_PROFILE.transcript.entry_limits.tool_tokens;
+pub(crate) const MAX_MESSAGE_TRANSCRIPT_TOKENS: usize =
+    DEFAULT_PROFILE.retention.max_message_transcript_tokens;
+pub(crate) const MAX_TOOL_TRANSCRIPT_TOKENS: usize =
+    DEFAULT_PROFILE.retention.max_tool_transcript_tokens;
+pub(crate) const MAX_RECENT_NON_USER_ENTRIES: usize =
+    DEFAULT_PROFILE.retention.max_recent_non_user_entries;
 /// Host snapshot and evidence borrowed for a single section collection.
 pub(crate) struct ContextInput<'a> {
     pub(crate) target: ContextTarget,
@@ -117,6 +110,7 @@ impl TranscriptConfig {
                     include_tool_calls: self.sources.contains(&TranscriptSource::ToolCalls),
                     include_tool_outputs: self.sources.contains(&TranscriptSource::ToolOutputs),
                     include_reasoning: self.sources.contains(&TranscriptSource::Reasoning),
+                    ..Default::default()
                 },
                 entry_limits: TranscriptEntryLimits {
                     message_tokens: self.max_message_entry_tokens,

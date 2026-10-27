@@ -76,10 +76,10 @@ fn instructions_preserve_source_order_and_whole_records() {
         messages: Vec::new(),
     };
     assert_eq!(
-        transcript_context(&history, crate::ContextProfile::synchronous())
+        transcript_context(&history, &crate::ContextProfile::synchronous())
             .retained_instructions()
             .into_messages(),
-        transcript_context(&history, crate::ContextProfile::asynchronous())
+        transcript_context(&history, &crate::ContextProfile::asynchronous())
             .retained_instructions()
             .into_messages(),
     );
@@ -219,10 +219,10 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
         messages: Vec::new(),
     };
     assert_eq!(
-        transcript_context(&history, crate::ContextProfile::synchronous())
+        transcript_context(&history, &crate::ContextProfile::synchronous())
             .retained_instructions()
             .into_messages(),
-        transcript_context(&history, crate::ContextProfile::asynchronous())
+        transcript_context(&history, &crate::ContextProfile::asynchronous())
             .retained_instructions()
             .into_messages(),
     );
@@ -310,7 +310,7 @@ fn delivery_uses_source_revision_and_complete_host_metadata() {
                 retained: retained.clone(),
                 messages: Vec::new(),
             },
-            crate::ContextProfile::asynchronous(),
+            &crate::ContextProfile::asynchronous(),
         )
         .retained_instructions()
     };
@@ -421,7 +421,7 @@ impl crate::SectionHistory for RetainedTranscript {
 
 fn transcript_context(
     history: &RetainedTranscript,
-    profile: crate::ContextProfile,
+    profile: &crate::ContextProfile,
 ) -> ComposedContext {
     let answers = crate::render_verified_answers(&history.retained);
     let collected = crate::default_registry()
@@ -508,7 +508,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
         crate::ContextProfile::synchronous(),
         crate::ContextProfile::asynchronous(),
     ] {
-        let mut context = transcript_context(&history, profile);
+        let mut context = transcript_context(&history, &profile);
         context.retain_new_instructions(&[]);
         let guidance = vec![crate::composition::user_message(vec![
             ContentItem::InputText {
@@ -520,7 +520,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
         ])];
         assert_eq!(context.retained_instructions().into_messages(), guidance);
         let mut delivered = context.clone().into_annotated_messages();
-        let mut next = transcript_context(&history, profile);
+        let mut next = transcript_context(&history, &profile);
         next.retain_new_instructions(&delivered);
         assert!(next.retained_instructions().into_messages().is_empty());
         for envelope in &mut delivered {
@@ -528,7 +528,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
                 metadata.mark_retained_sources_incomplete();
             }
         }
-        let mut next = transcript_context(&history, profile);
+        let mut next = transcript_context(&history, &profile);
         next.retain_new_instructions(&delivered);
         assert_eq!(next.retained_instructions().into_messages(), guidance);
         let budget = crate::RequestBudget {
@@ -550,7 +550,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
             .mark_retained_sources_incomplete();
         for metadata in [history.messages[0].metadata.take(), None] {
             history.messages[0].metadata = metadata;
-            let mut context = transcript_context(&history, profile);
+            let mut context = transcript_context(&history, &profile);
             let originals = context.retained_instructions().into_annotated_messages();
             context.retain_new_instructions(&[]);
             assert_eq!(
@@ -580,7 +580,7 @@ fn coalesced_repl_text_cannot_attest_to_host_omission_delivery() {
         RetainedInputSource::Local(Some(0)),
     );
     let profile = crate::ContextProfile::synchronous();
-    let mut previous = transcript_context(&history, profile);
+    let mut previous = transcript_context(&history, &profile);
     // Multimodal REPL results preserve raw text parts, coalesced with host guidance.
     previous.sections.push(crate::composition::SectionOutput {
         id: "node_repl_evidence",
@@ -600,7 +600,7 @@ fn coalesced_repl_text_cannot_attest_to_host_omission_delivery() {
     let (_, sync_metadata) = previous.into_annotated_user_inputs().unwrap();
     assert_eq!(sync_metadata, delivered[0].metadata);
     history.retained.mark_user_messages_incomplete();
-    let current = transcript_context(&history, profile).retained_instructions();
+    let current = transcript_context(&history, &profile).retained_instructions();
     let expected = vec![crate::composition::user_message(
         [START, USER_OMISSION, END]
             .map(|text| ContentItem::InputText {

@@ -50,7 +50,7 @@ async fn handoff(
     Ok(())
 }
 
-pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
+pub(crate) async fn handoff_scenario(native_history: bool) -> Result<Vec<ResponsesRequest>> {
     let server = start_mock_server().await;
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
@@ -60,7 +60,7 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
             model.multi_agent_version = Some(codex_protocol::protocol::MultiAgentVersion::V2);
         })
         .with_extensions(Arc::new(extensions.build()))
-        .with_config(|config| {
+        .with_config(move |config| {
             for feature in [
                 Feature::Collab,
                 Feature::MultiAgentV2,
@@ -70,6 +70,12 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
                     .features
                     .enable(feature)
                     .expect("enable multi-agent feature");
+            }
+            if native_history {
+                config
+                    .features
+                    .enable(Feature::GuardianNativeMultiAgentHistory)
+                    .expect("enable native multi-agent history");
             }
             config.multi_agent_v2.max_concurrent_threads_per_session = 4;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);

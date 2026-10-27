@@ -1032,9 +1032,11 @@ fn collect_guardian_transcript_entries(
     history: &dyn codex_guardian_context::SectionHistory,
     node_repl_result_token_limit: usize,
 ) -> Vec<ConversationTranscriptEntry> {
+    let mut profile = codex_guardian_context::ContextProfile::synchronous();
+    profile.transcript.entry_limits.node_repl_output_tokens = node_repl_result_token_limit;
     prompt::collect_guardian_context(
         history,
-        node_repl_result_token_limit,
+        &profile,
         &[],
         &[],
         /*planned_action*/ None,

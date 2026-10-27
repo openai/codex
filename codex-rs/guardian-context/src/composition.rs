@@ -314,7 +314,7 @@ impl CollectedContext {
                     let mut items = vec![Budgeted::required(start.to_owned().into())];
                     for (index, entry) in transcript.items.into_iter().enumerate() {
                         let content = match entry.content {
-                            TranscriptContent::AgentMessage(message) => {
+                            TranscriptContent::NativeMessage(message) => {
                                 sections.push((
                                     4,
                                     SectionOutput {

@@ -149,7 +149,7 @@ fn required_context(text: String) -> ComposedContext {
     };
     let context = super::super::prompt::collect_guardian_context(
         &Vec::<ResponseItem>::new(),
-        super::super::GUARDIAN_MAX_TOOL_ENTRY_TOKENS,
+        &ContextProfile::synchronous(),
         &[],
         &[],
         Some(&action),

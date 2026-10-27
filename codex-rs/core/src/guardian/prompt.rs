@@ -1,4 +1,5 @@
 use codex_extension_api::ConversationHistorySnapshot;
+use codex_features::Feature;
 use codex_guardian_context::Budgeted;
 use codex_guardian_context::CollectedContext;
 use codex_guardian_context::ComposedContext;
@@ -174,12 +175,35 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         .map_or(reviewed_node_repl_evidence_sequence, |snapshot| {
             snapshot.sequence
         });
+    let config = session.get_config().await;
+    let mut profile = ContextProfile::synchronous();
+    profile.transcript.entry_limits.node_repl_output_tokens = node_repl_result_token_limit;
+    profile.transcript.options.native_multi_agent_namespace = parent_context
+        .is_some_and(|context| {
+            let turn = context.turn();
+            turn.config
+                .features
+                .enabled(Feature::GuardianNativeMultiAgentHistory)
+                && turn.multi_agent_version == codex_protocol::protocol::MultiAgentVersion::V2
+        })
+        .then(|| {
+            config
+                .multi_agent_v2
+                .tool_namespace
+                .clone()
+                .filter(|namespace| !namespace.is_empty())
+                .unwrap_or_else(|| "functions".to_owned())
+        });
+    profile.transcript_format = match parent_context {
+        Some(context) => context.turn().config.guardian_transcript_mode,
+        None => config.guardian_transcript_mode,
+    };
     let sections = collect_guardian_context(
         &GuardianReviewHistory {
             history,
             use_parent_checkpoint,
         },
-        node_repl_result_token_limit,
+        &profile,
         root_authorization.as_deref().unwrap_or_default(),
         &trusted_user_inputs,
         Some(&planned_action),
@@ -213,12 +237,6 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
             },
         ),
     };
-    let mut profile = ContextProfile::synchronous();
-    profile.transcript_format = match parent_context {
-        Some(context) => context.turn().config.guardian_transcript_mode,
-        None => session.get_config().await.guardian_transcript_mode,
-    };
-    profile.transcript.entry_limits.node_repl_output_tokens = node_repl_result_token_limit;
     let mut transcript = profile.prepare_transcript(transcript_entries, offset);
     if transcript_entries.is_empty() {
         transcript.items.push(Budgeted::required(
@@ -256,7 +274,7 @@ pub(crate) fn render_guardian_transcript_entries(
             .map(|item| match item.content {
                 codex_guardian_context::TranscriptContent::Text(text) => text,
                 codex_guardian_context::TranscriptContent::Record(record) => record.to_string(),
-                codex_guardian_context::TranscriptContent::AgentMessage(_) => {
+                codex_guardian_context::TranscriptContent::NativeMessage(_) => {
                     panic!("expected text transcript")
                 }
             })
@@ -277,15 +295,13 @@ pub(crate) fn render_guardian_transcript_entries(
 /// The cursor counts every non-empty evidence entry.
 pub(super) fn collect_guardian_context(
     history: &dyn SectionHistory,
-    node_repl_result_token_limit: usize,
+    profile: &ContextProfile,
     root_conversation: &[GuardianRootMessage],
     trusted_user_answers: &[codex_guardian_context::TrustedUserAnswer],
     planned_action: Option<&PlannedAction>,
     permissions: Option<&GuardianPermissionContext>,
     node_repl: Option<&codex_guardian_context::NodeReplContext<'_>>,
 ) -> Result<CollectedContext, SectionError> {
-    let mut profile = ContextProfile::synchronous();
-    profile.transcript.entry_limits.node_repl_output_tokens = node_repl_result_token_limit;
     default_registry().prepare(&SectionInput {
         target: profile.target,
         history: &FilteredGuardianHistory(history),

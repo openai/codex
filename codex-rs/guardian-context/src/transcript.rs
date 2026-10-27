@@ -54,7 +54,7 @@ pub fn is_inherited_manual_approval(envelope: &codex_history::ResponseItemEnvelo
 }
 
 /// Evidence sources included alongside user and assistant conversation messages.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationTranscriptOptions {
     /// Includes submitted function, custom-tool, shell, and web-search calls.
     pub include_tool_calls: bool,
@@ -62,6 +62,9 @@ pub struct ConversationTranscriptOptions {
     pub include_tool_outputs: bool,
     /// Includes plaintext reasoning summaries and reasoning content.
     pub include_reasoning: bool,
+    /// Preserve calls in this MAv2 namespace for synchronous backend decryption.
+    /// `None` keeps the existing text transcript; `functions` selects the default namespace.
+    pub native_multi_agent_namespace: Option<String>,
 }
 
 impl Default for ConversationTranscriptOptions {
@@ -70,6 +73,7 @@ impl Default for ConversationTranscriptOptions {
             include_tool_calls: true,
             include_tool_outputs: true,
             include_reasoning: false,
+            native_multi_agent_namespace: None,
         }
     }
 }
@@ -101,7 +105,7 @@ pub struct TranscriptRetentionConfig {
 }
 
 /// Evidence sources and per-entry limits supplied on each collection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationTranscriptConfig {
     /// Evidence sources to include in this request.
     pub options: ConversationTranscriptOptions,
@@ -238,16 +242,16 @@ fn collect_transcript_for_review(
                     // Ciphertext cannot be truncated. Keep the complete native item, or
                     // an explicit omission at the same cursor position. Serialized bytes
                     // conservatively charge the encrypted payload to the message budget.
-                    let bytes = serde_json::to_vec(item).map_or(usize::MAX, |item| item.len());
+                    let bytes = crate::budget::ByteCount::item(item);
                     let content = if target == crate::ContextTarget::Sync {
-                        TranscriptContent::AgentMessage(Box::new(item.clone()))
+                        TranscriptContent::NativeMessage(Box::new(item.clone()))
                     } else {
                         let limit = codex_protocol::protocol::TruncationPolicy::Tokens(
                             config.entry_limits.message_tokens,
                         )
                         .byte_budget();
                         if bytes <= limit {
-                            TranscriptContent::AgentMessage(Box::new(item.clone()))
+                            TranscriptContent::NativeMessage(Box::new(item.clone()))
                         } else {
                             TranscriptContent::Text(TRANSCRIPT_OMISSION_NOTICE.to_owned())
                         }
@@ -297,10 +301,39 @@ fn collect_transcript_for_review(
                 if !config.options.include_tool_calls {
                     continue;
                 }
-                (
-                    ConversationTranscriptEntryKind::ToolCall(format!("tool {name} call")),
-                    arguments.clone(),
-                )
+                let kind = ConversationTranscriptEntryKind::ToolCall(format!("tool {name} call"));
+                if matches!(item, ResponseItem::FunctionCall { .. })
+                    && config
+                        .options
+                        .native_multi_agent_namespace
+                        .as_deref()
+                        .is_some_and(|configured| {
+                            namespace
+                                .as_deref()
+                                .filter(|namespace| !namespace.is_empty())
+                                .unwrap_or("functions")
+                                == configured
+                        })
+                    && matches!(
+                        name.as_str(),
+                        "spawn_agent" | "send_message" | "followup_task" | "interrupt_agent"
+                    )
+                {
+                    entries.push(ConversationTranscriptEntry {
+                        kind,
+                        content: if crate::estimate_input_tokens(item)
+                            <= config.entry_limits.tool_tokens.min(9_000)
+                        {
+                            TranscriptContent::NativeMessage(Box::new(item.clone()))
+                        } else {
+                            TranscriptContent::Text(TRANSCRIPT_OMISSION_NOTICE.to_owned())
+                        },
+                        original_bytes: crate::budget::ByteCount::item(item),
+                        retained_source: None,
+                    });
+                    continue;
+                }
+                (kind, arguments.clone())
             }
             ResponseItem::FunctionCallOutput {
                 call_id: Some(call_id),

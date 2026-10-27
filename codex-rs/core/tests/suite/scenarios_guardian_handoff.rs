@@ -1,8 +1,10 @@
 //! Guardian sees root windows delivered along a nested delegation chain.
 use super::*;
 
+#[test_case::test_case(false; "text_history")]
+#[test_case::test_case(true; "native_history")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn guardian_handoff_delegation_request_history() -> Result<()> {
+async fn guardian_handoff_delegation_request_history(native_history: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(
         Ok(()),
@@ -10,7 +12,9 @@ async fn guardian_handoff_delegation_request_history() -> Result<()> {
     );
     let requests = tokio::time::timeout(
         Duration::from_secs(/*secs*/ 30),
-        super::super::guardian_subagent_authorization::root_handoff::handoff_scenario(),
+        super::super::guardian_subagent_authorization::root_handoff::handoff_scenario(
+            native_history,
+        ),
     )
     .await??;
     let mut snapshot = context_snapshot::format_request_history_snapshot(
@@ -37,6 +41,11 @@ async fn guardian_handoff_delegation_request_history() -> Result<()> {
             .replace_all(&snapshot, replacement)
             .into_owned();
     }
-    insta::assert_snapshot!("guardian_handoff_delegation", snapshot);
+    let snapshot_name = if native_history {
+        "guardian_handoff_delegation_native"
+    } else {
+        "guardian_handoff_delegation"
+    };
+    insta::assert_snapshot!(snapshot_name, snapshot);
     Ok(())
 }

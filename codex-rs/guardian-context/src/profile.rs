@@ -30,7 +30,7 @@ const MIN_RECENT_TOOL_ENTRIES: usize = 5;
 
 /// Request-local policy resolved from the consumer's model and configuration.
 /// Registry scope follows `target`; source flags and caps apply before retention.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContextProfile {
     pub target: ContextTarget,
     pub transcript_format: TranscriptFormat,
@@ -68,6 +68,7 @@ impl ContextProfile {
                     include_tool_calls: true,
                     include_tool_outputs: true,
                     include_reasoning: false,
+                    native_multi_agent_namespace: None,
                 },
                 entry_limits: TranscriptEntryLimits {
                     message_tokens: 5_000,
@@ -94,6 +95,7 @@ impl ContextProfile {
                     include_tool_calls: true,
                     include_tool_outputs: true,
                     include_reasoning: false,
+                    native_multi_agent_namespace: None,
                 },
                 entry_limits: TranscriptEntryLimits {
                     message_tokens: 2_000,
@@ -174,9 +176,9 @@ impl ContextProfile {
                 let (content, tokens, retained_bytes) = match content.as_ref() {
                     TranscriptContent::Text(text) => prepare_text(text),
                     TranscriptContent::Record(record) => prepare_text(record.text()),
-                    TranscriptContent::AgentMessage(message) => (
-                        TranscriptContent::AgentMessage(message.clone()),
-                        crate::estimate_input_tokens(message),
+                    TranscriptContent::NativeMessage(message) => (
+                        TranscriptContent::NativeMessage(message.clone()),
+                        crate::native_tool_call::estimate_tokens(message),
                         entry.original_bytes,
                     ),
                 };
@@ -319,7 +321,7 @@ fn prepare_sync_content<'a>(
     let text = match &entry.content {
         TranscriptContent::Text(text) => text.as_str(),
         TranscriptContent::Record(record) => record.text(),
-        TranscriptContent::AgentMessage(_) => {
+        TranscriptContent::NativeMessage(_) => {
             // Native ciphertext stays whole, or leaves an omission at the same position.
             let limit = codex_protocol::protocol::TruncationPolicy::Tokens(limits.message_tokens)
                 .byte_budget();
