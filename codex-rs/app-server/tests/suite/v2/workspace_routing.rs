@@ -108,7 +108,7 @@ async fn saved_workspace_is_discovered_once_and_not_the_default_account(
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "accounts": [
                 {"id": "other", "workspace_backend_origin": "https://other.example", "account_routing_override": "us"},
-                {"id": "selected", "workspace_backend_origin": "https://gov.chatgpt.com", "account_routing_override": "NO_CONSTRAINT"}
+                {"id": "selected", "name": "Selected workspace", "workspace_backend_origin": "https://gov.chatgpt.com", "account_routing_override": "NO_CONSTRAINT"}
             ], "default_account_id": "other"
         })).set_delay(Duration::from_secs(accounts_delay_secs)))
         .expect(if accounts_delay_secs > 5 { 2 } else { 1 })
@@ -158,7 +158,7 @@ async fn saved_workspace_is_discovered_once_and_not_the_default_account(
         Some(json!({"authMode": "chatgpt", "planType": plan_type}))
     );
     let expected = json!({
-        "account": {"type": "chatgpt", "email": "user@example.com", "planType": plan_type},
+        "account": {"type": "chatgpt", "email": "user@example.com", "planType": plan_type, "workspaceName": "Selected workspace"},
         "requiresOpenaiAuth": true, "workspaceRouting": routing("selected", "https://gov.chatgpt.com", "NO_CONSTRAINT")
     });
     assert_eq!(read(&mut server).await?, expected);
@@ -185,7 +185,7 @@ async fn saved_chatgpt_login_without_selected_workspace_preserves_account() -> R
     let mut server = start(&home).await?;
     assert_eq!(
         read(&mut server).await?,
-        json!({"account": {"type": "chatgpt", "email": null, "planType": "pro"},
+        json!({"account": {"type": "chatgpt", "email": null, "planType": "pro", "workspaceName": null},
             "requiresOpenaiAuth": true, "workspaceRouting": null})
     );
     backend.verify().await;
@@ -245,7 +245,7 @@ async fn stable_clients_do_not_treat_failed_workspace_discovery_as_unrestricted(
         .await;
     assert_eq!(
         read(&mut server).await?,
-        json!({"account": {"type": "chatgpt", "email": null, "planType": "pro"},
+        json!({"account": {"type": "chatgpt", "email": null, "planType": "pro", "workspaceName": null},
             "requiresOpenaiAuth": true, "workspaceRouting": routing("selected", "https://chatgpt.com", "NO_CONSTRAINT")})
     );
     Ok(())

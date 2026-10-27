@@ -845,7 +845,11 @@ impl AppServerSession {
                 FeedbackAudience::External,
                 false,
             ),
-            Some(Account::Chatgpt { email, plan_type }) => {
+            Some(Account::Chatgpt {
+                email,
+                plan_type,
+                workspace_name,
+            }) => {
                 let feedback_audience = if email
                     .as_deref()
                     .is_some_and(|email| email.ends_with("@openai.com"))
@@ -860,6 +864,7 @@ impl AppServerSession {
                     Some(StatusAccountDisplay::ChatGpt {
                         email,
                         plan: Some(plan_type_display_name(plan_type)),
+                        workspace: workspace_display(workspace_name, account.workspace_routing),
                     }),
                     Some(plan_type),
                     feedback_audience,
@@ -1930,6 +1935,20 @@ pub(crate) async fn start_thread_with_request_handle(
     Ok(started)
 }
 
+pub(crate) fn workspace_display(
+    name: Option<String>,
+    routing: Option<codex_app_server_protocol::WorkspaceRouting>,
+) -> Option<String> {
+    let name = name
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty() && !name.chars().any(char::is_control));
+    let id = routing.map(|routing| routing.chatgpt_account_id);
+    match (name, id) {
+        (Some(name), Some(id)) => Some(format!("{name} ({id})")),
+        (name, id) => name.or(id),
+    }
+}
+
 pub(crate) fn status_account_display_from_auth_mode(
     auth_mode: Option<AuthMode>,
     plan_type: Option<codex_protocol::account::PlanType>,
@@ -1942,6 +1961,7 @@ pub(crate) fn status_account_display_from_auth_mode(
         | Some(AuthMode::PersonalAccessToken) => Some(StatusAccountDisplay::ChatGpt {
             email: None,
             plan: plan_type.map(plan_type_display_name),
+            workspace: None,
         }),
         Some(AuthMode::Headers)
         | Some(AuthMode::BedrockApiKey)
@@ -2793,6 +2813,7 @@ mod tests {
             account: Some(Account::Chatgpt {
                 email: Some("teammate@openai.com".to_string()),
                 plan_type: codex_protocol::account::PlanType::Plus,
+                workspace_name: None,
             }),
             requires_openai_auth: true,
         };
@@ -2907,6 +2928,7 @@ mod tests {
             account: Some(Account::Chatgpt {
                 email: Some("teammate@openai.com".to_string()),
                 plan_type: codex_protocol::account::PlanType::Plus,
+                workspace_name: None,
             }),
             requires_openai_auth: true,
             workspace_routing: None,
@@ -4811,6 +4833,7 @@ mod tests {
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
                 plan: Some(ref plan),
+                ..
             }) if plan == "Enterprise"
         ));
 
@@ -4823,6 +4846,7 @@ mod tests {
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
                 plan: Some(ref plan),
+                ..
             }) if plan == "Business"
         ));
 
@@ -4835,6 +4859,7 @@ mod tests {
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
                 plan: Some(ref plan),
+                ..
             }) if plan == "Business Premium"
         ));
     }

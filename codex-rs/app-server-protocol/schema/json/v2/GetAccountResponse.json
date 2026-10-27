@@ -36,6 +36,13 @@
               ],
               "title": "ChatgptAccountType",
               "type": "string"
+            },
+            "workspaceName": {
+              "description": "Display name of the selected ChatGPT workspace, when available.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [

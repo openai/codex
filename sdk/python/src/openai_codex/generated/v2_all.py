@@ -6866,6 +6866,13 @@ class ChatgptAccount(BaseModel):
     email: str | None
     plan_type: Annotated[PlanType, Field(alias="planType")]
     type: Annotated[Literal["chatgpt"], Field(title="ChatgptAccountType")]
+    workspace_name: Annotated[
+        str | None,
+        Field(
+            alias="workspaceName",
+            description="Display name of the selected ChatGPT workspace, when available.",
+        ),
+    ] = None
 
 
 class Account(RootModel[ApiKeyAccount | ChatgptAccount | AmazonBedrockAccount | GcpAccount]):

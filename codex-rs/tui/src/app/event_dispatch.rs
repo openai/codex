@@ -1333,10 +1333,10 @@ impl App {
                         elicitation_target: None,
                     });
             }
-            AppEvent::AccountEmailLoaded { request_id, email } => {
+            AppEvent::AccountEmailLoaded { request_id, email, workspace } => {
                 if self.account_email_request_id == Some(request_id) {
                     self.account_email_request_id = None;
-                    self.chat_widget.on_account_email_loaded(email);
+                    self.chat_widget.on_account_email_loaded(email, workspace);
                 }
             }
             AppEvent::SecuritySetupLoaded { request_id, identity, notice } => {

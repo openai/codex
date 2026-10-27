@@ -33,6 +33,8 @@ pub enum Account {
         )]
         email: Option<String>,
         plan_type: PlanType,
+        /// Display name of the selected ChatGPT workspace, when available.
+        workspace_name: Option<String>,
     },
 
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
@@ -52,7 +54,11 @@ impl From<ProviderAccount> for Account {
     fn from(account: ProviderAccount) -> Self {
         match account {
             ProviderAccount::ApiKey => Self::ApiKey {},
-            ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt { email, plan_type },
+            ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt {
+                email,
+                plan_type,
+                workspace_name: None,
+            },
             ProviderAccount::AmazonBedrock {
                 uses_codex_managed_credentials,
             } => Self::AmazonBedrock {

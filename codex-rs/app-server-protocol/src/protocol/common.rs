@@ -3654,12 +3654,14 @@ mod tests {
         let chatgpt = v2::Account::Chatgpt {
             email: Some("user@example.com".to_string()),
             plan_type: PlanType::Plus,
+            workspace_name: None,
         };
         assert_eq!(
             json!({
                 "type": "chatgpt",
                 "email": "user@example.com",
                 "planType": "plus",
+                "workspaceName": null,
             }),
             serde_json::to_value(&chatgpt)?,
         );
@@ -3667,12 +3669,14 @@ mod tests {
         let chatgpt_without_email = v2::Account::Chatgpt {
             email: None,
             plan_type: PlanType::Pro,
+            workspace_name: None,
         };
         assert_eq!(
             json!({
                 "type": "chatgpt",
                 "email": null,
                 "planType": "pro",
+                "workspaceName": null,
             }),
             serde_json::to_value(&chatgpt_without_email)?,
         );

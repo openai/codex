@@ -569,6 +569,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
             account: Some(Account::Chatgpt {
                 email: Some("embedded@example.com".to_string()),
                 plan_type: AccountPlanType::Pro,
+                workspace_name: None,
             }),
             requires_openai_auth: true,
         }
@@ -647,6 +648,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
             account: Some(Account::Chatgpt {
                 email: Some("embedded@example.com".to_string()),
                 plan_type: AccountPlanType::Pro,
+                workspace_name: None,
             }),
             requires_openai_auth: true,
         }
@@ -2444,6 +2446,7 @@ async fn login_survives_same_owner_token_refresh(
         account: Some(Account::Chatgpt {
             email: Some("device@example.com".into()),
             plan_type: AccountPlanType::Enterprise,
+            workspace_name: None,
         }),
         requires_openai_auth: true,
         workspace_routing: expected_workspace_routing(WORKSPACE_ID_DEVICE),
@@ -3485,6 +3488,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
         account: Some(Account::Chatgpt {
             email: Some("user@example.com".to_string()),
             plan_type: AccountPlanType::Pro,
+            workspace_name: None,
         }),
         requires_openai_auth: true,
     };
@@ -3542,6 +3546,7 @@ async fn get_account_with_chatgpt_plan_variants_returns_plan_type(
             account: Some(Account::Chatgpt {
                 email: Some("user@example.com".to_string()),
                 plan_type: expected_plan,
+                workspace_name: None,
             }),
             requires_openai_auth: true,
         }
@@ -3589,6 +3594,7 @@ async fn get_account_with_chatgpt_without_email() -> Result<()> {
             account: Some(Account::Chatgpt {
                 email: None,
                 plan_type: AccountPlanType::Pro,
+                workspace_name: None,
             }),
             requires_openai_auth: true,
         }
@@ -3714,6 +3720,7 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
         account: Some(Account::Chatgpt {
             email: Some("user@example.com".to_string()),
             plan_type: AccountPlanType::Unknown,
+            workspace_name: None,
         }),
         requires_openai_auth: true,
     };

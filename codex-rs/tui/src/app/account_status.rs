@@ -1,4 +1,4 @@
-//! Refreshes the email omitted by account-update notifications without blocking terminal input.
+//! Refreshes identity details omitted by account-update notifications without blocking terminal input.
 //! Results carry a request ID so account changes and reconnects reject obsolete identities.
 
 use super::App;
@@ -31,8 +31,20 @@ impl App {
             .await;
             match result {
                 Ok(Ok(response)) => {
-                    if let Some(Account::Chatgpt { email, .. }) = response.account {
-                        app_event_tx.send(AppEvent::AccountEmailLoaded { request_id, email });
+                    if let Some(Account::Chatgpt {
+                        email,
+                        workspace_name,
+                        ..
+                    }) = response.account
+                    {
+                        app_event_tx.send(AppEvent::AccountEmailLoaded {
+                            request_id,
+                            email,
+                            workspace: crate::app_server_session::workspace_display(
+                                workspace_name,
+                                response.workspace_routing,
+                            ),
+                        });
                     }
                 }
                 Ok(Err(_)) | Err(_) => {

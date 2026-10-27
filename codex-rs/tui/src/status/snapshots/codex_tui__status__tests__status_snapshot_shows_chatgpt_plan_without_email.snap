@@ -9,10 +9,11 @@ expression: sanitized
   Visit https://chatgpt.com/settings/usage for up-to-date
   information on rate limits and credits
 
-  Model:        gpt-5.1-codex-max (reasoning none, summaries auto)
-  Directory:    [[workspace]]
-  Permissions:  Custom (workspace with network access, Ask for approval)
-  Agents.md:    <none>
-  Account:      Enterprise (Automation)
+  Model:              gpt-5.1-codex-max (reasoning none, summaries auto)
+  Directory:          [[workspace]]
+  Permissions:        Custom (workspace with network access, Ask for approval)
+  Agents.md:          <none>
+  Account:            Enterprise (Automation)
+  ChatGPT workspace:  Example workspace (account-123)
 
-  Limits:       data not available yet
+  Limits:             data not available yet

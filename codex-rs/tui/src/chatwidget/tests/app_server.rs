@@ -123,10 +123,21 @@ async fn session_and_settings_sync_server_provider_id() {
     let first_id = ThreadId::new();
     let mut first = configured_thread_session(first_id);
     first.model_provider_id = "server-ollama".to_string();
+    chat.status_account_display = Some(StatusAccountDisplay::ChatGpt {
+        email: None,
+        plan: None,
+        workspace: Some("account-123".to_string()),
+    });
+    let mut provider = chat.config.model_provider.clone();
+    provider.env_key = Some("CUSTOM_API_KEY".to_string());
+    chat.config
+        .model_providers
+        .insert(first.model_provider_id.clone(), provider);
     chat.handle_thread_session(first.clone());
     let displayed = status(&mut chat);
     assert!(displayed.contains("Model provider:") && displayed.contains("server-ollama"));
     assert!(!displayed.contains("local-provider.example"));
+    assert!(!displayed.contains("ChatGPT workspace:"));
 
     let mut other = configured_thread_session(ThreadId::new());
     other.model_provider_id = "server-bedrock".to_string();

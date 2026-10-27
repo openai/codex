@@ -3917,6 +3917,7 @@ async fn account_update_discards_stale_workspace_headline_results() {
         Some(StatusAccountDisplay::ChatGpt {
             email: Some("first@example.com".to_string()),
             plan: None,
+            workspace: None,
         }),
         /*plan_type*/ None,
         /*has_chatgpt_account*/ true,
@@ -3928,6 +3929,7 @@ async fn account_update_discards_stale_workspace_headline_results() {
         Some(StatusAccountDisplay::ChatGpt {
             email: Some("second@example.com".to_string()),
             plan: None,
+            workspace: None,
         }),
         /*plan_type*/ None,
         /*has_chatgpt_account*/ true,

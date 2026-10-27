@@ -298,6 +298,7 @@ pub(crate) enum AppEvent {
     AccountEmailLoaded {
         request_id: uuid::Uuid,
         email: Option<String>,
+        workspace: Option<String>,
     },
     SecuritySetupLoaded {
         request_id: uuid::Uuid,

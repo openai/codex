@@ -229,6 +229,7 @@ async fn personal_access_token_without_email_supports_auth_status_and_account_re
             account: Some(Account::Chatgpt {
                 email: None,
                 plan_type: AccountPlanType::EnterpriseCbpAutomation,
+                workspace_name: None,
             }),
             requires_openai_auth: true,
         }

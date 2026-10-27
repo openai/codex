@@ -80,7 +80,7 @@ async fn gcp_account_tracks_provider_changes_with_saved_chatgpt_credentials() ->
         ),
         (
             "openai",
-            json!({"account": {"type": "chatgpt", "email": "user@example.com", "planType": "pro"}, "requiresOpenaiAuth": true, "workspaceRouting": null}),
+            json!({"account": {"type": "chatgpt", "email": "user@example.com", "planType": "pro", "workspaceName": null}, "requiresOpenaiAuth": true, "workspaceRouting": null}),
         ),
         (
             "gcp",
