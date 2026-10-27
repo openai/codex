@@ -660,6 +660,7 @@ mod tests {
                     failure: None,
                     saved_path: Some(expected_path.clone()),
                     input_images: Vec::new(),
+                    generation_id: None,
                 })],
             },
         )

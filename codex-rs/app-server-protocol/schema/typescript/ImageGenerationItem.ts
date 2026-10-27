@@ -9,4 +9,8 @@ export type ImageGenerationItem = { id: string, status: string, revisedPrompt: s
 /**
  * Observed local inputs for a completed generation, absent on older items.
  */
-inputImages?: Array<ImageGenerationInputImage>, } & ({ fileId: string, } | { result: string, });
+inputImages?: Array<ImageGenerationInputImage>,
+/**
+ * Image generation identifier for the generated image, when provided by the image backend.
+ */
+generationId: string | null, } & ({ fileId: string, } | { result: string, });

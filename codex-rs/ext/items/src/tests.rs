@@ -43,6 +43,7 @@ fn image_generation_item_preserves_stable_wire_shape() {
             "result": "cG5n",
             "transparentBackground": null,
             "failure": null,
+            "generationId": null,
         })
     );
     assert_eq!(
@@ -126,6 +127,7 @@ fn image_generation_item_reads_transitional_file_wire_shape() {
             "fileId": "file-1",
             "transparentBackground": null,
             "failure": null,
+            "generationId": null,
         })
     );
 }
@@ -173,6 +175,7 @@ fn image_generation_item_preserves_authoritative_transparency() {
             "result": "cG5n",
             "transparentBackground": true,
             "failure": null,
+            "generationId": null,
         })
     );
     assert_eq!(
@@ -205,16 +208,19 @@ fn image_generation_request_id_stays_internal() {
     let value = serde_json::to_value(&item).expect("serialize extension item");
 
     assert!(value.get("imagegenRequestId").is_none());
-    assert!(value.get("generationId").is_none());
+    assert_eq!(value["generationId"], json!("gen-image-123"));
     let ExtensionItem::ImageGeneration(round_tripped) =
         serde_json::from_value::<ExtensionItem>(value).expect("deserialize extension item")
     else {
         panic!("expected image-generation item");
     };
     assert_eq!(round_tripped.imagegen_request_id, None);
-    assert_eq!(round_tripped.generation_id, None);
+    assert_eq!(
+        round_tripped.generation_id.as_deref(),
+        Some("gen-image-123")
+    );
     assert!(!ImageGenerationItem::inline().contains("imagegenRequestId"));
-    assert!(!ImageGenerationItem::inline().contains("generationId"));
+    assert!(ImageGenerationItem::inline().contains("generationId: string | null"));
 }
 
 #[test]

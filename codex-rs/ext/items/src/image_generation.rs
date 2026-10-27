@@ -61,10 +61,8 @@ pub struct ImageGenerationItem {
     #[schemars(skip)]
     #[ts(skip)]
     pub imagegen_request_id: Option<String>,
-    /// Backend generation ID for this exact image, retained only for in-process analytics.
-    #[serde(skip)]
-    #[schemars(skip)]
-    #[ts(skip)]
+    /// Image generation identifier for the generated image, when provided by the image backend.
+    #[serde(default)]
     pub generation_id: Option<String>,
 }
 

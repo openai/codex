@@ -114,6 +114,7 @@ fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
         failure: item.failure.clone(),
         saved_path: item.saved_path.clone(),
         input_images: item.input_images.clone(),
+        generation_id: item.generation_id.clone(),
     })
 }
 

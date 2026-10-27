@@ -3099,6 +3099,7 @@ fn append_resume_redaction_history(
             failure: None,
             saved_path: Some(test_absolute_path("/tmp/ig-1.png")),
             input_images: Vec::new(),
+            generation_id: None,
         }),
     ]
     .into_iter()

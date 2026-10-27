@@ -558,6 +558,7 @@ async fn migration_preserves_image_generation_failure_metadata() {
             failure: expected_item.failure.clone(),
             saved_path: expected_item.saved_path.clone(),
             input_images: Vec::new(),
+            generation_id: expected_item.generation_id.clone(),
         }));
     let path = write_rollout(
         home.path(),
@@ -609,7 +610,7 @@ async fn migration_preserves_image_generation_input_observations() {
             sha256: "ab".repeat(32),
         }],
         imagegen_request_id: None,
-        generation_id: None,
+        generation_id: Some("gen-image-123".to_string()),
     };
     let image_completion =
         RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
@@ -621,6 +622,7 @@ async fn migration_preserves_image_generation_input_observations() {
             failure: expected_item.failure.clone(),
             saved_path: expected_item.saved_path.clone(),
             input_images: expected_item.input_images.clone(),
+            generation_id: expected_item.generation_id.clone(),
         }));
     let path = write_rollout(
         home.path(),

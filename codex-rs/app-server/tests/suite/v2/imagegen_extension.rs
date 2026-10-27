@@ -168,6 +168,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
         image,
         transparent_background,
         saved_path: Some(saved_path),
+        generation_id,
         ..
     }) = completed.item.payload
     else {
@@ -175,6 +176,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
     };
     assert_eq!(status, "completed");
     assert_eq!(revised_prompt.as_deref(), Some("paint a blue whale"));
+    assert_eq!(generation_id.as_deref(), Some("gen-image-123"));
     assert_eq!(
         image,
         GeneratedImageRef::Inline {
@@ -398,6 +400,10 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
         })
         .context("persisted legacy history should contain the generated image")?;
     assert_eq!(persisted_image.transparent_background, Some(true));
+    assert_eq!(
+        persisted_image.generation_id.as_deref(),
+        Some("gen-transparent")
+    );
     assert_eq!(persisted_image.input_images, expected_inputs);
 
     let resume_id = resumed
@@ -418,6 +424,10 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history(
         })
         .context("resumed legacy history should contain the generated image")?;
     assert_eq!(resumed_image.transparent_background, Some(true));
+    assert_eq!(
+        resumed_image.generation_id.as_deref(),
+        Some("gen-transparent")
+    );
     assert_eq!(resumed_image.input_images, expected_inputs);
 
     Ok(())
@@ -1255,7 +1265,7 @@ async fn mount_image_response_with_background(server: &MockServer, background: &
                 .set_body_json(json!({
                     "created": 1,
                     "background": background,
-                    "data": [{"b64_json": RESULT}],
+                    "data": [{"b64_json": RESULT, "generation_id": "gen-transparent"}],
                 })),
         )
         .expect(1)
@@ -1269,7 +1279,7 @@ async fn mount_image_edit_response(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "created": 1,
             "background": "transparent",
-            "data": [{"b64_json": RESULT}],
+            "data": [{"b64_json": RESULT, "generation_id": "gen-transparent"}],
         })))
         .expect(1)
         .mount(server)

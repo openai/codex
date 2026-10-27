@@ -69,6 +69,7 @@ fn legacy_image_generation_preserves_file_reference() {
         failure: None,
         saved_path: None,
         input_images: Vec::new(),
+        generation_id: None,
     });
 
     let persisted = persisted_event_msg(&event, ThreadHistoryMode::Legacy)
