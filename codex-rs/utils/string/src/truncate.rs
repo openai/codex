@@ -12,6 +12,17 @@ pub struct TextTruncation {
     pub marker: String,
 }
 
+impl TextTruncation {
+    /// Applies this edit to the string it was planned from.
+    pub fn apply(&self, original: &str) -> String {
+        assemble_truncated_output(
+            &original[..self.removed.start],
+            &original[self.removed.end..],
+            &self.marker,
+        )
+    }
+}
+
 /// Plans the existing head/tail token truncation. The marker is outside the
 /// retained-text budget, just as it is in [`truncate_middle_with_token_budget`].
 pub fn plan_token_truncation(s: &str, max_tokens: usize) -> Option<TextTruncation> {
@@ -70,11 +81,7 @@ pub fn truncate_middle_with_token_budget(s: &str, max_tokens: usize) -> (String,
     let Some(truncation) = plan_token_truncation(s, max_tokens) else {
         return (s.to_string(), None);
     };
-    let truncated = assemble_truncated_output(
-        &s[..truncation.removed.start],
-        &s[truncation.removed.end..],
-        &truncation.marker,
-    );
+    let truncated = truncation.apply(s);
     let total_tokens = u64::try_from(approx_token_count(s)).unwrap_or(u64::MAX);
 
     if truncated == s {

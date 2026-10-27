@@ -46,8 +46,7 @@ use codex_protocol::openai_models::ToolMode;
 use codex_tools::ToolName;
 use codex_utils_audio::estimate_audio_token_count;
 use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
-use codex_utils_output_truncation::truncate_function_output_items_with_policy;
+use codex_utils_output_truncation::formatted_truncate_function_output_items_with_policy;
 
 use delegate::CodeModeCellDelegate;
 use delegate::CodeModeDispatchBroker;
@@ -321,16 +320,7 @@ fn truncate_code_mode_result(
 ) -> Vec<FunctionCallOutputContentItem> {
     let max_output_tokens = resolve_max_tokens(max_output_tokens);
     let policy = TruncationPolicy::Tokens(max_output_tokens);
-    if items
-        .iter()
-        .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
-    {
-        let (truncated_items, _) =
-            formatted_truncate_text_content_items_with_policy(&items, policy);
-        return truncated_items;
-    }
-
-    truncate_function_output_items_with_policy(&items, policy, estimate_audio_token_count)
+    formatted_truncate_function_output_items_with_policy(items, policy, estimate_audio_token_count)
 }
 
 // Submit synchronously so the recorder sees the call before the cell's dispatch gate closes.
