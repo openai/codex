@@ -1,3 +1,4 @@
+use super::render::MathMode;
 use super::render::render;
 use crate::markdown_render::render_markdown_text_with_width;
 use itertools::Itertools;
@@ -75,8 +76,8 @@ fn unicode_math_accents_reject_ambiguous_arguments() {
         r"\hat",
         "\\hat{\u{0302}}",
     ] {
-        for display in [false, true] {
-            assert_eq!(render(source, display), None, "{source}");
+        for mode in [MathMode::Inline, MathMode::Display] {
+            assert_eq!(render(source, mode), None, "{source}");
         }
         assert_eq!(
             plain(&format!("\\({source}\\)"), /*width*/ 80),
@@ -135,7 +136,7 @@ fn unicode_math_bounds_and_unsupported_input() {
         r"\text{\alpha}",
         r"\begin{matrix}a&b\end{matrix}",
     ] {
-        assert_eq!(render(source, /*display*/ false), None, "{source}");
+        assert_eq!(render(source, MathMode::Inline), None, "{source}");
         assert_eq!(
             plain(&format!("\\({source}\\)"), /*width*/ 80),
             format!("\\({source}\\)")
@@ -146,7 +147,7 @@ fn unicode_math_bounds_and_unsupported_input() {
         "x".repeat(/*n*/ 300),
         format!("{}x", "\\sqrt".repeat(/*n*/ 100)),
     ] {
-        assert_eq!(render(&source, /*display*/ false), None);
+        assert_eq!(render(&source, MathMode::Inline), None);
     }
 }
 

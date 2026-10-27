@@ -1,4 +1,5 @@
 use super::MathMarkdown;
+use super::render::MathMode;
 use super::render::render;
 use crate::markdown_render::render_markdown_text_with_width;
 use pretty_assertions::assert_eq;
@@ -31,6 +32,13 @@ $$\frac{1}{2}\frac{3}{4}$$
 \[
 \int_0^1 x^2\,dx=\frac{1}{3}
 \]
+
+- Integral:
+
+  $$\int_0^1 x\,dx$$
+
+> Integral:
+$$\int_0^1 x\,dx$$
 
 $$
 x
@@ -153,11 +161,11 @@ Inline: \(\sum_{i=1}^N x_i\), \(\underset{x\ge0}{\min} x\).",
         /*width*/ 100
     ));
     assert_eq!(
-        render(r"\sum_i^N x_i", /*display*/ true),
-        render(r"\sum^N_i x_i", /*display*/ true)
+        render(r"\sum_i^N x_i", MathMode::Display),
+        render(r"\sum^N_i x_i", MathMode::Display)
     );
     for source in [r"\sum_i_j", r"\sum^i^j", r"\sum_", r"\sum^_i"] {
-        assert_eq!(render(source, /*display*/ true), None, "{source}");
+        assert_eq!(render(source, MathMode::Display), None, "{source}");
     }
     let source = r"\[\sum_{i,j,k=1}^{123456789}x_i\]";
     assert_eq!(
@@ -170,7 +178,7 @@ Inline: \(\sum_{i=1}^N x_i\), \(\underset{x\ge0}{\min} x\).",
                 r"\begin{{aligned}}{}\end{{aligned}}",
                 r"\sum_i x_i\\".repeat(/*n*/ 9)
             ),
-            /*display*/ true
+            MathMode::Display
         ),
         None
     );
@@ -184,6 +192,24 @@ Native scripts: \(x_i^2 + y_{10}\). Sets: \(\mathcal Q_t\).
 Annotations: \(\underset{i\in I}{\min} x_i\), \(\overset{\text{def}}{=}\).",
         /*width*/ 100
     ));
+}
+
+#[test]
+fn integral_limits_and_parenthesized_matrices() {
+    let formulas = [
+        r"$$\int_{0}^{\infty} e^{-x}\,dx = 1$$",
+        r"$$A=\begin{pmatrix}1&2\\3&4\end{pmatrix}$$",
+        r"$$v=\begin{pmatrix}10&20&30\end{pmatrix}$$",
+        r"$$\begin{pmatrix}\frac{1}{2}&0\\*100&x\end{pmatrix}v$$",
+        r"$$\begin{pmatrix}a&b\\ *x&y\\ [2pt]&z\end{pmatrix}$$",
+    ];
+    insta::assert_snapshot!(plain(&formulas.join("\n\n"), /*width*/ 80));
+    for formula in formulas {
+        assert_eq!(
+            plain(formula, /*width*/ 10),
+            plain(&format!("`{formula}`"), /*width*/ 10)
+        );
+    }
 }
 
 #[test]
@@ -232,9 +258,9 @@ fn unicode_math_structured_bounds_and_invalid_input() {
         r"\begin{{aligned}}\frac{{a}}{{b}}{}&=0\end{{aligned}}",
         "x".repeat(/*n*/ 252)
     );
-    let rendered = render(&source, /*display*/ true).expect("fits the layout width limit");
+    let rendered = render(&source, MathMode::Display).expect("fits the layout width limit");
     assert_eq!(
-        render(&source.replace('&', " \n &"), /*display*/ true),
+        render(&source.replace('&', " \n &"), MathMode::Display),
         Some(rendered)
     );
     assert_eq!(
@@ -243,8 +269,9 @@ fn unicode_math_structured_bounds_and_invalid_input() {
                 r"\begin{{aligned}}{}\end{{aligned}}",
                 "x&=1\\\\".repeat(/*n*/ 16)
             ),
-            /*display*/ true
-        ),
+            MathMode::Display
+        )
+        .map(|math| math.text),
         Some(vec!["x =1"; 16].join("\n"))
     );
     for source in [
@@ -254,10 +281,12 @@ fn unicode_math_structured_bounds_and_invalid_input() {
         r"\begin{aligned}x&={a&b}\end{aligned}",
         r"\begin{aligned}x&=1\\[bad]y&=2\end{aligned}",
         r"\begin{aligned}x&=1\\[NaNmm]y&=2\end{aligned}",
+        r"\begin{pmatrix}1&2\\3\end{pmatrix}",
+        r"\begin{pmatrix}1&2\end{aligned}",
         r"\underset{x}",
         r"\substack{x&y}",
     ] {
-        assert_eq!(render(source, /*display*/ true), None, "{source}");
+        assert_eq!(render(source, MathMode::Display), None, "{source}");
     }
     for source in [
         format!(
@@ -272,7 +301,7 @@ fn unicode_math_structured_bounds_and_invalid_input() {
         format!("{}x{}", r"\boxed{".repeat(/*n*/ 40), "}".repeat(/*n*/ 40)),
         format!(r"\substack{{{}}}", "x\\\\".repeat(/*n*/ 17)),
     ] {
-        assert_eq!(render(&source, /*display*/ true), None, "{source}");
+        assert_eq!(render(&source, MathMode::Display), None, "{source}");
     }
 }
 
@@ -321,7 +350,7 @@ fn unicode_math_pending_display_tracks_original_offset() {
 #[test]
 fn unicode_math_nested_fractions_and_oversized_pending_stay_source() {
     for source in [r"\frac{\frac{a}{b}}{c}", r"\frac{a}{\frac{b}{c}}"] {
-        assert_eq!(render(source, /*display*/ true), None);
+        assert_eq!(render(source, MathMode::Display), None);
     }
     let source = format!("$$\n{}", "x".repeat(/*n*/ 5000));
     assert_eq!(

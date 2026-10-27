@@ -1,11 +1,12 @@
-//! Small, bounded layouts for aligned equations and common optimization notation.
+//! Small, bounded layouts for aligned equations, parenthesized matrices, and optimization notation.
 //! Cell parsing shares the parent parser's depth budget and preserves nested groups.
-//! Aligned blocks compose with surrounding math at their first row's baseline.
+//! Surrounding math aligns to the first row of an aligned block and the middle of a matrix.
 //! Display annotations and operator limits are centered above or below their base.
 
 use super::Layout;
 use super::MAX_COLUMNS;
 use super::MAX_ROWS;
+use super::MathMode;
 use super::MathParser;
 use super::SequenceEnd;
 use crate::width::display_width;
@@ -84,15 +85,9 @@ impl MathParser<'_> {
 
     pub(super) fn structured_command(&mut self, name: &str) -> Option<Layout> {
         match name {
-            "begin" => {
-                self.remaining = self.remaining.trim_start().strip_prefix("{aligned}")?;
-                if self.remaining.trim_start().starts_with('[') {
-                    return None;
-                }
-                self.aligned()
-            }
+            "begin" => self.grid(),
             "boxed" => {
-                if !self.display {
+                if self.mode == MathMode::Inline {
                     return None;
                 }
                 let inner = self.argument()?;
@@ -163,10 +158,25 @@ impl MathParser<'_> {
         }
     }
 
-    fn aligned(&mut self) -> Option<Layout> {
-        if !self.display {
+    fn grid(&mut self) -> Option<Layout> {
+        if self.mode == MathMode::Inline {
             return None;
         }
+        let (name, remaining) = self
+            .remaining
+            .trim_start()
+            .strip_prefix('{')?
+            .split_once('}')?;
+        let end = match name {
+            "aligned" => r"\end{aligned}",
+            "pmatrix" => r"\end{pmatrix}",
+            _ => return None,
+        };
+        let matrix = name == "pmatrix";
+        if !matrix && remaining.trim_start().starts_with('[') {
+            return None;
+        }
+        self.remaining = remaining;
         let mut rows = Vec::new();
         let mut cells = Vec::new();
         let mut widths = Vec::<usize>::new();
@@ -174,7 +184,7 @@ impl MathParser<'_> {
             self.remaining = self.remaining.trim_start();
             // A trailing row separator does not introduce an extra blank row.
             if cells.is_empty()
-                && let Some(remaining) = self.remaining.strip_prefix(r"\end{aligned}")
+                && let Some(remaining) = self.remaining.strip_prefix(end)
             {
                 self.remaining = remaining;
                 break;
@@ -187,6 +197,9 @@ impl MathParser<'_> {
             if cell.rows.len() == 1 {
                 cell.rows[0] = cell.rows[0].trim().to_owned();
             }
+            if matrix && cell.width() == 0 {
+                return None;
+            }
             if widths.len() == cells.len() {
                 widths.push(cell.width());
             } else {
@@ -197,12 +210,18 @@ impl MathParser<'_> {
                 self.remaining = remaining;
                 continue;
             }
-            if let Some(remaining) = self.remaining.strip_prefix(r"\end{aligned}") {
+            if let Some(remaining) = self.remaining.strip_prefix(end) {
                 self.remaining = remaining;
                 rows.push(cells);
                 break;
             }
-            self.remaining = self.remaining.strip_prefix(r"\\")?.trim_start();
+            let next = self.remaining.strip_prefix(r"\\")?;
+            self.remaining = if matrix {
+                // Only an adjacent star or spacing option belongs to a matrix row break.
+                next.strip_prefix('*').unwrap_or(next)
+            } else {
+                next.trim_start()
+            };
             if let Some(spacing) = self.remaining.strip_prefix('[') {
                 let (distance, remaining) = spacing.split_once(']')?;
                 let number = [
@@ -220,7 +239,11 @@ impl MathParser<'_> {
         }
         let mut output = Vec::new();
         let mut layout_baseline = 0;
+        let max_content_width = if matrix { MAX_COLUMNS - 4 } else { MAX_COLUMNS };
         for cells in rows {
+            if matrix && cells.len() != widths.len() {
+                return None;
+            }
             let baseline = cells.iter().map(|cell| cell.baseline).max()?;
             if output.is_empty() {
                 layout_baseline = baseline;
@@ -241,7 +264,9 @@ impl MathParser<'_> {
                         .map(String::as_str)
                         .unwrap_or("");
                     // Align the cell rectangle, preserving numerator/denominator positions.
-                    let leading = if index % 2 == 0 {
+                    let leading = if matrix {
+                        (widths[index] - cell.width()) / 2
+                    } else if index % 2 == 0 {
                         widths[index] - cell.width()
                     } else {
                         0
@@ -250,14 +275,31 @@ impl MathParser<'_> {
                     line.push_str(text);
                     line.push_str(&" ".repeat(widths[index] - leading - display_width(text)));
                     if index + 1 < cells.len() {
-                        line.push_str(if index % 2 == 0 { " " } else { "  " });
+                        line.push_str(if !matrix && index % 2 == 0 { " " } else { "  " });
                     }
                 }
-                if display_width(&line) > MAX_COLUMNS {
+                if display_width(&line) > max_content_width {
                     return None;
                 }
-                output.push(line.trim_end().to_owned());
+                if !matrix {
+                    line.truncate(line.trim_end().len());
+                }
+                output.push(line);
             }
+        }
+        if matrix {
+            let last = output.len().checked_sub(1)?;
+            layout_baseline = last / 2;
+            for (index, line) in output.iter_mut().enumerate() {
+                let (left, right) = match index {
+                    _ if last == 0 => ('(', ')'),
+                    0 => ('⎛', '⎞'),
+                    _ if index == last => ('⎝', '⎠'),
+                    _ => ('⎜', '⎟'),
+                };
+                *line = format!("{left} {line} {right}");
+            }
+            self.has_matrix = true;
         }
         Some(Layout {
             rows: output,

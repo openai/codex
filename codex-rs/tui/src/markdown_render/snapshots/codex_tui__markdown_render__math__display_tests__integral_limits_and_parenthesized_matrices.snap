@@ -1,0 +1,21 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+expression: "plain(&formulas.join(\"\\n\\n\"), 80)"
+---
+∞
+∫ e⁻ˣ dx = 1
+0
+
+A=⎛ 1  2 ⎞
+  ⎝ 3  4 ⎠
+
+v=( 10  20  30 )
+
+⎛  1     ⎞
+⎜  ─   0 ⎟v
+⎜  2     ⎟
+⎝ 100  x ⎠
+
+⎛   a    b ⎞
+⎜  *x    y ⎟
+⎝ [2pt]  z ⎠

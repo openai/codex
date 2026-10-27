@@ -9,6 +9,7 @@ use pulldown_cmark::Event;
 use pulldown_cmark::Options;
 use pulldown_cmark::Parser;
 use pulldown_cmark::Tag;
+use render::MathMode;
 use std::borrow::Cow;
 use std::ops::Range;
 
@@ -223,25 +224,30 @@ impl<'a> MathMarkdown<'a> {
                 }
             }
             let rendered = if super::preferences::current().math && formula.len() < MAX_MATH_BYTES {
-                render::render(formula, display)
+                let mode = if !display {
+                    MathMode::Inline
+                } else if containers
+                    .peek()
+                    .is_some_and(|range| range.contains(&start))
+                {
+                    MathMode::NestedDisplay
+                } else {
+                    MathMode::Display
+                };
+                render::render(formula, mode).filter(|math| {
+                    // Nested Markdown prefixes have their own width. Never wrap a spatial layout.
+                    math.required_width.is_none_or(|required| {
+                        mode == MathMode::Display
+                            && width.is_none_or(|width| {
+                                required <= width.saturating_sub(/*rhs*/ 4)
+                            })
+                    })
+                })
             } else {
                 None
             };
             let rendered = rendered
-                .filter(|text| {
-                    // Nested Markdown prefixes have their own width; keep spatial layouts at the top level.
-                    // Never wrap a spatial layout into misleading pieces.
-                    !text.contains('\n')
-                        || !containers
-                            .peek()
-                            .is_some_and(|range| range.contains(&start))
-                            && width.is_none_or(|width| {
-                                text.lines().all(|line| {
-                                    crate::width::display_width(line)
-                                        <= width.saturating_sub(/*rhs*/ 4)
-                                })
-                            })
-                })
+                .map(|math| math.text)
                 .unwrap_or_else(|| input[span.clone()].to_owned());
             // Dollars are ordinary text in the Markdown parser and cannot form an HTML tag.
             result
