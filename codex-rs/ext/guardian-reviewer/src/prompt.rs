@@ -1,7 +1,6 @@
 //! Composes synchronous review prompts from the host's captured context sections.
 //! Full/delta selection, empty-transcript text, and cursor accounting preserve the existing layout.
 
-use codex_guardian_context::Budgeted;
 use codex_guardian_context::CollectedContext;
 use codex_guardian_context::ComposedContext;
 use codex_guardian_context::ContextPresentation;
@@ -26,27 +25,14 @@ pub fn compose_guardian_prompt(
 ) -> anyhow::Result<GuardianPromptItems> {
     let (selection, transcript_cursor) =
         mode.select(sections.transcript_entries(), history_version);
-    let (transcript_entries, offset, placeholder, presentation) = match selection {
-        TranscriptSelection::Full(entries) => (
-            entries,
-            0,
-            "<no retained transcript entries>",
-            ContextPresentation::SyncFull { session_id },
-        ),
-        TranscriptSelection::Delta { entries, offset } => (
-            entries,
-            offset,
-            "<no retained transcript delta entries>",
-            ContextPresentation::SyncDelta { session_id },
-        ),
+    let (offset, presentation) = match selection {
+        TranscriptSelection::Full(_) => (0, ContextPresentation::SyncFull { session_id }),
+        TranscriptSelection::Delta { offset, .. } => {
+            (offset, ContextPresentation::SyncDelta { session_id })
+        }
     };
-    let mut transcript = profile.prepare_transcript(transcript_entries, offset);
-    if transcript_entries.is_empty() {
-        transcript.items.push(Budgeted::required(
-            codex_guardian_context::TranscriptContent::Text(placeholder.to_owned()),
-        ));
-    }
-    let context = sections.compose(presentation, transcript)?;
+    let context =
+        codex_guardian_context::prepare_sync_context(sections, profile, offset, presentation)?;
     Ok(GuardianPromptItems {
         context,
         transcript_cursor,

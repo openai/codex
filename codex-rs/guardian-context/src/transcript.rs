@@ -171,7 +171,7 @@ fn collect_transcript_for_review(
 ) -> Vec<ConversationTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
-    let mut heartbeat_versions = HashMap::new();
+    let mut heartbeat_references = crate::preparation::HeartbeatReferences::default();
     // Positional legacy labels cannot establish reusable delivery proof, including
     // through transcript copies. The separate retained section stays authoritative.
     let retained_context = history
@@ -451,28 +451,14 @@ fn collect_transcript_for_review(
             continue;
         }
         let original_bytes = text.len();
-        if let Some(heartbeat) = codex_history::Heartbeat::from_message(item) {
-            match heartbeat_versions.get(heartbeat.automation_id) {
-                Some((instructions, number)) if *instructions == heartbeat.instructions => {
-                    // A reference no longer delivers the complete source instruction.
-                    source = None;
-                    text = format!(
-                        "Scheduled automation {} ran at {}. Instructions unchanged from transcript entry [{}]; this is a replay of that earlier instruction, not a new human instruction. If the referenced instructions are unavailable, do not infer authorization from this reference.",
-                        heartbeat.automation_id, heartbeat.timestamp, number
-                    );
-                }
-                _ => {
-                    heartbeat_versions.insert(
-                        heartbeat.automation_id,
-                        (heartbeat.instructions, entries.len() + 1),
-                    );
-                }
-            }
-        } else if codex_history::UserInputOrigin::from_message(item)
-            == codex_history::UserInputOrigin::Heartbeat
+        let scheduled = codex_history::UserInputOrigin::from_message(item)
+            == codex_history::UserInputOrigin::Heartbeat;
+        let heartbeat = codex_history::Heartbeat::from_message(item).map(Into::into);
+        if target == crate::ContextTarget::Async
+            && scheduled
+            && heartbeat_references.prepare(heartbeat.as_ref(), &mut text, entries.len() + 1)
         {
-            // Unknown scheduler envelopes may change instructions; do not bridge them.
-            heartbeat_versions.clear();
+            source = None;
         }
         let text = match &kind {
             ConversationTranscriptEntryKind::User | ConversationTranscriptEntryKind::Developer => {
@@ -546,7 +532,14 @@ fn collect_transcript_for_review(
                 )
             }),
             kind,
-            content: TranscriptContent::Text(text),
+            content: if target == crate::ContextTarget::Sync && scheduled {
+                TranscriptContent::ScheduledMessage(crate::entry::ScheduledTranscriptMessage {
+                    text,
+                    heartbeat,
+                })
+            } else {
+                TranscriptContent::Text(text)
+            },
             original_bytes,
         });
     }

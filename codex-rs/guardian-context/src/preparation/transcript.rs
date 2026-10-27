@@ -6,6 +6,7 @@
 //! The host selects line or JSON rendering; JSON keeps embedded headers inside text.
 
 use codex_protocol::protocol::TruncationPolicy;
+use std::collections::HashMap;
 
 use crate::BudgetPriority;
 use crate::Budgeted;
@@ -175,6 +176,7 @@ impl ContextProfile {
                 };
                 let (content, tokens, retained_bytes) = match content.as_ref() {
                     TranscriptContent::Text(text) => prepare_text(text),
+                    TranscriptContent::ScheduledMessage(message) => prepare_text(&message.text),
                     TranscriptContent::Record(record) => prepare_text(record.text()),
                     TranscriptContent::NativeMessage(message) => (
                         TranscriptContent::NativeMessage(message.clone()),
@@ -320,6 +322,7 @@ fn prepare_sync_content<'a>(
 ) -> std::borrow::Cow<'a, TranscriptContent> {
     let text = match &entry.content {
         TranscriptContent::Text(text) => text.as_str(),
+        TranscriptContent::ScheduledMessage(message) => message.text.as_str(),
         TranscriptContent::Record(record) => record.text(),
         TranscriptContent::NativeMessage(_) => {
             // Native ciphertext stays whole, or leaves an omission at the same position.
@@ -348,6 +351,79 @@ fn prepare_sync_content<'a>(
     std::borrow::Cow::Owned(TranscriptContent::Text(crate::truncate_text(text, tokens)))
 }
 
+#[derive(Clone, PartialEq)]
+pub(crate) struct HeartbeatInstruction {
+    automation_id: String,
+    timestamp: String,
+    instructions: String,
+}
+
+impl From<codex_history::Heartbeat<'_>> for HeartbeatInstruction {
+    fn from(value: codex_history::Heartbeat<'_>) -> Self {
+        Self {
+            automation_id: value.automation_id.to_owned(),
+            timestamp: value.timestamp.to_owned(),
+            instructions: value.instructions.to_owned(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct HeartbeatReferences {
+    versions: HashMap<String, (String, usize)>,
+}
+
+impl HeartbeatReferences {
+    /// Returns whether the representation no longer proves complete source delivery.
+    pub(crate) fn prepare(
+        &mut self,
+        heartbeat: Option<&HeartbeatInstruction>,
+        text: &mut String,
+        number: usize,
+    ) -> bool {
+        let Some(heartbeat) = heartbeat else {
+            self.versions.clear();
+            return false;
+        };
+        match self.versions.get(&heartbeat.automation_id) {
+            Some((instructions, previous)) if *instructions == heartbeat.instructions => {
+                let automation_id = &heartbeat.automation_id;
+                let timestamp = &heartbeat.timestamp;
+                *text = format!(
+                    "Scheduled automation {automation_id} ran at {timestamp}. Instructions unchanged from transcript entry [{previous}]; this is a replay of that earlier instruction, not a new human instruction. If the referenced instructions are unavailable, do not infer authorization from this reference."
+                );
+                true
+            }
+            _ => {
+                self.versions.insert(
+                    heartbeat.automation_id.clone(),
+                    (heartbeat.instructions.clone(), number),
+                );
+                false
+            }
+        }
+    }
+}
+
+/// Runs over the complete collected transcript so delta references keep their old targets.
+pub(super) fn prepare_sync_heartbeats(context: &mut crate::CollectedContext) {
+    for section in &mut context.sections {
+        let crate::ContextSection::ConversationTranscript { items } = section else {
+            continue;
+        };
+        let mut references = HeartbeatReferences::default();
+        for (index, entry) in items.iter_mut().enumerate() {
+            let crate::TranscriptContent::ScheduledMessage(message) = &mut entry.content else {
+                continue;
+            };
+            if references.prepare(message.heartbeat.as_ref(), &mut message.text, index + 1) {
+                entry.retained_source = None;
+            }
+            entry.content = crate::TranscriptContent::Text(std::mem::take(&mut message.text));
+        }
+    }
+}
+
 #[cfg(test)]
-#[path = "profile_tests.rs"]
+#[path = "transcript_tests.rs"]
 mod tests;

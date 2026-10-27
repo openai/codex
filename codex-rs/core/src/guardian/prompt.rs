@@ -208,7 +208,8 @@ pub(crate) fn render_guardian_transcript_entries(
             .map(|item| match item.content {
                 codex_guardian_context::TranscriptContent::Text(text) => text,
                 codex_guardian_context::TranscriptContent::Record(record) => record.to_string(),
-                codex_guardian_context::TranscriptContent::NativeMessage(_) => {
+                codex_guardian_context::TranscriptContent::ScheduledMessage(_)
+                | codex_guardian_context::TranscriptContent::NativeMessage(_) => {
                     panic!("expected text transcript")
                 }
             })

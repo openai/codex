@@ -1,8 +1,8 @@
 //! Structured transcript evidence shared by synchronous and asynchronous Guardian.
 //!
 //! Entry kinds preserve source attribution for consumer-specific retention and
-//! rendering. User text and manual approvals stay complete for admission; other text is
-//! capped during collection, with its original size retained for accounting.
+//! rendering. Sync entries remain complete until request preparation; async collection
+//! retains its existing caps. Original sizes remain available for accounting.
 
 /// Semantic role of one parent-conversation transcript entry.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,6 +44,8 @@ impl ConversationTranscriptEntryKind {
 #[derive(Clone, PartialEq)]
 pub enum TranscriptContent {
     Text(String),
+    /// Original scheduler input, compressed only during synchronous preparation.
+    ScheduledMessage(ScheduledTranscriptMessage),
     /// Host-attributed text prepared by the profile, rendered at delivery.
     Record(crate::TranscriptRecord),
     NativeMessage(Box<codex_protocol::models::ResponseItem>),
@@ -53,6 +55,7 @@ impl std::fmt::Debug for TranscriptContent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Text(_) => "Text(..)",
+            Self::ScheduledMessage(_) => "ScheduledMessage(..)",
             Self::Record(_) => "Record(..)",
             Self::NativeMessage(_) => "NativeMessage(..)",
         })
@@ -79,4 +82,11 @@ pub struct RetainedTranscriptSource {
     pub rendered_bytes: usize,
     pub order: String,
     pub source: codex_history::RetainedSource,
+}
+
+/// Original scheduler text and the provenance needed to compare heartbeat instructions.
+#[derive(Clone, PartialEq)]
+pub struct ScheduledTranscriptMessage {
+    pub(crate) text: String,
+    pub(crate) heartbeat: Option<crate::preparation::HeartbeatInstruction>,
 }

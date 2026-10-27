@@ -2,13 +2,20 @@
 //! Collection keeps captured sources intact. This owner applies text and image policy;
 //! delivery checks repeat against current reviewer history after compaction.
 
+pub(crate) mod repl;
 pub(crate) mod root;
+mod transcript;
+pub use transcript::ContextProfile;
+pub(crate) use transcript::HeartbeatInstruction;
+pub(crate) use transcript::HeartbeatReferences;
 
 use crate::CollectedContext;
 use crate::ComposedContext;
+use crate::ContextPresentation;
 use crate::ContextSection;
 use crate::GuardianRootMessage;
 use crate::RetainedInstructionItem;
+use crate::SectionError;
 use crate::retained_instructions::RetainedInstructionKind;
 use crate::retained_instructions::USER_OMISSION;
 use codex_protocol::models::ImageDetail;
@@ -22,6 +29,43 @@ pub(crate) const MAX_INSTRUCTION_TOKENS: usize = 900;
 
 const MAX_APPROVAL_REASON_TOKENS: usize = 512;
 const MAX_DESCRIPTION_TOKENS: usize = 400;
+
+/// Prepares the host-selected transcript suffix and all synchronous context sections.
+/// Cursor selection remains with the host; its offset addresses the collected entries.
+/// No storage, reviewer history or cursor state is changed by this operation.
+pub fn prepare_sync_context(
+    mut context: CollectedContext,
+    profile: &ContextProfile,
+    entry_number_offset: usize,
+    presentation: ContextPresentation<'_>,
+) -> Result<ComposedContext, SectionError> {
+    let placeholder = match &presentation {
+        ContextPresentation::SyncFull { .. } => "<no retained transcript entries>",
+        ContextPresentation::SyncDelta { .. } => "<no retained transcript delta entries>",
+        ContextPresentation::Async | ContextPresentation::AsyncDelta => {
+            return Err(SectionError::UnsupportedDelivery {
+                section: "sync_preparation",
+            });
+        }
+    };
+    transcript::prepare_sync_heartbeats(&mut context);
+    let entries = context
+        .transcript_entries()
+        .get(entry_number_offset..)
+        .ok_or(SectionError::UnsupportedDelivery {
+            section: "conversation_transcript",
+        })?;
+    let mut transcript = profile.prepare_transcript(entries, entry_number_offset);
+    if entries.is_empty() {
+        transcript
+            .items
+            .push(crate::Budgeted::required(crate::TranscriptContent::Text(
+                placeholder.to_owned(),
+            )));
+    }
+    prepare_sync_sections(&mut context);
+    context.compose_prepared(presentation, transcript)
+}
 
 /// Applies synchronous section policy to the already bounded collection snapshot.
 /// The host prepares its borrowed transcript selection before consuming the collection.

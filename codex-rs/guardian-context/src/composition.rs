@@ -148,7 +148,8 @@ impl CollectedContext {
             .unwrap_or_default()
     }
 
-    /// Compatibility entrypoint for existing synchronous and asynchronous callers.
+    /// Compatibility entrypoint for callers without unprepared scheduled messages.
+    /// Synchronous scheduler evidence requires `prepare_sync_context` before slicing.
     pub fn compose(
         mut self,
         presentation: ContextPresentation<'_>,
@@ -156,6 +157,15 @@ impl CollectedContext {
     ) -> Result<ComposedContext, SectionError> {
         match presentation {
             ContextPresentation::SyncFull { .. } | ContextPresentation::SyncDelta { .. } => {
+                if self
+                    .transcript_entries()
+                    .iter()
+                    .any(|entry| matches!(entry.content, TranscriptContent::ScheduledMessage(_)))
+                {
+                    return Err(SectionError::UnsupportedDelivery {
+                        section: "sync_preparation",
+                    });
+                }
                 crate::preparation::prepare_sync_sections(&mut self);
                 self.compose_prepared(presentation, transcript)
             }
@@ -311,6 +321,11 @@ impl CollectedContext {
                                     },
                                 ));
                                 continue;
+                            }
+                            TranscriptContent::ScheduledMessage(_) => {
+                                return Err(SectionError::UnsupportedDelivery {
+                                    section: "sync_preparation",
+                                });
                             }
                             TranscriptContent::Text(text) => ContentItem::InputText {
                                 text: if session_id.is_some() {

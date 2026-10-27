@@ -72,6 +72,55 @@ fn heartbeat_references_preserve_positions_changes_and_human_messages() {
         assert!(text.contains("unchanged from transcript entry [1]"));
         assert!(!text.contains("Monitor only."));
     }
+    // Sync collection keeps originals. Preparation compresses before slicing, so
+    // full and delta requests retain exactly the existing reference text and numbering.
+    let raw = super::collect_transcript_for_target(
+        &history,
+        &transcript_config(),
+        crate::ContextTarget::Sync,
+    );
+    let collected = crate::CollectedContext {
+        sections: vec![ContextSection::ConversationTranscript { items: raw.clone() }],
+    };
+    let prepared = crate::ContextProfile::synchronous().prepare_transcript(
+        collected.transcript_entries(),
+        /*entry_number_offset*/ 0,
+    );
+    assert!(matches!(
+        collected.compose(
+            crate::ContextPresentation::SyncFull {
+                session_id: "heartbeat"
+            },
+            prepared,
+        ),
+        Err(crate::SectionError::UnsupportedDelivery {
+            section: "sync_preparation"
+        })
+    ));
+    for offset in [0, 1, 3] {
+        let [expected, actual] = [entries.clone(), raw.clone()].map(|items| {
+            let presentation = if offset == 0 {
+                crate::ContextPresentation::SyncFull {
+                    session_id: "heartbeat",
+                }
+            } else {
+                crate::ContextPresentation::SyncDelta {
+                    session_id: "heartbeat",
+                }
+            };
+            crate::prepare_sync_context(
+                crate::CollectedContext {
+                    sections: vec![crate::ContextSection::ConversationTranscript { items }],
+                },
+                &crate::ContextProfile::synchronous(),
+                offset,
+                presentation,
+            )
+            .unwrap()
+            .into_messages()
+        });
+        assert_eq!(actual, expected);
+    }
     // A rebuilt window starts with a full body, never a dangling old reference.
     let rebuilt = collect_transcript(&history[3..].to_vec(), &transcript_config());
     assert!(

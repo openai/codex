@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 //! Profile retention keeps the existing sync and async evidence priorities.
 
 use super::*;
