@@ -332,6 +332,7 @@ async fn backend_banner_fallback_handles_settings_failure_and_queued_manual_sele
             client,
             crate::app_server_session::ThreadParamsMode::Embedded,
         );
+        assert!(!crate::app::safety_recourse::supports_server(&server));
         while events.try_recv().is_ok() {}
         let pending_turn = if use_reserve && error_code.is_some() {
             app.chat_widget

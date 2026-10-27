@@ -45,7 +45,12 @@ struct Suggestion {
     prompt_text: String,
 }
 
-pub(super) fn parse(mut value: Value) -> Option<(Domain, Option<String>)> {
+pub(super) struct Recourse {
+    pub(super) explanation: String,
+    pub(super) suggestions: Vec<(String, String)>,
+}
+
+pub(super) fn parse(mut value: Value) -> Option<(Domain, Option<Recourse>)> {
     let object = value.as_object_mut()?;
     let recourse = object.remove("safety_recourse").filter(|v| !v.is_null());
     let Some(value) = recourse else {
@@ -135,6 +140,11 @@ pub(super) fn parse(mut value: Value) -> Option<(Domain, Option<String>)> {
         _ => return None,
     };
     let mut prompts = HashSet::new();
+    let mut suggestions = Vec::new();
+    let labels = wire
+        .suggestions
+        .each_ref()
+        .map(|s| s.label.trim().to_lowercase());
     for suggestion in &wire.suggestions {
         if !valid_text(&suggestion.label, /*max_chars*/ 80)
             || !valid_text(&suggestion.prompt_text, /*max_chars*/ 2_000)
@@ -142,6 +152,22 @@ pub(super) fn parse(mut value: Value) -> Option<(Domain, Option<String>)> {
         {
             return None;
         }
+        // Only offer actions the composer can safely submit or restore.
+        let label = suggestion.label.trim();
+        let prompt = suggestion.prompt_text.trim();
+        let label_key = label.to_lowercase();
+        if suggestion.label.contains(char::is_control)
+            || suggestion.label.contains(['\u{2028}', '\u{2029}'])
+            || prompt.len() > 1_000
+            || prompt.starts_with(['!', '/'])
+            || crate::async_question_reply::parse(prompt).is_some()
+            || super::super::skills::contains_tool_mention(prompt)
+            || (wire.domain == Domain::Cyber && label.eq_ignore_ascii_case("Enable Daybreak"))
+            || labels.iter().filter(|key| **key == label_key).count() > 1
+        {
+            continue;
+        }
+        suggestions.push((label.into(), prompt.into()));
     }
     let overview = "We can still help with an overview of ";
     let (lead, offer) = match wire.domain {
@@ -149,7 +175,11 @@ pub(super) fn parse(mut value: Value) -> Option<(Domain, Option<String>)> {
         Domain::Cyber => (cyber_lead, overview),
     };
     let explanation = format!("We take extra caution {lead}{concern}. {offer}{help}.");
-    Some((wire.domain, Some(explanation)))
+    let result = Recourse {
+        explanation,
+        suggestions,
+    };
+    Some((wire.domain, Some(result)))
 }
 
 fn valid_text(value: &str, max_chars: usize) -> bool {

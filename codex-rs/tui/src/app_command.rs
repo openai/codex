@@ -117,6 +117,7 @@ pub(crate) enum AppCommand {
         command: String,
     },
     UserTurn {
+        turn_trigger: &'static str,
         client_user_message_id: String,
         items: Vec<UserInput>,
         cwd: PathBuf,
@@ -224,6 +225,7 @@ impl AppCommand {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn user_turn(
+        turn_trigger: &'static str,
         client_user_message_id: String,
         items: Vec<UserInput>,
         cwd: PathBuf,
@@ -237,6 +239,7 @@ impl AppCommand {
         collaboration_mode: Option<CollaborationMode>,
     ) -> Self {
         Self::UserTurn {
+            turn_trigger,
             client_user_message_id,
             items,
             cwd,

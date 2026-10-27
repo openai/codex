@@ -135,6 +135,7 @@ stream_max_retries = 0
             let turn = app_server
                 .turn_start(
                     started.session.thread_id,
+                    "user",
                     "tui-user-message".to_string(),
                     vec![UserInput::Text {
                         text: "hello".to_string(),

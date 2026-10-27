@@ -1428,6 +1428,7 @@ async fn remote_overview_startup_hides_disabled_older_server_notice() -> Result<
         ThreadParamsMode::Remote,
     );
 
+    assert!(crate::app::safety_recourse::supports_server(&session));
     assert_eq!(
         app.initialize_server_version_notice("2.1.0", session.server_version()),
         None

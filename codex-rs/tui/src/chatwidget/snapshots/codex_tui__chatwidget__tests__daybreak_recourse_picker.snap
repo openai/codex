@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Here are a few ways I can help:
+  Choosing a rewrite sends it in a new chat.
+
+
+› 1. Overview
+  2. Recovery
+  3. Prevention
+  4. Enable Daybreak
+
+  enter select · esc back

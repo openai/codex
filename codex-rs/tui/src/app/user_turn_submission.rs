@@ -11,6 +11,7 @@ pub(super) async fn try_submit_user_turn(
     op: &AppCommand,
 ) -> Result<bool> {
     let AppCommand::UserTurn {
+        turn_trigger,
         client_user_message_id,
         items,
         cwd,
@@ -28,6 +29,9 @@ pub(super) async fn try_submit_user_turn(
         return Ok(false);
     };
     if let Some(turn_id) = app.active_turn_id_for_thread(thread_id).await {
+        if *turn_trigger != "user" {
+            color_eyre::eyre::bail!("the fork already has an active turn");
+        }
         let mut steer_turn_id = turn_id;
         let mut retried_after_turn_mismatch = false;
         loop {
@@ -155,6 +159,7 @@ pub(super) async fn try_submit_user_turn(
     let response = app_server
         .turn_start(
             thread_id,
+            turn_trigger,
             client_user_message_id.clone(),
             items.to_vec(),
             cwd.clone(),

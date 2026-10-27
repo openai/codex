@@ -17,6 +17,8 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::turn_input::CyberAccessProgram;
 use codex_utils_absolute_path::test_support::PathExt;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -173,6 +175,7 @@ async fn safety_recourse_handles_a_policy_block() -> Result<()> {
     let (mut app, mut events, _) = make_test_app_with_channels().await;
     let model = responses::start_mock_server().await;
     app_test_support::MockResponsesConfig::new(&model.uri())
+        .with_root_config("instructions = 'Help the user.'")
         .write(app.config.codex_home.as_path())?;
     app.config = app
         .rebuild_config_for_cwd(app.config.cwd.to_path_buf())
@@ -231,9 +234,13 @@ async fn safety_recourse_handles_a_policy_block() -> Result<()> {
             /*initial_user_message*/ None,
         )
         .await?;
+        let selected_model = "gpt-5.1";
+        app.chat_widget.set_model(selected_model);
         submit_prompt(&mut app, "Blocked original prompt");
         app.submit_thread_op(&mut server, source_id, next_user_turn_event(&mut events))
             .await?;
+        app.chat_widget
+            .apply_external_edit(UNSENT_DRAFT.to_string());
         loop {
             let event = server.next_event().await.expect("moderation metadata");
             let is_metadata = matches!(&event.event, AppServerEvent::ServerNotification(notification)
@@ -266,6 +273,42 @@ async fn safety_recourse_handles_a_policy_block() -> Result<()> {
             continue;
         }
         insta::assert_snapshot!("safety_recourse", format!("{loading}\n\n{notice}"));
+        let picker = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+        let goal = server
+            .thread_goal_set(
+                source_id,
+                Some("Excluded objective".into()),
+                Some(codex_app_server_protocol::ThreadGoalStatus::Paused),
+                /*token_budget*/ None,
+            )
+            .await?
+            .goal;
+        responses::mount_sse_once(&model, responses::sse_completed("rewrite")).await;
+        let draft = app.chat_widget.capture_thread_input_state().unwrap();
+        app.chat_widget.handle_key_event(KeyCode::Enter.into());
+        assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 80), picker);
+        let selection = std::iter::from_fn(|| events.try_recv().ok())
+            .find(|event| matches!(event, AppEvent::ContinueSafetyRecourse { .. }))
+            .expect("rewrite selection");
+        app.handle_event(&mut tui, &mut server, selection).await?;
+        let fork_id = app.active_thread_id.expect("forked thread");
+        assert_eq!(server.thread_goal_get(fork_id).await?.goal, None);
+        assert_eq!(server.thread_goal_get(source_id).await?.goal, Some(goal));
+        assert_eq!(app.agents_overview.input_states[&source_id], draft);
+        wait_for_turn_completed(&mut app, &mut server, fork_id).await;
+        let requests = responses::received_responses_requests(&model).await;
+        assert_eq!(requests[1].body_json()["model"], selected_model);
+        insta::assert_snapshot!(
+            "safety_recourse_request_history",
+            context_snapshot::format_request_history_snapshot(
+                "The fork excludes the blocked turn and submits the selected rewrite.",
+                &requests,
+                &ContextSnapshotOptions::default().rewrite_known_segments(),
+            )
+        );
+        let header = requests[1].header("x-codex-turn-metadata").unwrap();
+        let metadata: Value = serde_json::from_str(&header)?;
+        assert_eq!(metadata["turn_trigger"], "safety_recourse_follow_up");
     }
     server.shutdown().await?;
     Ok(())

@@ -185,6 +185,60 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
     );
     assert!(ops.try_recv().is_err());
 
+    let error = AppServerTurnError {
+        message: "blocked".into(),
+        codex_error_info: Some(CodexErrorInfo::CyberPolicy),
+        misalignment: None,
+        additional_details: None,
+    };
+    let reply = r#"<send_user_message_question_reply>{"questionItemId":"q","question":"Q","answer":"\u0024google-drive"}</send_user_message_question_reply>"#;
+    let long_prompt = "界".repeat(334);
+    for (label, prompt, eligible) in [
+        ("Hidden\nrow", "Explain access", false),
+        ("Overview", "Use $connector", false),
+        ("Overview", "Use [@tool](plugin://tool)", false),
+        ("Overview", reply, false),
+        ("Overview", &long_prompt, false),
+        ("Recovery", "Explain access", false),
+        ("Enable Daybreak", "Explain access", false),
+        ("Overview", "Explain access", true),
+    ] {
+        handle_turn_started(&mut chat, "recourse");
+        safety_recourse::on_metadata(
+            &mut chat,
+            codex_app_server_protocol::TurnModerationMetadataNotification {
+                thread_id: thread_id.to_string(),
+                turn_id: "recourse".into(),
+                metadata: json!({"safety_recourse": {
+                    "schema_version": 1, "domain": "cyber", "source": "user_request",
+                    "source_message": {"id":"1", "kind":"ordinary_message", "role":"user"},
+                    "topic": "unauthorized_account_or_system_access",
+                    "suggestions": [
+                        {"label": label, "prompt_text": prompt},
+                        {"label": "Recovery", "prompt_text": "Explain account recovery"},
+                        {"label": "Prevention", "prompt_text": "Explain account protection"}
+                    ]
+                }}),
+            },
+        );
+        let pending = chat.safety_recourse.take();
+        assert!(safety_recourse::render_failure(&mut chat, pending, &error));
+        let picker = render_bottom_popup(&chat, /*width*/ 80);
+        assert!(picker.contains("Prevention"));
+        assert_eq!(picker.contains("3. Prevention"), eligible);
+        if !eligible {
+            chat.handle_key_event(KeyCode::Esc.into());
+        }
+    }
+    assert_chatwidget_snapshot!(
+        "daybreak_recourse_picker",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyCode::Char('4').into());
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+        event, AppEvent::PersistDaybreakSelection { thread_id: id, enabled: true } if id == thread_id
+    )));
+
     chat.set_parent_owned_thread();
     handle_error(
         &mut chat,

@@ -2433,10 +2433,13 @@ async fn reconnect_resumes_unsent_input_and_reconciles_confirmed_submissions() {
     for pending_start in [false, true] {
         let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.thread_id = Some(ThreadId::new());
-        if !pending_start {
+        if pending_start {
+            chat.prepare_safety_recourse_rewrite("first message")
+                .unwrap();
+        } else {
             handle_turn_started(&mut chat, "turn-1");
+            chat.submit_user_message("first message".into());
         }
-        chat.submit_user_message("first message".into());
         let client_id = if pending_start {
             chat.input_queue
                 .pending_user_message_client_id
@@ -2450,6 +2453,8 @@ async fn reconnect_resumes_unsent_input_and_reconciles_confirmed_submissions() {
             .push_back(UserMessage::from("follow-up").into());
         chat.pause_for_disconnect();
         let mut input = chat.capture_thread_input_state();
+        let saved_source = input.as_ref().unwrap().safety_buffering_source;
+        assert_eq!(saved_source, UserMessageSource::Prompt);
         // Missing history and unrelated receipts never authorize resubmitting uncertain input.
         for ids in [
             vec![],

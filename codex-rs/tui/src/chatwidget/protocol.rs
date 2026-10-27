@@ -87,6 +87,13 @@ impl ChatWidget {
                 self.on_thread_settings_updated(notification);
             }
             ServerNotification::TurnStarted(notification) => {
+                if self
+                    .bottom_pane
+                    .dismiss_view_by_id(safety_recourse::VIEW_ID)
+                    && self.bottom_pane.no_modal_or_popup_active()
+                {
+                    self.on_modal_or_popup_closed();
+                }
                 self.safety_recourse = None;
                 if from_replay {
                     self.restore_realtime_transcripts_before_turn(&notification.turn.id);

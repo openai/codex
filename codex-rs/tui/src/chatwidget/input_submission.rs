@@ -111,6 +111,27 @@ impl ChatWidget {
         .1
     }
 
+    pub(crate) fn prepare_safety_recourse_rewrite(&mut self, prompt: &str) -> Option<AppCommand> {
+        if !self.is_session_configured()
+            || self.is_user_turn_pending_or_running()
+            || self.pending_image_submission.is_some()
+            || self.input_queue.rate_limit_recovery_pending
+            || self.safety_recourse.is_some()
+        {
+            return None;
+        }
+        let op = self
+            .submit_user_message_with_history_and_shell_escape_policy(
+                prompt.into(),
+                UserMessageHistoryRecord::UserMessageText,
+                ShellEscapePolicy::Disallow,
+                UserMessageSource::SafetyRecourse,
+            )
+            .1?;
+        self.safety_buffering_source = UserMessageSource::Prompt;
+        Some(op)
+    }
+
     pub(super) fn submit_user_message_with_history_and_shell_escape_policy(
         &mut self,
         user_message: UserMessage,
@@ -455,6 +476,11 @@ impl ChatWidget {
         let service_tier = self.service_tier_update_for_core();
         let active_permission_profile = self.config.permissions.active_permission_profile();
         let op = AppCommand::user_turn(
+            if source == UserMessageSource::SafetyRecourse {
+                "safety_recourse_follow_up"
+            } else {
+                "user"
+            },
             client_user_message_id.clone(),
             items,
             self.config.cwd.to_path_buf(),
@@ -492,10 +518,11 @@ impl ChatWidget {
             ));
         }
 
-        if !self.submit_op(op.clone()) {
+        // The app submits recourse turns directly to the verified fork.
+        if source != UserMessageSource::SafetyRecourse && !self.submit_op(op.clone()) {
             return (false, None);
         }
-        if source == UserMessageSource::Prompt {
+        if source != UserMessageSource::QuestionAnswer {
             self.bottom_pane.clear_pending_questions();
         }
         self.dismiss_backend_banner_for_new_turn();

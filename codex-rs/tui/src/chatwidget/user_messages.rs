@@ -65,6 +65,7 @@ pub(super) enum ShellEscapePolicy {
 pub(super) enum UserMessageSource {
     Prompt,
     QuestionAnswer,
+    SafetyRecourse,
 }
 
 /// Whether a recovered message can be submitted without risking a duplicate.

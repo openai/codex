@@ -1513,6 +1513,7 @@ impl AppServerSession {
     pub(crate) async fn turn_start(
         &mut self,
         thread_id: ThreadId,
+        turn_trigger: &str,
         client_user_message_id: String,
         items: Vec<UserInput>,
         cwd: PathBuf,
@@ -1531,7 +1532,7 @@ impl AppServerSession {
         let request_id = self.next_request_id();
         let mut params = TurnStartParams {
             thread_id: thread_id.to_string(),
-            turn_trigger: Some("user".to_string()),
+            turn_trigger: Some(turn_trigger.to_string()),
             client_user_message_id: Some(client_user_message_id),
             input: items,
             output_schema,
@@ -3263,6 +3264,7 @@ mod tests {
         let (turn, sent_params) = tokio::join!(
             app_server.turn_start(
                 thread_id,
+                "user",
                 client_user_message_id.clone(),
                 input.clone(),
                 test_path_buf("/local/workspace"),
