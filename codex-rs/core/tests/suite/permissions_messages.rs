@@ -4,7 +4,9 @@ use codex_core::ForkSnapshot;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_features::Feature;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::ModelMessages;
@@ -34,6 +36,9 @@ use serde_json::json;
 use std::collections::HashSet;
 use tempfile::TempDir;
 use test_case::test_case;
+
+const REQUEST_TOOL_BODY: &str = "The built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task.";
+const AUTO_REVIEW_BODY: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
 
 fn permissions_texts(request: &ResponsesRequest) -> Vec<String> {
     request
@@ -87,9 +92,7 @@ fn model_with_approval_messages(
         approvals: Some(ApprovalMessages {
             on_request: Some(on_request.to_string()),
             on_request_auto_review: Some(on_request_auto_review.to_string()),
-            never: None,
-            unless_trusted: None,
-            granular: None,
+            ..Default::default()
         }),
         ..Default::default()
     });
@@ -162,6 +165,125 @@ async fn catalog_approval_message_is_sent_in_initial_permissions() -> Result<()>
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum ApprovalInstructionCase {
+    Present,
+    Absent,
+    Complete,
+}
+
+#[test_case(ApprovalInstructionCase::Present; "present_fields_use_model_wording")]
+#[test_case(ApprovalInstructionCase::Absent; "absent_fields_preserve_bundled_instructions")]
+#[test_case(ApprovalInstructionCase::Complete; "complete_approval_message_takes_precedence")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_approval_instruction_parts_are_sent_in_initial_permissions(
+    case: ApprovalInstructionCase,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let model_slug = "catalog-approvals-model";
+    let heading =
+        |value: &str| (!matches!(case, ApprovalInstructionCase::Absent)).then(|| value.to_string());
+    let sandbox = PermissionMessages {
+        read_only: Some(String::new()),
+        ..Default::default()
+    };
+    let mut model = model_info_from_slug(model_slug);
+    model.use_responses_lite = true;
+    model.model_messages = Some(ModelMessages {
+        approvals: Some(ApprovalMessages {
+            on_request_auto_review: matches!(case, ApprovalInstructionCase::Complete)
+                .then(|| "Complete catalog approval instructions".to_string()),
+            request_permissions: heading("Catalog permission tool"),
+            auto_review_suffix: heading("Catalog automatic review"),
+            ..Default::default()
+        }),
+        permissions: Some(sandbox.clone()),
+        ..Default::default()
+    });
+    let fallback_slug = "catalog-approvals-fallback-model";
+    let mut fallback_model = model_with_permission_messages(fallback_slug, sandbox);
+    fallback_model.use_responses_lite = true;
+    let mut builder = test_codex()
+        .with_model(model_slug)
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("read-only permissions should be allowed");
+            config.config_layer_stack = ConfigLayerStack::default();
+            for (feature, value) in [
+                (Feature::ExecPermissionApprovals, true),
+                (Feature::RequestPermissionsTool, true),
+            ] {
+                config
+                    .features
+                    .set_enabled(feature, value)
+                    .expect("test feature setting should be allowed");
+            }
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model, fallback_model],
+            });
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    submit_text_turn(&test, "hello").await?;
+
+    let request = req.single_request();
+    let bundled_rule = include_str!("../../../prompts/templates/permissions/approval_policy/on_request_rule_request_permission.md").replace("\r\n", "\n");
+    let bundled_approval = format!(
+        "{bundled_rule}\n\n# request_permissions Tool\n\n{REQUEST_TOOL_BODY}\n\n{AUTO_REVIEW_BODY}"
+    );
+    let expected = match case {
+        ApprovalInstructionCase::Complete => "Complete catalog approval instructions".to_string(),
+        ApprovalInstructionCase::Present => {
+            format!(
+                "{bundled_rule}\n\nCatalog permission tool\n\n{REQUEST_TOOL_BODY}\n\nCatalog automatic review\n\n{AUTO_REVIEW_BODY}"
+            )
+        }
+        ApprovalInstructionCase::Absent => bundled_approval.clone(),
+    };
+    let first = format!("<permissions instructions>\n{expected}\n</permissions instructions>");
+    let annotation = (
+        json!("developer"),
+        json!("permissions.instructions"),
+        json!({"provenance": {"type": "harness", "hook": false}}),
+    );
+    assert_eq!(permissions_texts(&request), vec![first.clone()]);
+    assert_eq!(permissions_annotations(&request), vec![annotation.clone()]);
+
+    if matches!(case, ApprovalInstructionCase::Present) {
+        let next = mount_sse_once(
+            &server,
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+        )
+        .await;
+        core_test_support::submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                model: Some(fallback_slug.to_string()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        submit_text_turn(&test, "Continue with the fallback model.").await?;
+        let next = next.single_request();
+        let fallback =
+            format!("<permissions instructions>\n{bundled_approval}\n</permissions instructions>");
+        assert!(next.input().starts_with(&request.input()));
+        assert_eq!(permissions_texts(&next), vec![first, fallback]);
+        assert_eq!(permissions_annotations(&next), vec![annotation; 2]);
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_change_appends_new_catalog_approval_message() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -220,11 +342,8 @@ async fn catalog_non_on_request_approval_messages_are_sent_in_initial_permission
         (
             AskForApproval::Never,
             ApprovalMessages {
-                on_request: None,
-                on_request_auto_review: None,
                 never: Some("catalog never approval instructions".to_string()),
-                unless_trusted: None,
-                granular: None,
+                ..Default::default()
             },
             "catalog never approval instructions",
             "Approval policy is currently never",
@@ -232,11 +351,8 @@ async fn catalog_non_on_request_approval_messages_are_sent_in_initial_permission
         (
             AskForApproval::UnlessTrusted,
             ApprovalMessages {
-                on_request: None,
-                on_request_auto_review: None,
-                never: None,
                 unless_trusted: Some("catalog unless-trusted approval instructions".to_string()),
-                granular: None,
+                ..Default::default()
             },
             "catalog unless-trusted approval instructions",
             "`approval_policy` is `unless-trusted`",

@@ -1,0 +1,140 @@
+---
+source: core/tests/suite/scenarios_catalog_approval_instructions_tests.rs
+assertion_line: 138
+expression: "context_snapshot::format_request_history_snapshot(\"Catalog permission-request and automatic-review headings follow the selected model. The switch appends new developer instructions after the prior reply and before the next user message; an unchanged follow-up preserves the full history without repeating instructions.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: Catalog permission-request and automatic-review headings follow the selected model. The switch appends new developer instructions after the prior reply and before the next user message; an unchanged follow-up preserves the full history without repeating instructions.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "catalog-approval-headings-a"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","summary":"auto"}
+  store: false
+  stream: true
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=23179252be1abe5f):
+        - namespace/functions; hash=9962be1e4c2d492b
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/request_permissions
+          - function/view_image
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    Help with the workspace.
+02:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+    # Permission Requests
+
+    Commands may require user approval before execution. Prefer requesting sandboxed additional permissions instead of asking to run fully outside the sandbox.
+
+    ## Preferred request mode
+
+    <OMITTED 29 LINES; ~379 TOKENS; hash=d11e3f29e8628ec8>
+    # Model A permission requests
+
+    The built-in `request_permissions` tool is available in this session. Invoke it when you need to request... only the specific permissions required for the task. [hash=a29255aad0722385]
+
+    # Model A automatic review
+
+    `approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for c...he risk and send a final message to ask for approval. [hash=c592d119d24cd2d6]
+    </permissions instructions>
+03:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+04:message/user:
+    Inspect the workspace permissions.
+
+## Window 2 (after request 1)
+Settings: relative to window 1
+  model: "catalog-approval-headings-b"
+-- request 2 (turn) --
+00:additional_tools/developer (2; hash=23179252be1abe5f):
+        - namespace/functions; hash=9962be1e4c2d492b
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - function/request_permissions
+          - function/view_image
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    Help with the workspace.
+02:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+    # Permission Requests
+
+    Commands may require user approval before execution. Prefer requesting sandboxed additional permissions instead of asking to run fully outside the sandbox.
+
+    ## Preferred request mode
+
+    <OMITTED 29 LINES; ~379 TOKENS; hash=d11e3f29e8628ec8>
+    # Model A permission requests
+
+    The built-in `request_permissions` tool is available in this session. Invoke it when you need to request... only the specific permissions required for the task. [hash=a29255aad0722385]
+
+    # Model A automatic review
+
+    `approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for c...he risk and send a final message to ask for approval. [hash=c592d119d24cd2d6]
+    </permissions instructions>
+03:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+04:message/user:
+    Inspect the workspace permissions.
+05:message/assistant:
+    I can inspect the workspace with the current permissions.
+06:message/developer:
+    <model_instructions>
+    The current model is catalog-approval-headings-b.
+    </model_instructions>
+07:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+    # Permission Requests
+
+    Commands may require user approval before execution. Prefer requesting sandboxed additional permissions instead of asking to run fully outside the sandbox.
+
+    ## Preferred request mode
+
+    <OMITTED 29 LINES; ~379 TOKENS; hash=d11e3f29e8628ec8>
+    # Model B permission requests
+
+    The built-in `request_permissions` tool is available in this session. Invoke it when you need to request... only the specific permissions required for the task. [hash=a29255aad0722385]
+
+    # Model B automatic review
+
+    `approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for c...he risk and send a final message to ask for approval. [hash=c592d119d24cd2d6]
+    </permissions instructions>
+08:message/user:
+    Continue with the selected model.
+-- request 3 (turn) --
+09:message/assistant:
+    The selected model's approval instructions are now active.
+10:message/user:
+    Continue without changing permissions.

@@ -1,5 +1,10 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+exports_files(
+    ["templates/permissions/approval_policy/on_request_rule_request_permission.md"],
+    visibility = ["//codex-rs/core:__pkg__"],
+)
+
 codex_rust_crate(
     name = "prompts",
     compile_data = glob(["templates/**"]),

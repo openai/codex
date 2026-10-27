@@ -769,12 +769,22 @@ pub struct ModelTokenBudgetConfig {
     pub auto_compact_fallback_buffer_tokens: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ApprovalMessages {
     pub on_request: Option<String>,
     pub on_request_auto_review: Option<String>,
     pub never: Option<String>,
     pub unless_trusted: Option<String>,
+    /// Optional replacement heading for the request_permissions tool instructions.
+    #[serde(
+        default,
+        alias = "request_permissions_tool",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_permissions: Option<String>,
+    /// Optional introduction to the harness-owned automatic escalation review policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_review_suffix: Option<String>,
     /// Optional catalog templates for harness-owned granular approval facts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granular: Option<GranularApprovalMessages>,
@@ -1285,7 +1295,9 @@ mod tests {
                 "instructions_template": null,
                 "approvals": {
                     "on_request": "",
-                    "never": ""
+                    "never": "",
+                    "request_permissions": "",
+                    "auto_review_suffix": null
                 }
             }"#,
         )
@@ -1295,12 +1307,39 @@ mod tests {
             messages.approvals,
             Some(ApprovalMessages {
                 on_request: Some(String::new()),
+                request_permissions: Some(String::new()),
                 on_request_auto_review: None,
                 never: Some(String::new()),
                 unless_trusted: None,
                 granular: None,
+                ..Default::default()
             })
         );
+
+        for field in ["request_permissions", "request_permissions_tool"] {
+            for heading in [
+                serde_json::Value::Null,
+                serde_json::json!(""),
+                serde_json::json!("Permission requests"),
+            ] {
+                let approvals: ApprovalMessages =
+                    serde_json::from_value(serde_json::json!({ field: heading }))
+                        .expect("permission heading should deserialize with either field name");
+                let mut expected = serde_json::json!({
+                    "on_request": null,
+                    "on_request_auto_review": null,
+                    "never": null,
+                    "unless_trusted": null,
+                });
+                if !heading.is_null() {
+                    expected["request_permissions"] = heading;
+                }
+                assert_eq!(
+                    serde_json::to_value(approvals).expect("serialize approvals"),
+                    expected
+                );
+            }
+        }
 
         for (granular, expected) in [
             (serde_json::json!(null), None),
@@ -1674,6 +1713,7 @@ mod tests {
                     prompted_categories: Some("Allowed: {{ categories }}".to_string()),
                     rejected_categories: Some("Denied: {{ categories }}".to_string()),
                 }),
+                ..Default::default()
             }),
             collaboration_modes: Some(CollaborationModeMessages {
                 default: Some("default collaboration".to_string()),

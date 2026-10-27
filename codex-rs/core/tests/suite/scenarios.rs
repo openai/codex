@@ -116,6 +116,9 @@ mod incremental_tools_resume;
 #[path = "scenarios_model_instructions.rs"]
 mod model_instructions;
 
+#[path = "scenarios_catalog_approval_instructions_tests.rs"]
+mod catalog_approval_instructions;
+
 #[path = "scenarios_context_management_tools.rs"]
 mod context_management_tools;
 

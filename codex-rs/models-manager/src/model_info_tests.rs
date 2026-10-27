@@ -41,6 +41,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
             prompted_categories: Some("Allowed: {{ categories }}".to_string()),
             rejected_categories: Some("Denied: {{ categories }}".to_string()),
         }),
+        ..Default::default()
     };
     let collaboration_modes = CollaborationModeMessages {
         default: Some("default instructions".to_string()),
@@ -174,6 +175,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
                 never: None,
                 unless_trusted: None,
                 granular: None,
+                ..Default::default()
             }),
             ..Default::default()
         };

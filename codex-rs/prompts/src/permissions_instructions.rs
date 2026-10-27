@@ -10,6 +10,7 @@ use crate::model_messages::permissions::READ_ONLY_TEMPLATE;
 use crate::model_messages::permissions::ResolvedApprovalMessages;
 use crate::model_messages::permissions::ResolvedPermissionMessages;
 use crate::model_messages::permissions::WORKSPACE_WRITE_TEMPLATE;
+use approval_instructions::ApprovalInstructions;
 use codex_context_fragments::ContextualUserFragment;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -32,6 +33,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use writable_roots::writable_roots_text;
 
+mod approval_instructions;
 mod path_warnings;
 mod writable_roots;
 
@@ -332,30 +334,31 @@ fn approval_text(
         }
         ResolvedMessage::Bundled(text) => text,
     };
+    let instructions = ApprovalInstructions::new(approval_context);
     let text = match approval_policy {
         AskForApproval::Never => return base.to_string(),
         AskForApproval::UnlessTrusted => {
             if request_permissions_tool_enabled {
-                format!("{base}\n\n{REQUEST_PERMISSIONS_TOOL}")
+                format!("{base}\n\n{}", instructions.tool())
             } else {
                 base.to_string()
             }
         }
         AskForApproval::OnRequest => {
-            let rule = if exec_permission_approvals_enabled {
-                REQUEST_PERMISSION_RULE
+            let mut sections = vec![if exec_permission_approvals_enabled {
+                REQUEST_PERMISSION_RULE.to_string()
             } else {
-                base
-            };
-            let mut sections = vec![rule.to_string()];
+                base.to_string()
+            }];
             if request_permissions_tool_enabled {
-                sections.push(REQUEST_PERMISSIONS_TOOL.to_string());
+                sections.push(instructions.tool());
             }
             sections.extend(render_prefixes());
             sections.join("\n\n")
         }
         AskForApproval::Granular(granular_config) => granular_instructions(
             granular_config,
+            approval_context,
             render_prefixes(),
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
@@ -363,7 +366,7 @@ fn approval_text(
     };
 
     if approval_context.reviewer == ApprovalsReviewer::AutoReview {
-        format!("{text}\n\n{AUTO_REVIEW_SUFFIX}")
+        format!("{text}\n\n{}", instructions.auto_review())
     } else {
         text
     }
@@ -398,10 +401,12 @@ fn approved_command_prefixes_text(prefixes: &[Vec<String>], template: &str) -> O
 
 fn granular_instructions(
     granular_config: GranularApprovalConfig,
+    approval_context: ApprovalPromptContext<'_>,
     approved_command_prefixes: Option<String>,
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
+    let instructions = ApprovalInstructions::new(approval_context);
     let sandbox_approval_prompts_allowed = granular_config.allows_sandbox_approval();
     let shell_permission_requests_available =
         exec_permission_approvals_enabled && sandbox_approval_prompts_allowed;
@@ -456,7 +461,7 @@ fn granular_instructions(
     }
 
     if request_permissions_tool_prompts_allowed {
-        sections.push(REQUEST_PERMISSIONS_TOOL.to_string());
+        sections.push(instructions.tool());
     }
 
     sections.extend(approved_command_prefixes);

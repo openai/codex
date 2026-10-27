@@ -1104,6 +1104,7 @@ async fn active_model_switch_updates_core_context_from_captured_settings(
                     never: None,
                     unless_trusted: None,
                     granular: None,
+                    ..Default::default()
                 });
                 messages.token_budget =
                     (initial_model || destination_has_guidance).then(|| ModelTokenBudgetConfig {

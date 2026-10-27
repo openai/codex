@@ -138,6 +138,7 @@ async fn protected_model_settings_use_the_proposed_permissions(
         never: None,
         unless_trusted: None,
         granular: None,
+        ..Default::default()
     });
     messages.permissions = Some(PermissionMessages {
         danger_full_access: None,

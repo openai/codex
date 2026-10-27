@@ -427,6 +427,7 @@ fn catalog_approval_messages_select_reviewer_variant() {
         never: Some("never catalog approvals".to_string()),
         unless_trusted: Some("unless-trusted catalog approvals".to_string()),
         granular: None,
+        ..Default::default()
     };
 
     for (approval_policy, reviewer, expected) in [
@@ -476,6 +477,7 @@ fn empty_catalog_approval_message_suppresses_legacy_approval_section() {
         never: None,
         unless_trusted: None,
         granular: None,
+        ..Default::default()
     };
     let approved_command_prefixes = vec![vec!["git".to_string(), "pull".to_string()]];
     let writable_root = "/tmp/repo".to_string();
@@ -517,6 +519,7 @@ fn missing_catalog_key_uses_legacy_approval_text() {
                 never: None,
                 unless_trusted: None,
                 granular: None,
+                ..Default::default()
             },
         ),
         (
@@ -527,6 +530,7 @@ fn missing_catalog_key_uses_legacy_approval_text() {
                 never: None,
                 unless_trusted: None,
                 granular: None,
+                ..Default::default()
             },
         ),
     ] {
@@ -571,6 +575,7 @@ fn empty_catalog_non_on_request_approval_messages_suppress_legacy_approval_text(
         never: Some(String::new()),
         unless_trusted: Some(String::new()),
         granular: None,
+        ..Default::default()
     };
 
     for approval_policy in [AskForApproval::Never, AskForApproval::UnlessTrusted] {
@@ -640,6 +645,79 @@ const ALL_PROMPTED_CATEGORIES: &str =
 - `rules`
 - `skill_approval`
 - `mcp_elicitations`";
+
+#[test]
+fn granular_approval_headings_follow_independent_tool_and_sandbox_gates() {
+    let messages = ApprovalMessages {
+        request_permissions: Some("Catalog permission tool".into()),
+        auto_review_suffix: Some("Catalog reviewer".into()),
+        ..Default::default()
+    };
+    let context = ApprovalPromptContext {
+        messages: ResolvedApprovalMessages::new(Some(&messages)),
+        ..user_approval_context()
+    };
+    for (sandbox_allowed, tool_allowed) in
+        [(true, false), (false, true), (true, true), (false, false)]
+    {
+        let text = approval_text(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: sandbox_allowed,
+                request_permissions: tool_allowed,
+                ..ALL_APPROVALS_ENABLED
+            }),
+            context,
+            &[],
+            /*exec_permission_approvals_enabled*/ true,
+            /*request_permissions_tool_enabled*/ true,
+        );
+        assert_eq!(text.contains(REQUEST_PERMISSION_RULE), sandbox_allowed);
+        assert_eq!(text.contains("Catalog permission tool"), tool_allowed);
+        assert!(!text.contains("Catalog reviewer"));
+    }
+}
+
+#[test]
+fn catalog_heading_fallback_and_policy_selection_are_independent() {
+    let messages = ApprovalMessages {
+        request_permissions: Some("Catalog permission tool".into()),
+        auto_review_suffix: Some("{{ unknown }}".into()),
+        ..Default::default()
+    };
+    let bundled = ApprovalPromptContext::new(
+        ApprovalsReviewer::AutoReview,
+        ResolvedModelMessages::bundled(),
+    );
+    let catalog = ApprovalPromptContext {
+        messages: ResolvedApprovalMessages::new(Some(&messages)),
+        ..bundled
+    };
+    for policy in [
+        AskForApproval::Never,
+        AskForApproval::UnlessTrusted,
+        AskForApproval::OnRequest,
+    ] {
+        for tool_enabled in [false, true] {
+            let render = |context| {
+                approval_text(
+                    policy,
+                    context,
+                    &[],
+                    /*exec_permission_approvals_enabled*/ true,
+                    tool_enabled,
+                )
+            };
+            let default = render(bundled);
+            let expected = if tool_enabled && policy != AskForApproval::Never {
+                assert!(default.contains("# request_permissions Tool"));
+                default.replace("# request_permissions Tool", "Catalog permission tool")
+            } else {
+                default
+            };
+            assert_eq!(render(catalog), expected);
+        }
+    }
+}
 
 #[test]
 fn granular_policy_lists_prompted_and_rejected_categories_separately() {
@@ -740,6 +818,7 @@ fn preserves_supplied_path_spellings_and_order() {
         never: None,
         unless_trusted: None,
         granular: None,
+        ..Default::default()
     };
     let permission_messages = PermissionMessages {
         danger_full_access: None,

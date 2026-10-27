@@ -50,6 +50,7 @@ async fn catalog_permission_message_loaded_from_remote_models_is_sent(
             never: None,
             unless_trusted: None,
             granular: None,
+            ..Default::default()
         }),
         collaboration_modes: None,
         auto_review: None,

@@ -26,6 +26,7 @@ pub(crate) const DENIED_READS_TEMPLATE: &str = "## Denied filesystem reads\n{{ d
 /// Resolved approval-policy text; policy and tool selection remain with the consumer.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ResolvedApprovalMessages<'a> {
+    pub(crate) catalog: Option<&'a ApprovalMessages>,
     pub(crate) never: ResolvedMessage<'a>,
     pub(crate) on_request: ResolvedMessage<'a>,
     pub(crate) on_request_auto_review: ResolvedMessage<'a>,
@@ -35,6 +36,7 @@ pub(crate) struct ResolvedApprovalMessages<'a> {
 impl<'a> ResolvedApprovalMessages<'a> {
     pub(crate) fn new(messages: Option<&'a ApprovalMessages>) -> Self {
         Self {
+            catalog: messages,
             never: ResolvedMessage::new(
                 messages.and_then(|m| m.never.as_deref()),
                 APPROVAL_POLICY_NEVER,

@@ -18,7 +18,9 @@ codex_rust_crate(
         "//codex-rs/windows-sandbox-rs:codex-windows-managed-deny-probe",
         "//codex-rs/windows-sandbox-rs:codex-windows-sandbox-setup",
     ],
-    integration_compile_data_extra = glob(["assets/**"]),
+    integration_compile_data_extra = glob(["assets/**"]) + [
+        "//codex-rs/prompts:templates/permissions/approval_policy/on_request_rule_request_permission.md",
+    ],
     integration_test_timeout = "long",
     run_tests_with_wine_exec = True,
     rustc_env = {
