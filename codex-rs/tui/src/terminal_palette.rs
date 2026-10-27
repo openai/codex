@@ -42,7 +42,7 @@ pub fn best_color_for_level(target: (u8, u8, u8), color_level: StdoutColorLevel)
 
 pub(crate) fn effective_stdout_color_level() -> StdoutColorLevel {
     #[cfg(test)]
-    if TEST_DEFAULT_COLORS.with(|colors| colors.get().is_some()) {
+    if TEST_DEFAULT_COLORS.with(|colors| colors.get().flatten().is_some()) {
         return StdoutColorLevel::TrueColor;
     }
 
@@ -96,7 +96,7 @@ pub struct DefaultColors {
 
 #[cfg(test)]
 thread_local! {
-    static TEST_DEFAULT_COLORS: std::cell::Cell<Option<DefaultColors>> = const {
+    static TEST_DEFAULT_COLORS: std::cell::Cell<Option<Option<DefaultColors>>> = const {
         std::cell::Cell::new(None)
     };
 }
@@ -104,23 +104,24 @@ thread_local! {
 pub fn default_colors() -> Option<DefaultColors> {
     #[cfg(test)]
     if let Some(colors) = TEST_DEFAULT_COLORS.with(std::cell::Cell::get) {
-        return Some(colors);
+        return colors;
     }
 
     imp::default_colors()
 }
 
-/// Scope a truecolor terminal palette to the current test thread while rendering a real widget.
+/// Scope a terminal palette (or its absence) to the current test thread while rendering a widget.
 #[cfg(test)]
 pub(crate) fn with_test_default_colors<T>(
-    colors: crate::terminal_probe::DefaultColors,
+    colors: impl Into<Option<crate::terminal_probe::DefaultColors>>,
     render: impl FnOnce() -> T,
 ) -> T {
     TEST_DEFAULT_COLORS.with(|override_colors| {
-        let previous = override_colors.replace(Some(DefaultColors {
+        let colors = colors.into().map(|colors| DefaultColors {
             fg: colors.fg,
             bg: colors.bg,
-        }));
+        });
+        let previous = override_colors.replace(Some(colors));
         let result = render();
         override_colors.set(previous);
         result

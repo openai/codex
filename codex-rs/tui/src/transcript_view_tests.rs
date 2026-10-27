@@ -1284,3 +1284,80 @@ fn history_prefetch_counts_rows_in_preceding_entries() {
         assert!(view.near_start(&cells));
     }
 }
+
+#[test]
+fn user_prompt_has_a_background_without_a_terminal_palette() {
+    use crate::history_cell::new_user_prompt;
+    use codex_protocol::user_input::TextElement;
+    use std::path::PathBuf;
+
+    let message = "First steering message";
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(new_user_prompt(
+        message.into(),
+        vec![TextElement::new((0..5).into(), Some("First".into()))],
+        vec![PathBuf::from("screenshot.png")],
+        Vec::new(),
+    ))];
+    crate::terminal_palette::with_test_default_colors(
+        /*colors*/ None::<crate::terminal_probe::DefaultColors>,
+        || {
+            let mut view = TranscriptView::default();
+            let buffer = render(&mut view, &cells, /*width*/ 32, /*height*/ 8);
+            insta::assert_snapshot!(
+                "user_prompt_has_a_background_without_a_terminal_palette",
+                format!("{buffer:?}")
+            );
+        },
+    );
+}
+
+#[test]
+fn spoken_prompt_selection_keeps_its_fallback_contrast() {
+    use crate::history_cell::new_spoken_user_prompt;
+    use ratatui::style::Color;
+    use ratatui::style::Modifier;
+
+    crate::terminal_palette::with_test_default_colors(
+        /*colors*/ None::<crate::terminal_probe::DefaultColors>,
+        || {
+            let cells: Vec<Arc<dyn HistoryCell>> =
+                vec![Arc::new(new_spoken_user_prompt("one\nnext".into()))];
+            for detailed in [false, true] {
+                let mut view = TranscriptView {
+                    detailed,
+                    ..TranscriptView::default()
+                };
+                let before = render(&mut view, &cells, /*width*/ 20, /*height*/ 5);
+                let rendered = text(&before);
+                let first = rendered
+                    .lines()
+                    .position(|row| row.contains("› one"))
+                    .unwrap() as u16;
+                let second = rendered
+                    .lines()
+                    .position(|row| row.contains("next"))
+                    .unwrap() as u16;
+                view.begin_selection(&cells, /*column*/ 2, first, /*clicks*/ 1);
+                view.extend_selection(/*column*/ 2, second);
+                let selected = render(&mut view, &cells, /*width*/ 20, /*height*/ 5);
+                let newline = &selected[(5, first)];
+                assert_eq!(
+                    (
+                        view.selected_text(&cells).as_deref(),
+                        selected[(0, first)].fg,
+                        newline.fg,
+                        newline.bg,
+                        newline.modifier.contains(Modifier::REVERSED),
+                    ),
+                    (
+                        Some("one\n"),
+                        Color::Red,
+                        Color::Reset,
+                        Color::DarkGray,
+                        true
+                    )
+                );
+            }
+        },
+    );
+}

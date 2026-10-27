@@ -167,6 +167,19 @@ fn build_user_message_lines_with_elements(
     raw_lines
 }
 
+fn user_message_element_style(style: Style, accent: Color) -> Style {
+    let unresolved_background = match style.bg {
+        Some(Color::Indexed(index)) => index < 16,
+        Some(Color::Rgb(..) | Color::Reset) | None => false,
+        Some(_) => true,
+    };
+    if accent == Color::Reset || unresolved_background {
+        style
+    } else {
+        style.fg(accent)
+    }
+}
+
 impl UserHistoryCell {
     pub(crate) fn with_async_replies(
         mut self,
@@ -234,7 +247,7 @@ impl HistoryCell for UserHistoryCell {
             .max(/*other*/ 1);
 
         let style = history_prompt_style();
-        let element_style = style.fg(accent_color_on(style.bg));
+        let element_style = user_message_element_style(style, accent_color_on(style.bg));
 
         let wrapped_images = plain_hyperlink_lines(adaptive_wrap_lines(
             self.image_labels_not_in_message()
@@ -243,7 +256,7 @@ impl HistoryCell for UserHistoryCell {
                 .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
         ));
 
-        let wrapped_message =
+        let mut wrapped_message =
             if let UserMessagePresentation::AsyncReplies { replies, cwd } = &self.presentation {
                 super::async_replies::render(replies, cwd, usize::from(wrap_width))
             } else {
@@ -272,6 +285,13 @@ impl HistoryCell for UserHistoryCell {
                 lines.push(HyperlinkLine::new(Line::from("").style(style)));
             }
         }
+        if self.is_spoken()
+            && let Some(first) = wrapped_message.first_mut()
+        {
+            // Wrapping already applied the foreground to the text. Native history
+            // applies line styles over spans, so leave the voice marker's color intact.
+            first.line.style.fg = None;
+        }
         lines.extend(wrapped_message);
         lines.push(HyperlinkLine::new(Line::from("").style(style)));
         for source in lines.iter_mut().filter_map(|line| line.source.as_mut()) {
@@ -284,8 +304,20 @@ impl HistoryCell for UserHistoryCell {
         lines
     }
 
+    fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.transcript_hyperlink_lines(width)
+    }
+
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        self.display_hyperlink_lines(width)
+        let mut lines = self.display_hyperlink_lines(width);
+        if self.is_spoken() {
+            for line in &mut lines {
+                if let Some(source) = &line.source {
+                    line.line.style.fg = source.line_style.fg;
+                }
+            }
+        }
+        lines
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -309,7 +341,7 @@ fn wrap_user_message(
     style: Style,
     wrap_width: u16,
 ) -> Vec<HyperlinkLine> {
-    let element_style = style.fg(accent_color_on(style.bg));
+    let element_style = user_message_element_style(style, accent_color_on(style.bg));
     if message.is_empty() && text_elements.is_empty() {
         return Vec::new();
     }

@@ -817,6 +817,49 @@ mod tests {
     }
 
     #[test]
+    fn vt100_spoken_prompt_keeps_its_marker_color_without_a_terminal_palette() {
+        use crate::history_cell::HistoryCell;
+        use crate::history_cell::new_spoken_user_prompt;
+
+        crate::terminal_palette::with_test_default_colors(
+            /*colors*/ None::<crate::terminal_probe::DefaultColors>,
+            || {
+                let width = 30;
+                let lines = new_spoken_user_prompt("hello from voice".into())
+                    .display_hyperlink_lines(width);
+                let mut snapshots = Vec::new();
+                for policy in [
+                    HistoryLineWrapPolicy::PreWrap,
+                    HistoryLineWrapPolicy::Terminal,
+                ] {
+                    let mut backend = VT100Backend::new(width, /*height*/ 1);
+                    let (wrapped, _) =
+                        wrap_history_hyperlink_lines(&lines[1..2], usize::from(width), policy);
+                    write_history_line(&mut backend, &wrapped[0], usize::from(width))
+                        .expect("write spoken prompt");
+                    let screen = backend.vt100().screen();
+                    let marker = screen.cell(/*row*/ 0, /*col*/ 0).unwrap();
+                    let text = screen.cell(/*row*/ 0, /*col*/ 2).unwrap();
+                    let margin = screen.cell(/*row*/ 0, width - 1).unwrap();
+                    snapshots.push(format!(
+                        "{policy:?}: {}\nmarker: {:?}, text: {:?}, background: {:?}",
+                        screen.rows(/*start*/ 0, width).next().unwrap().trim_end(),
+                        marker.fgcolor(),
+                        text.fgcolor(),
+                        margin.bgcolor(),
+                    ));
+                }
+                insta::assert_snapshot!(snapshots.join("\n"), @"
+                PreWrap: › hello from voice
+                marker: Idx(1), text: Default, background: Idx(8)
+                Terminal: › hello from voice
+                marker: Idx(1), text: Default, background: Idx(8)
+                ");
+            },
+        );
+    }
+
+    #[test]
     fn vt100_user_message_url_wrap_preserves_gutter_and_background() {
         use crate::history_cell::HistoryCell;
         use crate::history_cell::UserHistoryCell;

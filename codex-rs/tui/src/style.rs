@@ -62,9 +62,12 @@ pub fn user_message_style() -> Style {
 }
 
 /// Submitted prompts use a lighter fill than the editable composer in either theme.
+///
+/// Some terminals do not answer the optional default-color probe. Keep submitted prompts shaded
+/// with an ANSI-safe fallback instead of dropping the surface.
 pub(crate) fn history_prompt_style() -> Style {
     let Some(background) = default_bg() else {
-        return Style::default();
+        return Style::default().bg(Color::DarkGray);
     };
     let (foreground, alpha) = if is_light(background) {
         ((0, 0, 0), 0.02)
