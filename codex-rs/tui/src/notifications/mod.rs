@@ -72,6 +72,7 @@ mod tests {
 
     fn test_terminal(name: TerminalName) -> TerminalInfo {
         TerminalInfo {
+            backend: None,
             name,
             term_program: None,
             version: None,

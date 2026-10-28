@@ -1,6 +1,7 @@
 use std::io;
 
 use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalBackend;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use crossterm::Command;
@@ -146,6 +147,7 @@ fn cache_changes_only_after_a_successful_write() {
 #[test]
 fn selects_protocols_for_terminal_environment() {
     let direct_iterm = TerminalInfo {
+        backend: None,
         name: TerminalName::Iterm2,
         term_program: Some("iTerm.app".to_string()),
         version: Some("3.7.0".to_string()),
@@ -206,4 +208,50 @@ fn selects_protocols_for_terminal_environment() {
         ),
         generic_protocol
     );
+    assert_eq!(
+        terminal_program_status_support(
+            &TerminalInfo {
+                backend: Some(TerminalBackend::Vte {
+                    version: Some(5204)
+                }),
+                ..direct_iterm
+            },
+            /*stdout_is_terminal*/ true,
+            /*screen_active*/ false,
+        ),
+        no_protocols
+    );
+}
+
+#[test]
+fn selects_protocols_for_vte_backends() {
+    for name in [TerminalName::GnomeTerminal, TerminalName::Vte] {
+        for (version, osc_7501) in [
+            (Some(5204), false),
+            (Some(5300), false),
+            (Some(5399), false),
+            (Some(5400), true),
+            (Some(7600), true),
+            (None, true),
+        ] {
+            let terminal = TerminalInfo {
+                name,
+                term_program: None,
+                version: None,
+                term: None,
+                multiplexer: None,
+                backend: Some(TerminalBackend::Vte { version }),
+            };
+            assert_eq!(
+                terminal_program_status_support(
+                    &terminal, /*stdout_is_terminal*/ true, /*screen_active*/ false,
+                ),
+                TerminalProgramStatusSupport {
+                    osc_7501,
+                    osc_21337: false,
+                },
+                "terminal {name:?}, VTE backend version={version:?}"
+            );
+        }
+    }
 }

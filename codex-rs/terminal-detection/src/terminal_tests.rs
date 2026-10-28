@@ -33,6 +33,7 @@ fn terminal_info(
     multiplexer: Option<Multiplexer>,
 ) -> TerminalInfo {
     TerminalInfo {
+        backend: None,
         name,
         term_program: term_program.map(ToString::to_string),
         version: version.map(ToString::to_string),
@@ -299,6 +300,7 @@ fn detects_zellij_multiplexer() {
     assert_eq!(
         terminal,
         TerminalInfo {
+            backend: None,
             name: TerminalName::Unknown,
             term_program: None,
             version: None,
@@ -665,13 +667,18 @@ fn detects_vte() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(
-            TerminalName::Vte,
-            /*term_program*/ None,
-            Some("7000"),
-            /*term*/ None,
-            /*multiplexer*/ None
-        ),
+        TerminalInfo {
+            backend: Some(TerminalBackend::Vte {
+                version: Some(7000)
+            }),
+            ..terminal_info(
+                TerminalName::Vte,
+                /*term_program*/ None,
+                Some("7000"),
+                /*term*/ None,
+                /*multiplexer*/ None
+            )
+        },
         "vte_version_info"
     );
     assert_eq!(
@@ -686,13 +693,18 @@ fn detects_vte() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(
-            TerminalName::Vte,
-            Some("VTE"),
-            Some("7000"),
-            /*term*/ None,
-            /*multiplexer*/ None
-        ),
+        TerminalInfo {
+            backend: Some(TerminalBackend::Vte {
+                version: Some(7000)
+            }),
+            ..terminal_info(
+                TerminalName::Vte,
+                Some("VTE"),
+                Some("7000"),
+                /*term*/ None,
+                /*multiplexer*/ None
+            )
+        },
         "vte_term_program_info"
     );
     assert_eq!(
@@ -705,13 +717,16 @@ fn detects_vte() {
     let terminal = detect_terminal_info_from_env(&env);
     assert_eq!(
         terminal,
-        terminal_info(
-            TerminalName::Vte,
-            /*term_program*/ None,
-            /*version*/ None,
-            /*term*/ None,
-            /*multiplexer*/ None
-        ),
+        TerminalInfo {
+            backend: Some(TerminalBackend::Vte { version: None }),
+            ..terminal_info(
+                TerminalName::Vte,
+                /*term_program*/ None,
+                /*version*/ None,
+                /*term*/ None,
+                /*multiplexer*/ None
+            )
+        },
         "vte_empty_info"
     );
     assert_eq!(terminal.user_agent_token(), "VTE", "vte_empty_user_agent");
@@ -859,6 +874,49 @@ fn tmux_preserves_safe_underlying_terminal_identifiers() {
                 }),
             ),
             "{variable}"
+        );
+    }
+}
+
+#[test]
+fn captures_vte_backend_when_gnome_identity_takes_precedence() {
+    let env = FakeEnvironment::new()
+        .with_var("GNOME_TERMINAL_SCREEN", "1")
+        .with_var("VTE_VERSION", "5204")
+        .with_var("TMUX", "session");
+    assert_eq!(
+        detect_terminal_info_from_env(&env),
+        TerminalInfo {
+            name: TerminalName::GnomeTerminal,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: Some(Multiplexer::Tmux { version: None }),
+            backend: Some(TerminalBackend::Vte {
+                version: Some(5204)
+            }),
+        }
+    );
+}
+
+#[test]
+fn raw_vte_version_takes_precedence_even_when_malformed() {
+    for (raw_version, version) in [("5204", Some(5204)), ("invalid", None), ("", None)] {
+        let env = FakeEnvironment::new()
+            .with_var("TERM_PROGRAM", "VTE")
+            .with_var("TERM_PROGRAM_VERSION", "7600")
+            .with_var("VTE_VERSION", raw_version);
+        assert_eq!(
+            detect_terminal_info_from_env(&env),
+            TerminalInfo {
+                name: TerminalName::Vte,
+                term_program: Some("VTE".to_string()),
+                version: Some("7600".to_string()),
+                term: None,
+                multiplexer: None,
+                backend: Some(TerminalBackend::Vte { version }),
+            },
+            "VTE_VERSION={raw_version:?}"
         );
     }
 }

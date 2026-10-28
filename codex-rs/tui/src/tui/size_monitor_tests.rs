@@ -245,6 +245,7 @@ async fn drop_does_not_wait_for_a_blocked_query_or_start_another() {
 fn monitor_requires_tmux_detection() {
     let (draw_tx, _) = broadcast::channel(/*capacity*/ 1);
     let mut info = TerminalInfo {
+        backend: None,
         name: TerminalName::Ghostty,
         term_program: None,
         version: None,

@@ -19,6 +19,18 @@ pub struct TerminalInfo {
     pub term: Option<String>,
     /// Multiplexer metadata when a terminal multiplexer is active.
     pub multiplexer: Option<Multiplexer>,
+    /// Backend metadata observed independently of the terminal application identity.
+    pub backend: Option<TerminalBackend>,
+}
+
+/// Known terminal rendering backends derived from environment metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalBackend {
+    /// VTE, used by GNOME Terminal and other terminal applications.
+    Vte {
+        /// Encoded as major * 10_000 + minor * 100 + micro; unknown if malformed.
+        version: Option<u32>,
+    },
 }
 
 /// Known terminal name categories derived from environment variables.
@@ -86,6 +98,7 @@ impl TerminalInfo {
             version,
             term,
             multiplexer,
+            backend: None,
         }
     }
 
@@ -252,6 +265,24 @@ pub fn terminal_info() -> TerminalInfo {
 ///   `TERM_SESSION_ID` is not terminal-specific and cannot identify Apple Terminal.
 /// - Finally, `TERM` is used as the capability fallback.
 fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
+    let mut terminal = detect_terminal_identity_from_env(env);
+    // Identity probes can return before VTE is considered. Keep its backend
+    // metadata even when GNOME or another TERM_PROGRAM identifies the application.
+    let vte_version = env.var("VTE_VERSION");
+    if vte_version.is_some() || terminal.name == TerminalName::Vte {
+        terminal.backend = Some(TerminalBackend::Vte {
+            // Choose the raw value before parsing so malformed values retain
+            // precedence over the terminal-version fallback.
+            version: vte_version
+                .as_deref()
+                .or(terminal.version.as_deref())
+                .and_then(|version| version.parse().ok()),
+        });
+    }
+    terminal
+}
+
+fn detect_terminal_identity_from_env(env: &dyn Environment) -> TerminalInfo {
     let multiplexer = detect_multiplexer(env);
 
     if let Some(term_program) = env.var_non_empty("TERM_PROGRAM")

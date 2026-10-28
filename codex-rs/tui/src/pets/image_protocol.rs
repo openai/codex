@@ -637,6 +637,7 @@ mod tests {
         term: Option<&str>,
     ) -> TerminalInfo {
         TerminalInfo {
+            backend: None,
             name,
             term_program: term_program.map(str::to_string),
             version: version.map(str::to_string),

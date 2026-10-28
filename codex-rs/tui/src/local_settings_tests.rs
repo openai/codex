@@ -280,6 +280,7 @@ async fn copy_on_select_respects_terminal_defaults_and_config_overrides() -> any
             ),
         ] {
             let terminal = TerminalInfo {
+                backend: None,
                 name,
                 multiplexer,
                 term_program: None,

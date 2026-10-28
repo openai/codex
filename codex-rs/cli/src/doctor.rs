@@ -4348,6 +4348,7 @@ mod tests {
     fn terminal_inputs() -> TerminalCheckInputs {
         TerminalCheckInputs {
             info: TerminalInfo {
+                backend: None,
                 name: TerminalName::Unknown,
                 term_program: None,
                 version: None,
