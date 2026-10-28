@@ -379,26 +379,40 @@ async fn steer_joins_existing_turn_without_extending_sampling(
     assert!(dispatch_to_ready_ms.is_finite() && dispatch_to_ready_ms >= 0.0);
     assert!(accepted.end_time <= ready.timestamp);
     assert!(ready.timestamp <= blocking.end_time);
-    let mut profiles: Vec<_> = spans
-        .iter()
-        .flat_map(|span| span.events.events.iter())
-        .filter(|event| {
-            event.name == "codex.turn_profile"
-                && attribute(&event.attributes, "turn_id").as_deref() == Some(call.turn_id.as_str())
-        })
-        .map(|event| {
-            (
-                attribute(&event.attributes, "conversation.id"),
-                attribute(&event.attributes, "sampling_request_count"),
-                attribute(&event.attributes, "sampling_retry_count"),
-            )
-        })
-        .collect();
-    profiles.sort();
     let expected_counts = match finish {
         Finish::Reply => vec!["2"],
         Finish::Interrupt => vec!["1", "1"],
     };
+    // Profiles are recorded during task finalization, after run_turn ends, and
+    // exported when their enclosing spans close. ShutdownComplete does not join
+    // detached task cleanup, so wait for every completion before reading counts.
+    let mut profiles = tokio::time::timeout(Duration::from_secs(/* secs */ 10), async {
+        loop {
+            let profiles: Vec<_> = exported
+                .get_finished_spans()?
+                .iter()
+                .flat_map(|span| span.events.events.iter())
+                .filter(|event| {
+                    event.name == "codex.turn_profile"
+                        && attribute(&event.attributes, "turn_id").as_deref()
+                            == Some(call.turn_id.as_str())
+                })
+                .map(|event| {
+                    (
+                        attribute(&event.attributes, "conversation.id"),
+                        attribute(&event.attributes, "sampling_request_count"),
+                        attribute(&event.attributes, "sampling_retry_count"),
+                    )
+                })
+                .collect();
+            if profiles.len() >= expected_counts.len() {
+                break anyhow::Ok(profiles);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    profiles.sort();
     assert_eq!(
         profiles,
         expected_counts
