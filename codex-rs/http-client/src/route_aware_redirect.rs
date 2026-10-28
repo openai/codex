@@ -7,9 +7,10 @@
 //! for the new URL without giving [`crate::RouteAwareClientPool`] an opportunity to resolve the
 //! redirect destination.
 //!
-//! The pool therefore disables reqwest redirects for `RespectSystemProxy`, observes each redirect
-//! response, and uses these helpers to construct the next request before resolving its route. The
-//! helpers preserve the relevant reqwest method/body behavior while applying stricter
+//! The pool disables reqwest redirects when route or sensitive-header policy requires checking
+//! each hop. It observes each redirect response and uses these helpers to construct the next
+//! request before resolving its route. The helpers preserve the relevant reqwest
+//! method/body behavior while applying stricter
 //! origin-sensitive credential and `Referer` rules at the boundary between requests.
 
 use std::time::Duration;
@@ -99,12 +100,28 @@ pub(super) fn remove_sensitive_headers(
     headers: &mut HeaderMap,
     previous: &reqwest::Url,
     next: &reqwest::Url,
+    protect_sensitive_headers: bool,
 ) {
     if !same_origin(previous, next) {
         for header in [AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, WWW_AUTHENTICATE] {
             headers.remove(header);
         }
         headers.remove("cookie2");
+        if protect_sensitive_headers {
+            let sensitive: Vec<_> = headers
+                .keys()
+                .filter(|name| {
+                    headers
+                        .get_all(*name)
+                        .iter()
+                        .any(http::HeaderValue::is_sensitive)
+                })
+                .cloned()
+                .collect();
+            for name in sensitive {
+                headers.remove(name);
+            }
+        }
     }
 }
 

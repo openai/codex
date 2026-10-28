@@ -434,7 +434,8 @@ other non-default provider fields are not supported"
         }
     }
 
-    fn build_header_map(&self) -> CodexResult<HeaderMap> {
+    /// Resolve configured request headers before choosing credentials or a runtime.
+    pub fn build_header_map(&self) -> CodexResult<HeaderMap> {
         let capacity = self.http_headers.as_ref().map_or(0, HashMap::len)
             + self.env_http_headers.as_ref().map_or(0, HashMap::len);
         let mut headers = HeaderMap::with_capacity(capacity);

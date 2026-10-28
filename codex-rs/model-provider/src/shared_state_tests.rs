@@ -132,7 +132,7 @@ async fn gateway_credentials_accompany_primary_auth_in_models_and_responses() {
             HeaderName::from_static(name),
             HeaderValue::from_static(value),
         );
-        // WebSocket handshakes use the synchronous header interface.
+        // Legacy consumers and asynchronous handshakes preserve the same gateway credential.
         assert_eq!(auth.to_auth_headers().unwrap(), expected);
         assert_eq!(
             auth.apply_auth_headers(HeaderMap::new()).await.unwrap(),
@@ -174,6 +174,123 @@ async fn gateway_credentials_accompany_primary_auth_in_models_and_responses() {
                     .get("cookie")
                     .is_some_and(|value| value == "gateway_session=gateway-token")
         );
+    }
+}
+
+#[tokio::test]
+async fn gateway_preserves_runtime_auth_and_rejects_header_collisions() {
+    use codex_features::RuntimeAuthMode;
+    use codex_runtime_agent_instance::AgentHostAuthorization;
+    use codex_runtime_agent_instance::RuntimeAuthManager;
+    use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
+    use codex_runtime_agent_instance::RuntimeRole;
+
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        let server = MockServer::start().await;
+        let home = tempfile::tempdir().unwrap();
+        Mock::given(method("POST"))
+            .and(path("/register"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "runtime_agent_instance_id": "runtime-a",
+                "agent_host_id": "host-a",
+                "actor": {"kind":"platform", "user_id":"user-a", "organization_id":"org-a", "project_id":null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let primary = AuthManager::from_auth_for_testing_with_home(
+            CodexAuth::from_api_key("primary-token"),
+            home.path().to_path_buf(),
+        );
+        let info = ModelProviderInfo {
+            gateway_oauth: Some(GatewayOAuthConfig {
+                authorization_url: format!("{}/authorize", server.uri()),
+                token_url: format!("{}/token", server.uri()),
+                client_id: "client".into(),
+                resource: None,
+                scopes: vec![],
+                redirect_port: None,
+                delivery: GatewayOAuthDelivery::Header {
+                    name: "x-gateway-auth".into(),
+                    scheme: "Bearer".into(),
+                },
+            }),
+            ..ModelProviderInfo::create_openai_provider(Some(server.uri()))
+        };
+        let _gateway = seed_gateway_auth(
+            &info,
+            &primary,
+            json!({"access_token": "gateway-token", "expires_at": i64::MAX}),
+        );
+        let runtime = Arc::new(RuntimeAuthManager::new(
+            Arc::clone(&primary),
+            AgentHostAuthorization::InstallationId {
+                installation_id: "00000000-0000-0000-0000-000000000000".parse().unwrap(),
+            },
+            RuntimeRegistrationMetadata {
+                harness: None,
+                harness_version: None,
+                role: RuntimeRole::Orchestrator,
+            },
+            format!("{}/register", server.uri()).parse().unwrap(),
+        ));
+        let provider = crate::test_support::runtime_model_provider(info, primary, (runtime, mode));
+        let auth = provider.api_auth().await.unwrap();
+        let stale_headers = HeaderMap::from_iter([
+            (
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer stale"),
+            ),
+            (
+                HeaderName::from_static("x-openai-agent-assertion"),
+                HeaderValue::from_static("stale"),
+            ),
+            (
+                HeaderName::from_static("chatgpt-account-id"),
+                HeaderValue::from_static("stale"),
+            ),
+            (
+                HeaderName::from_static("x-caller"),
+                HeaderValue::from_static("retained"),
+            ),
+        ]);
+        let headers = auth
+            .apply_auth_headers(stale_headers.clone())
+            .await
+            .unwrap();
+        assert_eq!(headers["x-gateway-auth"], "Bearer gateway-token");
+        assert_eq!(headers["x-caller"], "retained");
+        assert!(!headers.contains_key("chatgpt-account-id"));
+        let proof_header = match mode {
+            RuntimeAuthMode::DualHeader => {
+                assert_eq!(headers["authorization"], "Bearer primary-token");
+                "x-openai-agent-assertion"
+            }
+            RuntimeAuthMode::AssertionOnly => {
+                assert!(!headers.contains_key("x-openai-agent-assertion"));
+                assert!(
+                    headers["authorization"]
+                        .to_str()
+                        .unwrap()
+                        .starts_with("AgentAssertion 1.")
+                );
+                "authorization"
+            }
+        };
+        let mut request = codex_http_client::Request::new(http::Method::POST, server.uri());
+        request.headers = stale_headers.clone();
+        let signed = auth.apply_auth(request).await.unwrap();
+        assert_eq!(signed.headers["x-gateway-auth"], "Bearer gateway-token");
+        assert_ne!(headers[proof_header], signed.headers[proof_header]);
+
+        let mut collision = stale_headers;
+        collision.insert("x-gateway-auth", HeaderValue::from_static("caller-token"));
+        assert!(auth.apply_auth_headers(collision.clone()).await.is_err());
+        let mut request = codex_http_client::Request::new(http::Method::POST, server.uri());
+        request.headers = collision;
+        assert!(auth.apply_auth(request).await.is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        server.verify().await;
     }
 }
 

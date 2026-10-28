@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::auth::ResolvedProviderAuth;
 use codex_api::AuthError;
+use codex_api::AuthHeaderTelemetry;
 use codex_api::AuthHeadersFuture;
 use codex_api::AuthProvider;
 use codex_api::AuthProviderFuture;
@@ -57,16 +58,6 @@ pub(crate) async fn compose_auth(
         ))
     })?;
     let (name, value) = gateway_header(config, &token)?;
-    if resolved
-        .auth
-        .to_auth_headers()
-        .map_err(|error| codex_api::map_api_error(error.into()))?
-        .contains_key(&name)
-    {
-        return Err(CodexErr::InvalidRequest(format!(
-            "The model provider already sets the {name} header. Choose a different header or cookie in gateway_oauth.delivery for the gateway token."
-        )));
-    }
     resolved.auth = Arc::new(CombinedAuth {
         primary: resolved.auth,
         name,
@@ -125,17 +116,13 @@ impl CombinedAuth {
 }
 
 impl AuthProvider for CombinedAuth {
+    fn auth_header_telemetry(&self) -> std::result::Result<AuthHeaderTelemetry, AuthError> {
+        self.primary.auth_header_telemetry()
+    }
+
     fn add_auth_headers(&self, headers: &mut HeaderMap) -> std::result::Result<(), AuthError> {
         self.primary.add_auth_headers(headers)?;
         self.insert_gateway_header(headers)
-    }
-
-    fn apply_auth(&self, request: codex_http_client::Request) -> AuthProviderFuture<'_> {
-        Box::pin(async move {
-            let mut request = self.primary.apply_auth(request).await?;
-            self.insert_gateway_header(&mut request.headers)?;
-            Ok(request)
-        })
     }
 
     fn apply_auth_headers(&self, headers: HeaderMap) -> AuthHeadersFuture<'_> {
@@ -143,6 +130,14 @@ impl AuthProvider for CombinedAuth {
             let mut headers = self.primary.apply_auth_headers(headers).await?;
             self.insert_gateway_header(&mut headers)?;
             Ok(headers)
+        })
+    }
+
+    fn apply_auth(&self, request: codex_http_client::Request) -> AuthProviderFuture<'_> {
+        Box::pin(async move {
+            let mut request = self.primary.apply_auth(request).await?;
+            self.insert_gateway_header(&mut request.headers)?;
+            Ok(request)
         })
     }
 }

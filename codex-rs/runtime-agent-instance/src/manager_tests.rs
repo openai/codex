@@ -82,7 +82,9 @@ fn registered(request: &Request) -> ResponseTemplate {
     let actor = if body["actor_auth"]["type"] == "oauth" {
         json!({"kind": "chatgpt", "user_id": "user-a", "account_id": "workspace-a"})
     } else {
-        json!({"kind": "platform", "user_id": "user-a", "organization_id": "org-a", "project_id": "project-a"})
+        json!({"kind": "platform", "user_id": "user-a",
+            "organization_id": body["actor_auth"]["organization_id"].as_str().unwrap_or("org-a"),
+            "project_id": body["actor_auth"]["project_id"].as_str().unwrap_or("project-a")})
     };
     ResponseTemplate::new(200).set_body_json(json!({
         "runtime_agent_instance_id": request.headers["idempotency-key"].to_str().unwrap(),
@@ -159,6 +161,85 @@ async fn concurrent_requests_share_registration_and_replacement_preserves_in_fli
         requests[1].body_json::<Value>().unwrap()["public_key"],
         requests[2].body_json::<Value>().unwrap()["public_key"]
     );
+}
+
+#[tokio::test]
+async fn projects_share_one_runtime_and_organization_changes_replace_it() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(registered)
+        .expect(3)
+        .mount(&server)
+        .await;
+    let initial = CodexAuth::from_api_key("key-a");
+    let (manager, _, _) = setup(&server, initial.clone(), initial).await;
+    let mut selection = PlatformResourceSelection {
+        organization_id: Some("org-a".into()),
+        project_id: Some("project-a".into()),
+    };
+    let first = manager.auth_with_selection(&selection).await.unwrap();
+    for project in [Some("project-b"), None, Some("project-a")] {
+        selection.project_id = project.map(str::to_owned);
+        let next = manager.auth_with_selection(&selection).await.unwrap();
+        assert!(Arc::ptr_eq(first.runtime(), next.runtime()));
+    }
+    selection.organization_id = Some("org-b".into());
+    let other_org = manager.auth_with_selection(&selection).await.unwrap();
+    assert_ne!(first.runtime().id(), other_org.runtime().id());
+    selection.organization_id = Some("org-a".into());
+    let replacement = manager.auth_with_selection(&selection).await.unwrap();
+    assert_ne!(first.runtime().id(), replacement.runtime().id());
+    assert_ne!(other_org.runtime().id(), replacement.runtime().id());
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn failed_registration_does_not_poison_another_project_or_reuse_its_idempotency_key() {
+    for status in [403, 503] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                json!({"actor_auth": {"project_id": "denied"}}),
+            ))
+            .respond_with(ResponseTemplate::new(status))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(registered)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let initial = CodexAuth::from_api_key("key-a");
+        let (manager, _, _) = setup(&server, initial.clone(), initial).await;
+        let mut selection = PlatformResourceSelection {
+            organization_id: Some("org-a".into()),
+            project_id: Some("denied".into()),
+        };
+        for _ in 0..2 {
+            assert!(manager.auth_with_selection(&selection).await.is_err());
+        }
+        let failed = server.received_requests().await.unwrap();
+        assert_eq!(failed.len(), if status == 403 { 1 } else { 2 });
+        if status == 503 {
+            assert_eq!(failed[0].body, failed[1].body);
+            assert_eq!(
+                failed[0].headers["idempotency-key"],
+                failed[1].headers["idempotency-key"]
+            );
+        }
+
+        selection.project_id = Some("allowed".into());
+        let ready = manager.auth_with_selection(&selection).await.unwrap();
+        assert_ne!(
+            ready.runtime().id(),
+            failed[0].headers["idempotency-key"].to_str().unwrap()
+        );
+        selection.project_id = Some("denied".into());
+        let reused = manager.auth_with_selection(&selection).await.unwrap();
+        assert!(Arc::ptr_eq(ready.runtime(), reused.runtime()));
+        server.verify().await;
+    }
 }
 
 #[tokio::test]

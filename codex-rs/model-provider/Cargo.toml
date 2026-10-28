@@ -20,7 +20,9 @@ codex-agent-identity = { workspace = true }
 codex-aws-auth = { workspace = true }
 codex-http-client = { workspace = true }
 codex-feedback = { workspace = true }
+codex-features = { workspace = true }
 codex-login = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
@@ -40,7 +42,10 @@ url = { workspace = true }
 base64 = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-redacted-string = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
 pretty_assertions = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 wiremock = { workspace = true }

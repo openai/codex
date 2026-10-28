@@ -214,6 +214,30 @@ impl NetworkPolicy {
         self
     }
 
+    /// Bind a caller's restrictions to a captured credential policy without widening either.
+    /// Different managed controllers or account bindings cannot authorize the same request.
+    pub fn with_account_binding(mut self, credentials: &Self) -> Option<Self> {
+        if let Some(state) = &credentials.state {
+            if let Some(caller) = &self.state {
+                if !Arc::ptr_eq(caller, state) {
+                    return None;
+                }
+            } else {
+                self.state = Some(Arc::clone(state));
+            }
+        }
+        if let (Some(caller), Some(credentials)) = (self.account, credentials.account)
+            && caller != credentials
+        {
+            return None;
+        }
+        self.account = self.account.or(credentials.account);
+        if let Some(endpoints) = &credentials.endpoints {
+            self = self.restrict_to_endpoints(endpoints.as_ref().clone());
+        }
+        Some(self)
+    }
+
     /// Whether this transport participates in the application policy lifecycle.
     pub fn is_managed(&self) -> bool {
         self.state.is_some()

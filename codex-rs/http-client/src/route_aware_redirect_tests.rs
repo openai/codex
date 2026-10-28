@@ -219,7 +219,12 @@ fn redirect_credentials_are_retained_only_for_the_same_origin() {
             (COOKIE, HeaderValue::from_static("session=secret")),
         ]);
 
-        remove_sensitive_headers(&mut headers, &previous, &next);
+        remove_sensitive_headers(
+            &mut headers,
+            &previous,
+            &next,
+            /*protect_sensitive_headers*/ false,
+        );
 
         assert_eq!(
             (

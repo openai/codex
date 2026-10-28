@@ -22,6 +22,7 @@ fn registration_serializes_the_supported_actor_authorizations() {
         ),
         (
             AuthenticatedActorAuthorization::PlatformApiKey {
+                selection: Default::default(),
                 credential: "secret".into(),
             },
             json!({"type": "platform_api_key", "credential": "secret"}),

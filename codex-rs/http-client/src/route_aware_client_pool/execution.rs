@@ -211,7 +211,12 @@ impl RouteAwareClientPool {
             if redirects >= MAX_REDIRECTS {
                 return Err(RouteAwareRequestError::TooManyRedirects);
             }
-            remove_sensitive_headers(next_request.headers_mut(), &current_url, &next_request_url);
+            remove_sensitive_headers(
+                next_request.headers_mut(),
+                &current_url,
+                &next_request_url,
+                self.http_client_factory.protects_sensitive_headers(),
+            );
             insert_referer(next_request.headers_mut(), &current_url, &next_request_url);
             request = next_request;
             redirects += 1;

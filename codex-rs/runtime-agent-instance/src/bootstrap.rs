@@ -8,9 +8,26 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthenticatedActorAuthorization {
-    Oauth { credential: RedactedString },
-    PersonalAccessToken { credential: RedactedString },
-    PlatformApiKey { credential: RedactedString },
+    Oauth {
+        credential: RedactedString,
+    },
+    PersonalAccessToken {
+        credential: RedactedString,
+    },
+    PlatformApiKey {
+        credential: RedactedString,
+        #[serde(flatten)]
+        selection: PlatformResourceSelection,
+    },
+}
+
+/// API resource selectors to authenticate, not claims about the resulting actor.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize)]
+pub struct PlatformResourceSelection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

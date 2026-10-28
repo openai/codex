@@ -63,6 +63,28 @@ impl RuntimeAuth {
         self.change_state
     }
 
+    /// Preserve the caller's transport settings and restrictions while binding requests to
+    /// this credential's account. Independent managed policies must not replace each other.
+    pub fn bind_http_client_factory(
+        &self,
+        factory: HttpClientFactory,
+    ) -> Result<HttpClientFactory, AuthError> {
+        let account_policy = self.http_client_factory().network_policy();
+        let policy = factory
+            .network_policy()
+            .clone()
+            .with_account_binding(account_policy)
+            .ok_or_else(|| {
+                AuthError::Build(
+                    "runtime credentials and transport must share the application network policy"
+                        .to_string(),
+                )
+            })?;
+        Ok(factory
+            .with_network_policy(policy)
+            .with_sensitive_header_protection())
+    }
+
     /// Use this selection for a request and its retries; select auth again for the next request.
     pub fn into_auth_provider(self, mode: RuntimeAuthMode) -> codex_api::SharedAuthProvider {
         Arc::new(RuntimeRequestAuth { auth: self, mode })
@@ -146,6 +168,7 @@ impl From<RuntimeAuthError> for AuthError {
             }
             RuntimeAuthError::Unavailable
             | RuntimeAuthError::Unsupported
+            | RuntimeAuthError::UnsupportedResourceSelection
             | RuntimeAuthError::Changed
             | RuntimeAuthError::RefreshFailed
             | RuntimeAuthError::KeyGeneration

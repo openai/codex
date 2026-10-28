@@ -8,6 +8,7 @@ mod gcp;
 mod models_endpoint;
 mod models_identity;
 mod provider;
+mod runtime_auth;
 mod shared_state;
 pub mod test_support;
 mod workspace_routing;
@@ -20,6 +21,7 @@ pub use amazon_bedrock::is_amazon_bedrock_gov_cloud_region;
 pub use amazon_bedrock::is_supported_amazon_bedrock_region;
 pub use amazon_bedrock::resolve_amazon_bedrock_region;
 pub use auth::AgentIdentitySessionFallback;
+pub use auth::ProviderAuthContext;
 pub use auth::ProviderAuthScope;
 pub use auth::ResolvedProviderAuth;
 pub use auth::auth_provider_from_auth;
@@ -47,6 +49,11 @@ pub use provider::SharedModelProvider;
 pub use provider::create_model_provider;
 pub use provider::provider_uses_first_party_auth_path;
 pub use provider::resolve_api_provider;
+
+pub use runtime_auth::select_runtime_auth;
+pub use runtime_auth::validate_runtime_destination;
+pub use runtime_auth::validate_runtime_provider;
+pub use runtime_auth::validate_runtime_selectors;
 
 #[cfg(test)]
 #[path = "workspace_routing_tests.rs"]

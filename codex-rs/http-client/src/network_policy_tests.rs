@@ -8,6 +8,81 @@ use reqwest::Url;
 use super::*;
 
 #[test]
+fn credential_binding_keeps_both_endpoint_restrictions_and_account_revocation() {
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    let a = Url::parse("https://example.com/a").unwrap();
+    let b = Url::parse("https://example.com/b").unwrap();
+    let c = Url::parse("https://example.com/c").unwrap();
+    let credentials = policy
+        .clone()
+        .for_current_account()
+        .restrict_to_endpoints(BTreeSet::from([b.clone(), c.clone()]));
+    let bound = policy
+        .clone()
+        .restrict_to_endpoints(BTreeSet::from([a.clone(), b.clone()]))
+        .with_account_binding(&credentials)
+        .unwrap();
+    assert!(matches!(
+        bound.acquire(&a),
+        Err(NetworkPolicyDenied::Destination)
+    ));
+    assert!(matches!(
+        bound.acquire(&c),
+        Err(NetworkPolicyDenied::Destination)
+    ));
+    let permit = bound.acquire(&b).unwrap();
+
+    policy.invalidate();
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    assert!(matches!(
+        bound.acquire(&b),
+        Err(NetworkPolicyDenied::Revoked)
+    ));
+    assert_eq!(permit.check(), Err(NetworkPolicyDenied::Revoked));
+}
+
+#[test]
+fn credential_binding_cannot_replace_a_callers_policy_or_revive_its_account() {
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    let allowed = Url::parse("https://example.com/allowed").unwrap();
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    let caller = policy
+        .clone()
+        .for_current_account()
+        .restrict_to_endpoints(BTreeSet::from([allowed.clone()]));
+    let bound = caller
+        .clone()
+        .with_account_binding(&NetworkPolicy::unmanaged())
+        .unwrap();
+    assert!(bound.acquire(&allowed).is_ok());
+    assert!(matches!(
+        bound.acquire(&Url::parse("https://example.com/other").unwrap()),
+        Err(NetworkPolicyDenied::Destination)
+    ));
+    assert!(
+        caller
+            .clone()
+            .with_account_binding(&NetworkPolicyController::default().policy())
+            .is_none()
+    );
+
+    policy.invalidate();
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    assert!(
+        caller
+            .with_account_binding(&policy.for_current_account())
+            .is_none()
+    );
+    assert!(matches!(
+        bound.acquire(&allowed),
+        Err(NetworkPolicyDenied::Revoked)
+    ));
+}
+
+#[test]
 fn restricted_policy_matches_exact_secure_hosts() {
     let controller = NetworkPolicyController::default();
     let policy = controller.policy();

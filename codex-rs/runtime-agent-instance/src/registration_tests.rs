@@ -27,6 +27,7 @@ use wiremock::matchers::path;
 fn pending() -> RuntimeRegistration {
     RuntimeRegistration::new(
         AuthenticatedActorAuthorization::PlatformApiKey {
+            selection: Default::default(),
             credential: "actor-secret".into(),
         },
         AgentHostAuthorization::InstallationId {

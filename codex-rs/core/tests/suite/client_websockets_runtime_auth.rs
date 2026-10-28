@@ -192,6 +192,10 @@ async fn http_requests_keep_matching_runtime_and_credentials_across_retries_and_
     let mut provider =
         ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
     provider.supports_websockets = false;
+    provider.http_headers = Some(std::collections::HashMap::from([
+        ("openai-organization".into(), "org-a".into()),
+        ("openai-project".into(), "project-a".into()),
+    ]));
     provider.request_max_retries = Some(1);
     if gateway {
         provider.gateway_oauth = Some(gateway_config(
@@ -213,6 +217,11 @@ async fn http_requests_keep_matching_runtime_and_credentials_across_retries_and_
         .filter(|r| r.url.path() == "/register")
         .collect();
     assert_eq!(bootstraps.len(), 2);
+    for registration in &bootstraps {
+        let body: Value = registration.body_json().unwrap();
+        assert_eq!(body["actor_auth"]["organization_id"], "org-a");
+        assert_eq!(body["actor_auth"]["project_id"], "project-a");
+    }
     assert!(
         bootstraps
             .iter()
@@ -227,6 +236,8 @@ async fn http_requests_keep_matching_runtime_and_credentials_across_retries_and_
         .iter()
         .zip(["key-a", "key-a", "key-other-user"])
         .map(|(r, credential)| {
+            assert_eq!(r.headers["openai-organization"], "org-a");
+            assert_eq!(r.headers["openai-project"], "project-a");
             assert_eq!(
                 r.headers
                     .get("x-gateway-auth")
@@ -305,6 +316,8 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
         ));
     }
     provider.http_headers = Some(std::collections::HashMap::from([
+        ("openai-organization".into(), "org-a".into()),
+        ("openai-project".into(), "project-a".into()),
         ("authorization".into(), "Bearer stale-credential".into()),
         ("x-openai-agent-assertion".into(), "stale-assertion".into()),
         ("x-openai-fedramp".into(), "true".into()),
@@ -384,11 +397,18 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
         assert_eq!(body["client_metadata"]["x-codex-turn-state"], Value::Null);
         assert_eq!(body["input"].as_array().unwrap().len(), index + 2);
     }
+    for request in registration.received_requests().await.unwrap() {
+        let body: Value = request.body_json().unwrap();
+        assert_eq!(body["actor_auth"]["organization_id"], "org-a");
+        assert_eq!(body["actor_auth"]["project_id"], "project-a");
+    }
     server.shutdown().await;
 }
 
+#[test_case(RuntimeAuthMode::DualHeader; "dual_header")]
+#[test_case(RuntimeAuthMode::AssertionOnly; "assertion_only")]
 #[tokio::test]
-async fn mismatched_resource_selector_never_sends_model_request() {
+async fn mismatched_organization_never_sends_model_request(mode: RuntimeAuthMode) {
     skip_if_no_network!();
     let server = MockServer::start().await;
     Mock::given(path("/register"))
@@ -399,12 +419,16 @@ async fn mismatched_resource_selector_never_sends_model_request() {
         ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
     provider.supports_websockets = false;
     provider.http_headers =
-        Some([(String::from("OpenAI-Project"), "another-project".into())].into());
-    let (harness, _) = runtime_harness(&server, provider, RuntimeAuthMode::DualHeader).await;
+        Some([(String::from("OpenAI-Organization"), "another-org".into())].into());
+    let (harness, _) = runtime_harness(&server, provider, mode).await;
     let error = complete(&mut harness.client.new_session(), &harness)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("openai-project does not match"));
+    assert!(
+        error
+            .to_string()
+            .contains("openai-organization does not match")
+    );
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].url.path(), "/register");

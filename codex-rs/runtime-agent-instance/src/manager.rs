@@ -1,7 +1,8 @@
-//! Share one runtime for the current credential source, including bootstrap retries and refreshes.
+//! Reuse one active runtime for the selected credential source and organization.
 
 use crate::AgentHostAuthorization;
 use crate::AuthenticatedActorAuthorization;
+use crate::PlatformResourceSelection;
 use crate::RegistrationError;
 use crate::RuntimeAgentInstance;
 use crate::RuntimeAuth;
@@ -25,22 +26,19 @@ pub struct RuntimeAuthManager {
     host: AgentHostAuthorization,
     metadata: RuntimeRegistrationMetadata,
     registration_url: Url,
-    state: Mutex<Option<RuntimeState>>,
+    state: Mutex<Option<CachedRuntime>>,
+}
+
+struct CachedRuntime {
+    source_generation: u64,
+    selection: PlatformResourceSelection,
+    state: RuntimeState,
 }
 
 enum RuntimeState {
-    Pending {
-        source_generation: u64,
-        registration: RuntimeRegistration,
-    },
-    Ready {
-        source_generation: u64,
-        runtime: Arc<RuntimeAgentInstance>,
-    },
-    Denied {
-        source_generation: u64,
-        error: RegistrationError,
-    },
+    Pending { registration: RuntimeRegistration },
+    Ready { runtime: Arc<RuntimeAgentInstance> },
+    Denied { error: RegistrationError },
 }
 
 impl std::fmt::Debug for RuntimeAuthManager {
@@ -70,11 +68,20 @@ impl RuntimeAuthManager {
         }
     }
 
+    pub async fn auth(&self) -> Result<RuntimeAuth, RuntimeAuthError> {
+        self.auth_with_selection(&PlatformResourceSelection::default())
+            .await
+    }
+
+    /// Select auth and a runtime for the requested organization and project.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "runtime initialization serializes registration and refresh for one credential source"
     )]
-    pub async fn auth(&self) -> Result<RuntimeAuth, RuntimeAuthError> {
+    pub async fn auth_with_selection(
+        &self,
+        selection: &PlatformResourceSelection,
+    ) -> Result<RuntimeAuth, RuntimeAuthError> {
         // This initializer's lock can span IO. No AuthManager lock is held across registration.
         let mut state = self.state.lock().await;
         let (auth, http_client_factory) = self
@@ -83,7 +90,9 @@ impl RuntimeAuthManager {
             .await
             .ok_or(RuntimeAuthError::Unavailable)?;
         let mut recovery = self.credentials.unauthorized_recovery();
-        let mut result = self.auth_once(&mut state, auth, http_client_factory).await;
+        let mut result = self
+            .auth_once(&mut state, auth, http_client_factory, selection)
+            .await;
         while matches!(
             &result,
             Err(RuntimeAuthError::Registration(
@@ -105,46 +114,51 @@ impl RuntimeAuthManager {
                 .auth_with_http_client_factory()
                 .await
                 .ok_or(RuntimeAuthError::Unavailable)?;
-            result = self.auth_once(&mut state, auth, http_client_factory).await;
+            result = self
+                .auth_once(&mut state, auth, http_client_factory, selection)
+                .await;
         }
         result
     }
 
     async fn auth_once(
         &self,
-        state: &mut Option<RuntimeState>,
+        state: &mut Option<CachedRuntime>,
         auth: CodexAuth,
         http_client_factory: HttpClientFactory,
+        selection: &PlatformResourceSelection,
     ) -> Result<RuntimeAuth, RuntimeAuthError> {
-        let actor_auth = actor_authorization(&auth)?;
+        let actor_auth = actor_authorization(&auth, selection)?;
+        let http_client_factory = http_client_factory.with_sensitive_header_protection();
         let change_state = self.auth_state(&auth)?;
-        let same_source = match state.as_ref() {
-            Some(
-                RuntimeState::Pending {
-                    source_generation, ..
-                }
-                | RuntimeState::Ready {
-                    source_generation, ..
-                }
-                | RuntimeState::Denied {
-                    source_generation, ..
-                },
-            ) => *source_generation == change_state.source_generation,
-            None => false,
-        };
-        if !same_source {
-            *state = Some(RuntimeState::Pending {
-                registration: RuntimeRegistration::new(
-                    actor_auth.clone(),
-                    self.host.clone(),
-                    self.metadata.clone(),
-                )
-                .map_err(|_| RuntimeAuthError::KeyGeneration)?,
-                source_generation: change_state.source_generation,
-            });
+        // Registered runtimes can serve different projects. Pending and denied
+        // registrations retain their original scope and idempotency key.
+        if state.as_ref().is_some_and(|cached| {
+            cached.source_generation != change_state.source_generation
+                || cached.selection.organization_id != selection.organization_id
+                || (!matches!(cached.state, RuntimeState::Ready { .. })
+                    && cached.selection != *selection)
+        }) {
+            *state = None;
         }
-        let registration = match state.as_mut().ok_or(RuntimeAuthError::Unavailable)? {
-            RuntimeState::Ready { runtime, .. } => {
+        let cached = match state {
+            Some(cached) => cached,
+            None => state.insert(CachedRuntime {
+                source_generation: change_state.source_generation,
+                selection: selection.clone(),
+                state: RuntimeState::Pending {
+                    registration: RuntimeRegistration::new(
+                        actor_auth.clone(),
+                        self.host.clone(),
+                        self.metadata.clone(),
+                    )
+                    .map_err(|_| RuntimeAuthError::KeyGeneration)?,
+                },
+            }),
+        };
+        let runtime_state = &mut cached.state;
+        let registration = match runtime_state {
+            RuntimeState::Ready { runtime } => {
                 return Ok(RuntimeAuth {
                     runtime: runtime.clone(),
                     auth,
@@ -152,8 +166,8 @@ impl RuntimeAuthManager {
                     change_state,
                 });
             }
-            RuntimeState::Denied { error, .. } => return Err(error.clone().into()),
-            RuntimeState::Pending { registration, .. } => {
+            RuntimeState::Denied { error } => return Err(error.clone().into()),
+            RuntimeState::Pending { registration } => {
                 registration.request.actor_auth = actor_auth;
                 registration
             }
@@ -171,10 +185,9 @@ impl RuntimeAuthManager {
         match result {
             Ok(info) => {
                 let runtime = Arc::new(registration.finish(info));
-                *state = Some(RuntimeState::Ready {
+                *runtime_state = RuntimeState::Ready {
                     runtime: runtime.clone(),
-                    source_generation: change_state.source_generation,
-                });
+                };
                 Ok(RuntimeAuth {
                     runtime,
                     auth,
@@ -188,10 +201,9 @@ impl RuntimeAuthManager {
                     ..
                 },
             ) => {
-                *state = Some(RuntimeState::Denied {
-                    source_generation: change_state.source_generation,
+                *runtime_state = RuntimeState::Denied {
                     error: error.clone(),
-                });
+                };
                 Err(error.into())
             }
             Err(error) => Err(error.into()),
@@ -212,13 +224,20 @@ impl RuntimeAuthManager {
 
 fn actor_authorization(
     auth: &CodexAuth,
+    selection: &PlatformResourceSelection,
 ) -> Result<AuthenticatedActorAuthorization, RuntimeAuthError> {
+    if !matches!(auth, CodexAuth::ApiKey(_)) && selection != &PlatformResourceSelection::default() {
+        return Err(RuntimeAuthError::UnsupportedResourceSelection);
+    }
     let credential = auth
         .get_token()
         .map_err(|_| RuntimeAuthError::Unsupported)?
         .into();
     Ok(match auth {
-        CodexAuth::ApiKey(_) => AuthenticatedActorAuthorization::PlatformApiKey { credential },
+        CodexAuth::ApiKey(_) => AuthenticatedActorAuthorization::PlatformApiKey {
+            credential,
+            selection: selection.clone(),
+        },
         CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
             AuthenticatedActorAuthorization::Oauth { credential }
         }
@@ -238,6 +257,8 @@ pub enum RuntimeAuthError {
     Unavailable,
     #[error("this credential cannot register a runtime; use a supported OpenAI sign-in")]
     Unsupported,
+    #[error("organization and project selection requires an OpenAI API key")]
+    UnsupportedResourceSelection,
     #[error("credentials changed during runtime registration; try again")]
     Changed,
     #[error("runtime registration could not refresh actor credentials")]
