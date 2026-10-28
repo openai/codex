@@ -30,6 +30,7 @@ async fn interceptors_forward_before_completion_in_order_and_cancel_upstream() {
     let mut stream = intercept_stream(
         Box::pin(
             ResponseStream {
+                routing_affinity: None,
                 rx_event,
                 interrupt: None,
                 consumer_dropped,

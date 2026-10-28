@@ -21,6 +21,9 @@ mod review;
 mod review_session;
 mod reviewer_config;
 pub(crate) use reviewer_config::resolve_review_model;
+mod routing;
+pub(crate) use routing::ParentResponse;
+pub(crate) use routing::PendingReviewRouting;
 mod runtime;
 #[cfg(test)]
 pub(crate) mod test_host;
@@ -83,8 +86,8 @@ pub(crate) use codex_guardian_reviewer::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKEN
 /// MCP elicitations use their live invocation's issuing step when available, otherwise turn inputs.
 #[derive(Clone)]
 pub(crate) struct GuardianReviewContext {
-    /// The latest response ID received in this turn when review was requested.
-    pub(crate) parent_response_id: Option<String>,
+    /// The latest response ID and its connection affinity when review was requested.
+    pub(crate) parent_response: Option<Arc<ParentResponse>>,
     turn: Arc<TurnContext>,
     environments: TurnEnvironmentSnapshot,
     project_instructions: Option<Arc<LoadedAgentsMd>>,
@@ -126,10 +129,7 @@ impl GuardianReviewContext {
         environments: &TurnEnvironmentSnapshot,
     ) -> Self {
         Self {
-            parent_response_id: turn
-                .extension_data
-                .get::<codex_api::ResponseId>()
-                .map(|id| id.0.clone()),
+            parent_response: turn.extension_data.get::<ParentResponse>(),
             environments: environments.clone(),
             project_instructions: None,
             model_info: Arc::clone(&settings.model_info),
@@ -154,11 +154,7 @@ impl GuardianReviewContext {
 impl From<&Arc<StepContext>> for GuardianReviewContext {
     fn from(step: &Arc<StepContext>) -> Self {
         Self {
-            parent_response_id: step
-                .turn
-                .extension_data
-                .get::<codex_api::ResponseId>()
-                .map(|id| id.0.clone()),
+            parent_response: step.turn.extension_data.get::<ParentResponse>(),
             turn: Arc::clone(&step.turn),
             environments: step.environments.clone(),
             project_instructions: Some(step.loaded_agents_md.clone().unwrap_or_default()),
@@ -175,10 +171,7 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
 impl From<Arc<TurnContext>> for GuardianReviewContext {
     fn from(turn: Arc<TurnContext>) -> Self {
         Self {
-            parent_response_id: turn
-                .extension_data
-                .get::<codex_api::ResponseId>()
-                .map(|id| id.0.clone()),
+            parent_response: turn.extension_data.get::<ParentResponse>(),
             environments: turn.initial_environments.clone(),
             project_instructions: None,
             model_info: Arc::clone(turn.model_info()),

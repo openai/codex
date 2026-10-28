@@ -46,6 +46,21 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
     )
     .unwrap();
     params.parent_session = Arc::clone(&parent);
+    let parent_uri = "wss://review-snapshot.chatgpt.com/backend-api/codex/responses"
+        .parse()
+        .unwrap();
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::SET_COOKIE,
+        http::HeaderValue::from_static("__oailb=original-parent; Path=/; Secure; Max-Age=3600"),
+    );
+    turn.extension_data.insert(super::super::ParentResponse {
+        id: "original-response".to_owned(),
+        routing_affinity: codex_http_client::ChatGptRoutingAffinity::from_response(
+            &parent_uri,
+            &headers,
+        ),
+    });
     params.parent_context = GuardianReviewContext::from(Arc::clone(&turn));
     let evidence: ResponseItem = serde_json::from_value(serde_json::json!({
         "type": "function_call_output", "call_id": "prior-inspection", "output": EVIDENCE
@@ -73,9 +88,14 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
             .node_repl_auto_review_required,
     )
     .with_node_repl_policy(&params.node_repl_policy);
+    let reviewer_session = Arc::clone(&reviewer.session);
     let manager = prewarm_test_session(&params, reviewer).await;
     // Capture the review context, then compact the parent before the reviewer builds its prompt.
     let prepared = setup::prepare_review(params).await.unwrap();
+    turn.extension_data.insert(super::super::ParentResponse {
+        id: "later-response".to_owned(),
+        routing_affinity: None,
+    });
     let checkpoint: ResponseItem = serde_json::from_value(serde_json::json!({
         "type": "compaction", "id": "cmp_new", "encrypted_content": "new-checkpoint"
     }))
@@ -99,6 +119,21 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
         .await;
     let ((outcome, _), submitted_text) = tokio::join!(manager.review(prepared), async {
         let submission = rx_sub.recv().await.unwrap();
+        let pending = reviewer_session
+            .services
+            .thread_extension_data
+            .get::<super::super::PendingReviewRouting>()
+            .unwrap();
+        let parent = pending.0.as_ref().unwrap();
+        assert_eq!(parent.id, "original-response");
+        assert_eq!(
+            parent
+                .routing_affinity
+                .as_ref()
+                .unwrap()
+                .cookie_header(&parent_uri),
+            Some(http::HeaderValue::from_static("__oailb=original-parent"))
+        );
         let id = submission.id;
         let Op::TurnInput { request, reply, .. } = submission.op else {
             panic!("expected reviewer prompt");
@@ -123,6 +158,14 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
             .unwrap();
         text
     });
+    assert!(
+        reviewer_session
+            .services
+            .thread_extension_data
+            .get::<super::super::PendingReviewRouting>()
+            .is_none()
+    );
+    assert!(!submitted_text.contains("__oailb"));
     assert!(matches!(
         outcome,
         GuardianReviewSessionOutcome::Completed(Ok(_))

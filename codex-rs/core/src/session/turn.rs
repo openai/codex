@@ -2926,6 +2926,12 @@ async fn try_run_sampling_request(
                 if let Some(response_id) = response_id {
                     turn_context
                         .extension_data
+                        .insert(crate::guardian::ParentResponse {
+                            id: response_id.clone(),
+                            routing_affinity: stream.routing_affinity.clone(),
+                        });
+                    turn_context
+                        .extension_data
                         .insert(codex_api::ResponseId(response_id));
                 }
             }

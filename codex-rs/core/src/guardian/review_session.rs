@@ -632,6 +632,13 @@ async fn run_review_on_session(
         .insert(super::input_budget::PendingReviewContext(
             prompt_items.context,
         ));
+    review_session
+        .session
+        .services
+        .thread_extension_data
+        .insert(super::PendingReviewRouting(
+            params.parent_context.parent_response.clone(),
+        ));
     let request = codex_guardian_reviewer::ReviewerTurn {
         items,
         environments: codex_protocol::protocol::TurnEnvironmentSelections::new(
@@ -644,7 +651,11 @@ async fn run_review_on_session(
         model: review_model.model.clone(),
         reasoning_effort: review_model.reasoning_effort.clone(),
         cyber_access_program: parent_turn.cyber_access_program,
-        parent_response_id: params.parent_context.parent_response_id.clone(),
+        parent_response_id: params
+            .parent_context
+            .parent_response
+            .as_ref()
+            .map(|parent| parent.id.clone()),
         schema: params.schema.clone(),
         parent_turn_id: parent_turn.sub_id.clone(),
         root_turn_id: parent_turn.turn_metadata_state.root_turn_id(),
@@ -660,6 +671,11 @@ async fn run_review_on_session(
     {
         Ok(turn_id) => turn_id,
         Err(outcome) => {
+            review_session
+                .session
+                .services
+                .thread_extension_data
+                .remove::<super::PendingReviewRouting>();
             review_session
                 .session
                 .services
@@ -688,6 +704,11 @@ async fn run_review_on_session(
         &mut analytics_result,
     )
     .await;
+    review_session
+        .session
+        .services
+        .thread_extension_data
+        .remove::<super::PendingReviewRouting>();
     // Finalizing input consumes this context; failures before admission leave it pending.
     let transcript_admitted = review_session
         .session

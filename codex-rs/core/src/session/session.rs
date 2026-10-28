@@ -725,6 +725,17 @@ impl Session {
         );
         ExecutionMetadata::from_settings(&step_context.settings).apply_to(&mut responses_metadata);
         responses_metadata.guardian_recorded_items = self.parent_observer_event_tx.get().is_some();
+        if responses_metadata.subagent_header.as_deref()
+            == Some(crate::guardian::GUARDIAN_REVIEWER_NAME)
+            && let Some(pending) = self
+                .services
+                .thread_extension_data
+                .get::<crate::guardian::PendingReviewRouting>()
+            && let Some(parent) = &pending.0
+            && responses_metadata.parent_response_id.as_deref() == Some(parent.id.as_str())
+        {
+            responses_metadata.parent_routing_affinity = parent.routing_affinity.clone();
+        }
         responses_metadata.tool_namespaces_info = if step_context
             .turn
             .config

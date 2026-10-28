@@ -608,6 +608,72 @@ async fn execution_metadata_applies_captured_settings_to_responses_metadata() {
     assert_eq!(metadata[NODE_REPL_DISABLED_KEY], true);
 }
 
+#[tokio::test]
+async fn guardian_affinity_requires_the_captured_parent_and_stays_out_of_metadata() {
+    let uri = "wss://metadata-affinity.chatgpt.com/backend-api/codex/responses"
+        .parse()
+        .unwrap();
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::SET_COOKIE,
+        http::HeaderValue::from_static("__oailb=private-parent-pin; Path=/; Secure; Max-Age=3600"),
+    );
+    let affinity =
+        codex_http_client::ChatGptRoutingAffinity::from_response(&uri, &headers).unwrap();
+    for (subagent, request_parent, expected) in [
+        (Some("guardian"), "parent", true),
+        (Some("guardian"), "other-parent", false),
+        (None, "parent", false),
+    ] {
+        let (session, mut turn) = make_session_and_context().await;
+        Arc::get_mut(&mut turn.turn_metadata_state)
+            .unwrap()
+            .subagent_header = subagent.map(str::to_owned);
+        turn.turn_metadata_state
+            .update_responsesapi_client_metadata(
+                codex_protocol::turn_input::ResponsesApiClientMetadataUpdate {
+                    replacement: Some(HashMap::from([(
+                        "parent_response_id".to_owned(),
+                        request_parent.to_owned(),
+                    )])),
+                    patch: None,
+                },
+            );
+        session
+            .services
+            .thread_extension_data
+            .insert(crate::guardian::PendingReviewRouting(Some(Arc::new(
+                crate::guardian::ParentResponse {
+                    id: "parent".to_owned(),
+                    routing_affinity: Some(affinity.clone()),
+                },
+            ))));
+        let step = StepContext::for_test(Arc::new(turn));
+        let metadata = session
+            .responses_metadata(&step, CodexResponsesRequestKind::Turn)
+            .await;
+        assert_eq!(
+            metadata
+                .parent_routing_affinity
+                .as_ref()
+                .and_then(|pin| pin.cookie_header(&uri)),
+            expected.then(|| http::HeaderValue::from_static("__oailb=private-parent-pin"))
+        );
+        assert!(
+            !metadata
+                .turn_metadata_json()
+                .unwrap()
+                .contains("private-parent-pin")
+        );
+        assert!(
+            !serde_json::to_string(&metadata.client_metadata(/*include_internal*/ true))
+                .unwrap()
+                .contains("private-parent-pin")
+        );
+        assert!(!format!("{:?}", metadata.compatibility_headers()).contains("private-parent-pin"));
+    }
+}
+
 #[test]
 fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_request_meta() {
     let temp_dir = TempDir::new().expect("temp dir");

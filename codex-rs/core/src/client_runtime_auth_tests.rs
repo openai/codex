@@ -117,6 +117,7 @@ async fn selected_runtime_transport_stays_revoked(mode: RuntimeAuthMode) {
             auth_context,
             RequestRouteTelemetry::for_endpoint("/responses"),
             &http::HeaderMap::new(),
+            /*parent_routing_affinity*/ None,
         )
         .await;
     assert!(matches!(

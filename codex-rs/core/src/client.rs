@@ -47,6 +47,7 @@ use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
 use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
 use codex_api::Provider as ApiProvider;
+use codex_api::RESPONSES_PATH;
 use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
@@ -360,6 +361,7 @@ struct WebsocketContinuation {
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
     responses_headers: ApiHeaderMap,
+    parent_routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
     runtime_id: Option<String>,
     /// Owner of the cached state, including before a connection is opened.
     auth_owner_generation: Option<u64>,
@@ -1425,9 +1427,26 @@ impl ModelClient {
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
         responses_headers: &ApiHeaderMap,
+        parent_routing_affinity: Option<&codex_http_client::ChatGptRoutingAffinity>,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
         let mut headers = self.build_websocket_headers(responses_metadata).await;
         headers.extend(responses_headers.clone());
+        if let Some(affinity) = parent_routing_affinity {
+            let uri = api_provider
+                .websocket_url_for_path(RESPONSES_PATH)
+                .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?
+                .as_str()
+                .parse::<http::Uri>()
+                .map_err(|err| ApiError::Stream(format!("invalid websocket URI: {err}")))?;
+            let cookies = headers
+                .get(http::header::COOKIE)
+                .cloned()
+                .or_else(|| api_provider.headers.get(http::header::COOKIE).cloned())
+                .or_else(|| http_client_factory.chatgpt_cookie_header(&uri));
+            if let Some(cookies) = affinity.merge_cookie_header(&uri, cookies.as_ref()) {
+                headers.insert(http::header::COOKIE, cookies);
+            }
+        }
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
             auth_context.clone(),
@@ -1798,12 +1817,19 @@ impl ModelClientSession {
             responses_headers,
             runtime_id,
         } = params;
+        let parent_routing_affinity = if is_guardian_reviewer(responses_headers) {
+            responses_metadata.parent_routing_affinity.clone()
+        } else {
+            None
+        };
         let connection_key = ResponsesConnectionKey::new(&api_provider, auth_revision);
         let reset_reason = match self.websocket_session.connection.as_ref() {
             Some(_)
                 if self.websocket_session.responses_headers != *responses_headers
                     || self.websocket_session.connection_key.as_ref() != Some(&connection_key)
-                    || self.websocket_session.runtime_id != runtime_id =>
+                    || self.websocket_session.runtime_id != runtime_id
+                    || self.websocket_session.parent_routing_affinity
+                        != parent_routing_affinity =>
             {
                 Some("other")
             }
@@ -1835,9 +1861,11 @@ impl ModelClientSession {
                     auth_context,
                     request_route_telemetry,
                     responses_headers,
+                    parent_routing_affinity.as_ref(),
                 )
                 .await?;
             self.websocket_session.connection = Some(new_conn);
+            self.websocket_session.parent_routing_affinity = parent_routing_affinity;
             self.websocket_session.responses_headers = responses_headers.clone();
             self.websocket_session.runtime_id = runtime_id;
             self.websocket_session.auth_owner_generation = auth_owner_generation;
@@ -2624,6 +2652,7 @@ fn map_response_stream(
     interceptors: Vec<Box<dyn codex_extension_api::ModelResponseInterceptor>>,
     last_response_tx: Option<oneshot::Sender<LastResponse>>,
 ) -> ResponseStream {
+    let routing_affinity = api_stream.routing_affinity.take();
     let upstream_request_id = api_stream.upstream_request_id.take();
     let interrupt = api_stream.interrupt.take();
     let mut stream = map_response_events(
@@ -2635,6 +2664,7 @@ fn map_response_stream(
         last_response_tx,
     );
     stream.interrupt = interrupt;
+    stream.routing_affinity = routing_affinity;
     stream
 }
 
@@ -2801,6 +2831,7 @@ where
     });
 
     ResponseStream {
+        routing_affinity: None,
         rx_event,
         interrupt: None,
         consumer_dropped: consumer_dropped_for_stream,

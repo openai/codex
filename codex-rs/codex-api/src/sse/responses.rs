@@ -98,6 +98,7 @@ pub fn spawn_response_stream(
     });
 
     ResponseStream {
+        routing_affinity: None,
         rx_event,
         upstream_request_id,
         interrupt: None,

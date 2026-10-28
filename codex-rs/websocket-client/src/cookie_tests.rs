@@ -63,7 +63,7 @@ async fn websocket_handshakes_share_routing_cookies_and_respect_cookie_scope() {
     let parent_url = format!("wss://{host}/backend-api/codex/responses");
     let review_url = format!("wss://{host}/backend-api/codex/guardian");
     let requests = [
-        (parent_url, None),
+        (parent_url.clone(), None),
         (review_url.clone(), None),
         (review_url.clone(), Some("explicit=keep")),
         (format!("wss://{host}/outside"), None),
@@ -77,19 +77,24 @@ async fn websocket_handshakes_share_routing_cookies_and_respect_cookie_scope() {
         (review_url.clone(), None),
         (review_url.clone(), None),
         (review_url, None),
+        (parent_url, None),
     ];
     let responses: Vec<(StatusCode, Vec<&str>)> = vec![
         (
             StatusCode::SWITCHING_PROTOCOLS,
             vec![
                 "__oailb=west; Path=/backend-api; Secure; HttpOnly",
+                "__cflb=west; Path=/backend-api; Secure; HttpOnly",
                 "chatgpt_session=never-store; Path=/; Secure",
             ],
         ),
         // Even a failed upgrade can refresh a cookie used by the next connection.
         (
             StatusCode::FORBIDDEN,
-            vec!["__oailb=east; Path=/backend-api; Secure"],
+            vec![
+                "__oailb=east; Path=/backend-api; Secure",
+                "__cflb=east; Path=/backend-api; Secure",
+            ],
         ),
         (StatusCode::SWITCHING_PROTOCOLS, vec![]),
         (StatusCode::SWITCHING_PROTOCOLS, vec![]),
@@ -106,10 +111,15 @@ async fn websocket_handshakes_share_routing_cookies_and_respect_cookie_scope() {
         (StatusCode::SWITCHING_PROTOCOLS, vec![]),
         (
             StatusCode::SWITCHING_PROTOCOLS,
-            vec!["__oailb=; Path=/backend-api; Max-Age=0; Secure"],
+            vec![
+                "__oailb=; Path=/backend-api; Max-Age=0; Secure",
+                "__cflb=; Path=/backend-api; Max-Age=0; Secure",
+            ],
         ),
         (StatusCode::SWITCHING_PROTOCOLS, vec![]),
     ];
+    let mut responses = responses;
+    responses.push((StatusCode::SWITCHING_PROTOCOLS, vec![]));
     let expected_statuses = responses
         .iter()
         .map(|(status, _)| *status)
@@ -165,7 +175,9 @@ async fn websocket_handshakes_share_routing_cookies_and_respect_cookie_scope() {
     });
 
     let mut actual_statuses = Vec::new();
-    for (url, explicit_cookie) in requests {
+    let mut parent_affinity: Option<codex_http_client::ChatGptRoutingAffinity> = None;
+    let last_request = requests.len() - 1;
+    for (index, (url, explicit_cookie)) in requests.into_iter().enumerate() {
         // Separate connector/factory instances must still see the shared routing cookie.
         let connector = WebSocketConnector {
             http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
@@ -177,6 +189,15 @@ async fn websocket_handshakes_share_routing_cookies_and_respect_cookie_scope() {
             request
                 .headers_mut()
                 .insert(COOKIE, HeaderValue::from_static(cookie));
+        }
+        // Replay the parent's captured pin after other traffic changed and deleted the shared pin.
+        if index == last_request {
+            let pin = parent_affinity
+                .as_ref()
+                .unwrap()
+                .cookie_header(request.uri())
+                .unwrap();
+            request.headers_mut().insert(COOKIE, pin);
         }
         let result = connector
             .connect_with_route(
@@ -191,6 +212,12 @@ async fn websocket_handshakes_share_routing_cookies_and_respect_cookie_scope() {
             .await;
         let status = match result {
             Ok((connection, response)) => {
+                if index == 0 {
+                    parent_affinity = connection.routing_affinity().cloned();
+                } else {
+                    // All later successful handshakes return no usable routing cookie.
+                    assert!(connection.routing_affinity().is_none());
+                }
                 drop(connection);
                 response.status()
             }
@@ -201,19 +228,29 @@ async fn websocket_handshakes_share_routing_cookies_and_respect_cookie_scope() {
     }
     assert_eq!(actual_statuses, expected_statuses);
     assert_eq!(
-        server.await.unwrap(),
+        server
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|cookie| cookie.map(|value| {
+                let mut parts = value.to_str().unwrap().split("; ").collect::<Vec<_>>();
+                parts.sort_unstable();
+                HeaderValue::from_str(&parts.join("; ")).unwrap()
+            }))
+            .collect::<Vec<_>>(),
         [
             None,
-            Some("__oailb=west"),
+            Some("__cflb=west; __oailb=west"),
             Some("explicit=keep"),
             None,
             None,
             None,
             None,
             None,
-            Some("__oailb=east"),
-            Some("__oailb=east"),
-            None
+            Some("__cflb=east; __oailb=east"),
+            Some("__cflb=east; __oailb=east"),
+            None,
+            Some("__cflb=west; __oailb=west"),
         ]
         .map(|cookie| cookie.map(HeaderValue::from_static))
         .to_vec(),

@@ -1,3 +1,4 @@
+use crate::RESPONSES_PATH;
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseInterrupt;
@@ -55,6 +56,7 @@ use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
 struct WsStream {
+    routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
     tx_command: mpsc::Sender<WsCommand>,
     rx_message: mpsc::UnboundedReceiver<Result<Message, WsError>>,
     pump_task: tokio::task::JoinHandle<()>,
@@ -69,6 +71,7 @@ enum WsCommand {
 
 impl WsStream {
     fn new(inner: WebSocketConnection) -> Self {
+        let routing_affinity = inner.routing_affinity().cloned();
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
 
@@ -126,6 +129,7 @@ impl WsStream {
         });
 
         Self {
+            routing_affinity,
             tx_command,
             rx_message,
             pump_task,
@@ -193,6 +197,7 @@ struct ResponsesWebsocketTimingLogContext {
 }
 
 pub struct ResponsesWebsocketConnection {
+    routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
     stream: Arc<Mutex<Option<WsStream>>>,
     // TODO (pakrym): is this the right place for timeout?
     idle_timeout: Duration,
@@ -215,18 +220,20 @@ impl std::fmt::Debug for ResponsesWebsocketConnection {
 
 impl ResponsesWebsocketConnection {
     fn new(
-        stream: WsStream,
+        mut stream: WsStream,
         idle_timeout: Duration,
         server_reasoning_included: bool,
         server_model: Option<String>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Self {
+        let routing_affinity = stream.routing_affinity.take();
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
             idle_timeout,
             server_reasoning_included,
             server_model,
             telemetry,
+            routing_affinity,
         }
     }
 
@@ -387,6 +394,7 @@ impl ResponsesWebsocketConnection {
         Ok(ResponseStream {
             rx_event,
             upstream_request_id: None,
+            routing_affinity: self.routing_affinity.clone(),
             interrupt: Some(tx_interrupt),
         })
     }
@@ -442,7 +450,7 @@ impl ResponsesWebsocketClient {
     ) -> Result<ResponsesWebsocketProbe, ResponsesWebsocketProbeError> {
         let ws_url = self
             .provider
-            .websocket_url_for_path("/responses")
+            .websocket_url_for_path(RESPONSES_PATH)
             .map_err(|err| {
                 ResponsesWebsocketProbeError::before_upgrade(
                     ApiError::Stream(format!("failed to build websocket URL: {err}")),

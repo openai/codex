@@ -238,6 +238,8 @@ pub struct CodexResponsesMetadata {
     pub(crate) guardian_recorded_items: bool,
     /// Guardian parent reference; projected only onto a Guardian request.
     pub(crate) parent_response_id: Option<String>,
+    /// Transport-only parent pin; never projected into headers or body metadata.
+    pub(crate) parent_routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
     pub(crate) installation_id: String,
     pub(crate) session_id: String,
     pub(crate) thread_id: String,
@@ -284,6 +286,7 @@ impl CodexResponsesMetadata {
     ) -> Self {
         Self {
             parent_response_id: None,
+            parent_routing_affinity: None,
             guardian_recorded_items: false,
             installation_id,
             session_id,
