@@ -4,11 +4,13 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_code_mode::CodeModeProcessMetricsSample;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::FunctionCallOutputContentItem;
 use codex_code_mode::GrpcCodeModeSessionProvider;
@@ -18,6 +20,7 @@ use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tonic::body::Body;
 use tower::ServiceExt;
@@ -105,6 +108,25 @@ async fn child_exit_after_channel_selection_does_not_replay_execution() -> Resul
     )
     .await?
     .map_err(anyhow::Error::msg)?;
+    let samples = Arc::new(AtomicUsize::new(0));
+    let stop = CancellationToken::new();
+    let sampler = tokio::spawn({
+        let provider = provider.clone();
+        let samples = samples.clone();
+        let stop = stop.clone();
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(/*millis*/ 5));
+            loop {
+                tokio::select! {
+                    _ = stop.cancelled() => break,
+                    _ = interval.tick() => {
+                        let _ = provider.sample_process_metrics().await;
+                        samples.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+    });
     armed.store(true, Ordering::SeqCst);
     let pending = tokio::spawn({
         let session = sessions[0].clone();
@@ -123,6 +145,8 @@ async fn child_exit_after_channel_selection_does_not_replay_execution() -> Resul
     })
     .await
     .context("child was not reaped")?;
+    let absent = provider.sample_process_metrics().await.unwrap_err();
+    assert!(absent.contains("host is not running"), "{absent}");
     assert_eq!(recorder.invocations()?.len(), 1);
     dispatch.add_permits(1);
     assert!(timeout(TEST_TIMEOUT, pending).await??.is_err());
@@ -147,6 +171,16 @@ async fn child_exit_after_channel_selection_does_not_replay_execution() -> Resul
         Ok::<_, anyhow::Error>(())
     }));
     timeout(TEST_TIMEOUT, recovery).await??;
+    assert_eq!(
+        provider
+            .sample_process_metrics()
+            .await
+            .map_err(anyhow::Error::msg)?,
+        CodeModeProcessMetricsSample::Unsupported
+    );
+    stop.cancel();
+    timeout(TEST_TIMEOUT, sampler).await??;
+    assert!(samples.load(Ordering::SeqCst) > 0);
     assert_eq!(recorder.invocations()?.len(), 2);
     for session in sessions {
         session.shutdown().await.map_err(anyhow::Error::msg)?;

@@ -223,6 +223,16 @@ pub trait CodeModeSessionProvider: Send + Sync {
         Ok(())
     }
 
+    /// Observes a host without starting a session. Process-owned providers must
+    /// not start or replace a host. Network providers may connect or reconnect
+    /// according to their transport policy. Sampling failures and cancellation
+    /// must not explicitly reset the shared execution connection.
+    fn sample_process_metrics(
+        &self,
+    ) -> CodeModeSessionResultFuture<'_, crate::CodeModeProcessMetricsSample> {
+        Box::pin(async { Ok(crate::CodeModeProcessMetricsSample::Unsupported) })
+    }
+
     fn create_session(&self) -> CodeModeSessionProviderFuture<'_>;
 
     /// Creates a session whose cells share the supplied execution limits.

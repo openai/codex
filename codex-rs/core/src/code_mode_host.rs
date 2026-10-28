@@ -1,6 +1,6 @@
 //! Owns the local gRPC code-mode client and host process. Sessions share a lazy
-//! HTTP/2 connection. Only session admission can replace a dead host; other RPCs
-//! use the current generation. Dropping its I/O kills and reaps the child.
+//! HTTP/2 connection. Only session admission can replace a dead host; metrics
+//! use the current generation and cannot reconnect. Dropping its I/O reaps the child.
 
 use std::io;
 use std::path::Path;
@@ -17,9 +17,11 @@ use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
 
+use codex_code_mode::CodeModeProcessMetricsSample;
 use codex_code_mode::CodeModeSessionCellExecutionLimits;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeSessionProviderFuture;
+use codex_code_mode::CodeModeSessionResultFuture;
 use codex_code_mode::GrpcCodeModeSessionProvider;
 use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
@@ -63,6 +65,26 @@ impl CodeModeSessionProvider for ProcessOwnedGrpcCodeModeSessionProvider {
             .availability()
     }
 
+    fn sample_process_metrics(
+        &self,
+    ) -> CodeModeSessionResultFuture<'_, CodeModeProcessMetricsSample> {
+        // Absence is local lifecycle state, not a meaning assigned to any remote
+        // gRPC error. A child dying after this observation produces a failed sample.
+        if !self
+            .current
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|host| host.alive.load(Ordering::Acquire))
+        {
+            return Box::pin(async { Ok(CodeModeProcessMetricsSample::NotRunning) });
+        }
+        match self.provider.get() {
+            Some(provider) => provider.sample_process_metrics(),
+            None => Box::pin(async { Ok(CodeModeProcessMetricsSample::NotRunning) }),
+        }
+    }
+
     fn create_session(&self) -> CodeModeSessionProviderFuture<'_> {
         self.create_session_with_limits(CodeModeSessionCellExecutionLimits::default())
     }
@@ -89,8 +111,8 @@ impl CodeModeSessionProvider for ProcessOwnedGrpcCodeModeSessionProvider {
 }
 
 // Every channel gets exactly one child. Tonic's internal reconnect loop cannot
-// spawn a process, including if the child dies between channel selection and
-// dispatch. Session admission selects a new generation during recovery.
+// spawn a process, including if the child dies between a metrics liveness check
+// and dispatch. Session admission selects a new generation during recovery.
 struct HostTransport {
     host_program: PathBuf,
     current: Arc<Mutex<Option<HostChannel>>>,
@@ -133,7 +155,7 @@ impl HostTransport {
                     .map_err(|error| Status::unavailable(error.to_string()))?;
                 let alive = connection.alive.clone();
                 let connection = Arc::new(Mutex::new(Some(connection)));
-                // Detect a live but unresponsive child even while the connection is idle.
+                // Preserve execution liveness detection independently of metrics cadence.
                 let channel = Endpoint::from_static("http://code-mode-host")
                     .http2_keep_alive_interval(Duration::from_secs(/*secs*/ 30))
                     .keep_alive_timeout(Duration::from_secs(/*secs*/ 10))

@@ -52,6 +52,8 @@ mod image_cancellation_tests;
 mod large_tool_delegate;
 #[path = "grpc/network_policy_tests.rs"]
 mod network_policy_tests;
+#[path = "grpc/process_metrics_tests.rs"]
+mod process_metrics_tests;
 #[path = "support/recording_delegate.rs"]
 mod recording_delegate;
 #[path = "grpc/session_recovery_tests.rs"]

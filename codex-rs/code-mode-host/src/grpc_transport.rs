@@ -21,7 +21,10 @@ use tracing::info;
 
 use crate::GrpcCodeModeHost;
 
-pub(super) async fn run_tcp_listener(bind_address: SocketAddr) -> Result<()> {
+pub(super) async fn run_tcp_listener(
+    bind_address: SocketAddr,
+    host: GrpcCodeModeHost,
+) -> Result<()> {
     let listener = bind_tcp_listener(bind_address).await?;
     let local_address = listener
         .local_addr()
@@ -33,7 +36,7 @@ pub(super) async fn run_tcp_listener(bind_address: SocketAddr) -> Result<()> {
         .context("failed to publish code-mode gRPC listen address")?;
 
     let routes = Routes::new(
-        CodeModeHostServer::new(GrpcCodeModeHost::new())
+        CodeModeHostServer::new(host)
             .send_compressed(tonic::codec::CompressionEncoding::Zstd)
             .max_decoding_message_size(MAX_FRAME_BYTES)
             .max_encoding_message_size(MAX_FRAME_BYTES),

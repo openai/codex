@@ -47,6 +47,7 @@ fn trace_context_from_request<T>(request: &Request<T>) -> Option<W3cTraceContext
 #[derive(Clone)]
 pub struct GrpcCodeModeHost {
     state: Arc<GrpcHostState>,
+    process_metrics: Option<Arc<crate::process_metrics::ProcessMetrics>>,
 }
 
 impl GrpcCodeModeHost {
@@ -54,6 +55,17 @@ impl GrpcCodeModeHost {
     pub fn new() -> Self {
         Self {
             state: Arc::new(GrpcHostState::new()),
+            process_metrics: None,
+        }
+    }
+
+    /// Uses a collector whose resources were prepared before sandbox entry.
+    pub fn with_process_metrics(collector: crate::CodeModeProcessMetricsCollector) -> Self {
+        Self {
+            process_metrics: Some(Arc::new(crate::process_metrics::ProcessMetrics::new(
+                collector,
+            ))),
+            ..Self::new()
         }
     }
 
@@ -302,6 +314,23 @@ impl Default for GrpcCodeModeHost {
 }
 
 impl CodeModeHost for GrpcCodeModeHost {
+    fn get_process_metrics<'a, 'async_trait>(
+        &'a self,
+        _request: Request<proto::GetProcessMetricsRequest>,
+    ) -> GrpcFuture<'async_trait, proto::GetProcessMetricsResponse>
+    where
+        'a: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            self.process_metrics
+                .as_ref()
+                .ok_or_else(|| Status::unimplemented("process metrics are unsupported"))?
+                .sample()
+                .await
+        })
+    }
+
     type OpenSessionStream = GrpcStream<proto::SessionEvent>;
     type SubscribeToToolCallsStream = GrpcStream<proto::ToolCall>;
     type ExecuteStream = GrpcStream<proto::ExecuteEvent>;

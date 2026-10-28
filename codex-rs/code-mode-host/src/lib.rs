@@ -44,13 +44,16 @@ use self::delegate::RemoteDelegate;
 use self::peer::HostPeer;
 
 pub use self::grpc::GrpcCodeModeHost;
+pub use self::process_metrics::CodeModeProcessMetricsCollector;
 pub use self::transport::DEFAULT_LISTEN_URL;
+pub use codex_code_mode_protocol::CodeModeProcessMetrics;
 
 mod delegate;
 mod grpc;
 mod grpc_stdio;
 mod grpc_transport;
 mod peer;
+mod process_metrics;
 mod transport;
 
 const MAX_IN_FLIGHT_REQUESTS: usize = 256;
@@ -95,7 +98,20 @@ impl HostLimits {
     fields(otel.name = "code_mode_host.run_main")
 )]
 pub async fn run_main(listen_url: &str) -> Result<()> {
-    transport::run_transport(listen_url).await
+    transport::run_transport(listen_url, GrpcCodeModeHost::new()).await
+}
+
+/// Runs with an optional gRPC metrics collector initialized before sandbox entry.
+/// The legacy stdio transport remains unchanged.
+pub async fn run_main_with_process_metrics(
+    listen_url: &str,
+    collector: CodeModeProcessMetricsCollector,
+) -> Result<()> {
+    transport::run_transport(
+        listen_url,
+        GrpcCodeModeHost::with_process_metrics(collector),
+    )
+    .await
 }
 
 /// Runs one code-mode host connection over the process standard streams.

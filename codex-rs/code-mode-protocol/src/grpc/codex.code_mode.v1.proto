@@ -10,6 +10,10 @@ package codex.code_mode.v1;
 // unknown session_id. Clients may retire the session binding on this status.
 // Missing cells use WaitResponse.missing_cell instead.
 service CodeModeHost {
+  // Optional host-level observation. UNIMPLEMENTED means no collector. Sampling
+  // never opens/closes a session and failures affect only this RPC stream.
+  rpc GetProcessMetrics(GetProcessMetricsRequest) returns (GetProcessMetricsResponse);
+
   // Opens a session lease. The first event is always SessionOpened; dropping
   // this stream closes the session and terminates its active cells.
   rpc OpenSession(OpenSessionRequest) returns (stream SessionEvent);
@@ -41,6 +45,15 @@ service CodeModeHost {
   // Acknowledges that a canceled wait has retired before another wait starts.
   rpc CancelWait(CancelWaitRequest) returns (CancelWaitResponse);
   rpc Terminate(TerminateRequest) returns (WaitResponse);
+}
+
+message GetProcessMetricsRequest {}
+
+message GetProcessMetricsResponse {
+  uint32 process_id = 1;
+  double process_start_time_seconds = 2;
+  double cpu_seconds_total = 3;
+  uint64 resident_memory_bytes = 4;
 }
 
 message OpenSessionRequest {

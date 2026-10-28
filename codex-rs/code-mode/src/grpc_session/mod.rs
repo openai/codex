@@ -46,6 +46,7 @@ mod conversion;
 mod deadline;
 mod generation;
 mod operations;
+mod process_metrics;
 mod reconnect;
 mod state;
 mod transport;
@@ -65,6 +66,11 @@ fn inject_span_traceparent<T>(request: &mut tonic::Request<T>, span: &tracing::S
 }
 
 /// Creates code-mode sessions over an HTTP/2 gRPC connection.
+///
+/// Metrics requests do not open sessions, retry RPCs, or explicitly reset the
+/// connection. URL providers may initialize their client or establish a network
+/// connection; caller-supplied channels and transports retain their reconnect
+/// policy. Preventing child creation requires a process-owned transport.
 #[derive(Clone)]
 pub struct GrpcCodeModeSessionProvider {
     transport: Arc<SharedTransport>,
@@ -94,7 +100,8 @@ impl GrpcCodeModeSessionProvider {
         Self::from_transport(SharedTransport::with_channel(channel))
     }
 
-    /// Uses a caller-owned transport to control connection establishment and recovery.
+    /// Uses a caller-owned transport, which can prevent observation RPCs from
+    /// starting or replacing process-owned connections.
     pub fn with_transport<T>(transport: T) -> Self
     where
         T: tower::Service<
@@ -238,6 +245,13 @@ impl GrpcCodeModeSessionProvider {
 }
 
 impl CodeModeSessionProvider for GrpcCodeModeSessionProvider {
+    fn sample_process_metrics(
+        &self,
+    ) -> CodeModeSessionResultFuture<'_, codex_code_mode_protocol::CodeModeProcessMetricsSample>
+    {
+        Box::pin(process_metrics::sample(self))
+    }
+
     fn create_session(&self) -> CodeModeSessionProviderFuture<'_> {
         self.create_session_with_limits(CodeModeSessionCellExecutionLimits::default())
     }

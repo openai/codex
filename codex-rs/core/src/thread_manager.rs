@@ -715,6 +715,18 @@ impl ThreadManager {
         self
     }
 
+    /// Samples host metrics without creating a Codex thread or code-mode session.
+    /// Process-owned providers observe existing children; custom providers retain
+    /// their transport's connection policy.
+    pub async fn sample_code_mode_process_metrics(
+        &self,
+    ) -> Result<codex_code_mode::CodeModeProcessMetricsSample, String> {
+        self.state
+            .code_mode_session_provider
+            .sample_process_metrics()
+            .await
+    }
+
     /// Replaces the process-wide provider before this manager is shared with threads.
     pub fn with_code_mode_session_provider(
         mut self,
