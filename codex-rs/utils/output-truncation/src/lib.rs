@@ -139,6 +139,7 @@ pub fn truncate_function_output_payload(
 /// are zeroed. Positions preceding an earlier boundary move to that position,
 /// preserving caller order. On return, boundaries refer to the rendered items;
 /// an end boundary precedes any generated omission notices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputBoundary {
     pub item_index: usize,
     pub text_offset: usize,

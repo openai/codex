@@ -2803,6 +2803,8 @@ dependencies = [
  "codex-code-mode-protocol",
  "codex-plugin-host",
  "codex-protocol",
+ "codex-utils-audio",
+ "codex-utils-output-truncation",
  "deno_core_icudata",
  "futures",
  "opentelemetry",

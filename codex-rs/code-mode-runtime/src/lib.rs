@@ -1,4 +1,10 @@
 mod cell_actor;
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "Wired into the runtime in the next stack layer"
+)]
+mod output;
 mod runtime;
 mod service;
 mod session_runtime;

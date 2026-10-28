@@ -15,8 +15,16 @@ pub const MAX_PENDING_DELEGATE_CALLS: usize = 1_024;
 /// Stdio connection support for the optional `session/open.outputTruncation` field.
 /// Each session selects its own setting after the connection hello.
 pub const BOUNDED_OUTPUT_CAPABILITY: &str = "bounded-output-v1";
-/// Maximum retained bytes between server-truncated observations.
+/// Maximum aggregate text bytes retained per server-truncated observation.
 pub const BOUNDED_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
+
+/// Maximum aggregate inline image bytes retained per server-truncated observation.
+pub const BOUNDED_OUTPUT_MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Maximum aggregate encoded audio URL bytes retained per server-truncated observation.
+/// Count the whole URL, including the data URL prefix and any base64 payload.
+/// This leaves heuristic transport headroom but does not bound the complete response.
+pub const BOUNDED_OUTPUT_MAX_AUDIO_BYTES: usize = 62 * 1024 * 1024;
 
 /// Negotiated support for cell execution resource limits on `session/open`.
 pub const SESSION_RESOURCE_LIMITS_CAPABILITY: &str = "session-cell-execution-resource-limits";

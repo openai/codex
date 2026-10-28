@@ -17,6 +17,8 @@ base64 = { workspace = true }
 codex-code-mode-protocol = { workspace = true }
 codex-plugin-host = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-audio = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
 deno_core_icudata = { workspace = true }
 futures = { workspace = true, features = ["executor", "std"] }
 opentelemetry = { workspace = true }
