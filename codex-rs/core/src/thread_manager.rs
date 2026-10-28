@@ -192,6 +192,13 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
+/// Describes whether a captured runtime is still registered under its thread ID.
+pub enum ThreadRegistration {
+    Current,
+    Absent,
+    Replaced,
+}
+
 // TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
 // core can represent sampling boundaries directly instead of relying on
 // whichever items happened to be persisted mid-turn.
@@ -1006,6 +1013,19 @@ impl ThreadManager {
 
     pub async fn get_thread(&self, thread_id: ThreadId) -> CodexResult<Arc<CodexThread>> {
         self.state.get_thread(thread_id).await
+    }
+
+    /// Checks the full registry without exposing any replacement runtime.
+    pub async fn thread_registration(
+        &self,
+        thread_id: ThreadId,
+        expected: &Arc<CodexThread>,
+    ) -> ThreadRegistration {
+        match self.state.threads.read().await.get(&thread_id) {
+            Some(current) if Arc::ptr_eq(current, expected) => ThreadRegistration::Current,
+            Some(_) => ThreadRegistration::Replaced,
+            None => ThreadRegistration::Absent,
+        }
     }
 
     /// Board hosts may reach internal runtimes only through a matching explicit connection.

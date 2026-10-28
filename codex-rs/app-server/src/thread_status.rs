@@ -248,11 +248,8 @@ impl ThreadWatchManager {
         }
     }
 
-    pub(crate) async fn subscribe(
-        &self,
-        thread_id: ThreadId,
-    ) -> Option<watch::Receiver<ThreadStatus>> {
-        Some(self.state.lock().await.subscribe(thread_id.to_string()))
+    pub(crate) async fn subscribe(&self, thread_id: ThreadId) -> watch::Receiver<ThreadStatus> {
+        self.state.lock().await.subscribe(thread_id.to_string())
     }
 
     async fn note_active_guard_released(
@@ -826,14 +823,8 @@ mod tests {
             .expect("interactive thread id should parse");
         let non_interactive_thread_id = ThreadId::from_string(NON_INTERACTIVE_THREAD_ID)
             .expect("non-interactive thread id should parse");
-        let mut interactive_rx = manager
-            .subscribe(interactive_thread_id)
-            .await
-            .expect("interactive status watcher should subscribe");
-        let mut non_interactive_rx = manager
-            .subscribe(non_interactive_thread_id)
-            .await
-            .expect("non-interactive status watcher should subscribe");
+        let mut interactive_rx = manager.subscribe(interactive_thread_id).await;
+        let mut non_interactive_rx = manager.subscribe(non_interactive_thread_id).await;
 
         manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
 

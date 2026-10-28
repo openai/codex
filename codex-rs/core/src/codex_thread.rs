@@ -858,6 +858,11 @@ impl CodexThread {
         self.io.agent_status().await
     }
 
+    /// Returns whether the runtime has published its shutdown status.
+    pub fn has_shutdown_status(&self) -> bool {
+        matches!(*self.io.agent_status.borrow(), AgentStatus::Shutdown)
+    }
+
     pub async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
         self.session.list_background_terminals().await
     }

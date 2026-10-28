@@ -428,14 +428,12 @@ mod tests {
                 .connection_initialized(connection_id, ConnectionCapabilities::default())
                 .await;
         }
-        thread_state_manager
-            .try_ensure_connection_subscribed(
-                thread_id,
-                subscribed_connection,
-                /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection should be subscribed");
+        assert!(
+            thread_state_manager
+                .try_add_connection_to_thread(thread_id, subscribed_connection)
+                .await,
+            "connection should be subscribed"
+        );
         let sink = app_server_extension_event_sink(outgoing, thread_state_manager);
 
         sink.emit_warning(ExtensionWarning {
@@ -494,14 +492,12 @@ mod tests {
             message: "catalog was shortened".to_string(),
         });
         tokio::task::yield_now().await;
-        thread_state_manager
-            .try_ensure_connection_subscribed(
-                thread_id,
-                subscribed_connection,
-                /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection should be subscribed");
+        assert!(
+            thread_state_manager
+                .try_add_connection_to_thread(thread_id, subscribed_connection)
+                .await,
+            "connection should be subscribed"
+        );
 
         let envelope = timeout(Duration::from_secs(1), outgoing_rx.recv())
             .await
@@ -544,14 +540,12 @@ mod tests {
         thread_state_manager
             .connection_initialized(subscribed_connection, ConnectionCapabilities::default())
             .await;
-        thread_state_manager
-            .try_ensure_connection_subscribed(
-                thread_id,
-                subscribed_connection,
-                /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection should be subscribed");
+        assert!(
+            thread_state_manager
+                .try_add_connection_to_thread(thread_id, subscribed_connection)
+                .await,
+            "connection should be subscribed"
+        );
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
         drop(listener_command_rx);
         thread_state_manager.register_listener_command_tx(thread_id, listener_command_tx);

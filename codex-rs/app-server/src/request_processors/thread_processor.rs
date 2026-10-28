@@ -40,7 +40,6 @@ use codex_protocol::SanitizedGitUrl;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
-use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
 use std::ops::ControlFlow;
@@ -2271,41 +2270,45 @@ impl ThreadRequestProcessor {
             )));
         }
         let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-        let shutdown_drain_rx = thread_state.lock().await.register_shutdown_drain_waiter();
+        let mut shutdown_drain = thread_state
+            .lock()
+            .await
+            .shutdown_drain
+            .clone()
+            .ok_or_else(|| {
+                internal_error(format!(
+                    "thread {thread_id} has no listener to drain shutdown events"
+                ))
+            })?;
 
         match wait_for_thread_shutdown(&thread).await {
             ThreadShutdownResult::Complete => {}
             ThreadShutdownResult::SubmitFailed => {
-                thread_state.lock().await.take_shutdown_drain_waiter();
                 return Err(internal_error(format!(
                     "failed to shut down thread {thread_id} before revert"
                 )));
             }
             ThreadShutdownResult::TimedOut => {
-                thread_state.lock().await.take_shutdown_drain_waiter();
                 return Err(internal_error(format!(
                     "timed out shutting down thread {thread_id} before revert"
                 )));
             }
         }
-        let drain_result = tokio::time::timeout(Duration::from_secs(10), shutdown_drain_rx)
-            .await
-            .map_err(|_| {
-                internal_error(format!(
-                    "timed out waiting for thread {thread_id} listener to drain shutdown events"
-                ))
-            })
-            .and_then(|result| {
-                result.map_err(|_| {
-                    internal_error(format!(
-                        "thread {thread_id} listener stopped before draining shutdown events"
-                    ))
-                })
-            });
-        if let Err(err) = drain_result {
-            thread_state.lock().await.take_shutdown_drain_waiter();
-            return Err(err);
-        }
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            shutdown_drain.wait_for(|drained| *drained),
+        )
+        .await
+        .map_err(|_| {
+            internal_error(format!(
+                "timed out waiting for thread {thread_id} listener to drain shutdown events"
+            ))
+        })?
+        .map_err(|_| {
+            internal_error(format!(
+                "thread {thread_id} listener stopped before draining shutdown events"
+            ))
+        })?;
         // The listener is drained: even an interrupted turn is durable now. Inspect only the
         // suffix being reverted and remember the revision, not a collection of turn IDs.
         let receipt_to_retire = async {
@@ -3875,80 +3878,19 @@ impl ThreadRequestProcessor {
         self.thread_watch_manager.subscribe_running_turn_count()
     }
 
-    /// Best-effort: start the lifecycle listener and subscribe initialized connections.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "listener state creation must be serialized against pending unloads"
-    )]
     pub(crate) async fn try_attach_thread_listener(
         &self,
         thread_id: ThreadId,
+        thread: Arc<CodexThread>,
         connection_ids: Vec<ConnectionId>,
     ) {
-        if connection_ids.is_empty() {
-            let result = loop {
-                let pending = self.pending_thread_unloads.lock().await;
-                if let Some(unload) = pending.get(&thread_id) {
-                    // A replacement can be published before the old listener finishes cleanup.
-                    let mut completion = unload.subscribe();
-                    drop(pending);
-                    let _ = completion.changed().await;
-                    continue;
-                }
-                let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
-                    return;
-                };
-                // Only persisted V2 children can reload after idle eviction.
-                if thread.multi_agent_version() != Some(MultiAgentVersion::V2)
-                    || thread.config().await.ephemeral
-                {
-                    return;
-                }
-                self.thread_watch_manager
-                    .upsert_thread(&thread_id.to_string())
-                    .await;
-                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-                let result = self
-                    .ensure_listener_task_running(thread_id, thread, thread_state)
-                    .await;
-                drop(pending);
-                break result;
-            };
-            if let Err(err) = result {
-                warn!(
-                    "failed to start listener for thread {thread_id}: {message}",
-                    message = err.message
-                );
-            }
-            return;
-        }
-
-        let mut raw_events_enabled = false;
-        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            let config_snapshot = thread.config_snapshot().await;
-            self.thread_watch_manager
-                .upsert_thread(&thread_id.to_string())
-                .await;
-            if let Some(parent_thread_id) = config_snapshot.parent_thread_id {
-                raw_events_enabled = self
-                    .thread_state_manager
-                    .thread_state(parent_thread_id)
-                    .await
-                    .lock()
-                    .await
-                    .experimental_raw_events;
-            }
-        }
-
-        for connection_id in connection_ids {
-            log_listener_attach_result(
-                self.ensure_conversation_listener(thread_id, connection_id, raw_events_enabled)
-                    .await,
-                thread_id,
-                connection_id,
-                "thread",
-            );
-        }
+        super::thread_lifecycle::attach_created_thread_listener(
+            self.listener_task_context(),
+            thread_id,
+            thread,
+            connection_ids,
+        )
+        .await;
     }
 
     async fn thread_resume_inner(
@@ -4074,11 +4016,20 @@ impl ThreadRequestProcessor {
         // Path-based resume can use an empty request thread ID. Coordinate once its real
         // identity is known; unrelated loaded threads never wait for this cold startup.
         let _goal_resume_guard = if let InitialHistory::Resumed(resumed) = &thread_history {
-            Some(
-                self.thread_state_manager
-                    .lock_goal_resume(resumed.conversation_id)
-                    .await,
-            )
+            let guard = self
+                .thread_state_manager
+                .lock_goal_resume(resumed.conversation_id)
+                .await;
+            let state = self
+                .thread_state_manager
+                .thread_state(resumed.conversation_id)
+                .await;
+            let drain = state.lock().await.pending_shutdown_drain();
+            if let Some(mut drain) = drain {
+                // Core can remove the old runtime before its listener forwards ShutdownComplete.
+                let _ = drain.wait_for(|drained| *drained).await;
+            }
+            Some(guard)
         } else {
             None
         };
