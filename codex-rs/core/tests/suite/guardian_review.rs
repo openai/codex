@@ -1462,6 +1462,266 @@ async fn guardian_node_repl_policy_follows_production_approval_path(
     Ok(())
 }
 
+#[test_case("recovered", &["codex-auto-review"; 2], 1; "refresh_restores_reviewer")]
+#[test_case("cache_write_error", &["codex-auto-review"; 2], 1; "failed_cache_write_keeps_recovered_reviewer")]
+#[test_case("still_missing", &["guardian-parent-a"; 2], 1; "missing_reviewer_keeps_fallback")]
+#[test_case("fetch_error", &["guardian-parent-a"; 2], 1; "failed_refresh_keeps_fallback")]
+#[test_case("static_catalog", &["guardian-parent-a"; 2], 0; "custom_file_is_authoritative")]
+#[test_case("provider_catalog", &["guardian-parent-a"; 2], 0; "custom_url_is_authoritative")]
+#[test_case("already_available", &["codex-auto-review"; 2], 0; "available_reviewer_needs_no_refresh")]
+#[test_case("override", &["guardian-parent-b"; 2], 0; "explicit_override_needs_no_refresh")]
+#[test_case("resumed", &["codex-auto-review"; 2], 1; "refresh_precedes_checkpoint_compatibility")]
+#[test_case("cancel_prewarm", &["codex-auto-review"; 2], 1; "refresh_survives_cancelled_prewarm")]
+#[test_case("deadline", &[], 1; "catalog_wait_honors_review_deadline")]
+#[test_case("cancel_review", &[], 1; "catalog_wait_honors_interruption")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_refreshes_missing_default_reviewer_once(
+    scenario: &'static str,
+    expected_review_models: &[&str],
+    expected_refreshes: usize,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+
+    let stalled = matches!(scenario, "deadline" | "cancel_review");
+    let server = wiremock::MockServer::start().await;
+    let mut initial_catalog = guardian_parent_catalog();
+    initial_catalog.models[0].comp_hash = Some("parent-checkpoint".to_owned());
+    let mut refreshed_catalog = initial_catalog.clone();
+    let mut preferred = initial_catalog.models[0].clone();
+    preferred.slug = "codex-auto-review".to_string();
+    preferred.comp_hash = Some("reviewer-checkpoint".to_owned());
+    refreshed_catalog.models.push(preferred);
+    if scenario == "already_available" {
+        initial_catalog = refreshed_catalog.clone();
+    } else if scenario == "override" {
+        initial_catalog.models[0].auto_review_model_override =
+            Some("guardian-parent-b".to_string());
+    }
+    let initial_fetch = mount_models_once(&server, initial_catalog.clone()).await;
+    // Install both responses before startup can prewarm Guardian. The one-shot
+    // initial catalog wins first; subsequent fetches see the recovery response.
+    let catalog_response = match scenario {
+        "fetch_error" => ResponseTemplate::new(400),
+        "still_missing" => ResponseTemplate::new(200).set_body_json(&initial_catalog),
+        "deadline" | "cancel_review" => ResponseTemplate::new(200)
+            .set_body_json(&refreshed_catalog)
+            .set_delay(Duration::from_secs(10)),
+        _ => ResponseTemplate::new(200).set_body_json(&refreshed_catalog),
+    };
+    let response_gate = tokio_util::sync::CancellationToken::new();
+    let release_response = response_gate.clone();
+    let refresh_started = Arc::new(tokio::sync::Notify::new());
+    let started = Arc::clone(&refresh_started);
+    let recovery = Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .respond_with(move |_: &wiremock::Request| {
+            if scenario == "cancel_prewarm" {
+                started.notify_one();
+                // Wiremock runs on its own thread; keep the response held until cancellation.
+                futures::executor::block_on(response_gate.cancelled());
+            }
+            catalog_response.clone()
+        })
+        .with_priority(6) // Lower priority than the initial mock's default of 5.
+        .expect(expected_refreshes as u64)
+        .mount_as_scoped(&server)
+        .await;
+    // Unblock the responder before its mock is dropped, including on assertion failure.
+    let release_response = release_response.drop_guard();
+    let catalog_url = format!("{}/v1/models", server.uri());
+    let configured_catalog = initial_catalog.clone();
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model("guardian-parent-a")
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer =
+                if matches!(scenario, "resumed" | "cancel_prewarm" | "cache_write_error") {
+                    ApprovalsReviewer::User
+                } else {
+                    ApprovalsReviewer::AutoReview
+                };
+            if scenario == "deadline" {
+                config.guardian_review_timeout = Some(Duration::from_millis(50));
+            }
+            if scenario == "static_catalog" {
+                config.model_catalog = Some(configured_catalog);
+            } else if scenario == "provider_catalog" {
+                config.model_provider.model_catalog_url = Some(catalog_url.into());
+            }
+        });
+    if scenario == "resumed" {
+        builder = builder.with_history_mode(codex_protocol::protocol::ThreadHistoryMode::Paginated);
+    }
+    let mut test = builder.build_with_auto_env(&server).await?;
+    let cache_path = test.config.codex_home.join("models_cache.json");
+    let original_cache = if scenario == "cache_write_error" {
+        let contents = fs::read(&cache_path)?;
+        let mut permissions = fs::metadata(&cache_path)?.permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&cache_path, permissions)?;
+        assert!(
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&cache_path)
+                .is_err()
+        );
+        Some(contents)
+    } else {
+        None
+    };
+    if scenario == "resumed" {
+        let restriction = json!({
+            "type": "message", "id": "restriction", "role": "user",
+            "content": [{"type": "input_text", "text": "Never deploy to production."}]
+        });
+        let history: Vec<RolloutItem> = serde_json::from_value(json!([
+            {"type": "compacted", "payload": {
+                "message": "parent checkpoint",
+                "replacement_history": [{
+                    "type": "compaction", "id": "checkpoint", "encrypted_content": "opaque checkpoint"
+                }],
+                "replacement_history_metadata": [{"compaction_model_hash": "parent-checkpoint"}],
+                "guardian_history": [restriction.clone()]
+            }}
+        ]))?;
+        test.codex.ensure_rollout_materialized().await;
+        // Manual resume without an opaque checkpoint must not fetch Guardian's catalog.
+        test.codex =
+            super::guardian_checkpoint_migration::resume(&test, &test.codex, Vec::new()).await?;
+        assert!(recovery.received_requests().await.is_empty());
+        test.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        test.codex =
+            super::guardian_checkpoint_migration::resume(&test, &test.codex, history).await?;
+        let snapshot = test.codex.conversation_history_snapshot().await;
+        assert_eq!(
+            codex_core::context::GuardianContextMode::from_history(snapshot.as_ref()),
+            codex_core::context::GuardianContextMode::Legacy
+        );
+        assert_eq!(
+            snapshot
+                .review_items()
+                .cloned()
+                .collect::<Vec<ResponseItem>>(),
+            vec![serde_json::from_value::<ResponseItem>(restriction)?]
+        );
+    } else if scenario == "cancel_prewarm" {
+        let parent = Arc::clone(&test.codex);
+        let prewarm = tokio::spawn(async move {
+            codex_core::guardian_review::prepare_review_prewarm(&parent).await
+        });
+        refresh_started.notified().await;
+        prewarm.abort();
+        let Err(error) = prewarm.await else {
+            anyhow::bail!("prewarm finished before cancellation");
+        };
+        assert!(error.is_cancelled());
+        drop(release_response);
+    }
+    if stalled {
+        recovery.wait_until_satisfied().await;
+    }
+    let mut events = Vec::new();
+    for call_id in ["first-action", "second-action"] {
+        events.push(sse(vec![
+            ev_response_created(call_id),
+            ev_function_call(
+                call_id,
+                "exec_command",
+                &json!({
+                    "cmd": format!("printf {call_id}"),
+                    "sandbox_permissions": SandboxPermissions::RequireEscalated,
+                    "justification": "Exercise Guardian catalog recovery.",
+                })
+                .to_string(),
+            ),
+            ev_completed(call_id),
+        ]));
+        if stalled {
+            break;
+        }
+        events.push(sse(vec![
+            ev_response_created("guardian"),
+            ev_assistant_message("assessment", r#"{"outcome":"allow"}"#),
+            ev_completed("guardian"),
+        ]));
+    }
+    if scenario != "cancel_review" {
+        events.push(sse(vec![ev_completed("done")]));
+    }
+    let responses = mount_sse_sequence(&server, events).await;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run both protected commands".to_owned(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    if stalled {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::GuardianAssessment(assessment)
+            if assessment.status == codex_protocol::protocol::GuardianAssessmentStatus::InProgress)
+        })
+        .await;
+        if scenario == "cancel_review" {
+            test.codex.submit(Op::Interrupt).await?;
+        }
+    }
+    let finished = wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnAborted(_) => scenario == "cancel_review",
+        EventMsg::TurnComplete(_) => scenario != "cancel_review",
+        _ => false,
+    });
+    if stalled {
+        // Finish before the independent five-second catalog timeout.
+        tokio::time::timeout(Duration::from_secs(2), finished).await?;
+    } else {
+        finished.await;
+    }
+    let requests = responses.requests();
+    let review_models = requests
+        .iter()
+        .filter(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
+        .map(|request| request.body_json()["model"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(json!(review_models), json!(expected_review_models));
+    if scenario == "deadline" {
+        assert!(
+            requests[1]
+                .function_call_output("first-action")
+                .to_string()
+                .contains("did not finish before its deadline")
+        );
+    } else if !stalled {
+        for (index, call_id) in [(2, "first-action"), (4, "second-action")] {
+            assert!(
+                requests[index]
+                    .function_call_output(call_id)
+                    .to_string()
+                    .contains(call_id)
+            );
+        }
+    }
+    let initial_fetches = usize::from(scenario != "static_catalog");
+    assert_eq!(initial_fetch.requests().len(), initial_fetches);
+    if let Some(original_cache) = original_cache {
+        assert_eq!(fs::read(&cache_path)?, original_cache);
+    }
+    test.codex.shutdown_and_wait().await?;
+    server.verify().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_reviews_delayed_and_new_actions_after_catalog_refresh() -> Result<()> {
     skip_if_no_network!(Ok(()));

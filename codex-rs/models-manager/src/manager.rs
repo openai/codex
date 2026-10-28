@@ -103,6 +103,8 @@ pub type ModelsEndpointFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + '
 /// Strategy for refreshing available models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshStrategy {
+    /// Use the current in-memory catalog without loading cache or fetching from the network.
+    InMemory,
     /// Always fetch from the network, ignoring cache.
     Online,
     /// Only use cached data, never fetch from the network.
@@ -114,6 +116,7 @@ pub enum RefreshStrategy {
 impl RefreshStrategy {
     const fn as_str(self) -> &'static str {
         match self {
+            Self::InMemory => "in_memory",
             Self::Online => "online",
             Self::Offline => "offline",
             Self::OnlineIfUncached => "online_if_uncached",
@@ -434,9 +437,10 @@ impl ModelsManager for OpenAiModelsManager {
         http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, Vec<CatalogModel>> {
         Box::pin(async move {
-            if let Err(err) = self
-                .refresh_available_models(refresh_strategy, &http_client_factory)
-                .await
+            if refresh_strategy != RefreshStrategy::InMemory
+                && let Err(err) = self
+                    .refresh_available_models(refresh_strategy, &http_client_factory)
+                    .await
             {
                 error!("failed to refresh available models: {err}");
             }
@@ -631,6 +635,7 @@ impl OpenAiModelsManager {
             return Ok(());
         }
         match refresh_strategy {
+            RefreshStrategy::InMemory => Ok(()),
             RefreshStrategy::Offline => {
                 self.try_load_cache().await;
                 Ok(())

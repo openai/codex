@@ -1909,9 +1909,21 @@ impl Session {
             .zip(metadata)
             .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
             .collect();
-        let context = crate::guardian::GuardianReviewContext::from(turn_context);
-        let (_, reviewer) = crate::guardian::resolve_review_model(self, &context).await;
-        let reviewer_compaction_hash = reviewer.comp_hash.clone();
+        // Ordinary replay needs no reviewer or network refresh. Only an opaque
+        // checkpoint can make reconstruction depend on reviewer compatibility.
+        let reviewer_compaction_hash = if codex_history::CompactionCheckpoint::latest(&history)
+            .is_some_and(codex_history::CompactionCheckpoint::is_usable)
+            && turn_context
+                .config
+                .features
+                .enabled(Feature::GuardianReuseParentCompaction)
+        {
+            let context = crate::guardian::GuardianReviewContext::from(turn_context);
+            let (_, reviewer) = crate::guardian::resolve_review_model(self, &context).await;
+            reviewer.comp_hash.clone()
+        } else {
+            None
+        };
         {
             let mut state = self.state.lock().await;
             state.replace_annotated_history(

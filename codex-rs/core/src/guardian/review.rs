@@ -15,6 +15,7 @@ use codex_guardian_reviewer::GuardianReviewOutcome;
 use codex_guardian_reviewer::GuardianReviewSessionLimits;
 use codex_guardian_reviewer::ReviewDeadline;
 use codex_guardian_reviewer::ReviewModel;
+use codex_guardian_reviewer::run_before_review_deadline;
 #[cfg(test)]
 use codex_guardian_reviewer::run_with_retry;
 use codex_prompts::ResolvedModelMessages;
@@ -186,11 +187,23 @@ async fn run_guardian_review_session_before_deadline(
             GuardianReviewAnalyticsResult::without_session(),
         );
     };
-    let session_config = match guardian_review_session_config(session.as_ref(), &context).await {
-        Ok(session_config) => session_config,
-        Err(err) => {
+    let session_config = match run_before_review_deadline(
+        options.deadline,
+        options.external_cancel.as_ref(),
+        guardian_review_session_config(session.as_ref(), &context),
+    )
+    .await
+    {
+        Ok(Ok(session_config)) => session_config,
+        Ok(Err(err)) => {
             return (
                 GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
+                GuardianReviewAnalyticsResult::without_session(),
+            );
+        }
+        Err(outcome) => {
+            return (
+                outcome.into(),
                 GuardianReviewAnalyticsResult::without_session(),
             );
         }
