@@ -43,8 +43,9 @@ impl PreparedGuardianContext {
         let context_mode =
             GuardianContextMode::from_history(history.conversation_history_snapshot().as_ref());
         let context_policy = ReviewContextPolicy::for_context(context_mode, &config.features);
-        let root_review_version = context_policy.root_review_version(&parent).await;
-        let parent_compaction = context_policy.parent_compaction(history)?;
+        let root_review_version =
+            context_policy::root_review_version(context_policy, &parent).await;
+        let parent_compaction = context_policy.parent_compaction(history.annotated_items())?;
         let mut instructions = parent.inherited_instructions().await;
         context.capture_project_instructions(&parent).await;
         instructions.project_snapshot = context.project_instructions.clone();

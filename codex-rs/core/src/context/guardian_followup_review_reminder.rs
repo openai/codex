@@ -24,13 +24,6 @@ impl ContextualUserFragment for GuardianFollowupReviewReminder {
     }
 
     fn body(&self) -> ContentItem {
-        input_text(concat!(
-            "Use prior reviews as context, not binding precedent. ",
-            "Follow the Workspace Policy. ",
-            "If the user explicitly approves a previously rejected action after being informed of the ",
-            "concrete risks, set outcome to \"allow\" unless the policy explicitly disallows user ",
-            "overwrites in such cases."
-        )
-        .to_string())
+        input_text(codex_guardian_reviewer::GUARDIAN_FOLLOWUP_REVIEW_REMINDER.to_string())
     }
 }

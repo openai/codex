@@ -10,8 +10,8 @@ pub(crate) use setup::run_guardian_review_session;
 
 #[path = "review_session_context.rs"]
 mod context_policy;
+use codex_guardian_reviewer::ReviewContextPolicy;
 use codex_guardian_reviewer::ReviewDeadline;
-use context_policy::ReviewContextPolicy;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -447,7 +447,7 @@ async fn run_review_on_session(
                 &params.spawn_config.features,
             );
             let loaded_parent_checkpoint = policy
-                .parent_compaction(&params.parent_history)?
+                .parent_compaction(params.parent_history.annotated_items())?
                 .as_ref()
                 .zip(codex_history::CompactionCheckpoint::latest(
                     reviewer_history.annotated_items(),

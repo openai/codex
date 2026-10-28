@@ -3649,7 +3649,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-analytics",
+ "codex-context-fragments",
  "codex-extension-api",
+ "codex-features",
  "codex-feedback",
  "codex-guardian-context",
  "codex-history",

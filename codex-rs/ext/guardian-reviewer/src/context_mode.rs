@@ -35,7 +35,7 @@ impl GuardianContextMode {
         }
     }
 
-    pub(crate) fn for_checkpoint(
+    pub fn for_checkpoint(
         items: &[ResponseItemEnvelope],
         reviewer_compaction_hash: Option<&str>,
     ) -> Self {
