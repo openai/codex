@@ -67,7 +67,13 @@ rust_binary(
         "BAZEL_PACKAGE": "codex-rs/app-server-protocol",
         "CARGO_PKG_NAME": "codex-app-server-protocol",
     },
-    rustc_flags = ["--test"] + WINDOWS_RUSTC_LINK_FLAGS,
+    # This short-lived exporter sits on application builds' critical path. Avoid
+    # optimizing its full test harness, retaining exec-mode assertion behavior.
+    rustc_flags = [
+        "--test",
+        "-Copt-level=0",
+        "-Cdebug-assertions=no",
+    ] + WINDOWS_RUSTC_LINK_FLAGS,
     tags = ["manual"],
     visibility = ["//bazel/schema:__pkg__"],
     deps = all_crate_deps(
