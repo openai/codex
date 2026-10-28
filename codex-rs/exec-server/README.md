@@ -17,8 +17,6 @@ use `codex-arg0` for hidden filesystem, process, and platform sandbox dispatch.
 The standalone executable accepts the same executor arguments and `-c` config
 overrides, including `--listen stdio`. Build it with
 `cargo build -p codex-exec-server-cli --bin codex-exec-server`.
-Canonical packages place it in `bin/` beside the entrypoint, with platform
-sandbox resources in `codex-resources/`.
 
 ## Command metadata
 

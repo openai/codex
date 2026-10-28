@@ -1125,9 +1125,6 @@ install_package_release() {
   if [ -f "$stage_release/codex-resources/bwrap" ]; then
     chmod 0755 "$stage_release/codex-resources/bwrap"
   fi
-  if [ -f "$stage_release/bin/codex-exec-server" ]; then
-    chmod 0755 "$stage_release/bin/codex-exec-server"
-  fi
   ln -sf "bin/codex" "$stage_release/codex"
 
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
@@ -1181,10 +1178,6 @@ release_dir_is_complete() {
         [ -x "$release_dir/codex" ] &&
         [ -x "$release_dir/codex-path/rg" ] ||
         return 1
-      # Older canonical packages do not advertise or contain the executor.
-      if grep -Eq '"execServer"[[:space:]]*:' "$release_dir/codex-package.json"; then
-        [ -x "$release_dir/bin/codex-exec-server" ] || return 1
-      fi
       ;;
     legacy-platform-npm)
       [ -x "$release_dir/codex" ] &&

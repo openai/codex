@@ -2,7 +2,6 @@
 
 import argparse
 import os
-import plistlib
 import subprocess
 import sys
 from pathlib import Path
@@ -135,12 +134,6 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
                     check=True,
                 )
             if relative.startswith("bin/"):
-                # Signing tools may omit the blob when no entitlements are requested.
-                if (
-                    actual.stat().st_size == 0
-                    and plistlib.loads(entitlements.read_bytes()) == {}
-                ):
-                    actual.write_bytes(entitlements.read_bytes())
                 expected = reports / f"{name}-expected.plist"
                 subprocess.run(
                     [

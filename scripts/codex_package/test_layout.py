@@ -2,8 +2,6 @@
 
 from pathlib import Path
 import hashlib
-import io
-import tarfile
 import json
 import shutil
 import subprocess
@@ -14,7 +12,6 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from build_winget_package import prepare_winget_package
-from codex_package.archive import write_archive, resolve_zstd_command
 from codex_package.layout import build_package_dir
 from codex_package.layout import validate_package_dir
 from codex_package.targets import PACKAGE_VARIANTS
@@ -66,7 +63,6 @@ int main(void) {
                     flags = [
                         "--entrypoint-bin",
                         "--code-mode-host-bin",
-                        "--exec-server-bin",
                         "--rg-bin",
                     ]
                     if "linux" in target:
@@ -77,7 +73,7 @@ int main(void) {
                         # Preserved prebuilt inputs must not even need a strip tool.
                         command.extend(("--strip-tool", str(root / "absent-strip")))
                     subprocess.run(command, check=True, capture_output=True)
-                    for name in ("codex", "codex-code-mode-host", "codex-exec-server"):
+                    for name in ("codex", "codex-code-mode-host"):
                         executable = package / "bin" / name
                         self.assertEqual(
                             subprocess.check_output([str(executable)]),
@@ -101,7 +97,6 @@ int main(void) {
                 files = {
                     "bin/codex.exe": b"signed CLI",
                     "bin/codex-code-mode-host.exe": b"signed code mode host",
-                    "bin/codex-exec-server.exe": b"signed executor",
                     "codex-resources/codex-command-runner.exe": b"signed runner",
                     "codex-resources/codex-windows-sandbox-setup.exe": b"signed setup",
                     "codex-resources/voice/bin/codex-voice-host.exe": b"signed voice host",
@@ -177,7 +172,6 @@ int main(void) {
                             code_mode_host_bin=touch_executable(
                                 root / "codex-code-mode-host"
                             ),
-                            exec_server_bin=rg_bin,
                             rg_bin=rg_bin,
                             bwrap_bin=None,
                             codex_command_runner_bin=None,
@@ -186,41 +180,13 @@ int main(void) {
 
                         build_package_dir(package_dir, "1.2.3", variant, spec, inputs)
                         validate_package_dir(package_dir, variant, spec)
-                        for suffix in (".tar.gz", ".tar.zst"):
-                            archive_path = root / f"package{suffix}"
-                            write_archive(package_dir, archive_path, force=False)
-                            data = (
-                                subprocess.check_output(
-                                    [
-                                        *resolve_zstd_command(),
-                                        "-d",
-                                        "--stdout",
-                                        str(archive_path),
-                                    ]
-                                )
-                                if suffix == ".tar.zst"
-                                else archive_path.read_bytes()
-                            )
-                            with tarfile.open(
-                                fileobj=io.BytesIO(data), mode="r:*"
-                            ) as archive:
-                                member = archive.getmember("bin/codex-exec-server")
-                                self.assertTrue(member.mode & 0o111)
-                                self.assertEqual(
-                                    archive.extractfile(member).read(),
-                                    rg_bin.read_bytes(),
-                                )
 
                         self.assertEqual(
                             {
                                 "rg": (package_dir / "codex-path" / "rg").read_bytes(),
-                                "executor": (
-                                    package_dir / "bin/codex-exec-server"
-                                ).read_bytes(),
                             },
                             {
                                 "rg": b"signed ripgrep binary",
-                                "executor": b"signed ripgrep binary",
                             },
                         )
 
@@ -232,7 +198,6 @@ int main(void) {
             inputs = PackageInputs(
                 entrypoint_bin=touch_executable(root / "codex-app-server"),
                 code_mode_host_bin=touch_executable(root / "codex-code-mode-host"),
-                exec_server_bin=touch_executable(root / "codex-exec-server"),
                 rg_bin=touch_executable(root / "rg"),
                 bwrap_bin=touch_executable(root / "bwrap"),
                 codex_command_runner_bin=None,
