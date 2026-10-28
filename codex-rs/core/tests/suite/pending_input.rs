@@ -1403,6 +1403,131 @@ async fn steer_interrupts_and_drains_websocket(
     Ok(())
 }
 
+#[test_case(false, false; "feature disabled")]
+#[test_case(true, false; "interrupt during inference")]
+#[test_case(true, true; "interrupt while steering drains")]
+#[tokio::test]
+async fn turn_interrupt_stops_websocket_inference(
+    interrupt_on_cancel: bool,
+    steer_first: bool,
+) -> anyhow::Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+
+    let completed = ev_completed("resp-interrupted");
+    let server = responses::start_websocket_server(vec![
+        vec![
+            vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+            vec![
+                ev_response_created("resp-interrupted"),
+                ev_reasoning_item_added("reason-1", &["thinking"]),
+            ],
+            vec![
+                json!({"type": "response.interrupt.accepted", "response_id": "resp-interrupted"}),
+                completed.clone(),
+            ],
+            vec![],
+        ],
+        vec![vec![
+            ev_response_created("replacement"),
+            ev_completed("replacement"),
+        ]],
+    ])
+    .await;
+    let release_completion = server.gate_response_event(&completed);
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(move |config| {
+            if interrupt_on_cancel {
+                config
+                    .features
+                    .enable(Feature::InterruptOnCancel)
+                    .expect("enable InterruptOnCancel feature");
+            }
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable InstantInterrupt feature");
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+    let codex = &test.codex;
+    submit_user_input(codex, "first prompt").await;
+    wait_for_reasoning_item_started(codex).await;
+
+    if steer_first {
+        steer_user_input(codex, "second prompt").await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 2),
+        )
+        .await?;
+    }
+    // Freeze the cleanup deadline so waiting for it cannot make replacement succeed.
+    tokio::time::pause();
+    {
+        let replacement = async {
+            codex.submit(Op::Interrupt).await?;
+            wait_for_event(codex, |event| matches!(event, EventMsg::TurnAborted(_))).await;
+            if interrupt_on_cancel {
+                let interrupt = tokio::time::timeout(
+                    std::time::Duration::from_secs(/*secs*/ 10),
+                    server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 2),
+                )
+                .await?
+                .body_json();
+                assert_eq!(
+                    interrupt,
+                    json!({
+                        "type": "response.interrupt", "response_id": "resp-interrupted",
+                        "mode": "discard_partial_items"
+                    })
+                );
+            }
+            submit_user_input(codex, "replacement prompt").await;
+            wait_for_successful_turn(codex).await;
+            anyhow::Ok(())
+        };
+        tokio::pin!(replacement);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "replacement waited for cancelled response cleanup"
+            );
+            tokio::select! {
+                result = &mut replacement => { result?; break; }
+                // Keep the runtime runnable so paused time cannot auto-advance during I/O.
+                () = tokio::task::yield_now() => {}
+            }
+        }
+    }
+    tokio::time::resume();
+    release_completion
+        .send(())
+        .expect("release interrupted completion");
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(
+        connections[1][0].body_json()["previous_response_id"],
+        Value::Null
+    );
+    codex.shutdown_and_wait().await?;
+    assert!(
+        server
+            .wait_for_closed_connections(/*expected*/ 2, std::time::Duration::from_secs(5))
+            .await
+    );
+    assert_eq!(
+        connections[0].len(),
+        if interrupt_on_cancel { 3 } else { 2 }
+    );
+    server.shutdown().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steer_during_stream_retry_skips_backoff() {
     let server = responses::start_mock_server().await;

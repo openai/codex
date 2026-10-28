@@ -195,6 +195,13 @@ impl SampleTask {
             .features
             .enable(Feature::ReasoningEffortOverride)
             .map_err(|error| invalid_request(error.to_string()))?;
+        if let Some(interrupt_on_cancel) = params.interrupt_on_cancel {
+            options
+                .config
+                .features
+                .set_enabled(Feature::InterruptOnCancel, interrupt_on_cancel)
+                .map_err(|error| invalid_request(error.to_string()))?;
+        }
         options
             .thread_extension_init
             .insert(codex_core::compact::AutoCompactionDisabled);

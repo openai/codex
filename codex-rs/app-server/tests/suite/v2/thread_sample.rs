@@ -305,6 +305,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             expected_turn_id: completed.turn.id.clone(),
             prompt: "Continue identically".to_string(),
             effort: Some(ReasoningEffort::Medium),
+            interrupt_on_cancel: Some(true),
             thread_source: Some(ThreadSource::Feature("composer_predictions".to_string())),
             turn_trigger: Some("composer_predictions".to_string()),
             responsesapi_client_metadata: Some(HashMap::from([

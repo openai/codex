@@ -9,6 +9,7 @@ use codex_extension_api::ModelRequestKind;
 use codex_extension_api::ModelResponseInterceptor;
 use codex_extension_api::ModelResponseStream;
 use codex_extension_api::ResponseEvent;
+use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -30,6 +31,7 @@ use tokio::time::timeout;
 #[derive(Debug)]
 struct Gates {
     delivered: Semaphore,
+    output_received: Semaphore,
     output_waiting: Semaphore,
     cancelled: Semaphore,
     output_items: std::sync::atomic::AtomicUsize,
@@ -87,6 +89,7 @@ impl ModelResponseInterceptor for Permit {
                     }
                     if matches!(&event, Ok(ResponseEvent::OutputItemDone(_))) {
                         output_items += 1;
+                        self.gates.output_received.add_permits(1);
                     }
                     let completed = matches!(&event, Ok(ResponseEvent::Completed { .. }));
                     events.push(event);
@@ -135,6 +138,7 @@ async fn model_request_gates_output_and_cancellation() -> Result<()> {
     let model = responses::mount_sse_sequence(&server, vec![response.clone(), response]).await;
     let gates = Arc::new(Gates {
         delivered: Semaphore::new(0),
+        output_received: Semaphore::new(0),
         output_waiting: Semaphore::new(0),
         cancelled: Semaphore::new(0),
         output_items: std::sync::atomic::AtomicUsize::new(0),
@@ -213,8 +217,9 @@ async fn model_request_gates_output_and_cancellation() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn model_request_gates_websocket_output_but_not_warmup() -> Result<()> {
+    let completed = ev_completed("response");
     let server = responses::start_websocket_server(vec![vec![
         vec![ev_response_created("warm"), ev_completed("warm")],
         vec![
@@ -240,12 +245,18 @@ async fn model_request_gates_websocket_output_but_not_warmup() -> Result<()> {
                 }
             }),
             ev_assistant_message("message", "done"),
-            ev_completed("response"),
         ],
+        vec![
+            serde_json::json!({"type": "response.interrupt.accepted", "response_id": "response"}),
+            completed.clone(),
+        ],
+        vec![],
     ]])
     .await;
+    let release_completion = server.gate_response_event(&completed);
     let gates = Arc::new(Gates {
         delivered: Semaphore::new(0),
+        output_received: Semaphore::new(0),
         output_waiting: Semaphore::new(0),
         cancelled: Semaphore::new(0),
         output_items: std::sync::atomic::AtomicUsize::new(0),
@@ -256,6 +267,15 @@ async fn model_request_gates_websocket_output_but_not_warmup() -> Result<()> {
     registry.model_request_contributor(Arc::new(Contributor(gates.clone())));
     let mut builder = test_codex()
         .with_model("gpt-5.2")
+        .with_model_info_override("gpt-5.2", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::InterruptOnCancel)
+                .expect("enable InterruptOnCancel feature");
+        })
         .with_extensions(Arc::new(registry.build()));
     let test = builder.build_with_websocket_server(&server).await?;
     test.codex
@@ -264,7 +284,7 @@ async fn model_request_gates_websocket_output_but_not_warmup() -> Result<()> {
             text_elements: vec![],
         }]))
         .await?;
-    timeout(Duration::from_secs(10), gates.output_waiting.acquire())
+    timeout(Duration::from_secs(10), gates.output_received.acquire())
         .await??
         .forget();
     let requests = server.single_connection();
@@ -304,10 +324,42 @@ async fn model_request_gates_websocket_output_but_not_warmup() -> Result<()> {
         requests[1].body_json()["client_metadata"]["test-interceptor"],
         "present"
     );
-    test.codex.submit(Op::Interrupt).await?;
-    timeout(Duration::from_secs(10), gates.cancelled.acquire())
-        .await??
-        .forget();
+    // Neither a terminal response nor the cleanup deadline may release this interceptor.
+    tokio::time::pause();
+    {
+        let cancelled = async {
+            test.codex.submit(Op::Interrupt).await?;
+            timeout(Duration::from_secs(10), gates.cancelled.acquire())
+                .await??
+                .forget();
+            server
+                .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2)
+                .await;
+            anyhow::Ok(())
+        };
+        tokio::pin!(cancelled);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "interceptor remained alive during cancelled response cleanup"
+            );
+            tokio::select! {
+                result = &mut cancelled => { result?; break; }
+                // Keep the runtime runnable so paused time cannot auto-advance during I/O.
+                () = tokio::task::yield_now() => {}
+            }
+        }
+    }
+    tokio::time::resume();
+    release_completion
+        .send(())
+        .expect("release interrupted completion");
+    assert!(
+        server
+            .wait_for_closed_connections(/*expected*/ 1, Duration::from_secs(5))
+            .await
+    );
     server.shutdown().await;
     Ok(())
 }
