@@ -395,6 +395,29 @@ async fn remote_session_persists_values_forwards_delegates_and_controls_cells() 
 
     let actual = execute(
         &session,
+        execute_request(""),
+        Arc::new(RecordingDelegate::default()),
+    )
+    .await;
+    assert_eq!(
+        actual,
+        RuntimeResponse::Result {
+            code_mode_host_duration: actual.code_mode_host_duration(),
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+            result_buffered_for: Duration::ZERO,
+            error_text: None,
+        }
+    );
+    session.shutdown().await.expect("shutdown before reload");
+    // Reloading a thread must not reuse cell IDs from its previous session.
+    let session = provider
+        .create_session()
+        .await
+        .expect("create replacement session");
+
+    let actual = execute(
+        &session,
         execute_request(r#"store("key", "persisted");"#),
         first_delegate.clone(),
     )
@@ -403,7 +426,7 @@ async fn remote_session_persists_values_forwards_delegates_and_controls_cells() 
         actual,
         RuntimeResponse::Result {
             code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("1"),
+            cell_id: cell_id("g2:1"),
             content_items: Vec::new(),
             result_buffered_for: Duration::ZERO,
             error_text: None,
@@ -432,7 +455,7 @@ text(result.value);
         actual,
         RuntimeResponse::Result {
             code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("2"),
+            cell_id: cell_id("g2:2"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "output".to_string(),
             }],
@@ -443,7 +466,7 @@ text(result.value);
     assert_eq!(
         *delegate.invocations.lock().expect("invocations lock"),
         vec![CodeModeNestedToolCall {
-            cell_id: cell_id("2"),
+            cell_id: cell_id("g2:2"),
             runtime_tool_call_id: "tool-1".to_string(),
             tool_name: ToolName::plain("echo"),
             tool_kind: CodeModeToolKind::Function,
@@ -452,7 +475,7 @@ text(result.value);
     );
     assert_eq!(
         *delegate.notifications.lock().expect("notifications lock"),
-        vec![("call-2".to_string(), cell_id("2"), "notice".to_string())]
+        vec![("call-2".to_string(), cell_id("g2:2"), "notice".to_string())]
     );
 
     let mut pending_request = execute_request("await new Promise(() => {});");
@@ -463,14 +486,14 @@ text(result.value);
         actual,
         RuntimeResponse::Yielded {
             code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("3"),
+            cell_id: cell_id("g2:3"),
             content_items: Vec::new(),
         }
     );
     let actual = session
         .wait(
             WaitRequest {
-                cell_id: cell_id("3"),
+                cell_id: cell_id("g2:3"),
                 yield_time_ms: 1,
                 max_output_tokens: None,
             },
@@ -482,19 +505,19 @@ text(result.value);
         actual,
         WaitOutcome::LiveCell(RuntimeResponse::Yielded {
             code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("3"),
+            cell_id: cell_id("g2:3"),
             content_items: Vec::new(),
         })
     );
     let actual = session
-        .terminate(cell_id("3").into())
+        .terminate(cell_id("g2:3").into())
         .await
         .expect("terminate cell");
     assert_eq!(
         actual,
         WaitOutcome::LiveCell(RuntimeResponse::Terminated {
             code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("3"),
+            cell_id: cell_id("g2:3"),
             content_items: Vec::new(),
         })
     );
@@ -502,14 +525,14 @@ text(result.value);
     session.shutdown().await.expect("shutdown remote session");
     assert_eq!(
         *delegate.closed_cells.lock().expect("closed cells lock"),
-        vec![cell_id("2"), cell_id("3")]
+        vec![cell_id("g2:2"), cell_id("g2:3")]
     );
     assert_eq!(
         *first_delegate
             .closed_cells
             .lock()
             .expect("closed cells lock"),
-        vec![cell_id("1")]
+        vec![cell_id("g2:1")]
     );
 }
 
@@ -1089,7 +1112,7 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
         actual,
         RuntimeResponse::Result {
             code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("g2:1"),
+            cell_id: cell_id("g3:1"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
                 text: "replacement".to_string(),
             }],

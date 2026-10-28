@@ -2468,8 +2468,9 @@ impl ThreadManagerState {
             instructions,
             exec_policy,
             multi_agent_version,
-            parent_rollout_thread_trace: self
-                .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
+            parent_rollout_thread_trace: agent_control
+                .runtime()
+                .parent_rollout_thread_trace(&session_source)
                 .await,
             originator,
             attachment_source,
@@ -2700,35 +2701,6 @@ impl ThreadManagerState {
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
         let _ = self.thread_created_tx.send(thread_id);
-    }
-
-    async fn parent_rollout_thread_trace_for_source(
-        &self,
-        session_source: &SessionSource,
-        initial_history: &InitialHistory,
-    ) -> codex_rollout_trace::ThreadTraceContext {
-        // A fresh v2 child belongs to the same rollout tree as its parent, so
-        // session startup derives its child trace from the parent's thread
-        // context. Resumed children already have a prior `ThreadStarted` event
-        // for this thread id; deriving a child trace during resume would write
-        // that start event again and make the bundle unreplayable.
-        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) = session_source
-        else {
-            return codex_rollout_trace::ThreadTraceContext::disabled();
-        };
-        if matches!(initial_history, InitialHistory::Resumed(_)) {
-            return codex_rollout_trace::ThreadTraceContext::disabled();
-        }
-        // A stopped parent or one on another manager cannot supply a local trace.
-        // Tracing is best-effort and never blocks child creation.
-        self.get_thread(*parent_thread_id)
-            .await
-            .ok()
-            .filter(|thread| thread.is_running())
-            .map(|thread| thread.session.services.rollout_thread_trace.clone())
-            .unwrap_or_else(codex_rollout_trace::ThreadTraceContext::disabled)
     }
 }
 

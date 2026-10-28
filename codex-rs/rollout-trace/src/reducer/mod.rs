@@ -237,6 +237,9 @@ impl TraceReducer {
             RawTraceEventPayload::ThreadEnded { thread_id, status } => {
                 self.end_thread(event.seq, event.wall_time_unix_ms, thread_id, status)?;
             }
+            RawTraceEventPayload::ThreadResumed { thread_id } => {
+                self.resume_thread(&thread_id)?;
+            }
             RawTraceEventPayload::CodexTurnStarted {
                 codex_turn_id,
                 thread_id,

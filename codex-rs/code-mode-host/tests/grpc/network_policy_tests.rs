@@ -92,7 +92,7 @@ async fn account_change_revokes_active_rpc_and_renews_the_cached_client() -> Res
     .await?;
     assert_eq!(
         response,
-        text_response("1", "replacement", response.code_mode_host_duration())
+        text_response("g2:1", "replacement", response.code_mode_host_duration())
     );
     session.shutdown().await.map_err(anyhow::Error::msg)?;
     replacement.shutdown().await.map_err(anyhow::Error::msg)?;

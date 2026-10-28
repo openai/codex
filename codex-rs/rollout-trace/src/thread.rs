@@ -156,11 +156,7 @@ impl ThreadTraceContext {
         matches!(self.state, ThreadTraceContextState::Enabled(_))
     }
 
-    /// Starts a fresh child thread in this context's rollout tree.
-    ///
-    /// Callers should use [`ThreadTraceContext::disabled`] for resumed children:
-    /// reusing the parent trace would emit a duplicate `ThreadStarted` event
-    /// for an existing thread id and make the bundle unreplayable.
+    /// Starts a new child thread in this context's rollout tree.
     pub fn start_child_thread_trace_or_disabled(
         &self,
         metadata: ThreadStartedTraceMetadata,
@@ -172,6 +168,22 @@ impl ThreadTraceContext {
                 context.root_thread_id.clone(),
                 metadata,
             ),
+        }
+    }
+
+    /// Reattaches an evicted child to this rollout without starting a new thread.
+    pub fn resume_child_thread_trace_or_disabled(&self, thread_id: String) -> Self {
+        let ThreadTraceContextState::Enabled(parent) = &self.state else {
+            return Self::disabled();
+        };
+        let context = EnabledThreadTraceContext {
+            writer: Arc::clone(&parent.writer),
+            root_thread_id: parent.root_thread_id.clone(),
+            thread_id: thread_id.clone(),
+        };
+        context.append_best_effort(RawTraceEventPayload::ThreadResumed { thread_id });
+        Self {
+            state: ThreadTraceContextState::Enabled(context),
         }
     }
 

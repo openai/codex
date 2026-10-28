@@ -187,12 +187,14 @@ impl OwnedCodeModeHost {
             .cloned()
     }
 
-    fn allocate_session_id(&self) -> SessionId {
-        let value = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-        match SessionId::new(format!("session-{value}")) {
+    fn allocate_session(&self) -> RemoteSession {
+        // The shared ordinal also keeps cell IDs distinct after a thread reload.
+        let generation = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+        let id = match SessionId::new(format!("session-{generation}")) {
             Ok(session_id) => session_id,
             Err(_) => unreachable!("a generated code-mode session ID is nonempty"),
-        }
+        };
+        RemoteSession { id, generation }
     }
 }
 
@@ -218,7 +220,6 @@ struct SessionInner {
     host: Arc<OwnedCodeModeHost>,
     limits: CodeModeSessionCellExecutionLimits,
     state: StdMutex<SessionState>,
-    next_generation: AtomicU64,
     shutdown_requested: AtomicBool,
     shutdown_result: StdMutex<Option<ShutdownResultReceiver>>,
     retired_cleanups: StdMutex<Vec<SessionCleanup>>,
@@ -245,7 +246,6 @@ impl ProcessOwnedCodeModeSession {
                 host,
                 limits,
                 state: StdMutex::new(SessionState::New),
-                next_generation: AtomicU64::new(1),
                 shutdown_requested: AtomicBool::new(false),
                 shutdown_result: StdMutex::new(None),
                 retired_cleanups: StdMutex::new(Vec::new()),
@@ -312,11 +312,7 @@ impl SessionInner {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 match &*state {
                     SessionState::New => {
-                        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-                        let remote = RemoteSession {
-                            id: self.host.allocate_session_id(),
-                            generation,
-                        };
+                        let remote = self.host.allocate_session();
                         let (result_tx, result_rx) = watch::channel(None);
                         *state = SessionState::Opening {
                             remote: remote.clone(),

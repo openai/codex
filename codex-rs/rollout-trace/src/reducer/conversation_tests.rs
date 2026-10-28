@@ -10,6 +10,7 @@ use crate::model::ConversationPart;
 use crate::model::ConversationRole;
 use crate::model::ExecutionStatus;
 use crate::model::ProducerRef;
+use crate::model::RolloutStatus;
 use crate::model::ToolCallKind;
 use crate::model::ToolCallSummary;
 use crate::payload::RawPayloadKind;
@@ -24,7 +25,8 @@ use crate::reducer::test_support::trace_context;
 use crate::replay_bundle;
 
 #[test]
-fn request_snapshots_reuse_history_without_deduping_new_identical_items() -> anyhow::Result<()> {
+fn request_snapshots_reuse_history_across_reload_without_deduping_new_identical_items()
+-> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
@@ -36,6 +38,17 @@ fn request_snapshots_reuse_history_without_deduping_new_identical_items() -> any
         }),
     )?;
     append_inference_start(&writer, "inference-1", "turn-1", first_request)?;
+
+    // Reload reopens the same logical thread, retaining its original start and history.
+    let before_reload = replay_bundle(temp.path())?;
+    writer.append(RawTraceEventPayload::ThreadEnded {
+        thread_id: "thread-root".to_string(),
+        status: RolloutStatus::Completed,
+    })?;
+    writer.append(RawTraceEventPayload::ThreadResumed {
+        thread_id: "thread-root".to_string(),
+    })?;
+    assert_eq!(replay_bundle(temp.path())?.threads, before_reload.threads);
     start_turn(&writer, "turn-2")?;
 
     let second_request = writer.write_json_payload(
@@ -93,6 +106,19 @@ fn request_snapshots_reuse_history_without_deduping_new_identical_items() -> any
     );
 
     Ok(())
+}
+
+#[test]
+fn resume_from_an_earlier_trace_is_unsupported() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    writer.append(RawTraceEventPayload::ThreadResumed {
+        thread_id: "previous-trace-child".to_string(),
+    })?;
+    expect_replay_error(
+        &temp,
+        "resuming threads from an earlier trace is not supported",
+    )
 }
 
 #[test]

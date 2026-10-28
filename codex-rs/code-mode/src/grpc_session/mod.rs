@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -67,6 +68,8 @@ fn inject_span_traceparent<T>(request: &mut tonic::Request<T>, span: &tracing::S
 #[derive(Clone)]
 pub struct GrpcCodeModeSessionProvider {
     transport: Arc<SharedTransport>,
+    // Reloaded threads share this counter rather than reusing a cell namespace.
+    next_generation: Arc<AtomicU64>,
 }
 
 impl GrpcCodeModeSessionProvider {
@@ -94,6 +97,7 @@ impl GrpcCodeModeSessionProvider {
     fn from_transport(transport: SharedTransport) -> Self {
         Self {
             transport: Arc::new(transport),
+            next_generation: Arc::new(AtomicU64::new(1)),
         }
     }
 

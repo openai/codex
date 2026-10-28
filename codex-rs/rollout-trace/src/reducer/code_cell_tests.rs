@@ -6,6 +6,7 @@ use crate::model::CodeCellRuntimeStatus;
 use crate::model::ConversationItemKind;
 use crate::model::ExecutionStatus;
 use crate::model::ProducerRef;
+use crate::model::RolloutStatus;
 use crate::model::ToolCallKind;
 use crate::model::ToolCallSummary;
 use crate::payload::RawPayloadKind;
@@ -399,7 +400,7 @@ fn cancelled_turn_terminates_unfinished_code_cell() -> anyhow::Result<()> {
 }
 
 #[test]
-fn runtime_code_cell_ids_can_repeat_across_threads() -> anyhow::Result<()> {
+fn runtime_code_cell_ids_can_repeat_across_threads_and_after_resume() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     writer.append(RawTraceEventPayload::ThreadStarted {
@@ -407,9 +408,6 @@ fn runtime_code_cell_ids_can_repeat_across_threads() -> anyhow::Result<()> {
         agent_path: "/root/child".to_string(),
         metadata_payload: None,
     })?;
-    start_turn_for_thread(&writer, "thread-root", "turn-root")?;
-    start_turn_for_thread(&writer, "thread-child", "turn-child")?;
-
     for (thread_id, turn_id, inference_call_id, call_id) in [
         ("thread-root", "turn-root", "inference-root", "call-root"),
         (
@@ -418,7 +416,23 @@ fn runtime_code_cell_ids_can_repeat_across_threads() -> anyhow::Result<()> {
             "inference-child",
             "call-child",
         ),
+        (
+            "thread-child",
+            "turn-resumed",
+            "inference-resumed",
+            "call-resumed",
+        ),
     ] {
+        if turn_id == "turn-resumed" {
+            writer.append(RawTraceEventPayload::ThreadEnded {
+                thread_id: thread_id.to_string(),
+                status: RolloutStatus::Completed,
+            })?;
+            writer.append(RawTraceEventPayload::ThreadResumed {
+                thread_id: thread_id.to_string(),
+            })?;
+        }
+        start_turn_for_thread(&writer, thread_id, turn_id)?;
         let request = writer.write_json_payload(
             RawPayloadKind::InferenceRequest,
             &json!({
@@ -444,7 +458,7 @@ fn runtime_code_cell_ids_can_repeat_across_threads() -> anyhow::Result<()> {
         let response = writer.write_json_payload(
             RawPayloadKind::InferenceResponse,
             &json!({
-                "response_id": format!("resp-{thread_id}"),
+                "response_id": format!("resp-{turn_id}"),
                 "output_items": [{
                     "type": "custom_tool_call",
                     "name": "exec",
@@ -455,7 +469,7 @@ fn runtime_code_cell_ids_can_repeat_across_threads() -> anyhow::Result<()> {
         )?;
         writer.append(RawTraceEventPayload::InferenceCompleted {
             inference_call_id: inference_call_id.to_string(),
-            response_id: Some(format!("resp-{thread_id}")),
+            response_id: Some(format!("resp-{turn_id}")),
             upstream_request_id: None,
             response_payload: response,
         })?;
@@ -472,15 +486,24 @@ fn runtime_code_cell_ids_can_repeat_across_threads() -> anyhow::Result<()> {
     let rollout = replay_bundle(temp.path())?;
     let root_cell_id = test_reduced_code_cell_id("call-root");
     let child_cell_id = test_reduced_code_cell_id("call-child");
+    let resumed_cell_id = test_reduced_code_cell_id("call-resumed");
 
     assert_eq!(rollout.code_cells[&root_cell_id].thread_id, "thread-root");
     assert_eq!(rollout.code_cells[&child_cell_id].thread_id, "thread-child");
+    assert_eq!(
+        rollout.code_cells[&resumed_cell_id].thread_id,
+        "thread-child"
+    );
     assert_eq!(
         rollout.code_cells[&root_cell_id].runtime_cell_id,
         Some("1".to_string())
     );
     assert_eq!(
         rollout.code_cells[&child_cell_id].runtime_cell_id,
+        Some("1".to_string())
+    );
+    assert_eq!(
+        rollout.code_cells[&resumed_cell_id].runtime_cell_id,
         Some("1".to_string())
     );
 

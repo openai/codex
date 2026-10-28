@@ -1307,18 +1307,6 @@ impl Session {
                     session_configuration.sandbox_policy(environment_selections)
                 ),
             };
-            let rollout_thread_trace = if matches!(
-                session_configuration.session_source,
-                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-            ) {
-                // Spawned child threads are part of their root rollout tree. If the
-                // parent had no trace bundle, do not create an orphan child bundle
-                // that looks like an independent rollout.
-                parent_rollout_thread_trace.start_child_thread_trace_or_disabled(trace_metadata)
-            } else {
-                ThreadTraceContext::start_root_or_disabled(trace_metadata)
-            };
-
             let mut post_session_configured_events = Vec::<Event>::new();
 
             for usage in config.features.legacy_feature_usages() {
@@ -1768,6 +1756,23 @@ impl Session {
                 );
             let reasoning_effort_override_enabled =
                 config.features.enabled(Feature::ReasoningEffortOverride) && !title_request;
+            // Once tracing starts, startup cleanup must own the session before the next await.
+            let rollout_thread_trace = if matches!(
+                session_configuration.session_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            ) {
+                // Spawned child threads are part of their root rollout tree. If the
+                // parent had no trace bundle, do not create an orphan child bundle
+                // that looks like an independent rollout.
+                if matches!(&initial_history, InitialHistory::Resumed(_)) {
+                    parent_rollout_thread_trace
+                        .resume_child_thread_trace_or_disabled(thread_id.to_string())
+                } else {
+                    parent_rollout_thread_trace.start_child_thread_trace_or_disabled(trace_metadata)
+                }
+            } else {
+                ThreadTraceContext::start_root_or_disabled(trace_metadata)
+            };
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.

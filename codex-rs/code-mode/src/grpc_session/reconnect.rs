@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use codex_code_mode_protocol::CodeModeSession;
@@ -34,7 +33,6 @@ struct ReconnectInner {
     limits: CodeModeSessionCellExecutionLimits,
     binding: Mutex<Option<SessionBinding>>,
     opening_permit: Semaphore,
-    next_generation: AtomicU64,
     shutdown_requested: CancellationToken,
     shutdown_result: Mutex<Option<ShutdownResultReceiver>>,
 }
@@ -56,7 +54,6 @@ impl ReconnectableSession {
                 limits,
                 binding: Mutex::new(None),
                 opening_permit: Semaphore::new(/*permits*/ 1),
-                next_generation: AtomicU64::new(1),
                 shutdown_requested: CancellationToken::new(),
                 shutdown_result: Mutex::new(None),
             }),
@@ -178,7 +175,10 @@ impl ReconnectInner {
             wait_for_watch(binding.session.inner.request_shutdown()).await?;
         }
 
-        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let generation = self
+            .provider
+            .next_generation
+            .fetch_add(1, Ordering::Relaxed);
         let session = tokio::select! {
             biased;
             _ = self.shutdown_requested.cancelled() => {

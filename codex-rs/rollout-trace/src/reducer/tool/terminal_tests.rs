@@ -9,6 +9,7 @@ use crate::ToolDispatchPayload;
 use crate::ToolDispatchRequester;
 use crate::model::ExecutionStatus;
 use crate::model::ExecutionWindow;
+use crate::model::RolloutStatus;
 use crate::model::TerminalModelObservation;
 use crate::model::TerminalObservationSource;
 use crate::model::TerminalOperation;
@@ -242,10 +243,21 @@ fn reused_process_ids_keep_sessions_and_stdin_joins_distinct() -> anyhow::Result
         ("child", "child-turn", ToolCallKind::WriteStdin),
         ("thread-root", "turn-1", ToolCallKind::ExecCommand),
         ("thread-root", "turn-1", ToolCallKind::WriteStdin),
+        ("child", "resumed-turn", ToolCallKind::WriteStdin),
     ]
     .into_iter()
     .enumerate()
     {
+        if turn == "resumed-turn" {
+            writer.append(RawTraceEventPayload::ThreadEnded {
+                thread_id: thread.to_string(),
+                status: RolloutStatus::Completed,
+            })?;
+            writer.append(RawTraceEventPayload::ThreadResumed {
+                thread_id: thread.to_string(),
+            })?;
+            start_turn_for_thread(&writer, thread, turn)?;
+        }
         if index == 4 {
             let response = writer.write_json_payload(
                 RawPayloadKind::ToolRuntimeEvent,
@@ -319,6 +331,7 @@ fn reused_process_ids_keep_sessions_and_stdin_joins_distinct() -> anyhow::Result
             ("thread-root", vec!["tool-0", "tool-2"]),
             ("child", vec!["tool-1", "tool-3"]),
             ("thread-root", vec!["tool-4", "tool-5"]),
+            ("child", vec!["tool-6"]),
         ],
     );
     let (runtime_start, request_id) = reused_stdin.unwrap();

@@ -41,7 +41,7 @@ try { image(value); } catch { text(calls); }
     .await?;
     assert_eq!(
         other_response,
-        text_response("1", "yes", other_response.code_mode_host_duration())
+        text_response("g2:1", "yes", other_response.code_mode_host_duration())
     );
 
     let delegate = Arc::new(RecordingDelegate::default());
@@ -90,7 +90,7 @@ try { image(value); } catch { text(calls); }
     .await?;
     assert_eq!(
         other_response,
-        text_response("2", "yes", other_response.code_mode_host_duration())
+        text_response("g2:2", "yes", other_response.code_mode_host_duration())
     );
     session.shutdown().await.map_err(anyhow::Error::msg)?;
     other_session.shutdown().await.map_err(anyhow::Error::msg)?;

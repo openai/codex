@@ -10,6 +10,7 @@ use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::DynamicToolFunctionSpec;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItemPayload;
@@ -31,6 +32,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::Feature;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -621,15 +623,30 @@ async fn wait_for_dynamic_tool_started(
 #[tokio::test]
 async fn v2_child_idle_eviction_preserves_mail_and_followup_context() -> Result<()> {
     let server = responses::start_mock_server().await;
+    let (mcp_server, startup_control) = AppsTestServer::mount_with_startup_control(&server).await?;
     let codex_home = TempDir::new()?;
+    let traces = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .with_model("gpt-5.5")
         .enable_feature(Feature::MultiAgentV2)
+        .enable_feature(Feature::CodeMode)
+        .enable_feature(Feature::CodeModeHost)
         .with_root_config("thread_unload_delay_secs = 0")
+        .with_extra_config(&format!(
+            r#"[mcp_servers.fails_once]
+url = "{}/api/codex/ps/mcp"
+http_headers = {{ Authorization = "Bearer synthetic-test-token" }}
+required = true
+# No cached tools: the child must initialize instead of taking the lazy startup path.
+enabled_tools = []
+"#,
+            mcp_server.chatgpt_base_url
+        ))
         .write(codex_home.path())?;
     write_models_cache(codex_home.path()).await?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("CODEX_ROLLOUT_TRACE_ROOT", traces.path().to_str())])
         .build_initialized()
         .await?;
     let parent = mcp.start_thread(ThreadStartParams::default()).await?.thread;
@@ -675,18 +692,32 @@ async fn v2_child_idle_eviction_preserves_mail_and_followup_context() -> Result<
         )
         .await;
         if tool != "send_message" {
+            let exec_call_id = format!("child-exec-{tool}");
             let parent_id = parent.id.clone();
-            let _child = responses::mount_sse_once_match(
+            let expected_call_id = exec_call_id.clone();
+            let _child_exec = responses::mount_sse_once_match(
                 &server,
                 move |request: &wiremock::Request| {
                     request
                         .headers
                         .get("thread-id")
                         .is_some_and(|id| id != parent_id.as_str())
+                        && !String::from_utf8_lossy(&request.body).contains(&expected_call_id)
+                },
+                responses::sse(vec![
+                    responses::ev_custom_tool_call(&exec_call_id, "exec", "text('child cell')"),
+                    responses::ev_completed("child-exec"),
+                ]),
+            )
+            .await;
+            let _child = responses::mount_sse_once_match(
+                &server,
+                move |request: &wiremock::Request| {
+                    String::from_utf8_lossy(&request.body).contains(&exec_call_id)
                 },
                 responses::sse(vec![
                     responses::ev_assistant_message(
-                        "child-result",
+                        &format!("child-result-{tool}"),
                         "Remember the initial child result",
                     ),
                     responses::ev_completed("child-done"),
@@ -750,6 +781,27 @@ async fn v2_child_idle_eviction_preserves_mail_and_followup_context() -> Result<
                     thread_id: child_id.clone()
                 }
             );
+            // Close the failed reload's trace before the follow-up reloads the child.
+            startup_control.fail_next_initialize_attempts(/*attempts*/ 1);
+            let resume_id = mcp
+                .send_thread_resume_request(ThreadResumeParams {
+                    thread_id: child_id.clone(),
+                    ..Default::default()
+                })
+                .await?;
+            let error = timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+            )
+            .await??;
+            assert!(
+                error
+                    .error
+                    .message
+                    .contains("cannot resume an unloaded multi-agent v2 sub-agent"),
+                "unexpected error: {}",
+                error.error.message
+            );
             let loaded: ThreadLoadedListResponse = mcp
                 .request(|request_id| ClientRequest::ThreadLoadedList {
                     request_id,
@@ -765,7 +817,7 @@ async fn v2_child_idle_eviction_preserves_mail_and_followup_context() -> Result<
                         |request| request.header("thread-id").as_deref() == Some(child_id.as_str())
                     )
                     .count(),
-                1,
+                2,
                 "queue-only mail must not start another child turn",
             );
         }
@@ -776,21 +828,21 @@ async fn v2_child_idle_eviction_preserves_mail_and_followup_context() -> Result<
         .iter()
         .filter(|request| request.header("thread-id").as_deref() == Some(child_id.as_str()))
         .collect();
-    assert_eq!(child_requests.len(), 2);
+    assert_eq!(child_requests.len(), 4);
     assert_eq!(
-        child_requests[1]
+        child_requests[2]
             .inputs_of_type("message")
             .into_iter()
             .filter(|item| item["role"] == "assistant")
             .collect::<Vec<_>>(),
         vec![json!({
-            "type": "message", "role": "assistant",
+            "id": "child-result-spawn_agent", "type": "message", "role": "assistant",
             "content": [{"type": "output_text", "text": "Remember the initial child result"}],
         })],
     );
     for message in ["Unread note for later", "Continue the child task"] {
         assert_eq!(
-            child_requests[1]
+            child_requests[2]
                 .inputs_of_type("agent_message")
                 .iter()
                 .filter(|item| item.to_string().contains(message))
@@ -799,6 +851,59 @@ async fn v2_child_idle_eviction_preserves_mail_and_followup_context() -> Result<
             "resumed child must receive {message} exactly once",
         );
     }
-    mcp.shutdown_gracefully().await?;
+    // Reload must keep tracing both turns under the same logical child.
+    let expected_calls = child_requests
+        .iter()
+        .map(|request| {
+            request
+                .header("x-codex-inference-call-id")
+                .expect("child inference must remain traced after eviction")
+        })
+        .collect::<Vec<_>>();
+    assert!(mcp.shutdown_gracefully().await?.success());
+    let bundles = std::fs::read_dir(traces.path())?.collect::<std::io::Result<Vec<_>>>()?;
+    assert_eq!(bundles.len(), 1);
+    let events = std::fs::read_to_string(bundles[0].path().join("trace.jsonl"))?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    let recorded_calls = events
+        .iter()
+        .map(|event| &event["payload"])
+        .filter(|event| event["type"] == "inference_started" && event["thread_id"] == child_id)
+        .map(|event| event["inference_call_id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(recorded_calls, expected_calls);
+    // Reloading the child replaces its Code Mode session, but must not reuse cell IDs.
+    let cells = events
+        .iter()
+        .filter(|event| {
+            event["thread_id"] == child_id && event["payload"]["type"] == "code_cell_started"
+        })
+        .map(|event| &event["payload"])
+        .collect::<Vec<_>>();
+    assert_eq!(cells.len(), 2);
+    assert_ne!(cells[0]["runtime_cell_id"], cells[1]["runtime_cell_id"]);
+    let lifecycle = events
+        .iter()
+        .map(|event| &event["payload"])
+        .filter(|event| event["thread_id"] == child_id)
+        .filter_map(|event| {
+            let kind = event["type"].as_str()?;
+            matches!(kind, "thread_started" | "thread_ended" | "thread_resumed")
+                .then(|| (kind, event["status"].as_str()))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle,
+        vec![
+            ("thread_started", None),
+            ("thread_ended", Some("completed")),
+            ("thread_resumed", None),
+            ("thread_ended", Some("aborted")),
+            ("thread_resumed", None),
+            ("thread_ended", Some("completed")),
+        ]
+    );
     Ok(())
 }

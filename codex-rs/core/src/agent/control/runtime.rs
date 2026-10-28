@@ -15,11 +15,15 @@ use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
 use arc_swap::ArcSwapOption;
 use codex_extension_api::ThreadInstructionsProvider;
+use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::AgentErrorContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
+use codex_rollout_trace::ThreadTraceContext;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -309,6 +313,35 @@ impl LocalAgentRuntime {
 
     pub(crate) fn generate_thread_id(&self) -> ThreadId {
         (self.thread_id_generator)()
+    }
+
+    /// Shares the tree's trace with a new or reloaded child runtime.
+    pub(crate) async fn parent_rollout_thread_trace(
+        &self,
+        session_source: &SessionSource,
+    ) -> ThreadTraceContext {
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = session_source
+        else {
+            return ThreadTraceContext::disabled();
+        };
+        let Some(manager) = self.manager.upgrade() else {
+            return ThreadTraceContext::disabled();
+        };
+        // Reattach reloaded children through the v2 root: their immediate parent
+        // may also be evicted. V1 has no registered root, so it uses the parent.
+        let trace_owner = self
+            .registry
+            .agent_id_for_path(&AgentPath::root())
+            .unwrap_or(*parent_thread_id);
+        manager
+            .get_thread(trace_owner)
+            .await
+            .ok()
+            .filter(|thread| thread.is_running())
+            .map(|thread| thread.session.services.rollout_thread_trace.clone())
+            .unwrap_or_else(ThreadTraceContext::disabled)
     }
 
     pub(crate) fn root_thread_instructions_provider(

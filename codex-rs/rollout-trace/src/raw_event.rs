@@ -84,6 +84,10 @@ pub enum RawTraceEventPayload {
         thread_id: AgentThreadId,
         status: RolloutStatus,
     },
+    /// An evicted runtime was reloaded for a thread already recorded in this bundle.
+    ThreadResumed {
+        thread_id: AgentThreadId,
+    },
     CodexTurnStarted {
         codex_turn_id: CodexTurnId,
         thread_id: AgentThreadId,
@@ -250,6 +254,7 @@ impl RawTraceEventPayload {
             RawTraceEventPayload::RolloutStarted { .. }
             | RawTraceEventPayload::RolloutEnded { .. }
             | RawTraceEventPayload::ThreadEnded { .. }
+            | RawTraceEventPayload::ThreadResumed { .. }
             | RawTraceEventPayload::CodexTurnStarted { .. }
             | RawTraceEventPayload::CodexTurnEnded { .. }
             | RawTraceEventPayload::HistoryItemAccepted { .. }
