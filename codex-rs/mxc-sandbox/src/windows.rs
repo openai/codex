@@ -8,8 +8,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_utils_path_uri::PathUri;
-use mxc_sdk::mxc_common::filesystem_object::ExistingObjectComparison;
-use mxc_sdk::mxc_common::filesystem_object::compare_existing_filesystem_objects;
 use windows_sys::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
@@ -92,8 +90,8 @@ pub(super) fn volume_roots(
     Ok(volumes)
 }
 
-// Omit only implicit network roots whose object identity MXC cannot inspect.
-// Keep healthy shares and cwd volumes; explicit grants follow the normal path.
+// Default reads cover local volumes and cwd shares, not unrelated network shares.
+// Explicit grants follow the normal policy path.
 pub(super) fn implicit_read_roots(
     volume_roots: &[PathBuf],
     policy_cwd: &Path,
@@ -111,7 +109,6 @@ pub(super) fn implicit_read_roots(
             drive_type != DRIVE_REMOTE
                 || policy_cwd.starts_with(root)
                 || command_cwd.starts_with(root)
-                || compare_existing_filesystem_objects(root, root) == ExistingObjectComparison::Same
         })
         .map(PathUri::from_host_native_path)
         .collect()

@@ -95,6 +95,9 @@ to 4096 bytes; the helper removes them before native process creation. Use
 - Windows volume-root grants do not recurse. The adapter grants the root and
   its immediate children; directories added or newly mounted during a running
   command are not implicitly granted.
+- Default read access excludes network shares unrelated to the policy or command
+  cwd. Explicit read/write grants remain supported. Unrelated shares are not
+  probed for object identity or enumerated for implicit reads.
 - The native API represents paths and environment values as Unicode strings.
   Non-Unicode values fail instead of undergoing lossy conversion.
 - An empty child environment still uses the Windows user-profile defaults.
