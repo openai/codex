@@ -456,6 +456,7 @@ pub struct ConfigRequirements {
     pub check_for_update_on_startup: Option<bool>,
     pub allow_login_shell: Option<bool>,
     pub feedback: Option<FeedbackRequirements>,
+    pub otel: Option<OtelRequirements>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -497,6 +498,65 @@ pub struct NewThreadModelDefaults {
 #[ts(export_to = "v2/")]
 pub struct FeedbackRequirements {
     pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct OtelRequirements {
+    pub tool_result: Option<OtelToolResultLogConfig>,
+    pub log_user_prompt: Option<bool>,
+    pub log_agent_responses: Option<bool>,
+    pub log_guardian_assessments: Option<bool>,
+    pub environment: Option<String>,
+    pub exporter: Option<OtelExporter>,
+    pub trace_exporter: Option<OtelExporter>,
+    pub metrics_exporter: Option<OtelExporter>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct OtelToolResultLogConfig {
+    pub max_bytes: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export_to = "v2/", rename_all = "kebab-case")]
+pub enum OtelExporter {
+    None,
+    Statsig,
+    OtlpHttp {
+        endpoint: String,
+        /// Exporter request headers.
+        headers: HashMap<String, String>,
+        protocol: OtelHttpProtocol,
+        tls: Option<OtelTlsConfig>,
+    },
+    OtlpGrpc {
+        endpoint: String,
+        /// Exporter request headers.
+        headers: HashMap<String, String>,
+        tls: Option<OtelTlsConfig>,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export_to = "v2/", rename_all = "kebab-case")]
+pub enum OtelHttpProtocol {
+    Binary,
+    Json,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export_to = "v2/", rename_all = "kebab-case")]
+pub struct OtelTlsConfig {
+    pub ca_certificate: Option<PathBuf>,
+    pub client_certificate: Option<PathBuf>,
+    pub client_private_key: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

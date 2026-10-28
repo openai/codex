@@ -2226,6 +2226,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             check_for_update_on_startup: None,
             allow_login_shell: None,
             feedback: None,
+            otel: None,
         });
 
     assert_eq!(reason, Some("askForApproval.granular"));

@@ -591,6 +591,7 @@ pub(crate) fn map_requirements_to_api(
                 service_tier: new_thread.service_tier,
             }),
         }),
+        otel: None,
         sqlite_home: requirements.sqlite_home.map(Into::into),
         log_dir: requirements.log_dir.map(Into::into),
         model_catalog_json: requirements.model_catalog_json.map(Into::into),
