@@ -879,10 +879,10 @@ use_repo(
 http_archive(
     name = "v8_crate_152_2_0",
     build_file = "//third_party/v8:v8_crate.BUILD.bazel",
-    sha256 = "a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888",
-    strip_prefix = "v8-152.2.0",
+    sha256 = "e2e7f9961af59dbb749a60ac0a3c34c9680f6b86dd04277f2715356b5a52feab",
+    strip_prefix = "rusty_v8-350c5a859a9b3c84ab8701b3ad51e3b7699b30c0",
     type = "tar.gz",
-    urls = ["https://static.crates.io/crates/v8/v8-152.2.0.crate"],
+    urls = ["https://github.com/seanh-oai/rusty_v8/archive/350c5a859a9b3c84ab8701b3ad51e3b7699b30c0.tar.gz"],
 )
 
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")

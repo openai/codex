@@ -33,6 +33,7 @@ CANARY_PATH_PATTERNS = {
     "MODULE.bazel",
     "MODULE.bazel.lock",
     "codex-rs/Cargo.toml",
+    "codex-rs/v8-poc/**",
     "patches/BUILD.bazel",
     "patches/llvm_*.patch",
     "patches/rules_cc_*.patch",

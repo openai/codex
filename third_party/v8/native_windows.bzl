@@ -32,6 +32,24 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["BUILD.bazel"])
 filegroup(name = "llvm-readobj", srcs = glob(["bin/llvm-readobj.exe"], allow_empty = True))
 filegroup(name = "llvm-lib", srcs = glob(["bin/llvm-lib.exe"], allow_empty = True))
+# Tool paths alone do not invalidate cached C++ actions when the pin changes.
+# Keep compiler resources and bundled runtime DLLs in the toolchain inputs.
+filegroup(
+    name = "compiler_files",
+    srcs = glob(["bin/clang-cl.exe", "bin/*.dll", "lib/clang/*/include/**"], allow_empty = True),
+)
+filegroup(
+    name = "linker_files",
+    srcs = glob(["bin/lld-link.exe", "bin/*.dll"], allow_empty = True),
+)
+filegroup(
+    name = "archiver_files",
+    srcs = glob(["bin/llvm-lib.exe", "bin/*.dll"], allow_empty = True),
+)
+filegroup(
+    name = "all_files",
+    srcs = [":compiler_files", ":linker_files", ":archiver_files"],
+)
 [
     filegroup(
         name = "builtins_" + arch,

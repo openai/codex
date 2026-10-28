@@ -6,7 +6,7 @@ Bazel consumer builds use:
 - Codex-published sandbox archive/binding pairs on Darwin, GNU/musl Linux,
   and Windows MSVC (x64 and arm64), with checksums pinned from the trusted
   release manifests
-- source-built V8 archives on Windows GNU
+- source-built V8 archives and matching generated bindings on Windows GNU
 
 Local Cargo builds still use upstream prebuilt `rusty_v8` archives by default.
 Selected Cargo CI, release, and package builds override
@@ -15,14 +15,17 @@ sets those variables independently in `MODULE.bazel`, selecting the pair above
 for its consumers. All Bazel compilation modes use the same published V8
 release archive on supported platforms.
 
-The Bazel `v8` crate feature selection enables V8's in-process sandbox.
-Darwin/Linux consumers use the matching published pair by default.
-For a source build use `--//:rusty_v8_from_source=true`; both archive and
-bindings then come from the source path. Source targets enforce the workspace
-runtime and sandbox/pointer-compression ABI. Release-pair targets enforce either
-the legacy or the sandbox ABI plus Chromium's pinned runtime. Target CPU follows
-the named artifact. The underlying V8 settings are internal, and callers do
-not pass separate V8 feature or libc++ flags.
+The Bazel `v8` crate and its native source targets enable V8's in-process
+sandbox and pointer compression. For instrumentation, use
+`--//:rusty_v8_from_source=true`: on Darwin, Linux and native Windows MSVC
+the archive and bindings both come from source instead of the pinned published
+sandbox pair. The published archive cannot incorporate native debug or sanitizer
+settings.
+
+Source targets enforce the workspace runtime and sandbox/pointer-compression
+ABI. Release-pair targets enforce either the legacy or sandbox ABI plus
+Chromium's pinned runtime. Target CPU follows the named artifact. These V8
+settings are internal; callers do not pass separate V8 feature or libc++ flags.
 
 Current pinned versions:
 
@@ -130,20 +133,25 @@ This depends on libc++'s shared exception-object ABI; updates to either libc++
 revision must keep the native GNU link/runtime checks passing. The Bazel pair targets above still point directly to source
 targets so a new release or canary never depends on an older published copy.
 
-Native Windows x64 and ARM64 hosts can build sandbox archives with pinned
-clang-cl and the installed Microsoft SDK using
+Native Windows x64 and ARM64 hosts can build sandbox archives and matching
+Rust bindings with pinned clang-cl and the installed Microsoft SDK using
 `//third_party/v8:v8_152_2_0_x86_64_pc_windows_msvc_bazel` and
 `//third_party/v8:v8_152_2_0_aarch64_pc_windows_msvc_bazel`.
-`//third_party/v8:rusty_v8_native_windows_archive_for_target` selects these source
-outputs directly. These targets bundle Chromium libc++ and compiler builtins,
-and fix pointer compression and sandboxing to the published Windows contract.
-The owned engine policy also preserves the GN MSVC defaults for GC-managed
-microtask queues, random Wasm module generation, disabled imminent-deprecation
-warnings, and external TypedArray backing stores. Other source targets retain
-the published Unix policy, including a 64-byte inline TypedArray threshold.
-These are fixed platform choices, not additional developer build switches.
-Matching generated Rust bindings, consumer selection, and publishing integration
-are added separately; existing MSVC consumers continue using the prebuilt pair.
+The producer selectors `//third_party/v8:rusty_v8_native_windows_archive_for_target`
+and `//third_party/v8:rusty_v8_native_windows_binding_for_target` select source
+outputs directly. Both use the same sandbox, pointer compression, target CPU,
+and Chromium libc++ profile. The bindings use V8's compiled headers and defines
+so their sizes follow the archive, including CppGC members. Default MSVC
+consumers keep the published pair; `--//:rusty_v8_from_source=true` selects
+the newly built archive and bindings together.
+
+The owned engine policy preserves the GN MSVC defaults for GC-managed microtask
+queues, random Wasm module generation, disabled imminent-deprecation warnings,
+and external TypedArray backing stores. Other source targets retain the published
+Unix policy, including a 64-byte inline TypedArray threshold. Generated Rust
+bindings use that same threshold; never pair a native 64-byte threshold with
+GN's size-zero binding constant. These are fixed platform choices, not additional
+developer build switches.
 
 Use a native Visual Studio Developer PowerShell with the C++ tools and Windows
 SDK available. The SDK supplies headers, libraries, `dumpbin.exe`, and the
@@ -152,7 +160,8 @@ assembler. From the repo root, build the archive for that host:
 ```powershell
 bazel build --config=ci-windows-msvc `
   --host_platform=//:local_windows_msvc --platforms=//:local_windows_msvc `
-  //third_party/v8:rusty_v8_native_windows_archive_for_target
+  //third_party/v8:rusty_v8_native_windows_archive_for_target `
+  //third_party/v8:rusty_v8_native_windows_binding_for_target
 ```
 
 Bazel fetches and verifies LLVM 22.1.8 for the host, the same major and patch

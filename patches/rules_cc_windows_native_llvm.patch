@@ -1,7 +1,7 @@
 # Reuse rules_cc's installed SDK setup with an explicitly declared LLVM repo.
-# Only the V8 repository has native_llvm; ordinary local_config_cc behaves
-# exactly as upstream, including the caller's BAZEL_LLVM/USE_CLANG_CL.
-# Preserve DUMPBIN when selecting clang-cl; the upstream MSVC template uses it.
+# Only the V8 repository has native_llvm; ordinary local_config_cc keeps its
+# installed compiler and input files. Track the fetched LLVM tools and resources
+# as action inputs so changes to the pin invalidate cached compilation and links.
 diff --git a/cc/private/toolchain/windows_cc_configure.bzl b/cc/private/toolchain/windows_cc_configure.bzl
 --- a/cc/private/toolchain/windows_cc_configure.bzl
 +++ b/cc/private/toolchain/windows_cc_configure.bzl
@@ -35,3 +35,75 @@ diff --git a/cc/private/toolchain/windows_cc_configure.bzl b/cc/private/toolchai
          build_tools["LINK"] = find_llvm_tool(repository_ctx, llvm_path, "lld-link.exe")
          if not build_tools["LINK"]:
              build_tools["LINK"] = find_msvc_tool(repository_ctx, vc_path, "link.exe", "x64")
+@@ -923,6 +930,12 @@
+     )
+
+     template_vars = dict()
++    native_llvm = getattr(repository_ctx.attr, "native_llvm", None)
++    for group in ["compiler_files", "linker_files", "archiver_files", "all_files"]:
++        files = [str(native_llvm.same_package_label(group))] if native_llvm else []
++        if native_llvm and group == "all_files":
++            files.append(":msvc_compiler_files")
++        template_vars["%{native_llvm_" + group + "}"] = repr(files)
+     msvc_vars_x64 = _get_msvc_vars(repository_ctx, paths, "x64")
+     template_vars.update(msvc_vars_x64)
+     template_vars.update(_get_clang_cl_vars(repository_ctx, paths, msvc_vars_x64, "x64"))
+diff --git a/cc/private/toolchain/BUILD.windows.tpl b/cc/private/toolchain/BUILD.windows.tpl
+--- a/cc/private/toolchain/BUILD.windows.tpl
++++ b/cc/private/toolchain/BUILD.windows.tpl
+@@ -67,7 +67,22 @@
+         "%{msvc_deps_scanner_wrapper_path_x64}",
+         "%{msvc_deps_scanner_wrapper_path_arm}",
+         "%{msvc_deps_scanner_wrapper_path_arm64}",
+-    ]
++    ] + %{native_llvm_compiler_files}
++)
++
++filegroup(
++    name = "msvc_all_files",
++    srcs = %{native_llvm_all_files},
++)
++
++filegroup(
++    name = "msvc_linker_files",
++    srcs = %{native_llvm_linker_files},
++)
++
++filegroup(
++    name = "msvc_archiver_files",
++    srcs = %{native_llvm_archiver_files},
+ )
+
+ # Hardcoded toolchain, legacy behaviour.
+@@ -301,12 +316,12 @@
+     name = "cc-compiler-x64_windows",
+     toolchain_identifier = "msvc_x64",
+     toolchain_config = ":msvc_x64",
+-    all_files = ":empty",
+-    ar_files = ":empty",
++    all_files = ":msvc_all_files",
++    ar_files = ":msvc_archiver_files",
+     as_files = ":msvc_compiler_files",
+     compiler_files = ":msvc_compiler_files",
+     dwp_files = ":empty",
+-    linker_files = ":empty",
++    linker_files = ":msvc_linker_files",
+     objcopy_files = ":empty",
+     strip_files = ":empty",
+     supports_param_files = 1,
+@@ -526,12 +541,12 @@
+     name = "cc-compiler-arm64_windows",
+     toolchain_identifier = "msvc_arm64",
+     toolchain_config = ":msvc_arm64",
+-    all_files = ":empty",
+-    ar_files = ":empty",
++    all_files = ":msvc_all_files",
++    ar_files = ":msvc_archiver_files",
+     as_files = ":msvc_compiler_files",
+     compiler_files = ":msvc_compiler_files",
+     dwp_files = ":empty",
+-    linker_files = ":empty",
++    linker_files = ":msvc_linker_files",
+     objcopy_files = ":empty",
+     strip_files = ":empty",
+     supports_param_files = 1,

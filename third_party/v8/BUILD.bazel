@@ -2,6 +2,7 @@ load("@@//third_party/v8:artifact_profile.bzl", "v8_artifact_files")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rs//rs:rules_rust_bindgen.bzl", "rust_bindgen")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -93,20 +94,6 @@ alias(
     actual = ":v8_152_2_0_x86_64_pc_windows_gnullvm_bazel",
 )
 
-alias(
-    name = "src_binding_release_x86_64_pc_windows_gnullvm_152_2_0_release",
-    # `rusty_v8` does not publish a Windows GNU binding file. The generated
-    # binding only describes this V8 release's C++ API surface, so reuse the
-    # Linux release binding while the windows-gnullvm archive build is still
-    # experimental.
-    actual = ":src_binding_release_x86_64_unknown_linux_gnu_152_2_0_release",
-)
-
-alias(
-    name = "src_binding_release_aarch64_pc_windows_gnullvm_152_2_0_release",
-    actual = ":src_binding_release_aarch64_unknown_linux_gnu_152_2_0_release",
-)
-
 # Both ordinary consumers and source consumers use the current sandbox ABI.
 # Switch the archive and binding together for source instrumentation. The same
 # root setting is visible in the @v8_targets copy used by rules_rs.
@@ -176,14 +163,14 @@ alias(
     actual = select({
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":v8_152_2_0_aarch64_apple_darwin_bazel",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":v8_152_2_0_aarch64_pc_windows_gnullvm",
-        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":v8_152_2_0_aarch64_pc_windows_msvc",
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":v8_152_2_0_aarch64_pc_windows_msvc_bazel",
         "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": ":v8_152_2_0_aarch64_unknown_linux_gnu_bazel",
         # Rust's compiler-builtins archive does not supply V8's __clear_cache.
         # Use the merged archive containing the ARM64 compiler-rt builtins.
         ":platform_aarch64_unknown_linux_musl": ":v8_152_2_0_aarch64_unknown_linux_musl_release",
         "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ":v8_152_2_0_x86_64_apple_darwin_bazel",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ":v8_152_2_0_x86_64_pc_windows_gnullvm",
-        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":v8_152_2_0_x86_64_pc_windows_msvc",
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":v8_152_2_0_x86_64_pc_windows_msvc_bazel",
         "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": ":v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
         ":platform_x86_64_unknown_linux_musl": ":v8_152_2_0_x86_64_unknown_linux_musl_release",
         "//conditions:default": ":v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
@@ -216,17 +203,17 @@ alias(
 alias(
     name = "rusty_v8_source_binding_for_target",
     actual = select({
-        "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":src_binding_release_aarch64_apple_darwin_152_2_0_release",
-        "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_release_aarch64_pc_windows_gnullvm_152_2_0_release",
-        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":src_binding_release_aarch64_pc_windows_msvc_152_2_0_release",
-        "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_release_aarch64_unknown_linux_gnu_152_2_0_release",
-        ":platform_aarch64_unknown_linux_musl": ":src_binding_release_aarch64_unknown_linux_musl_152_2_0_release",
-        "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ":src_binding_release_x86_64_apple_darwin_152_2_0_release",
-        "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_release_x86_64_pc_windows_gnullvm_152_2_0_release",
-        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":src_binding_release_x86_64_pc_windows_msvc_152_2_0_release",
-        "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_release_x86_64_unknown_linux_gnu_152_2_0_release",
-        ":platform_x86_64_unknown_linux_musl": ":src_binding_release_x86_64_unknown_linux_musl_152_2_0_release",
-        "//conditions:default": ":src_binding_release_x86_64_unknown_linux_gnu_152_2_0_release",
+        "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":src_binding_aarch64_apple_darwin_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_aarch64_pc_windows_gnullvm_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":src_binding_aarch64_pc_windows_msvc_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_aarch64_unknown_linux_gnu_152_2_0_bazel",
+        ":platform_aarch64_unknown_linux_musl": ":src_binding_aarch64_unknown_linux_musl_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ":src_binding_x86_64_apple_darwin_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_x86_64_pc_windows_gnullvm_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":src_binding_x86_64_pc_windows_msvc_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_x86_64_unknown_linux_gnu_152_2_0_bazel",
+        ":platform_x86_64_unknown_linux_musl": ":src_binding_x86_64_unknown_linux_musl_152_2_0_bazel",
+        "//conditions:default": ":src_binding_x86_64_unknown_linux_gnu_152_2_0_bazel",
     }),
 )
 
@@ -420,6 +407,184 @@ alias(
     tags = ["manual"],
 )
 
+# Bindgen reads the same CcInfo as the C++ archive. Pass local libc++ options
+# explicitly because CcInfo propagates defines and headers, but not copts.
+cc_library(
+    name = "binding_headers_152_2_0",
+    hdrs = [
+        "@v8_crate_152_2_0//:binding_hpp",
+        "@v8_crate_152_2_0//:support_h",
+    ],
+    tags = ["manual"],
+    # Bindgen asks the toolchain for C flags, which omit its C++ header search
+    # paths. Source profiles use the workspace headers; release profiles get
+    # their pinned Chromium headers from the profiled binding dependency.
+    deps = [":v8_152_2_0_binding"] + select({
+        ":use_rusty_v8_custom_libcxx": [],
+        "@platforms//os:osx": [],
+        "//conditions:default": [
+            "@llvm-project//libcxx:headers",
+            "@llvm-project//libcxxabi:headers",
+        ],
+    }),
+)
+
+rust_bindgen(
+    name = "binding_generated_152_2_0",
+    bindgen_flags = [
+        "--generate-cstr",
+        "--rustified-enum=.*UseCounterFeature",
+        "--rustified-enum=.*ModuleImportPhase",
+        "--rustified-enum=.*Intercepted",
+        "--bitfield-enum=.*GCType",
+        "--bitfield-enum=.*GCCallbackFlags",
+        "--allowlist-item=v8__.*",
+        "--allowlist-item=cppgc__.*",
+        "--allowlist-item=RustObj",
+        "--allowlist-item=memory_span_t",
+        "--allowlist-item=const_memory_span_t",
+        "--allowlist-item=ExternalConstOneByteStringResource",
+        "--blocklist-item=cppgc.*Visitor",
+        "--blocklist-item=RustObj.*Trace",
+    ],
+    cc_lib = ":binding_headers_152_2_0",
+    clang_flags = [
+        "-x",
+        "c++",
+        "-std=c++20",
+    ] + V8_CUSTOM_LIBCXX_COPTS + select({
+        # Match the C++ toolchain. Bindgen asks for C flags and otherwise
+        # enables C++20 modules, for which the macOS SDK's types are cyclic.
+        "@platforms//os:osx": [
+            "-Xclang",
+            "-fno-cxx-modules",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ["--target=arm64-apple-darwin"],
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ["--target=aarch64-w64-windows-gnu"],
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ["--target=aarch64-pc-windows-msvc"],
+        "@llvm//platforms/config:linux_aarch64": ["--target=aarch64-unknown-linux-gnu"],
+        ":platform_aarch64_unknown_linux_musl": ["--target=aarch64-unknown-linux-musl"],
+        "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ["--target=x86_64-apple-darwin"],
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ["--target=x86_64-w64-windows-gnu"],
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ["--target=x86_64-pc-windows-msvc"],
+        "@llvm//platforms/config:linux_x86_64": ["--target=x86_64-unknown-linux-gnu"],
+        ":platform_x86_64_unknown_linux_musl": ["--target=x86_64-unknown-linux-musl"],
+    }),
+    header = "@v8_crate_152_2_0//:binding_hpp",
+    tags = ["manual"],
+)
+
+v8_artifact_files(
+    name = "src_binding_aarch64_pc_windows_msvc_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "sandbox_release",
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:msvc",
+    ],
+    v8_cpu = "arm64",
+)
+
+v8_artifact_files(
+    name = "src_binding_x86_64_pc_windows_msvc_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "sandbox_release",
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:msvc",
+    ],
+    v8_cpu = "x64",
+)
+
+v8_artifact_files(
+    name = "src_binding_aarch64_pc_windows_gnullvm_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "source",
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:gnullvm",
+    ],
+    v8_cpu = "arm64",
+)
+
+v8_artifact_files(
+    name = "src_binding_x86_64_pc_windows_gnullvm_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "source",
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:gnullvm",
+    ],
+    v8_cpu = "x64",
+)
+
+v8_artifact_files(
+    name = "src_binding_aarch64_apple_darwin_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "source",
+    tags = ["manual"],
+    v8_cpu = "arm64",
+)
+
+v8_artifact_files(
+    name = "src_binding_x86_64_apple_darwin_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "source",
+    tags = ["manual"],
+    v8_cpu = "x64",
+)
+
+v8_artifact_files(
+    name = "src_binding_aarch64_unknown_linux_gnu_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "source",
+    tags = ["manual"],
+    v8_cpu = "arm64",
+)
+
+v8_artifact_files(
+    name = "src_binding_x86_64_unknown_linux_gnu_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "source",
+    tags = ["manual"],
+    v8_cpu = "x64",
+)
+
+v8_artifact_files(
+    name = "src_binding_aarch64_unknown_linux_musl_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "source",
+    tags = ["manual"],
+    v8_cpu = "arm64",
+)
+
+v8_artifact_files(
+    name = "src_binding_x86_64_unknown_linux_musl_152_2_0_bazel",
+    srcs = [":binding_generated_152_2_0"],
+    profile = "source",
+    tags = ["manual"],
+    v8_cpu = "x64",
+)
+
+alias(
+    name = "rusty_v8_native_windows_binding_for_target",
+    actual = select({
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":src_binding_aarch64_pc_windows_msvc_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":src_binding_x86_64_pc_windows_msvc_152_2_0_bazel",
+    }),
+    tags = ["manual"],
+)
+
 cc_static_library(
     name = "_v8_152_2_0_aarch64_apple_darwin_bazel",
     features = V8_STATIC_LIBRARY_FEATURES,
@@ -541,51 +706,11 @@ cc_static_library(
     ]
 ]
 
-filegroup(
-    name = "src_binding_release_aarch64_apple_darwin_152_2_0_release",
-    srcs = ["@v8_crate_152_2_0//:src_binding_release_aarch64_apple_darwin"],
-)
-
-filegroup(
-    name = "src_binding_release_x86_64_apple_darwin_152_2_0_release",
-    srcs = ["@v8_crate_152_2_0//:src_binding_release_x86_64_apple_darwin"],
-)
-
-filegroup(
-    name = "src_binding_release_aarch64_unknown_linux_gnu_152_2_0_release",
-    srcs = ["@v8_crate_152_2_0//:src_binding_release_aarch64_unknown_linux_gnu"],
-)
-
-filegroup(
-    name = "src_binding_release_x86_64_unknown_linux_gnu_152_2_0_release",
-    srcs = ["@v8_crate_152_2_0//:src_binding_release_x86_64_unknown_linux_gnu"],
-)
-
-filegroup(
-    name = "src_binding_release_aarch64_unknown_linux_musl_152_2_0_release",
-    srcs = ["@v8_crate_152_2_0//:src_binding_release_aarch64_unknown_linux_gnu"],
-)
-
-filegroup(
-    name = "src_binding_release_x86_64_unknown_linux_musl_152_2_0_release",
-    srcs = ["@v8_crate_152_2_0//:src_binding_release_x86_64_unknown_linux_gnu"],
-)
-
-alias(
-    name = "src_binding_release_aarch64_pc_windows_msvc_152_2_0_release",
-    actual = "@rusty_v8_152_2_0_aarch64_pc_windows_msvc_binding//file",
-)
-
-alias(
-    name = "src_binding_release_x86_64_pc_windows_msvc_152_2_0_release",
-    actual = "@rusty_v8_152_2_0_x86_64_pc_windows_msvc_binding//file",
-)
-
 v8_artifact_files(
     name = "rusty_v8_release_pair_x86_64_apple_darwin",
     srcs = [
         ":_v8_152_2_0_x86_64_apple_darwin_bazel",
-        ":src_binding_release_x86_64_apple_darwin_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "release",
     v8_cpu = "x64",
@@ -595,7 +720,7 @@ v8_artifact_files(
     name = "rusty_v8_release_pair_aarch64_apple_darwin",
     srcs = [
         ":_v8_152_2_0_aarch64_apple_darwin_bazel",
-        ":src_binding_release_aarch64_apple_darwin_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "release",
     v8_cpu = "arm64",
@@ -605,7 +730,7 @@ v8_artifact_files(
     name = "rusty_v8_release_pair_x86_64_unknown_linux_gnu",
     srcs = [
         ":_v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
-        ":src_binding_release_x86_64_unknown_linux_gnu_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "release",
     v8_cpu = "x64",
@@ -615,7 +740,7 @@ v8_artifact_files(
     name = "rusty_v8_release_pair_aarch64_unknown_linux_gnu",
     srcs = [
         ":_v8_152_2_0_aarch64_unknown_linux_gnu_bazel",
-        ":src_binding_release_aarch64_unknown_linux_gnu_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "release",
     v8_cpu = "arm64",
@@ -625,7 +750,7 @@ v8_artifact_files(
     name = "rusty_v8_release_pair_x86_64_unknown_linux_musl",
     srcs = [
         ":_v8_152_2_0_x86_64_unknown_linux_musl_release",
-        ":src_binding_release_x86_64_unknown_linux_musl_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "release",
     v8_cpu = "x64",
@@ -635,7 +760,7 @@ v8_artifact_files(
     name = "rusty_v8_release_pair_aarch64_unknown_linux_musl",
     srcs = [
         ":_v8_152_2_0_aarch64_unknown_linux_musl_release",
-        ":src_binding_release_aarch64_unknown_linux_musl_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "release",
     v8_cpu = "arm64",
@@ -644,16 +769,16 @@ v8_artifact_files(
 filegroup(
     name = "rusty_v8_release_pair_x86_64_pc_windows_msvc",
     srcs = [
-        ":src_binding_release_x86_64_pc_windows_msvc_152_2_0_release",
         ":v8_152_2_0_x86_64_pc_windows_msvc",
+        "@rusty_v8_152_2_0_x86_64_pc_windows_msvc_binding//file",
     ],
 )
 
 filegroup(
     name = "rusty_v8_release_pair_aarch64_pc_windows_msvc",
     srcs = [
-        ":src_binding_release_aarch64_pc_windows_msvc_152_2_0_release",
         ":v8_152_2_0_aarch64_pc_windows_msvc",
+        "@rusty_v8_152_2_0_aarch64_pc_windows_msvc_binding//file",
     ],
 )
 
@@ -661,7 +786,7 @@ v8_artifact_files(
     name = "rusty_v8_sandbox_release_pair_x86_64_apple_darwin",
     srcs = [
         ":_v8_152_2_0_x86_64_apple_darwin_bazel",
-        ":src_binding_release_x86_64_apple_darwin_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "sandbox_release",
     v8_cpu = "x64",
@@ -671,7 +796,7 @@ v8_artifact_files(
     name = "rusty_v8_sandbox_release_pair_aarch64_apple_darwin",
     srcs = [
         ":_v8_152_2_0_aarch64_apple_darwin_bazel",
-        ":src_binding_release_aarch64_apple_darwin_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "sandbox_release",
     v8_cpu = "arm64",
@@ -681,7 +806,7 @@ v8_artifact_files(
     name = "rusty_v8_sandbox_release_pair_x86_64_unknown_linux_gnu",
     srcs = [
         ":_v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
-        ":src_binding_release_x86_64_unknown_linux_gnu_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "sandbox_release",
     v8_cpu = "x64",
@@ -691,7 +816,7 @@ v8_artifact_files(
     name = "rusty_v8_sandbox_release_pair_aarch64_unknown_linux_gnu",
     srcs = [
         ":_v8_152_2_0_aarch64_unknown_linux_gnu_bazel",
-        ":src_binding_release_aarch64_unknown_linux_gnu_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "sandbox_release",
     v8_cpu = "arm64",
@@ -701,7 +826,7 @@ v8_artifact_files(
     name = "rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl",
     srcs = [
         ":_v8_152_2_0_x86_64_unknown_linux_musl_release",
-        ":src_binding_release_x86_64_unknown_linux_musl_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "sandbox_release",
     v8_cpu = "x64",
@@ -711,7 +836,7 @@ v8_artifact_files(
     name = "rusty_v8_sandbox_release_pair_aarch64_unknown_linux_musl",
     srcs = [
         ":_v8_152_2_0_aarch64_unknown_linux_musl_release",
-        ":src_binding_release_aarch64_unknown_linux_musl_152_2_0_release",
+        ":binding_generated_152_2_0",
     ],
     profile = "sandbox_release",
     v8_cpu = "arm64",

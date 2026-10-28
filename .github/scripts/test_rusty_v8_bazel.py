@@ -50,7 +50,7 @@ class RustyV8BazelTest(unittest.TestCase):
             "x86_64_unknown_linux_musl",
         ]:
             self.assertIn(
-                f":src_binding_release_{selector}_{version_suffix}_release",
+                f":src_binding_{selector}_{version_suffix}_bazel",
                 build_bazel,
             )
 

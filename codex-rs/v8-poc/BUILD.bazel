@@ -5,6 +5,11 @@ codex_rust_crate(
     crate_features = ["sandbox"],
     crate_name = "codex_v8_poc",
     deps_extra = ["@crates//:v8"],
+    # The ignored CppGC ABI checks require the native archive/binding pair.
+    unit_test_args = select({
+        "//third_party/v8:use_rusty_v8_prebuilts": [],
+        "//conditions:default": ["--include-ignored"],
+    }),
 )
 
 alias(

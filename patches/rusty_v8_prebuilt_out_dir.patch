@@ -1,6 +1,6 @@
-# What: make `rusty_v8` accept Bazel-provided archives and bindings for the
-# windows-gnullvm experiment.
-# Scope: `rusty_v8` build.rs only; no V8 source or Bazel rule changes.
+# Make rusty_v8 use the Bazel-provided archive and bindings. Mark the Git
+# checkout's vendored third_party directory as a package so rules_rs does not
+# stage libc++ test names containing '=' as Cargo build-script runfiles.
 
 --- a/build.rs
 +++ b/build.rs
@@ -72,3 +72,7 @@
        if target.contains("msvc") {
          // nothing to link to
        } else if target.contains("apple")
+--- /dev/null
++++ b/third_party/BUILD.bazel
+@@ -0,0 +1 @@
++package(default_visibility = ["//visibility:private"])
