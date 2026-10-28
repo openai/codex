@@ -23,7 +23,7 @@ runs:
       shell: bash
       working-directory: codex-rs
       env:
-        BASE_BINARIES: "codex codex-app-server codex-code-mode-host"
+        BASE_BINARIES: "codex codex-app-server codex-code-mode-host codex-exec-server"
         WINDOWS_ONLY_BINARIES: "codex-command-runner codex-windows-sandbox-setup"
         BUILD_MODE: ${{ inputs.build-mode }}
         BUILD_SYSTEM: ${{ inputs.build-system }}
@@ -138,6 +138,7 @@ runs:
         package_args=(
           --target "$target"
           --code-mode-host-bin "${release_dir}/codex-code-mode-host${exe_suffix}"
+          --exec-server-bin "${release_dir}/codex-exec-server${exe_suffix}"
           --cargo-profile release
           --package-version "$CODEX_PACKAGE_VERSION"
           --force
@@ -183,7 +184,6 @@ runs:
         mkdir -p "${GITHUB_WORKSPACE}/codex-rs/target"
         pytest_args=(
           -v
-          --basetemp "${GITHUB_WORKSPACE}/codex-rs/target/package-smoke-tmp"
           --package-target "$target"
           --symbols-archive "${GITHUB_WORKSPACE}/symbols-dist/${target}/codex-symbols-${target}.tar.gz"
         )
@@ -194,13 +194,17 @@ runs:
           exit 1
         fi
 
+        # Windows setup helpers can finish background ACL work after pytest exits.
+        # Separate roots keep the next run from deleting their executables.
         uv run --frozen pytest "${pytest_args[@]}" \
+          --basetemp "${GITHUB_WORKSPACE}/codex-rs/target/package-smoke-gzip-tmp" \
           --compression gzip \
           --cli-archive "${archive_dir}/codex-package-${target}.tar.gz" \
           --app-server-archive "${archive_dir}/codex-app-server-package-${target}.tar.gz" \
           test_codex_package.py
 
         uv run --frozen pytest "${pytest_args[@]}" \
+          --basetemp "${GITHUB_WORKSPACE}/codex-rs/target/package-smoke-zstd-tmp" \
           --compression zstd \
           --cli-archive "${archive_dir}/codex-package-${target}.tar.zst" \
           --app-server-archive "${archive_dir}/codex-app-server-package-${target}.tar.zst" \

@@ -772,6 +772,16 @@ function Test-PackageContentsAreComplete {
         "codex-resources\codex-command-runner.exe",
         "codex-resources\codex-windows-sandbox-setup.exe"
     )
+    try {
+        $metadataPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $PackageDir "codex-package.json"))
+        $metadata = [System.IO.File]::ReadAllText($metadataPath)
+        # Older canonical packages do not advertise or contain the executor.
+        if ([regex]::IsMatch($metadata, '"execServer"\s*:')) {
+            $expectedFiles += "bin\codex-exec-server.exe"
+        }
+    } catch {
+        return $false
+    }
     foreach ($name in $expectedFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $name) -PathType Leaf)) {
             return $false

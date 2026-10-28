@@ -55,6 +55,11 @@ def build_package_dir(
         bin_dir / f"codex-code-mode-host{spec.exe_suffix}",
         is_windows=spec.is_windows,
     )
+    copy_executable(
+        inputs.exec_server_bin,
+        bin_dir / f"codex-exec-server{spec.exe_suffix}",
+        is_windows=spec.is_windows,
+    )
     copy_executable(inputs.rg_bin, path_dir / spec.rg_name, is_windows=spec.is_windows)
 
     if inputs.bwrap_bin is not None:
@@ -80,6 +85,7 @@ def build_package_dir(
         "target": spec.target,
         "variant": variant.name,
         "entrypoint": f"bin/{entrypoint_name}",
+        "execServer": f"bin/codex-exec-server{spec.exe_suffix}",
         "resourcesDir": "codex-resources",
         "pathDir": "codex-path",
     }
@@ -113,6 +119,7 @@ def validate_package_dir(
         "target": spec.target,
         "variant": variant.name,
         "entrypoint": f"bin/{variant.entrypoint_name(spec)}",
+        "execServer": f"bin/codex-exec-server{spec.exe_suffix}",
         "resourcesDir": "codex-resources",
         "pathDir": "codex-path",
     }
@@ -126,6 +133,7 @@ def validate_package_dir(
     required_files = [
         Path("bin") / variant.entrypoint_name(spec),
         Path("bin") / f"codex-code-mode-host{spec.exe_suffix}",
+        Path("bin") / f"codex-exec-server{spec.exe_suffix}",
         Path("codex-path") / spec.rg_name,
     ]
     executable_files = list(required_files)
