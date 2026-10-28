@@ -56,6 +56,8 @@ use codex_utils_plugins::PluginSkillRoot;
 use codex_utils_plugins::SkillDiscoveryMode;
 use codex_utils_plugins::find_plugin_manifest_path;
 use codex_utils_plugins::migrated_command_skills_root;
+use futures::StreamExt;
+use futures::stream;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -75,6 +77,7 @@ const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 const CONFIG_TOML_FILE: &str = "config.toml";
 const CURATED_PLUGIN_CACHE_VERSION_SHA_PREFIX_LEN: usize = 8;
+const MAX_CONCURRENT_PLUGIN_LOADS: usize = 8;
 
 /// Hook declarations and warnings resolved without loading other plugin capabilities.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -191,8 +194,16 @@ async fn load_plugins_from_layer_stack_with_scope(
 
     let mut plugins = Vec::with_capacity(configured_plugins.len());
     let mut seen_mcp_server_names = HashMap::<String, String>::new();
-    for (configured_name, plugin) in configured_plugins {
-        let loaded_plugin = load_plugin(configured_name.clone(), &plugin, store, &scope).await;
+    let scope = &scope;
+    // Overlap independent filesystem/skill loads, but consume them in configured-name order:
+    // that order determines duplicate MCP precedence and startup hook warning order.
+    let mut pending_plugins = stream::iter(configured_plugins)
+        .map(|(configured_name, plugin)| async move {
+            let loaded_plugin = load_plugin(configured_name.clone(), &plugin, store, scope).await;
+            (configured_name, loaded_plugin)
+        })
+        .buffered(MAX_CONCURRENT_PLUGIN_LOADS);
+    while let Some((configured_name, loaded_plugin)) = pending_plugins.next().await {
         for name in loaded_plugin.mcp_servers.keys() {
             if let Some(previous_plugin) =
                 seen_mcp_server_names.insert(name.clone(), configured_name.clone())

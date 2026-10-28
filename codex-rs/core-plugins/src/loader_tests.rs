@@ -9,9 +9,37 @@ use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
 use codex_config::config_toml::ConfigToml;
 use codex_plugin::PluginId;
+use codex_skills::LoadedSkills;
+use codex_skills::SkillLoadFuture;
 use codex_utils_plugins::AGENT_PLUGIN_SCHEMA_URI;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tempfile::TempDir;
+
+// Yield at the skill loader so the buffered stream can poll its other plugin loads.
+struct OverlapTrackingSkillRootLoader {
+    delegate: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+}
+
+impl SkillRootLoader<PluginSkillRoot> for OverlapTrackingSkillRootLoader {
+    fn load_roots(
+        &self,
+        request: SkillRootLoadRequest<PluginSkillRoot>,
+    ) -> SkillLoadFuture<'_, LoadedSkills> {
+        Box::pin(async move {
+            let active = self.active.fetch_add(1, Ordering::Relaxed) + 1;
+            self.max_active.fetch_max(active, Ordering::Relaxed);
+            tokio::task::yield_now().await;
+            let result = self.delegate.load_roots(request).await;
+            self.active.fetch_sub(1, Ordering::Relaxed);
+            result
+        })
+    }
+}
 
 fn user_config_path(temp_dir: &TempDir, file_name: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::from_absolute_path(temp_dir.path().join(file_name))
@@ -26,6 +54,103 @@ fn user_layer(path: AbsolutePathBuf, config: &str) -> ConfigLayerEntry {
         },
         toml::from_str(config).expect("user config toml"),
     )
+}
+
+#[tokio::test]
+async fn concurrent_plugin_loads_preserve_mcp_precedence_and_hook_warnings() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let mut config = String::new();
+    // Exercise more than one buffer of actual file reads, with conflicting MCP definitions.
+    let names: Vec<_> = (0..MAX_CONCURRENT_PLUGIN_LOADS + 2)
+        .map(|index| format!("plugin-{index:02}"))
+        .collect();
+    // Declare plugin-00 last. Its name sorts first, so its shared MCP server should win.
+    for name in names.iter().rev() {
+        let root = temp_dir
+            .path()
+            .join(format!("plugins/cache/test/{name}/local"));
+        write_file(
+            &root.join(".codex-plugin/plugin.json"),
+            &format!(r#"{{"name":"{name}"}}"#),
+        );
+        write_file(
+            &root.join(".mcp.json"),
+            &format!(r#"{{"mcpServers":{{"shared":{{"command":"{name}"}}}}}}"#),
+        );
+        write_file(
+            &root.join("skills/example/SKILL.md"),
+            &format!("---\nname: {name}\ndescription: Example skill\n---\nInstructions\n"),
+        );
+        write_file(&root.join("hooks/hooks.json"), "not valid json");
+        config.push_str(&format!("[plugins.\"{name}@test\"]\nenabled = true\n"));
+    }
+    let stack = ConfigLayerStack::new(
+        vec![user_layer(
+            user_config_path(&temp_dir, "config.toml"),
+            &config,
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+    let store = PluginStore::new(temp_dir.path().to_path_buf());
+    let config: ConfigToml = stack.effective_config().try_into().expect("plugin config");
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
+    let remote_plugin_id_resolver = RemotePluginIdResolver::default();
+    let skill_root_loader = test_skill_root_loader();
+    let scope = PluginLoadScope::AllCapabilities {
+        restriction_product: Some(Product::Codex),
+        skill_config_rules: &skill_config_rules,
+        plugin_skill_snapshots: None,
+        remote_plugin_id_resolver: &remote_plugin_id_resolver,
+        skill_root_loader: skill_root_loader.as_ref(),
+    };
+    let mut expected = Vec::new();
+    for name in &names {
+        let configured_name = format!("{name}@test");
+        expected.push(
+            load_plugin(
+                configured_name.clone(),
+                &config.plugins.plugins[&configured_name],
+                &store,
+                &scope,
+            )
+            .await,
+        );
+    }
+    let overlap_loader = OverlapTrackingSkillRootLoader {
+        delegate: Arc::clone(&skill_root_loader),
+        active: AtomicUsize::new(0),
+        max_active: AtomicUsize::new(0),
+    };
+    let loaded = load_plugins_from_layer_stack(
+        &stack,
+        &config.plugins,
+        RemoteInstalledPluginsSnapshot::default(),
+        &store,
+        /*plugin_skill_snapshots*/ None,
+        Some(Product::Codex),
+        /*remote_global_catalog_active*/ false,
+        &overlap_loader,
+    )
+    .await;
+    assert_eq!(loaded, expected);
+    assert!(
+        (2..=MAX_CONCURRENT_PLUGIN_LOADS)
+            .contains(&overlap_loader.max_active.load(Ordering::Relaxed)),
+        "plugin skill loads should overlap without exceeding the buffer",
+    );
+    assert!(loaded.iter().all(|plugin| plugin.has_enabled_skills));
+    assert!(
+        loaded
+            .iter()
+            .all(|plugin| plugin.hook_load_warnings.len() == 1)
+    );
+    let expected_server = expected[0].mcp_servers["shared"].clone();
+    assert_eq!(
+        crate::PluginLoadOutcome::from_plugins(loaded).effective_mcp_servers(),
+        HashMap::from([("shared".to_string(), expected_server)])
+    );
 }
 
 #[tokio::test]
