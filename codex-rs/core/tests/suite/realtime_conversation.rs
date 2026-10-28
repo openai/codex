@@ -76,6 +76,8 @@ use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 use tokio_tungstenite::tungstenite::handshake::server::Response;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use uuid::Uuid;
 use wiremock::Match;
 use wiremock::Mock;
@@ -1890,6 +1892,80 @@ async fn conversation_webrtc_start_uses_configured_call_base_url_for_avas() -> R
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
     realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[test_case(RealtimeConversationVersion::V1; "preview")]
+#[test_case(RealtimeConversationVersion::V3; "frameless")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_existing_call_stop_closes_only_observer_transport(
+    version: RealtimeConversationVersion,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let realtime_ws_base_url = format!("ws://{}", listener.local_addr()?);
+    let observer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        let mut websocket = tokio_tungstenite::accept_async(stream).await?;
+        // The first frame must be the transport close, never session initialization or SessionClose.
+        let frame = websocket.next().await.context("observer frame")??;
+        Ok::<_, anyhow::Error>(frame)
+    });
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_base_url = Some(realtime_ws_base_url);
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            delegation_ack_filler: None,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
+            codex_response_handoff_channel_prefixes: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: false,
+            initial_items: Vec::new(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
+            prompt: None,
+            realtime_session_id: None,
+            voice_session_id: None,
+            transport: Some(ConversationStartTransport::ExistingCall {
+                call_id: "rtc_frontend_owned".to_string(),
+                sideband_base_url: None,
+            }),
+            version: Some(version),
+            voice: None,
+        }))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationStarted(_))
+    })
+    .await;
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    let closed = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(closed.reason.as_deref(), Some("requested"));
+    assert_eq!(
+        timeout(Duration::from_secs(5), observer)
+            .await
+            .context("observer close timed out")???,
+        Message::Close(Some(CloseFrame {
+            code: CloseCode::Normal,
+            reason: "".into()
+        }))
+    );
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 

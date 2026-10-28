@@ -818,6 +818,7 @@ impl RealtimeConversationManager {
         {
             let mut guard = self.state.lock().await;
             if let Some(state) = guard.conversation.as_mut()
+                // Only attach the task to the conversation currently stored in the manager.
                 && Arc::ptr_eq(&state.realtime_active, realtime_active)
             {
                 state.fanout_task = fanout_task.take();
@@ -2134,6 +2135,7 @@ enum RealtimeSidebandSessionInitialization {
     },
 }
 
+// The main loop for realtime inputs, including user audio/text and model commentary/results.
 async fn run_realtime_input_task(
     input: RealtimeInputTask,
     pending_outbound: Option<Box<RealtimePendingOutbound>>,
@@ -2154,6 +2156,7 @@ async fn run_realtime_input_task(
     let mut output_audio_state: Option<OutputAudioState> = None;
     let mut response_create_queue = RealtimeResponseCreateQueue::default();
 
+    // Send any previously unsent messages before entering the main event loop.
     if let Some(pending_outbound) = pending_outbound
         && let Err(err) = send_realtime_pending_outbound(
             &pending_outbound,

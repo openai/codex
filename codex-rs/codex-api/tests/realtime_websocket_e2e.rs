@@ -25,6 +25,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::StatusCode;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use tokio::net::TcpListener;
@@ -33,6 +34,8 @@ use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 use tokio_tungstenite::tungstenite::handshake::server::Response;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 type RealtimeWsStream = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
 
@@ -370,6 +373,108 @@ async fn realtime_ws_existing_call_retries_activation_404_with_a_bounded_budget(
         .await
         .expect("bounded sideband handshake attempts");
     }
+}
+
+#[tokio::test]
+async fn realtime_ws_existing_call_transport_close_preserves_session() {
+    for event_parser in [
+        RealtimeEventParser::RealtimeV2,
+        RealtimeEventParser::FramelessBidi,
+    ] {
+        let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
+            assert_eq!(
+                ws.next().await.expect("close frame").expect("valid close"),
+                Message::Close(Some(CloseFrame {
+                    code: CloseCode::Normal,
+                    reason: "".into(),
+                })),
+                "observer detach must not send an application session.close"
+            );
+        })
+        .await;
+        let client = test_client(test_provider(format!("http://{addr}")))
+            .with_webrtc_sideband_base_url(format!("http://{addr}"));
+        let connection = client
+            .connect_existing_call_sideband(
+                RealtimeSessionConfig {
+                    instructions: String::new(),
+                    initial_items: Vec::new(),
+                    delegation_ack_filler: None,
+                    model: None,
+                    session_id: None,
+                    event_parser,
+                    session_mode: RealtimeSessionMode::Conversational,
+                    output_modality: RealtimeOutputModality::Audio,
+                    voice: RealtimeVoice::Marin,
+                },
+                "rtc_frontend_owned",
+                HeaderMap::new(),
+                HeaderMap::new(),
+                RealtimeTranscriptState::default(),
+            )
+            .await
+            .expect("attach observer");
+        connection
+            .writer()
+            .close_transport()
+            .await
+            .expect("detach transport");
+        connection.close().await.expect("already detached");
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("close was flushed before dropping connection")
+            .expect("server task");
+    }
+}
+
+#[tokio::test]
+async fn realtime_ws_frameless_session_close_still_ends_session() {
+    let (addr, server) = spawn_realtime_ws_server(|mut ws| async move {
+        let session_close = ws
+            .next()
+            .await
+            .expect("session close")
+            .expect("valid frame");
+        assert_eq!(
+            serde_json::from_str::<Value>(session_close.to_text().expect("text")).expect("json"),
+            json!({"type": "session.close"})
+        );
+        assert_eq!(
+            ws.next()
+                .await
+                .expect("websocket close")
+                .expect("valid close"),
+            Message::Close(None)
+        );
+    })
+    .await;
+    let client = test_client(test_provider(format!("http://{addr}")))
+        .with_webrtc_sideband_base_url(format!("http://{addr}"));
+    let connection = client
+        .connect_existing_call_sideband(
+            RealtimeSessionConfig {
+                instructions: String::new(),
+                initial_items: Vec::new(),
+                delegation_ack_filler: None,
+                model: None,
+                session_id: None,
+                event_parser: RealtimeEventParser::FramelessBidi,
+                session_mode: RealtimeSessionMode::Conversational,
+                output_modality: RealtimeOutputModality::Audio,
+                voice: RealtimeVoice::Marin,
+            },
+            "rtc_session_owner",
+            HeaderMap::new(),
+            HeaderMap::new(),
+            RealtimeTranscriptState::default(),
+        )
+        .await
+        .expect("connect session");
+    connection.close().await.expect("close session");
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("close flushed")
+        .expect("server task");
 }
 
 #[tokio::test]

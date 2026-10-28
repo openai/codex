@@ -148,9 +148,12 @@ macro_rules! serialization_scope_expr {
     ($actual_params:ident, global_shared_read($key:literal)) => {
         Some(ClientRequestSerializationScope::GlobalSharedRead($key))
     };
-    ($actual_params:ident, thread_id($params:ident . $field:ident)) => {
+    // Match one or more dot-separated fields, allowing both `params.thread_id`
+    // and nested paths like `params.start.thread_id`. The resolved ID selects
+    // the per-thread request queue, preserving ordering with other thread operations.
+    ($actual_params:ident, thread_id($params:ident . $($field:ident).+)) => {
         Some(ClientRequestSerializationScope::Thread {
-            thread_id: $actual_params.$field.clone(),
+            thread_id: $actual_params.$($field).+.clone(),
         })
     };
     ($actual_params:ident, optional_thread_id($params:ident . $field:ident)) => {

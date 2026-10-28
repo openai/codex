@@ -55,6 +55,7 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
+use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::protocol::frame::coding::CloseCode;
 use url::Url;
@@ -76,6 +77,7 @@ enum WsCommand {
         tx_result: oneshot::Sender<Result<(), WsError>>,
     },
     Close {
+        frame: Option<CloseFrame>,
         tx_result: oneshot::Sender<Result<(), WsError>>,
     },
 }
@@ -116,9 +118,9 @@ impl WsStream {
                                     break;
                                 }
                             }
-                            WsCommand::Close { tx_result } => {
+                            WsCommand::Close { frame, tx_result } => {
                                 info!("realtime websocket sending close");
-                                let result = inner.send(Message::Close(None)).await;
+                                let result = inner.send(Message::Close(frame)).await;
                                 if let Err(err) = &result {
                                     error!("realtime websocket close failed: {err}");
                                     report_write_policy_error(err);
@@ -226,8 +228,10 @@ impl WsStream {
             .await
     }
 
-    async fn close(&self) -> Result<(), WsError> {
-        self.request(|tx_result| WsCommand::Close { tx_result })
+    /// Ask the socket pump to send a close frame to the connected peer and
+    /// return the write result.
+    async fn close(&self, frame: Option<CloseFrame>) -> Result<(), WsError> {
+        self.request(|tx_result| WsCommand::Close { frame, tx_result })
             .await
     }
 }
@@ -493,7 +497,7 @@ impl RealtimeWebsocketWriter {
                 )));
             }
         }
-        if let Err(err) = self.stream.close().await
+        if let Err(err) = self.stream.close(/*frame*/ None).await
             && !matches!(err, WsError::ConnectionClosed | WsError::AlreadyClosed)
         {
             return Err(ApiError::Stream(format!(
@@ -501,6 +505,20 @@ impl RealtimeWebsocketWriter {
             )));
         }
         Ok(())
+    }
+
+    /// Detach an observer without ending the frontend-owned realtime session.
+    pub async fn close_transport(&self) -> Result<(), ApiError> {
+        if self.is_closed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.stream
+            .close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "".into(),
+            }))
+            .await
+            .map_err(|err| ApiError::Stream(format!("failed to close websocket transport: {err}")))
     }
 
     async fn send_json(&self, message: &RealtimeOutboundMessage) -> Result<(), ApiError> {

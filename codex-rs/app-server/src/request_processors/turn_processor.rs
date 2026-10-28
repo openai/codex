@@ -271,8 +271,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
+        sideband_base_url: Option<String>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_start_inner(request_id, params)
+        self.thread_realtime_start_inner(request_id, params, sideband_base_url)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -1198,6 +1199,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
+        sideband_base_url: Option<String>,
     ) -> Result<Option<ThreadRealtimeStartResponse>, JSONRPCErrorError> {
         let attaches_existing_call = matches!(
             &params.transport,
@@ -1276,10 +1278,10 @@ impl TurnRequestProcessor {
                     ThreadRealtimeStartTransport::Webrtc { sdp } => {
                         ConversationStartTransport::Webrtc { sdp }
                     }
-                    ThreadRealtimeStartTransport::ExistingCall { call_id } => {
+                    ThreadRealtimeStartTransport::ExistingCall { call_id, .. } => {
                         ConversationStartTransport::ExistingCall {
                             call_id,
-                            sideband_base_url: None,
+                            sideband_base_url,
                         }
                     }
                 }),

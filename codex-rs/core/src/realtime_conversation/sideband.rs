@@ -9,6 +9,7 @@ use codex_api::ApiError;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeEventParser;
 use codex_api::RealtimeTranscriptState;
+use codex_api::RealtimeWebsocketConnection;
 use codex_api::map_api_error;
 use codex_login::default_client::default_headers;
 use http::StatusCode;
@@ -17,12 +18,14 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
 const RECONNECT_BASE_DELAY: Duration = Duration::from_millis(200);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const STABLE_CONNECTION_DURATION: Duration = Duration::from_secs(30);
+const TRANSPORT_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn spawn_webrtc_sideband_input_task(
     input: RealtimeWebrtcSidebandInputTask,
@@ -110,11 +113,14 @@ pub(super) fn spawn_webrtc_sideband_input_task(
                 }
             };
 
+            // Stop when the call is inactive or cancellation has been requested.
             if !realtime_active.load(Ordering::Relaxed) || stop_token.is_cancelled() {
+                close_sideband_transport(&connection).await;
                 break;
             }
 
             let connected_at = Instant::now();
+            // Run the realtime input loop.
             let exit = run_realtime_input_task(
                 RealtimeInputTask {
                     writer: connection.writer(),
@@ -132,6 +138,12 @@ pub(super) fn spawn_webrtc_sideband_input_task(
             )
             .await;
 
+            // Cancellation returns Terminal, so close the socket before checking for TransportLost.
+            if !realtime_active.load(Ordering::Relaxed) || stop_token.is_cancelled() {
+                close_sideband_transport(&connection).await;
+                break;
+            }
+
             let RealtimeInputTaskExit::TransportLost {
                 err,
                 pending_outbound: failed_outbound,
@@ -140,9 +152,7 @@ pub(super) fn spawn_webrtc_sideband_input_task(
                 break;
             };
             pending_outbound = failed_outbound;
-            if !realtime_active.load(Ordering::Relaxed) || stop_token.is_cancelled() {
-                break;
-            }
+
             if event_parser != RealtimeEventParser::FramelessBidi
                 || matches!(
                     &err,
@@ -170,9 +180,30 @@ pub(super) fn spawn_webrtc_sideband_input_task(
             }
         }
 
+        if let RealtimeSidebandSessionInitialization::ExistingCall { initial_connection } =
+            &mut session_initialization
+            && let Some(connection) = initial_connection.take()
+        {
+            // Cancellation may win before the task takes its already connected observer.
+            close_sideband_transport(&connection).await;
+        }
         let transcript_tail = transcript_state.take_transcript_tail().await;
         flush_realtime_transcript_tail(&transcript_tail_flush, &transcript_tail).await;
     })
+}
+
+async fn close_sideband_transport(connection: &RealtimeWebsocketConnection) {
+    // The session belongs to the frontend; writer.close() would also send SessionClose.
+    match timeout(
+        TRANSPORT_CLOSE_TIMEOUT,
+        connection.writer().close_transport(),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => warn!("failed to close realtime sideband transport"),
+        Err(_) => warn!("timed out closing realtime sideband transport"),
+    }
 }
 
 fn webrtc_sideband_session_ended(err: &ApiError) -> bool {
