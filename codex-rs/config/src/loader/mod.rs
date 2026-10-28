@@ -1604,14 +1604,15 @@ fn project_trust_for_lookup_key(
         return Some((lookup_key.to_string(), trust_level));
     }
 
-    let mut normalized_matches: Vec<_> = projects_trust
+    // Only Windows folds project keys. On other platforms the exact lookup is exhaustive.
+    #[cfg(windows)]
+    return projects_trust
         .iter()
-        .filter(|(key, _)| normalize_project_trust_lookup_key((*key).clone()) == lookup_key)
-        .collect();
-    normalized_matches.sort_by_key(|(key, _)| *key);
-    normalized_matches
-        .first()
-        .map(|(key, trust_level)| ((**key).clone(), **trust_level))
+        .filter(|(key, _)| key.eq_ignore_ascii_case(lookup_key))
+        .min_by_key(|(key, _)| *key)
+        .map(|(key, trust_level)| (key.clone(), *trust_level));
+    #[cfg(not(windows))]
+    None
 }
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
 /// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
@@ -1621,11 +1622,16 @@ fn project_trust_for_lookup_key(
 /// even if they were loaded from different directories.
 #[doc(hidden)]
 pub fn resolve_relative_paths_in_config_toml(
-    value_from_config_toml: TomlValue,
+    mut value_from_config_toml: TomlValue,
     base_dir: &Path,
 ) -> io::Result<TomlValue> {
-    // Use the serialize/deserialize round-trip to convert the
-    // `toml::Value` into a `ConfigToml` with `AbsolutePath
+    if value_from_config_toml
+        .as_table()
+        .is_some_and(toml::Table::is_empty)
+    {
+        return Ok(value_from_config_toml);
+    }
+    // The typed round trip resolves AbsolutePathBuf fields against this layer's directory.
     let _guard = AbsolutePathBufGuard::new(base_dir);
     let Ok(resolved) = value_from_config_toml.clone().try_into::<ConfigToml>() else {
         return Ok(value_from_config_toml);
@@ -1639,38 +1645,27 @@ pub fn resolve_relative_paths_in_config_toml(
         )
     })?;
 
-    Ok(copy_shape_from_original(
-        &value_from_config_toml,
-        &resolved_value,
-    ))
+    apply_resolved_values(&mut value_from_config_toml, resolved_value);
+    Ok(value_from_config_toml)
 }
 
-/// Ensure that every field in `original` is present in the returned
-/// `toml::Value`, taking the value from `resolved` where possible. This ensures
-/// the fields that we "removed" during the serialize/deserialize round-trip in
-/// `resolve_config_paths` are preserved, out of an abundance of caution.
-fn copy_shape_from_original(original: &TomlValue, resolved: &TomlValue) -> TomlValue {
+/// Update values in the original tree while preserving unknown keys and omitting defaults
+/// introduced by the typed round trip.
+fn apply_resolved_values(original: &mut TomlValue, resolved: TomlValue) {
     match (original, resolved) {
         (TomlValue::Table(original_table), TomlValue::Table(resolved_table)) => {
-            let mut table = toml::map::Map::new();
-            for (key, original_value) in original_table {
-                let resolved_value = resolved_table.get(key).unwrap_or(original_value);
-                table.insert(
-                    key.clone(),
-                    copy_shape_from_original(original_value, resolved_value),
-                );
+            for (key, resolved_value) in resolved_table {
+                if let Some(original_value) = original_table.get_mut(&key) {
+                    apply_resolved_values(original_value, resolved_value);
+                }
             }
-            TomlValue::Table(table)
         }
         (TomlValue::Array(original_array), TomlValue::Array(resolved_array)) => {
-            let mut items = Vec::new();
-            for (index, original_value) in original_array.iter().enumerate() {
-                let resolved_value = resolved_array.get(index).unwrap_or(original_value);
-                items.push(copy_shape_from_original(original_value, resolved_value));
+            for (original_value, resolved_value) in original_array.iter_mut().zip(resolved_array) {
+                apply_resolved_values(original_value, resolved_value);
             }
-            TomlValue::Array(items)
         }
-        (_, resolved_value) => resolved_value.clone(),
+        (original, resolved) => *original = resolved,
     }
 }
 
