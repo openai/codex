@@ -25,13 +25,18 @@ use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionAnalyticsParams;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_extension_api::Instructions;
-use codex_guardian_reviewer::ConversationCheckpoint;
+#[cfg(test)]
 use codex_guardian_reviewer::ConversationState;
+use codex_guardian_reviewer::GuardianReviewForkSnapshot;
+pub use codex_guardian_reviewer::GuardianReviewState;
+use codex_guardian_reviewer::GuardianTranscriptSource;
+use codex_guardian_reviewer::PendingNodeReplEvidenceAdmission;
 use codex_guardian_reviewer::ReviewModel;
 use codex_guardian_reviewer::ReviewSessionResult;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_guardian_reviewer::token_usage_delta;
 use codex_history::InitialHistory;
+#[cfg(test)]
 use codex_history::RolloutItem;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
@@ -45,6 +50,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
+#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SubAgentSource;
@@ -130,42 +136,8 @@ pub struct GuardianReviewSession {
     state: Mutex<GuardianReviewState>,
 }
 
-/// Opaque conversation progress retained while ThreadManager starts a reviewer.
-pub struct GuardianReviewState {
-    conversation: ConversationState<GuardianReviewHistory>,
-    // Only the first attempt may use the checkpoint loaded without prior reviewer history.
-    fresh_parent_checkpoint: bool,
-    // The cursor describes evidence admitted before any later reviewer compaction.
-    transcript_history_version: u64,
-    transcript_source: Option<GuardianTranscriptSource>,
-    last_admitted_node_repl_response_sequence: u64,
-    pending_node_repl_evidence_admission: Option<PendingNodeReplEvidenceAdmission>,
-}
-
-// These histories have independent version counters; a cursor must identify its source.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum GuardianTranscriptSource {
-    Retained,
-    LoadedParentCheckpoint,
-}
-
-struct PendingNodeReplEvidenceAdmission {
-    turn_id: String,
-    response_sequence: u64,
-}
-
 fn had_prior_review_context(prompt_mode: &GuardianPromptMode) -> bool {
     matches!(prompt_mode, GuardianPromptMode::Delta { .. })
-}
-
-type GuardianReviewForkSnapshot = ConversationCheckpoint<GuardianReviewHistory>;
-
-/// Host-owned history and admitted evidence used to seed a private reviewer fork.
-#[derive(Clone)]
-pub struct GuardianReviewHistory {
-    initial_history: InitialHistory,
-    transcript_source: Option<GuardianTranscriptSource>,
-    last_admitted_node_repl_response_sequence: u64,
 }
 
 /// Opaque compatibility key derived by the existing context builder.
@@ -262,38 +234,6 @@ impl GuardianReviewSessionReuseKey {
     fn with_node_repl_policy(mut self, policy: &GuardianNodeReplPolicy) -> Self {
         self.node_repl_policy = policy.body().into_text().unwrap_or_default();
         self
-    }
-}
-
-impl GuardianReviewSession {
-    async fn admit_node_repl_evidence(&self, event: &Event) {
-        // Annotated review inputs are recorded as response items without UI turn
-        // items. Both input paths emit this event after history admission.
-        let EventMsg::RawResponseItem(recorded) = &event.msg else {
-            return;
-        };
-        let ResponseItem::Message { role, content, .. } = &recorded.item else {
-            return;
-        };
-        if role != "user"
-            || !content.iter().any(|item| {
-                matches!(item, ContentItem::InputText { text }
-                    if text == GUARDIAN_TRANSCRIPT_START || text == ">>> TRANSCRIPT DELTA START\n")
-            })
-        {
-            return;
-        }
-
-        let mut state = self.state.lock().await;
-        let Some(pending) = state.pending_node_repl_evidence_admission.as_ref() else {
-            return;
-        };
-        if event.id == pending.turn_id {
-            state.last_admitted_node_repl_response_sequence = state
-                .last_admitted_node_repl_response_sequence
-                .max(pending.response_sequence);
-            state.pending_node_repl_evidence_admission = None;
-        }
     }
 }
 
@@ -920,7 +860,7 @@ impl codex_guardian_reviewer::ReviewerRuntime for GuardianReviewSession {
     }
 
     async fn admit_context(&self, event: &Event) {
-        self.admit_node_repl_evidence(event).await;
+        codex_guardian_reviewer::admit_node_repl_evidence(&self.state, event).await;
     }
 
     async fn interrupt(&self) -> anyhow::Result<()> {

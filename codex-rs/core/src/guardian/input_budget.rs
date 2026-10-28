@@ -6,8 +6,6 @@
 //! Loss telemetry describes accepted inputs, excluding feasibility checks and failed retries.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_features::Feature;
@@ -35,13 +33,7 @@ use crate::session::turn_context::TurnContext;
 #[derive(Clone)]
 pub(crate) struct PendingReviewContext(pub ComposedContext);
 
-/// Requests one bounded restart from the captured parent checkpoint when
-/// reviewer compaction invalidates the pending input. The flag belongs to this attempt.
-pub(super) struct CheckpointRecovery {
-    pub(super) requested: Arc<AtomicBool>,
-    pub(super) history_version: u64,
-    pub(super) fresh_parent_checkpoint: bool,
-}
+pub(super) use codex_guardian_reviewer::CheckpointRecovery;
 
 /// Restart a reused reviewer before paying for a summary we would discard.
 /// A fresh checkpoint stays intact while final input selection makes the review fit.

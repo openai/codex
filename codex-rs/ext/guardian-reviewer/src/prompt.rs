@@ -9,6 +9,8 @@ use codex_guardian_context::TranscriptCursor as GuardianTranscriptCursor;
 use codex_guardian_context::TranscriptMode as GuardianPromptMode;
 use codex_guardian_context::TranscriptSelection;
 
+pub const GUARDIAN_TRANSCRIPT_START: &str = ">>> TRANSCRIPT START\n";
+
 pub struct GuardianPromptItems {
     pub context: ComposedContext,
     pub transcript_cursor: GuardianTranscriptCursor,

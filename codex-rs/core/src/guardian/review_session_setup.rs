@@ -12,14 +12,8 @@ use crate::guardian::input_budget::CheckpointRecovery;
 use codex_features::Feature;
 use codex_guardian_reviewer::ReviewerPool;
 use codex_guardian_reviewer::ReviewerRequest;
+use codex_guardian_reviewer::ReviewerSelection;
 use codex_protocol::protocol::TurnEnvironmentSelection;
-
-/// Controls whether selection may reuse a session or must start from the parent checkpoint.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ReviewerSelection {
-    ReuseIfAvailable,
-    FreshParentCheckpoint,
-}
 
 #[derive(Clone)]
 pub struct PreparedGuardianContext {
@@ -102,41 +96,12 @@ impl PreparedGuardianContext {
         kind: GuardianReviewSessionKind,
         snapshot: Option<GuardianReviewForkSnapshot>,
     ) -> (crate::StartThreadOptions, GuardianReviewState) {
-        let mut conversation = snapshot
-            .filter(|_| self.reviewer_selection == ReviewerSelection::ReuseIfAvailable)
-            .map(ConversationState::from)
-            .unwrap_or_default();
-        if self.parent_compaction.is_some() && conversation.cursor().is_none() {
-            // A compacted fork has no valid transcript progress. Prefer the
-            // captured parent checkpoint to its lossy reviewer summary.
-            conversation = ConversationState::default();
-        }
-        let history = match kind {
-            GuardianReviewSessionKind::EphemeralForked => conversation.take_history(),
-            // Replacement trunks keep the checkpoint if their first review is invalidated.
-            GuardianReviewSessionKind::TrunkNew | GuardianReviewSessionKind::TrunkReused => {
-                conversation
-                    .snapshot()
-                    .map(|checkpoint| checkpoint.history().clone())
-            }
-        };
-        let state = GuardianReviewState {
-            conversation,
-            fresh_parent_checkpoint: history.is_none() && self.parent_compaction.is_some(),
-            transcript_history_version: 0,
-            transcript_source: history
-                .as_ref()
-                .and_then(|history| history.transcript_source),
-            last_admitted_node_repl_response_sequence: history.as_ref().map_or(0, |history| {
-                history.last_admitted_node_repl_response_sequence
-            }),
-            pending_node_repl_evidence_admission: None,
-        };
-        let initial_history = history.map(|history| history.initial_history).or_else(|| {
-            self.parent_compaction
-                .clone()
-                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item.into())]))
-        });
+        let (state, initial_history) = GuardianReviewState::for_session(
+            kind,
+            snapshot,
+            self.reviewer_selection,
+            self.parent_compaction.as_ref(),
+        );
         let mut config = self.config.clone();
         config.model_provider.supports_websockets &= self
             .parent
@@ -343,27 +308,16 @@ impl ReviewerRequest for PreparedReview {
             return result;
         }
         if let Some((items, history_version, mut state)) = checkpoint {
-            // Forks must not inherit a cursor for evidence the completed turn compacted away.
-            if state.transcript_history_version != history_version
-                && session
+            state.commit_snapshot(
+                items,
+                history_version,
+                session
                     .session
                     .services
                     .thread_extension_data
                     .get::<CheckpointRecovery>()
-                    .is_some()
-            {
-                state.conversation.reset_transcript();
-                state.transcript_source = None;
-                state.last_admitted_node_repl_response_sequence = 0;
-            }
-            let last_admitted_node_repl_response_sequence =
-                state.last_admitted_node_repl_response_sequence;
-            let transcript_source = state.transcript_source;
-            state.conversation.commit_snapshot(GuardianReviewHistory {
-                initial_history: InitialHistory::Forked(items),
-                transcript_source,
-                last_admitted_node_repl_response_sequence,
-            });
+                    .as_deref(),
+            );
         }
         result
     }
