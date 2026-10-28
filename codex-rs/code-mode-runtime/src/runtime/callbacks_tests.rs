@@ -16,7 +16,7 @@ use super::super::RuntimeEvent;
 use super::super::RuntimeState;
 use super::super::ToolCallbackMetadata;
 use super::super::globals;
-use crate::FunctionCallOutputContentItem;
+use crate::session_runtime::OutputItem;
 use crate::v8_init::ensure_v8_initialized;
 
 // Deliberately leave JS running: the test must verify host-side admission even
@@ -109,7 +109,7 @@ clearTimeout(earlyTimer); setTimeout(() => {}, 60000);
         )
         .expect("install globals");
         scope.set_slot(RuntimeState {
-            event_tx,
+            event_tx: event_tx.into(),
             pending_tool_calls: HashMap::new(),
             pending_timeouts: HashMap::new(),
             stored_values: HashMap::new(),
@@ -152,7 +152,7 @@ const earlyTimer = setTimeout(() => text("early timer"), 60000);
 
         assert!(
             matches!(event_rx.try_recv(), Ok(RuntimeEvent::ContentItem(
-            FunctionCallOutputContentItem::InputText { text }
+            OutputItem::InputText { text }
         )) if text == "before"),
             "{label}: pre-exit output"
         );

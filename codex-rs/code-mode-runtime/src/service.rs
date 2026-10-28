@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
@@ -11,8 +12,8 @@ use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::DEFAULT_EXEC_YIELD_TIME_MS;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::ExecuteToPendingOutcome;
+#[cfg(test)]
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
-use codex_code_mode_protocol::ImageDetail;
 use codex_code_mode_protocol::RuntimeResponse;
 use codex_code_mode_protocol::StartedCell;
 use codex_code_mode_protocol::TerminateRequest;
@@ -319,6 +320,7 @@ impl runtime::SessionRuntimeDelegate for ProtocolDelegate {
 
 fn runtime_request(request: ExecuteRequest) -> runtime::CreateCellRequest {
     runtime::CreateCellRequest {
+        output_truncation: CodeModeOutputTruncation::Client,
         tool_call_id: request.tool_call_id,
         enabled_tools: request
             .enabled_tools
@@ -358,7 +360,9 @@ fn pending_outcome(
             pending_tool_call_ids,
         } => Ok(ExecuteToPendingOutcome::Pending {
             cell_id: cell_id.clone(),
-            content_items: content_items.into_iter().map(output_item).collect(),
+            content_items: content_items
+                .into_collected_output()
+                .into_untruncated_items(),
             pending_tool_call_ids,
         }),
         event => Ok(ExecuteToPendingOutcome::Completed(runtime_response(
@@ -374,7 +378,9 @@ fn runtime_response(
     match event {
         runtime::CellEvent::Yielded { content_items } => Ok(RuntimeResponse::Yielded {
             cell_id: cell_id.clone(),
-            content_items: content_items.into_iter().map(output_item).collect(),
+            content_items: content_items
+                .into_collected_output()
+                .into_untruncated_items(),
             code_mode_host_duration: None,
         }),
         runtime::CellEvent::Completed {
@@ -383,38 +389,22 @@ fn runtime_response(
             result_buffered_for,
         } => Ok(RuntimeResponse::Result {
             cell_id: cell_id.clone(),
-            content_items: content_items.into_iter().map(output_item).collect(),
+            content_items: content_items
+                .into_collected_output()
+                .into_untruncated_items(),
             error_text,
             result_buffered_for,
             code_mode_host_duration: None,
         }),
         runtime::CellEvent::Terminated { content_items } => Ok(RuntimeResponse::Terminated {
             cell_id: cell_id.clone(),
-            content_items: content_items.into_iter().map(output_item).collect(),
+            content_items: content_items
+                .into_collected_output()
+                .into_untruncated_items(),
             code_mode_host_duration: None,
         }),
         runtime::CellEvent::Pending { .. } => {
             Err("cell returned a pending frontier unexpectedly".to_string())
-        }
-    }
-}
-
-fn output_item(item: runtime::OutputItem) -> FunctionCallOutputContentItem {
-    match item {
-        runtime::OutputItem::Text { text } => FunctionCallOutputContentItem::InputText { text },
-        runtime::OutputItem::Image { image_url, detail } => {
-            FunctionCallOutputContentItem::InputImage {
-                image_url,
-                detail: detail.map(|detail| match detail {
-                    runtime::ImageDetail::Auto => ImageDetail::Auto,
-                    runtime::ImageDetail::Low => ImageDetail::Low,
-                    runtime::ImageDetail::High => ImageDetail::High,
-                    runtime::ImageDetail::Original => ImageDetail::Original,
-                }),
-            }
-        }
-        runtime::OutputItem::Audio { audio_url } => {
-            FunctionCallOutputContentItem::InputAudio { audio_url }
         }
     }
 }

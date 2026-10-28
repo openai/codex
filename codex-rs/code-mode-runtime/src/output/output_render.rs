@@ -30,6 +30,10 @@ const MAX_POSITIONED_NOTICES: usize = 4;
 /// budget: Core's warning describes the retained text alone. The shared
 /// formatter moves collector boundaries along with their source content.
 /// If losses are too scattered for individual notices, report their totals once.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "Renderer is wired in the next stack layer")
+)]
 pub(crate) fn render_output(
     output: CollectedOutput,
     max_output_tokens: Option<usize>,

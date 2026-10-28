@@ -299,3 +299,34 @@ fn repeated_eviction_keeps_recent_writes_and_gaps_on_each_side_of_an_image() {
     assert_eq!(after.omitted.text_bytes, (writes * chunk.len()) as u64);
     assert_eq!(after.omitted.text_items, (1 + writes - recent) as u64);
 }
+
+#[test]
+fn terminal_error_matches_ordinary_text_across_loss_boundaries() {
+    let label = "Script error:\n";
+    // Rounding inward at the emoji can wrongly pull XYZ into the retained suffix.
+    let error = format!(
+        "{}XYZ{}💡{}",
+        "p".repeat(MAX_OUTPUT_BYTES - label.len() - 3),
+        "m".repeat(22),
+        "s".repeat(MAX_OUTPUT_BYTES - 3),
+    );
+    let half = text(&"p".repeat(MAX_OUTPUT_BYTES / 2));
+    for (prefix, gap_count) in [
+        (Vec::new(), 1),
+        (vec![text(""); MAX_OUTPUT_ITEMS / 2], 1),
+        (vec![half.clone(), text("lost"), image("i".into()), half], 2),
+    ] {
+        let mut terminal = BoundedOutput::default();
+        let mut ordinary = BoundedOutput::default();
+        for item in prefix {
+            terminal.push(item.clone());
+            ordinary.push(item);
+        }
+        terminal.push_error(&error);
+        ordinary.push(text(&format!("{label}{error}")));
+        assert!(retained_capacity(&terminal) < MAX_OUTPUT_BYTES + TEXT_BLOCK_BYTES);
+        let actual = terminal.into_collected_output();
+        assert_eq!(actual.gaps.len(), gap_count);
+        assert!(actual == ordinary.into_collected_output());
+    }
+}

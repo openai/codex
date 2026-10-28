@@ -18,7 +18,6 @@ use self::callbacks::report_task_result;
 use self::callbacks::spawn_notification;
 use self::callbacks::spawn_tool;
 use self::conversions::cell_tool_kind;
-use self::conversions::output_item;
 use self::conversions::runtime_request;
 use self::types::CellCommand;
 pub(crate) use self::types::CellError;
@@ -31,16 +30,18 @@ pub(crate) use self::types::CompletionCommit;
 use self::types::CompletionDelivery;
 use self::types::ObservationDelivery;
 use crate::TaskFailureHandler;
+use crate::output::OutputCollector;
 use crate::runtime::PendingRuntimeMode;
 use crate::runtime::RuntimeCommand;
 use crate::runtime::RuntimeControlCommand;
 use crate::runtime::RuntimeEvent;
+use crate::runtime::RuntimeEventReceiver;
+use crate::runtime::runtime_event_channel;
 use crate::runtime::spawn_runtime;
 use crate::session_runtime::CellEvent;
 use crate::session_runtime::CreateCellRequest as CellRequest;
 use crate::session_runtime::Observation;
 use crate::session_runtime::ObserveMode;
-use crate::session_runtime::OutputItem;
 use crate::session_runtime::ToolName as CellToolName;
 
 pub(crate) struct CellActor;
@@ -61,7 +62,8 @@ impl CellActor {
         ),
         String,
     > {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = runtime_event_channel(request.output_truncation);
+        let output = OutputCollector::new(request.output_truncation);
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (initial_response_tx, initial_response_rx) = oneshot::channel();
         let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
@@ -79,6 +81,7 @@ impl CellActor {
                 runtime_control_tx,
                 runtime_terminate_handle,
                 cell_state,
+                output,
             },
             event_rx,
             command_rx,
@@ -99,6 +102,7 @@ struct CellContext {
     runtime_control_tx: std::sync::mpsc::Sender<RuntimeControlCommand>,
     runtime_terminate_handle: v8::IsolateHandle,
     cell_state: Arc<CellState>,
+    output: OutputCollector,
 }
 
 struct Observer {
@@ -109,7 +113,7 @@ struct Observer {
 async fn run_cell<H: CellHost>(
     host: Arc<H>,
     context: CellContext,
-    mut event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
+    mut event_rx: RuntimeEventReceiver,
     command_rx: mpsc::UnboundedReceiver<CellCommand>,
     initial_observer: Observer,
     task_failure_handler: Option<TaskFailureHandler>,
@@ -119,10 +123,10 @@ async fn run_cell<H: CellHost>(
         runtime_control_tx,
         runtime_terminate_handle,
         cell_state,
+        mut output,
     } = context;
     let cancellation_token = cell_state.cancellation_token();
     let callback_cancellation_token = cancellation_token.child_token();
-    let mut content_items = Vec::new();
     let mut pending_tool_call_ids = Vec::new();
     let mut pending_frontier_ready = false;
     let mut yield_signal = Some(initial_observer.observation.yield_signal.clone());
@@ -164,7 +168,7 @@ async fn run_cell<H: CellHost>(
                         &cell_state,
                         observer.take().map(|observer| observer.response_tx),
                         CellEvent::Terminated {
-                            content_items: std::mem::take(&mut content_items),
+                            content_items: output.take(),
                         },
                     );
                     break;
@@ -202,27 +206,8 @@ async fn run_cell<H: CellHost>(
                     continue;
                 }
                 if matches!(mode, ObserveMode::PendingFrontier) && pending_frontier_ready {
-                    pending_frontier_ready = false;
-                    match send_cell_event(
-                        response_tx,
-                        CellEvent::Pending {
-                            content_items: std::mem::take(&mut content_items),
-                            pending_tool_call_ids: std::mem::take(&mut pending_tool_call_ids),
-                        },
-                    ) {
-                        Ok(()) => {}
-                        Err(CellEvent::Pending {
-                            content_items: undelivered_items,
-                            pending_tool_call_ids: undelivered_tool_call_ids,
-                        }) => {
-                            content_items = undelivered_items;
-                            pending_tool_call_ids = undelivered_tool_call_ids;
-                            pending_frontier_ready = true;
-                        }
-                        Err(event) => {
-                            panic!("pending delivery returned an unexpected event: {event:?}")
-                        }
-                    }
+                    pending_frontier_ready =
+                        !send_pending(&mut output, response_tx, &mut pending_tool_call_ids);
                     continue;
                 }
                 yield_signal = Some(observation.yield_signal.clone());
@@ -259,19 +244,13 @@ async fn run_cell<H: CellHost>(
             } => {
                 yield_timer = None;
                 yield_signal = None;
-                restore_undelivered_yield(
-                    send_observer_event(
-                        observer.take(),
-                        CellEvent::Yielded {
-                            content_items: std::mem::take(&mut content_items),
-                        },
-                    ),
-                    &mut content_items,
-                );
+                if let Some(observer) = observer.take() {
+                    send_yield(&mut output, observer.response_tx);
+                }
             }
             maybe_event = async {
                 if runtime_closed {
-                    std::future::pending::<Option<RuntimeEvent>>().await
+                    std::future::pending().await
                 } else {
                     event_rx.recv().await
                 }
@@ -292,7 +271,7 @@ async fn run_cell<H: CellHost>(
                             &cell_state,
                             observer.take().map(|observer| observer.response_tx),
                             CellEvent::Terminated {
-                                content_items: std::mem::take(&mut content_items),
+                                content_items: output.take(),
                             },
                         );
                         break;
@@ -313,22 +292,17 @@ async fn run_cell<H: CellHost>(
                         task_failure_handler.as_ref(),
                     )
                     .await;
-                    let event = CellEvent::Completed {
-                        content_items: std::mem::take(&mut content_items),
-                        result_buffered_for: std::time::Duration::ZERO,
-                        error_text: Some("exec runtime ended unexpectedly".to_string()),
-                    };
-                    let rejected_event = match host
+                    host
                         .commit_completion(
                             HashMap::new(),
-                            event,
+                            || {
+                                take_completed_event(&mut output, Some(
+                                    "exec runtime ended unexpectedly".to_string(),
+                                ))
+                            },
                             Arc::clone(&cell_state),
                         )
-                        .await
-                    {
-                        CompletionCommit::Committed => None,
-                        CompletionCommit::Rejected(event) => Some(event),
-                    };
+                        .await;
                     match cell_state.deliver_completion(
                         observer.take().map(|observer| observer.response_tx),
                     ) {
@@ -339,7 +313,7 @@ async fn run_cell<H: CellHost>(
                                 &cell_state,
                                 response_tx,
                                 CellEvent::Terminated {
-                                    content_items: rejected_completion_content(rejected_event),
+                                    content_items: output.take(),
                                 },
                             );
                             break;
@@ -356,59 +330,29 @@ async fn run_cell<H: CellHost>(
                     }
                     RuntimeEvent::Pending => {
                         runtime_paused = true;
-                        if matches!(
-                            observer.as_ref().map(|observer| observer.observation.mode),
-                            Some(ObserveMode::PendingFrontier)
-                        ) {
+                        if let Some(observer) = observer.take_if(|observer| {
+                            matches!(observer.observation.mode, ObserveMode::PendingFrontier)
+                        }) {
                             yield_timer = None;
                             yield_signal = None;
-                            pending_frontier_ready = false;
-                            match send_observer_event(
-                                observer.take(),
-                                CellEvent::Pending {
-                                    content_items: std::mem::take(&mut content_items),
-                                    pending_tool_call_ids: std::mem::take(
-                                        &mut pending_tool_call_ids,
-                                    ),
-                                },
-                            ) {
-                                Ok(()) => {}
-                                Err(CellEvent::Pending {
-                                    content_items: undelivered_items,
-                                    pending_tool_call_ids: undelivered_tool_call_ids,
-                                }) => {
-                                    content_items = undelivered_items;
-                                    pending_tool_call_ids = undelivered_tool_call_ids;
-                                    pending_frontier_ready = true;
-                                }
-                                Err(event) => {
-                                    panic!("pending delivery returned an unexpected event: {event:?}")
-                                }
-                            }
+                            pending_frontier_ready =
+                                !send_pending(&mut output, observer.response_tx, &mut pending_tool_call_ids);
                         } else {
                             pending_tool_call_ids.clear();
                             let _ = runtime_control_tx.send(RuntimeControlCommand::Continue);
                             runtime_paused = false;
                         }
                     }
-                    RuntimeEvent::ContentItem(item) => content_items.push(output_item(item)),
+                    RuntimeEvent::ContentItem(item) => {
+                        output.push(item);
+                    }
                     RuntimeEvent::YieldRequested => {
-                        let yield_observer = matches!(
-                            observer.as_ref().map(|observer| observer.observation.mode),
-                            Some(ObserveMode::YieldAfter(_))
-                        );
-                        if yield_observer {
+                        if let Some(observer) = observer.take_if(|observer| {
+                            matches!(observer.observation.mode, ObserveMode::YieldAfter(_))
+                        }) {
                             yield_timer = None;
                             yield_signal = None;
-                            restore_undelivered_yield(
-                                send_observer_event(
-                                    observer.take(),
-                                    CellEvent::Yielded {
-                                        content_items: std::mem::take(&mut content_items),
-                                    },
-                                ),
-                                &mut content_items,
-                            );
+                            send_yield(&mut output, observer.response_tx);
                         }
                     }
                     RuntimeEvent::Notify { call_id, text } => {
@@ -456,7 +400,7 @@ async fn run_cell<H: CellHost>(
                                 &cell_state,
                                 observer.take().map(|observer| observer.response_tx),
                                 CellEvent::Terminated {
-                                    content_items: std::mem::take(&mut content_items),
+                                    content_items: output.take(),
                                 },
                             );
                             break;
@@ -469,22 +413,13 @@ async fn run_cell<H: CellHost>(
                             task_failure_handler.as_ref(),
                         )
                         .await;
-                        let event = CellEvent::Completed {
-                            content_items: std::mem::take(&mut content_items),
-                            result_buffered_for: std::time::Duration::ZERO,
-                            error_text,
-                        };
-                        let rejected_event = match host
+                        host
                             .commit_completion(
                                 stored_value_writes,
-                                event,
+                                || take_completed_event(&mut output, error_text),
                                 Arc::clone(&cell_state),
                             )
-                            .await
-                        {
-                            CompletionCommit::Committed => None,
-                            CompletionCommit::Rejected(event) => Some(event),
-                        };
+                            .await;
                         match cell_state.deliver_completion(
                             observer.take().map(|observer| observer.response_tx),
                         ) {
@@ -495,7 +430,7 @@ async fn run_cell<H: CellHost>(
                                     &cell_state,
                                     response_tx,
                                     CellEvent::Terminated {
-                                        content_items: rejected_completion_content(rejected_event),
+                                        content_items: output.take(),
                                     },
                                 );
                                 break;
@@ -539,11 +474,14 @@ async fn run_cell<H: CellHost>(
     host.closed().await;
 }
 
-fn send_observer_event(observer: Option<Observer>, event: CellEvent) -> Result<(), CellEvent> {
-    let Some(observer) = observer else {
-        return Err(event);
-    };
-    send_cell_event(observer.response_tx, event)
+/// Construct completion only after it has won the terminal decision.
+fn take_completed_event(output: &mut OutputCollector, error_text: Option<String>) -> CellEvent {
+    let error_text = error_text.map(|error_text| output.collect_error(error_text));
+    CellEvent::Completed {
+        content_items: output.take(),
+        error_text,
+        result_buffered_for: std::time::Duration::ZERO,
+    }
 }
 
 fn send_cell_event(
@@ -557,25 +495,42 @@ fn send_cell_event(
     }
 }
 
-fn restore_undelivered_yield(delivery: Result<(), CellEvent>, content_items: &mut Vec<OutputItem>) {
-    match delivery {
-        Ok(()) => {}
-        Err(CellEvent::Yielded {
-            content_items: mut undelivered_items,
-        }) => {
-            undelivered_items.append(content_items);
-            *content_items = undelivered_items;
-        }
-        Err(event) => panic!("yield delivery returned an unexpected event: {event:?}"),
-    }
+fn send_yield(
+    output: &mut OutputCollector,
+    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+) {
+    output.try_deliver(|content_items| {
+        send_cell_event(response_tx, CellEvent::Yielded { content_items }).map_err(|event| {
+            let CellEvent::Yielded { content_items } = event else {
+                unreachable!("yield delivery returned a different event");
+            };
+            content_items
+        })
+    });
 }
 
-fn rejected_completion_content(event: Option<CellEvent>) -> Vec<OutputItem> {
-    match event {
-        Some(CellEvent::Completed { content_items, .. }) => content_items,
-        None => Vec::new(),
-        Some(event) => panic!("completion commit rejected an unexpected event: {event:?}"),
-    }
+fn send_pending(
+    output: &mut OutputCollector,
+    response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
+    pending_tool_call_ids: &mut Vec<String>,
+) -> bool {
+    output.try_deliver(|content_items| {
+        let pending = CellEvent::Pending {
+            content_items,
+            pending_tool_call_ids: std::mem::take(pending_tool_call_ids),
+        };
+        send_cell_event(response_tx, pending).map_err(|event| {
+            let CellEvent::Pending {
+                content_items,
+                pending_tool_call_ids: returned_ids,
+            } = event
+            else {
+                unreachable!("pending delivery returned a different event");
+            };
+            *pending_tool_call_ids = returned_ids;
+            content_items
+        })
+    })
 }
 
 fn finish_termination(

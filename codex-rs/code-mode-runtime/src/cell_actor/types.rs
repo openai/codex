@@ -55,7 +55,7 @@ pub(crate) trait CellHost: Send + Sync + 'static {
     fn commit_completion(
         &self,
         stored_value_writes: HashMap<String, Arc<JsonValue>>,
-        event: CellEvent,
+        event: impl FnOnce() -> CellEvent + Send,
         cell_state: Arc<CellState>,
     ) -> impl Future<Output = CompletionCommit> + Send;
 
@@ -136,7 +136,7 @@ pub(crate) enum CompletionDelivery {
 #[derive(Debug, PartialEq)]
 pub(crate) enum CompletionCommit {
     Committed,
-    Rejected(CellEvent),
+    Rejected,
 }
 
 pub(crate) enum ObservationDelivery {
@@ -200,7 +200,7 @@ impl CellState {
 
     pub(crate) fn commit_completion(
         &self,
-        event: CellEvent,
+        event: impl FnOnce() -> CellEvent,
         commit: impl FnOnce(),
     ) -> CompletionCommit {
         let mut phase = self
@@ -208,11 +208,13 @@ impl CellState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !matches!(*phase, CellPhase::Running) || self.cancellation_token.is_cancelled() {
-            return CompletionCommit::Rejected(event);
+            return CompletionCommit::Rejected;
         }
         commit();
         *phase = CellPhase::Completed {
-            event,
+            // Construct terminal output only after completion wins. In bounded
+            // mode, an error may evict user output; termination must not see it.
+            event: event(),
             completed_at: Instant::now(),
         };
         CompletionCommit::Committed

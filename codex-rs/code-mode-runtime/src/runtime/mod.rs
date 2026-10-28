@@ -1,5 +1,6 @@
 mod audio;
 mod callbacks;
+mod event_channel;
 mod globals;
 mod module_loader;
 mod timers;
@@ -12,17 +13,18 @@ use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 
+use crate::TaskFailureHandler;
+use crate::session_runtime::OutputItem;
+use crate::v8_init::ensure_v8_initialized;
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::EnabledToolMetadata;
 use codex_code_mode_protocol::ExecuteRequest;
-use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::normalize_code_mode_identifier;
 use codex_protocol::ToolName;
+pub(crate) use event_channel::RuntimeEventReceiver;
+pub(crate) use event_channel::RuntimeEventSender;
+pub(crate) use event_channel::runtime_event_channel;
 use serde_json::Value as JsonValue;
-use tokio::sync::mpsc;
-
-use crate::TaskFailureHandler;
-use crate::v8_init::ensure_v8_initialized;
 
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
@@ -51,7 +53,7 @@ pub(crate) enum RuntimeControlCommand {
 pub(crate) enum RuntimeEvent {
     Started,
     Pending,
-    ContentItem(FunctionCallOutputContentItem),
+    ContentItem(OutputItem),
     YieldRequested,
     ToolCall {
         id: String,
@@ -73,7 +75,7 @@ pub(crate) enum RuntimeEvent {
 pub(crate) fn spawn_runtime(
     stored_values: HashMap<String, Arc<JsonValue>>,
     request: ExecuteRequest,
-    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    event_tx: impl Into<RuntimeEventSender>,
     pending_mode: PendingRuntimeMode,
     task_failure_handler: Option<TaskFailureHandler>,
 ) -> Result<
@@ -84,6 +86,7 @@ pub(crate) fn spawn_runtime(
     ),
     String,
 > {
+    let event_tx = event_tx.into();
     ensure_v8_initialized()?;
 
     let (command_tx, command_rx) = std_mpsc::channel();
@@ -128,16 +131,17 @@ pub(crate) fn spawn_runtime(
 }
 
 fn spawn_supervised_runtime_thread(
-    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    event_tx: impl Into<RuntimeEventSender>,
     task_failure_handler: Option<TaskFailureHandler>,
     runtime: impl FnOnce() + Send + 'static,
 ) {
+    let event_tx = event_tx.into();
     thread::spawn(move || {
         if catch_unwind(AssertUnwindSafe(runtime)).is_err() {
             if let Some(task_failure_handler) = task_failure_handler {
                 task_failure_handler("code-mode V8 runtime thread panicked".to_string());
             }
-            let _ = event_tx.send(RuntimeEvent::ThreadPanicked);
+            let _ = event_tx.blocking_send(RuntimeEvent::ThreadPanicked);
         }
     });
 }
@@ -157,7 +161,7 @@ struct ToolCallbackMetadata {
 }
 
 pub(super) struct RuntimeState {
-    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    event_tx: RuntimeEventSender,
     pending_tool_calls: HashMap<String, v8::Global<v8::PromiseResolver>>,
     pending_timeouts: HashMap<u64, timers::ScheduledTimeout>,
     stored_values: HashMap<String, Arc<JsonValue>>,
@@ -177,7 +181,7 @@ pub(super) enum CompletionState {
 
 fn run_runtime(
     config: RuntimeConfig,
-    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    event_tx: RuntimeEventSender,
     command_rx: std_mpsc::Receiver<RuntimeCommand>,
     control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
     pending_mode: PendingRuntimeMode,
@@ -221,7 +225,7 @@ fn run_runtime(
         exit_requested: false,
     });
 
-    let _ = event_tx.send(RuntimeEvent::Started);
+    let _ = event_tx.blocking_send(RuntimeEvent::Started);
 
     let pending_promise = match module_loader::evaluate_main_module(scope, &config.source) {
         Ok(pending_promise) => pending_promise,
@@ -289,7 +293,7 @@ fn run_runtime(
 }
 
 fn next_runtime_command(
-    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    event_tx: &RuntimeEventSender,
     command_rx: &std_mpsc::Receiver<RuntimeCommand>,
     control_rx: &std_mpsc::Receiver<RuntimeControlCommand>,
     pending_mode: PendingRuntimeMode,
@@ -301,7 +305,7 @@ fn next_runtime_command(
             Err(std_mpsc::TryRecvError::Empty) => {}
         }
 
-        let _ = event_tx.send(RuntimeEvent::Pending);
+        let _ = event_tx.blocking_send(RuntimeEvent::Pending);
         match pending_mode {
             #[cfg(test)]
             PendingRuntimeMode::Continue => return command_rx.recv().ok(),
@@ -316,7 +320,7 @@ fn next_runtime_command(
 
 fn send_scope_result(
     scope: &mut v8::PinScope<'_, '_>,
-    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    event_tx: &RuntimeEventSender,
     error_text: Option<String>,
 ) {
     // Error rendering can itself run JS getters, including exit(). Capture
@@ -330,11 +334,11 @@ fn send_scope_result(
 }
 
 fn send_result(
-    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    event_tx: &RuntimeEventSender,
     stored_value_writes: HashMap<String, Arc<JsonValue>>,
     error_text: Option<String>,
 ) {
-    let _ = event_tx.send(RuntimeEvent::Result {
+    let _ = event_tx.blocking_send(RuntimeEvent::Result {
         stored_value_writes,
         error_text,
     });
@@ -355,7 +359,7 @@ mod tests {
     use super::RuntimeEvent;
     use super::spawn_runtime;
     use super::spawn_supervised_runtime_thread;
-    use crate::FunctionCallOutputContentItem;
+    use crate::session_runtime::OutputItem;
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
@@ -530,9 +534,7 @@ await new Promise(() => {});
             .await
             .unwrap()
             .unwrap();
-        let RuntimeEvent::ContentItem(FunctionCallOutputContentItem::InputText { text }) =
-            content_event
-        else {
+        let RuntimeEvent::ContentItem(OutputItem::InputText { text }) = content_event else {
             panic!("expected resumed runtime output");
         };
         assert_eq!(text, "after");
@@ -602,7 +604,7 @@ setTimeout(() => text("late"), 3_600_000);
         }
         assert_eq!(
             output,
-            vec![FunctionCallOutputContentItem::InputText {
+            vec![OutputItem::InputText {
                 text: "done".to_string()
             }]
         );

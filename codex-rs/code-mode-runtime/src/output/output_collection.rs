@@ -435,6 +435,34 @@ impl HeadTailOutput {
 }
 
 impl BoundedOutput {
+    /// A completed error is one logical text item, including its label. Do not
+    /// allocate an arbitrarily large formatted copy before selecting its output.
+    pub(crate) fn push_error(&mut self, error: &str) {
+        const LABEL: &str = "Script error:\n";
+        // No selection can retain more than MAX_OUTPUT_BYTES from either end
+        // of this item. Keep both possible spans until push() decides how the
+        // existing head, tail and item pressure affect them. Round outward so
+        // a UTF-8 boundary cannot pull bytes from the prefix across the gap.
+        let head_end = error.ceil_char_boundary(error.len().min(MAX_OUTPUT_BYTES - LABEL.len()));
+        let tail_start =
+            error.floor_char_boundary(error.len().saturating_sub(MAX_OUTPUT_BYTES).max(head_end));
+        self.push(OutputItem::InputText {
+            text: format!("{LABEL}{}{}", &error[..head_end], &error[tail_start..]),
+        });
+        let skipped = tail_start - head_end;
+        if skipped > 0 {
+            // This item alone exceeds the content budget. Its newest, retained
+            // suffix owns the gap, even when an image separates it from older loss.
+            let Retention::HeadTail(output) = &mut self.state else {
+                unreachable!("an oversized error must enter head/tail retention");
+            };
+            let Some(RetainedItem::Partial(text)) = output.tail.back_mut() else {
+                unreachable!("the tail retains the end of the oversized error");
+            };
+            text.omitted = text.omitted.saturating_add(skipped as u64);
+        }
+    }
+
     pub(crate) fn push(&mut self, item: OutputItem) {
         if let Err(loss) = self.media.admit(&item) {
             self.push_retained(RetainedItem::Gap(loss));

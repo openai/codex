@@ -11,6 +11,7 @@ mod output_collection;
 mod output_render;
 
 pub(crate) use output_collection::BoundedOutput;
+#[allow(unused_imports, reason = "Renderer is wired in the next stack layer")]
 pub(crate) use output_render::render_output;
 
 /// The actor transfers the whole collector at each observation, so a failed
@@ -35,6 +36,20 @@ impl OutputCollector {
         match self {
             Self::Client(items) => items.push(item),
             Self::Server(output) => output.get_or_insert_with(Box::default).push(item),
+        }
+    }
+
+    /// Server errors share the observation's budget; preserve their presence
+    /// for completion status. Client errors retain their original formatting.
+    pub(crate) fn collect_error(&mut self, error_text: String) -> String {
+        match self {
+            Self::Client(_) => error_text,
+            Self::Server(output) => {
+                output
+                    .get_or_insert_with(Box::default)
+                    .push_error(&error_text);
+                String::new()
+            }
         }
     }
 

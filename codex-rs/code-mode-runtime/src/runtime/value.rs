@@ -1,7 +1,7 @@
 use serde_json::Value as JsonValue;
 
+use crate::session_runtime::OutputItem;
 use codex_code_mode_protocol::DEFAULT_IMAGE_DETAIL;
-use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 
 use super::RuntimeState;
@@ -48,8 +48,8 @@ pub(super) fn normalize_output_image(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
     detail_override: Option<String>,
-) -> Result<FunctionCallOutputContentItem, ()> {
-    let result = (|| -> Result<FunctionCallOutputContentItem, String> {
+) -> Result<OutputItem, ()> {
+    let result = (|| -> Result<OutputItem, String> {
         let (image_url, detail) = if value.is_string() {
             (value.to_rust_string_lossy(scope), None)
         } else if value.is_object() && !value.is_array() {
@@ -96,7 +96,7 @@ pub(super) fn normalize_output_image(
             None => Some(DEFAULT_IMAGE_DETAIL),
         };
 
-        Ok(FunctionCallOutputContentItem::InputImage { image_url, detail })
+        Ok(OutputItem::InputImage { image_url, detail })
     })();
 
     match result {
@@ -191,8 +191,8 @@ fn parse_image_detail_value<'s>(
 pub(super) fn normalize_output_audio(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-) -> Result<FunctionCallOutputContentItem, ()> {
-    let result = (|| -> Result<FunctionCallOutputContentItem, String> {
+) -> Result<OutputItem, ()> {
+    let result = (|| -> Result<OutputItem, String> {
         let audio_url = if value.is_string() {
             value.to_rust_string_lossy(scope)
         } else if value.is_object() && !value.is_array() {
@@ -219,13 +219,13 @@ pub(super) fn normalize_output_audio(
 
         // Tiny tool-generated clips cannot be encoded reliably by audio models.
         if wav_duration_seconds(&audio_url).is_some_and(|duration| duration < 0.025) {
-            return Ok(FunctionCallOutputContentItem::InputText {
+            return Ok(OutputItem::InputText {
                 text: "Audio output omitted because the clip is shorter than 25 ms; use a longer clip."
                     .to_string(),
             });
         }
 
-        Ok(FunctionCallOutputContentItem::InputAudio { audio_url })
+        Ok(OutputItem::InputAudio { audio_url })
     })();
 
     match result {
