@@ -13,6 +13,7 @@ use opentelemetry::global;
 use opentelemetry::trace::Span as _;
 use opentelemetry::trace::SpanBuilder;
 use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::trace::noop::NoopTracerProvider;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::LogExporter;
 use opentelemetry_otlp::OTEL_EXPORTER_OTLP_LOGS_TIMEOUT;
@@ -202,6 +203,7 @@ impl OtelProvider {
             // settings do not install an active provider.
             crate::trace_context::set_tracestate_entries(BTreeMap::new())?;
             crate::metrics::buffered::GLOBAL.disable();
+            install_global_tracer_provider(/*tracer_provider*/ None);
             debug!("No OTEL exporter enabled in settings.");
             return Ok(None);
         }
@@ -269,10 +271,7 @@ impl OtelProvider {
         provider.prepare_shutdown_worker()?;
 
         crate::trace_context::set_tracestate_entries(settings.tracestate.clone())?;
-        if let Some(tracer_provider) = provider.tracer_provider.clone() {
-            global::set_tracer_provider(tracer_provider);
-            global::set_text_map_propagator(TraceContextPropagator::new());
-        }
+        install_global_tracer_provider(provider.tracer_provider.clone());
         if let Some(metrics) = provider.metrics.as_mut() {
             *metrics = crate::metrics::install_global(metrics.clone());
             if matches!(settings.metrics_exporter, OtelExporter::Statsig) {
@@ -351,6 +350,15 @@ impl OtelProvider {
 
     pub fn metrics(&self) -> Option<&MetricsClient> {
         self.metrics.as_ref()
+    }
+}
+
+fn install_global_tracer_provider(tracer_provider: Option<SdkTracerProvider>) {
+    if let Some(tracer_provider) = tracer_provider {
+        global::set_tracer_provider(tracer_provider);
+        global::set_text_map_propagator(TraceContextPropagator::new());
+    } else {
+        global::set_tracer_provider(NoopTracerProvider::new());
     }
 }
 
@@ -659,6 +667,7 @@ mod tests {
     use crate::metrics::TURN_TOKEN_USAGE_METRIC;
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
+    use opentelemetry::trace::Tracer as _;
     use opentelemetry_sdk::metrics::InMemoryMetricExporter;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -724,6 +733,26 @@ mod tests {
         assert!(is_trace_safe_target("codex_otel.trace_safe.summary"));
         assert!(!is_trace_safe_target("codex_otel.log_only"));
         assert!(!is_trace_safe_target("codex_otel.network_proxy"));
+    }
+
+    #[test]
+    fn disabled_trace_settings_replace_global_tracer_with_noop() -> Result<(), Box<dyn Error>> {
+        global::set_tracer_provider(SdkTracerProvider::builder().build());
+        let before = global::tracer("codex-otel-test").start("before-disable");
+        assert!(
+            before.is_recording(),
+            "the test provider should record before tracing is disabled"
+        );
+
+        let provider = OtelProvider::try_new(&test_otel_settings())?;
+        assert!(provider.is_none());
+
+        let after = global::tracer("codex-otel-test").start("after-disable");
+        assert!(
+            !after.is_recording(),
+            "new spans should not record after tracing is disabled"
+        );
+        Ok(())
     }
 
     #[test]

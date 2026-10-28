@@ -27,6 +27,11 @@ const NEXT_EMAIL: &str = "next-account@example.com";
 const PARENT_TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 const PARENT_TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
+enum TraceExporterSetting {
+    Disabled,
+    Collector,
+}
+
 #[tokio::test]
 async fn account_switch_reloads_telemetry_collectors_and_preserves_trace_context() -> Result<()> {
     let collector = MockServer::start().await;
@@ -37,7 +42,11 @@ async fn account_switch_reloads_telemetry_collectors_and_preserves_trace_context
 
     let codex_home = TempDir::new()?;
     let initial_endpoint = format!("{}/initial", collector.uri());
-    write_otel_config(codex_home.path(), &initial_endpoint)?;
+    write_otel_config(
+        codex_home.path(),
+        &initial_endpoint,
+        TraceExporterSetting::Collector,
+    )?;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("initial-access-token")
@@ -81,7 +90,11 @@ async fn account_switch_reloads_telemetry_collectors_and_preserves_trace_context
     .context("initial account telemetry must be exported before its permission is revoked")?;
 
     let next_endpoint = format!("{}/next", collector.uri());
-    write_otel_config(codex_home.path(), &next_endpoint)?;
+    write_otel_config(
+        codex_home.path(),
+        &next_endpoint,
+        TraceExporterSetting::Collector,
+    )?;
     let access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email(NEXT_EMAIL)
@@ -184,7 +197,124 @@ async fn account_switch_reloads_telemetry_collectors_and_preserves_trace_context
     Ok(())
 }
 
-fn write_otel_config(codex_home: &Path, collector_endpoint: &str) -> Result<()> {
+#[tokio::test]
+async fn account_switch_enables_trace_exporter_after_startup_without_tracing() -> Result<()> {
+    let collector = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&collector)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    let initial_endpoint = format!("{}/initial", collector.uri());
+    write_otel_config(
+        codex_home.path(),
+        &initial_endpoint,
+        TraceExporterSetting::Disabled,
+    )?;
+    write_trace_requirements(
+        codex_home.path(),
+        &initial_endpoint,
+        TraceExporterSetting::Disabled,
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("initial-access-token")
+            .account_id(INITIAL_ACCOUNT_ID)
+            .chatgpt_account_id(INITIAL_ACCOUNT_ID)
+            .chatgpt_user_id("initial-user")
+            .plan_type("pro")
+            .email(INITIAL_EMAIL),
+        AuthCredentialsStoreMode::File,
+    )?;
+    write_models_cache(codex_home.path()).await?;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("TRACEPARENT", Some(PARENT_TRACEPARENT))])
+        .with_json_logging("codex_app_server::otel_reloader=info")
+        .build_initialized_with_timeout(TEST_TIMEOUT)
+        .await?;
+    app_server
+        .start_thread(ThreadStartParams::default())
+        .await?;
+
+    let next_endpoint = format!("{}/next", collector.uri());
+    write_trace_requirements(
+        codex_home.path(),
+        &next_endpoint,
+        TraceExporterSetting::Collector,
+    )?;
+    let access_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .email(NEXT_EMAIL)
+            .plan_type("pro")
+            .chatgpt_account_id(NEXT_ACCOUNT_ID)
+            .chatgpt_user_id("next-user"),
+    )?;
+    let request_id = app_server
+        .send_chatgpt_auth_tokens_login_request(
+            access_token,
+            NEXT_ACCOUNT_ID.to_string(),
+            Some("pro".to_string()),
+        )
+        .await?;
+    let response: LoginAccountResponse =
+        timeout(TEST_TIMEOUT, app_server.read_response(request_id)).await??;
+    assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
+    timeout(
+        TEST_TIMEOUT,
+        app_server.wait_for_json_log_event(
+            "codex.app_server.otel_reloaded",
+            Duration::from_secs(/*secs*/ 10),
+        ),
+    )
+    .await??;
+    app_server
+        .start_thread(ThreadStartParams::default())
+        .await?;
+
+    let status = timeout(TEST_TIMEOUT, app_server.shutdown_gracefully()).await??;
+    assert!(status.success(), "app-server did not shut down cleanly");
+
+    let requests = collector
+        .received_requests()
+        .await
+        .context("collector did not record requests")?;
+    let exported = |path: &str| {
+        requests
+            .iter()
+            .filter(|request| request.url.path() == path)
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let initial_traces = exported("/initial/traces");
+    let next_traces = exported("/next/traces");
+
+    assert!(
+        initial_traces.is_empty(),
+        "traces were exported before tracing was configured: {initial_traces}"
+    );
+    assert!(
+        next_traces.contains(PARENT_TRACE_ID),
+        "the requirements-managed trace exporter did not start after account switch: {next_traces}"
+    );
+
+    Ok(())
+}
+
+fn write_otel_config(
+    codex_home: &Path,
+    collector_endpoint: &str,
+    trace_exporter_setting: TraceExporterSetting,
+) -> Result<()> {
+    let trace_exporter = match trace_exporter_setting {
+        TraceExporterSetting::Disabled => String::new(),
+        TraceExporterSetting::Collector => format!(
+            r#"trace_exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/traces", protocol = "json" }} }}"#
+        ),
+    };
     std::fs::write(
         codex_home.join("config.toml"),
         format!(
@@ -202,8 +332,30 @@ enabled = false
 [otel]
 environment = "test"
 exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/logs", protocol = "json", headers = {{ x-collector-key = "test-collector-key" }} }} }}
-trace_exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/traces", protocol = "json" }} }}
+{trace_exporter}
 metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/metrics", protocol = "json" }} }}
+"#
+        ),
+    )?;
+    Ok(())
+}
+
+fn write_trace_requirements(
+    codex_home: &Path,
+    collector_endpoint: &str,
+    trace_exporter_setting: TraceExporterSetting,
+) -> Result<()> {
+    let trace_exporter = match trace_exporter_setting {
+        TraceExporterSetting::Disabled => "trace_exporter = \"none\"".to_string(),
+        TraceExporterSetting::Collector => format!(
+            r#"trace_exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/traces", protocol = "json" }} }}"#
+        ),
+    };
+    std::fs::write(
+        codex_home.join("requirements.toml"),
+        format!(
+            r#"[otel]
+{trace_exporter}
 "#
         ),
     )?;
