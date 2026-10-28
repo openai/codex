@@ -24,7 +24,6 @@ use crate::context::NodeReplReviewEvidenceMode;
 use crate::context::is_guardian_context_message;
 use crate::context::node_repl_review_evidence_mode;
 use crate::session::session::Session;
-use codex_utils_output_truncation::approx_bytes_for_tokens;
 
 use super::ApprovalRequestReasons;
 use super::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS;
@@ -333,11 +332,4 @@ impl SectionHistory for FilteredGuardianHistory<'_> {
     ) -> Option<GuardianRootMessage> {
         self.0.render_retained_assistant(message)
     }
-}
-
-pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> (String, bool) {
-    (
-        codex_guardian_context::truncate_text(content, token_cap),
-        content.len() > approx_bytes_for_tokens(token_cap),
-    )
 }

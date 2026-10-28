@@ -3,6 +3,7 @@
 
 use super::ContextualUserFragment;
 use codex_guardian_context::GuardianRootMessage;
+pub(crate) use codex_guardian_reviewer::GuardianSenderExchange;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
@@ -14,12 +15,6 @@ pub(crate) struct GuardianSenderMessages {
     pub delivery: String,
     pub from_storage: bool,
     pub messages: Vec<GuardianSenderExchange>,
-}
-
-/// Recorded adjacency provides context, not a verified question/answer association.
-pub(crate) struct GuardianSenderExchange {
-    pub user: Option<String>,
-    pub assistant: Option<GuardianRootMessage>,
 }
 
 impl ContextualUserFragment for GuardianSenderMessages {

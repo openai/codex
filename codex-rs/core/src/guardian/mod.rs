@@ -48,10 +48,10 @@ pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::GuardianNetworkAccessTrigger;
 #[cfg(test)]
 pub(crate) use approval_request::guardian_approval_request_to_json;
+pub(crate) use codex_guardian_reviewer::guardian_truncate_text;
 pub(crate) use codex_guardian_reviewer::is_basic_session_source;
 pub(crate) use decision::decide_approval;
 pub(crate) use decision::spawn_approval_decision;
-pub(crate) use prompt::guardian_truncate_text;
 pub(crate) use review::GuardianReviewOptions;
 pub(crate) use review::new_guardian_review_id;
 pub(crate) use review::routes_approval_policy_to_guardian;
@@ -74,7 +74,7 @@ const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = {
     PROFILE.transcript.entry_limits.tool_tokens
 };
 pub(crate) const GUARDIAN_MAX_ROOT_MESSAGE_TOKENS: usize = 900;
-pub(crate) const GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS: usize = 6_000;
+pub(crate) use codex_guardian_reviewer::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS;
 
 /// Captures review inputs from the issuing step without retaining its MCP bindings or tool router.
 /// Background network approvals and Unix interception use the active task's resolved settings.

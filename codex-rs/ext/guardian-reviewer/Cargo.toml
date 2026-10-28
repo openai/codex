@@ -27,6 +27,8 @@ codex-prompts = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-path-uri = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
+codex-utils-string = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -35,6 +37,8 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+codex-context-fragments = { workspace = true }
+codex-protocol-test-support = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["experimental_metrics_custom_reader", "metrics"] }
 test-case = "3.3.1"

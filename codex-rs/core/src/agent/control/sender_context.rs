@@ -3,12 +3,8 @@
 //! quoted delegation text cannot establish sender provenance. Unloaded senders are read
 //! through the host's authenticated thread store, without resuming their runtime.
 
-use crate::context::GuardianSenderExchange;
 use crate::context::GuardianSenderMessages;
 use crate::context_manager::ContextManager;
-use codex_guardian_context::GuardianRootMessage;
-use codex_history::RetainedContextEntry;
-use codex_history::RetainedContextOrder;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
@@ -111,38 +107,7 @@ impl LocalAgentRuntime {
                 }
             };
             if let Some(context) = context {
-                let mut exchanges = Vec::new();
-                let mut assistant = None;
-                for (order, entry) in context.ordered_entries() {
-                    match (order, entry) {
-                        (
-                            RetainedContextOrder::Local(_),
-                            RetainedContextEntry::UserMessage(message),
-                        ) => exchanges.push((message, assistant.take())),
-                        (
-                            RetainedContextOrder::Local(_),
-                            RetainedContextEntry::AssistantMessage(message),
-                        ) => assistant = Some(message),
-                        (RetainedContextOrder::Inherited(_), _)
-                        | (_, RetainedContextEntry::VerifiedAnswer(_)) => {}
-                    }
-                }
-                fragment.messages = exchanges
-                    .into_iter()
-                    .rev()
-                    .take(/*n*/ 3)
-                    .map(|(user, assistant)| GuardianSenderExchange {
-                        user: user.complete.then(|| user.text.clone()),
-                        assistant: assistant.map(|message| {
-                            if message.complete {
-                                GuardianRootMessage::Assistant(message.text.clone())
-                            } else {
-                                GuardianRootMessage::IncompleteAssistantContext
-                            }
-                        }),
-                    })
-                    .collect();
-                fragment.messages.reverse();
+                fragment.messages = codex_guardian_reviewer::guardian_sender_exchanges(&context);
             }
         }
         Some(fragment)

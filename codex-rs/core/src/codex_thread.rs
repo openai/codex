@@ -187,30 +187,8 @@ pub enum ConfigRefreshOutcome {
 
 pub use codex_guardian_context::GuardianRootMessage;
 
-/// Authorization state that changes on genuine user input or history resets.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GuardianAuthorizationVersion {
-    /// User-message/reset revision, preserved across compaction and internal context.
-    pub user_message_revision: u64,
-    /// False when required retained answers or root instructions are unavailable.
-    pub retained_context_complete: bool,
-}
-
-/// Root authorization state, selected messages and request-local originals from one snapshot.
-#[derive(Debug, PartialEq)]
-pub struct GuardianRootSnapshot {
-    /// Authoritative root from which this evidence was captured.
-    pub root_thread_id: ThreadId,
-    /// Distinguishes a history reset from additional authorization in the same history.
-    pub(crate) history_reset_version: u64,
-    pub authorization_version: GuardianAuthorizationVersion,
-    /// Confirmed assistant context is relevant to review but cannot authorize an action.
-    pub review_context_revision: u64,
-    pub messages: Vec<GuardianRootMessage>,
-    /// Request-local originals retained before the bounded compatibility projection.
-    pub(crate) request_candidates: Option<codex_guardian_context::RootConversationInput>,
-    pub trusted_skill_paths: Vec<String>,
-}
+pub use codex_guardian_reviewer::GuardianAuthorizationVersion;
+pub use codex_guardian_reviewer::GuardianRootSnapshot;
 
 pub struct CodexThread {
     pub(crate) session: Arc<Session>,

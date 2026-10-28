@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use codex_protocol::models::ImageReference;
 use codex_protocol::user_input::UserInput;
 use codex_protocol_test_support::ContentItemTestExt;
