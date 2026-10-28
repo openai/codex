@@ -150,10 +150,6 @@ base_url = "{}/v1"
             "review/start",
             json!({ "threadId": started.thread.id, "target": { "type": "custom", "instructions": "Review this change." }, "delivery": "inline" }),
         ),
-        (
-            "review/start",
-            json!({ "threadId": started.thread.id, "target": { "type": "custom", "instructions": "Review this change." }, "delivery": "detached" }),
-        ),
     ] {
         let id = server.send_raw_request(method, Some(params)).await?;
         let error = server

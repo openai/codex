@@ -1746,7 +1746,8 @@ impl MessageProcessor {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {
-                self.turn_processor.review_start(&request_id, params).await
+                // Keep review setup from inflating the shared request dispatcher's stack frame.
+                Box::pin(self.turn_processor.review_start(&request_id, params)).await
             }
             ClientRequest::McpServerOauthLogin { params, .. } => {
                 // Keep MCP discovery's large future from inflating every request.

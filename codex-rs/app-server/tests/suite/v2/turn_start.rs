@@ -4893,13 +4893,6 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
             }),
         ),
         (
-            "review/start",
-            json!({
-                "target": {"type": "custom", "instructions": "Start a detached task."},
-                "delivery": "detached",
-            }),
-        ),
-        (
             "thread/realtime/start",
             json!({
                 "outputModality": "text",

@@ -217,7 +217,6 @@ codex-websocket-auth = { path = "websocket-auth" }
 codex-websocket-client = { path = "websocket-client" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
-codex-agent-extension = { path = "ext/agent" }
 codex-agent-message-board-client = { path = "agent-message-board-client" }
 codex-agent-message-board-extension = { path = "ext/agent-message-board" }
 codex-message-board = { path = "message-board" }

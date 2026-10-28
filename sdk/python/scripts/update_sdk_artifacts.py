@@ -547,6 +547,9 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
                 required.remove(field)
         for name, definition in definitions.items():
             if isinstance(definition, dict):
+                if name == "ReviewDelivery":
+                    # Preserve ReviewDelivery.inline when only one delivery mode remains.
+                    definition["x-enum-field-as-literal"] = False
                 if name == "CodexErrorInfo":
                     _normalize_open_ended_enum(definition)
                 _flatten_string_enum_one_of(definition)

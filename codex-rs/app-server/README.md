@@ -179,6 +179,14 @@ discovery finds no project-root marker, Git checkout, or project-local `.codex`
 directory. Starting a task there does not preapprove project configuration added
 later. Existing trust decisions and permission checks for projects are unchanged.
 
+# Review delivery
+
+`review/start` runs the review on the supplied thread and returns that same
+`reviewThreadId`. Clients can omit `delivery`, send `null`, or specify `"inline"`.
+Clients that used `"detached"` should call `thread/start` and pass the new thread id
+to `review/start`. To keep the original conversation history with custom review
+instructions, use `thread/fork` followed by `turn/start`.
+
 # Thread removal
 
 `thread/archive` and `thread/delete` reject attempts to remove a live internal

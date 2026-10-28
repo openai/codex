@@ -3682,13 +3682,6 @@ pub struct GitInfo {
     pub repository_url: Option<SanitizedGitUrl>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewDelivery {
-    Inline,
-    Detached,
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
