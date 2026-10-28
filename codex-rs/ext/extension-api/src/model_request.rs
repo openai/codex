@@ -1,5 +1,6 @@
 //! Request-scoped interception of model response streams.
 pub use codex_api::ApiError as ModelResponseError;
+pub use codex_api::GuardianAssessment;
 pub use codex_api::ResponseEvent;
 use futures::stream::BoxStream;
 use std::collections::HashMap;

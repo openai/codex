@@ -3197,6 +3197,10 @@ async fn try_run_sampling_request(
                 sess.emit_turn_moderation_metadata(&turn_context, metadata)
                     .await;
             }
+            ResponseEvent::GuardianAssessment(_) => {
+                // Request-scoped extensions may consume this evidence. It does not
+                // authorize tools here and must not enter conversation history.
+            }
             ResponseEvent::SafetyBuffering(buffering) => {
                 sess.send_event(
                     &turn_context,
