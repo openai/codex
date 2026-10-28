@@ -9,6 +9,7 @@ use codex_app_server_protocol::ConfigLayerSource as ApiConfigLayerSource;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_config::types::OtelExporterKind;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -2099,6 +2100,178 @@ async fn write_value_reports_managed_override() {
         ApiConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
     );
     assert_eq!(overridden.effective_value, serde_json::json!("never"));
+}
+
+#[tokio::test]
+async fn write_overrides_redact_managed_otel_exporter_headers() {
+    let tmp = tempdir().expect("tempdir");
+    let user_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&user_path, "").expect("write user config");
+    let managed_path = tmp.path().join("managed_config.toml");
+    std::fs::write(
+        &managed_path,
+        r#"[otel]
+environment = "managed"
+exporter = { otlp-http = { endpoint = "https://collector.example", protocol = "json", headers = { Authorization = "admin-secret", "x.api.key" = "dotted-secret" } } }
+trace_exporter = { otlp-grpc = { endpoint = "https://trace.example", headers = { Authorization = "trace-secret" } } }
+metrics_exporter = { otlp-http = { endpoint = "https://metrics.example", protocol = "json", headers = { Authorization = "metrics-secret" } } }
+span_attributes = { "service.name" = "managed-service" }"#,
+    )
+    .expect("write managed config");
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path),
+        CloudConfigBundleLoader::default(),
+    );
+    let exporter = serde_json::json!({
+        "otlp-http": {
+            "endpoint": "https://collector.example",
+            "headers": { "Authorization": "[redacted]", "x.api.key": "[redacted]" },
+            "protocol": "json"
+        }
+    });
+    let otel = serde_json::json!({
+        "environment": "managed",
+        "exporter": exporter.clone(),
+        "trace_exporter": {
+            "otlp-grpc": {
+                "endpoint": "https://trace.example",
+                "headers": { "Authorization": "[redacted]" }
+            }
+        },
+        "metrics_exporter": {
+            "otlp-http": {
+                "endpoint": "https://metrics.example",
+                "protocol": "json",
+                "headers": { "Authorization": "[redacted]" }
+            }
+        },
+        "span_attributes": { "service.name": "managed-service" }
+    });
+
+    for (key_path, expected) in [
+        ("otel", otel.clone()),
+        ("otel.exporter", exporter.clone()),
+        ("otel.exporter.otlp-http", exporter["otlp-http"].clone()),
+        (
+            "otel.exporter.otlp-http.headers",
+            exporter["otlp-http"]["headers"].clone(),
+        ),
+        (
+            "otel.exporter.otlp-http.headers.Authorization",
+            serde_json::json!("[redacted]"),
+        ),
+        (
+            "otel.exporter.otlp-http.headers.\"x.api.key\"",
+            serde_json::json!("[redacted]"),
+        ),
+        (
+            "otel.exporter.otlp-http.endpoint",
+            serde_json::json!("https://collector.example"),
+        ),
+        (
+            "otel.exporter.otlp-http.protocol",
+            serde_json::json!("json"),
+        ),
+        ("otel.trace_exporter", otel["trace_exporter"].clone()),
+        ("otel.metrics_exporter", otel["metrics_exporter"].clone()),
+        (
+            "otel.metrics_exporter.otlp-http.headers.Authorization",
+            serde_json::json!("[redacted]"),
+        ),
+        ("otel.environment", serde_json::json!("managed")),
+        (
+            "otel.span_attributes.\"service.name\"",
+            serde_json::json!("managed-service"),
+        ),
+    ] {
+        let response = service
+            .write_value(ConfigValueWriteParams {
+                file_path: None,
+                key_path: key_path.to_string(),
+                value: serde_json::Value::Null,
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect("no-op config clear should succeed");
+        assert_eq!(response.status, WriteStatus::OkOverridden, "{key_path}");
+        assert_eq!(
+            response
+                .overridden_metadata
+                .expect("managed override")
+                .effective_value,
+            expected,
+            "{key_path}"
+        );
+        assert_eq!(std::fs::read_to_string(&user_path).unwrap(), "");
+    }
+
+    let response = service
+        .batch_write(ConfigBatchWriteParams {
+            edits: vec![codex_app_server_protocol::ConfigEdit {
+                key_path: "otel.exporter.otlp-http.headers.Authorization".to_string(),
+                value: serde_json::Value::Null,
+                merge_strategy: MergeStrategy::Replace,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: false,
+        })
+        .await
+        .expect("no-op batch clear should succeed");
+    assert_eq!(response.status, WriteStatus::OkOverridden);
+    assert_eq!(
+        response
+            .overridden_metadata
+            .expect("managed batch override")
+            .effective_value,
+        serde_json::json!("[redacted]")
+    );
+    assert_eq!(std::fs::read_to_string(&user_path).unwrap(), "");
+
+    let read = service
+        .read(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await
+        .expect("read public config");
+    let mut effective_exporter = exporter.clone();
+    effective_exporter["otlp-http"]["tls"] = serde_json::Value::Null;
+    assert_eq!(
+        read.config.additional["otel"]["exporter"],
+        effective_exporter
+    );
+    let managed_layer = read
+        .layers
+        .expect("config layers")
+        .into_iter()
+        .find(|layer| {
+            matches!(
+                layer.name,
+                ApiConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
+            )
+        })
+        .expect("legacy managed layer");
+    assert_eq!(managed_layer.config["otel"]["exporter"], exporter);
+
+    let runtime = service
+        .load_latest_config(/*fallback_cwd*/ None)
+        .await
+        .expect("load runtime config");
+    let OtelExporterKind::OtlpHttp { headers, .. } = runtime.otel.exporter else {
+        panic!("unexpected runtime exporter");
+    };
+    assert_eq!(
+        headers.get("Authorization").map(|value| value.as_str()),
+        Some("admin-secret")
+    );
+    assert_eq!(
+        headers.get("x.api.key").map(|value| value.as_str()),
+        Some("dotted-secret")
+    );
 }
 
 /// Legacy managed feature toggles own their normalized enabled origin and override metadata.

@@ -6,10 +6,10 @@ import type { OtelTlsConfig } from "./OtelTlsConfig";
 
 export type OtelExporter = "none" | "statsig" | { "otlp-http": { endpoint: string,
 /**
- * Exporter request headers.
+ * Header names are retained; values are redacted by the server.
  */
 headers: { [key in string]?: string }, protocol: OtelHttpProtocol, tls: OtelTlsConfig | null, } } | { "otlp-grpc": { endpoint: string,
 /**
- * Exporter request headers.
+ * Header names are retained; values are redacted by the server.
  */
 headers: { [key in string]?: string }, tls: OtelTlsConfig | null, } };

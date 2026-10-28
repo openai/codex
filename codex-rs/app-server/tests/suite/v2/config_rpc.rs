@@ -602,7 +602,7 @@ async fn config_read_disables_guardian_v2_when_managed_config_requires_guardian_
 #[test_case::test_case("json", "none"; "json_and_disabled_metrics")]
 #[test_case::test_case("binary", "statsig"; "binary_and_statsig_metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_requirements_read_includes_complete_otel_policy_and_headers(
+async fn config_requirements_read_redacts_otel_exporter_headers(
     protocol: &str,
     metrics_exporter: &str,
 ) -> Result<()> {
@@ -641,7 +641,7 @@ metrics_exporter = "$METRICS_EXPORTER""#
             "exporter": {
                 "otlp-http": {
                     "endpoint": "http://127.0.0.1:1/v1/logs",
-                    "headers": { "Authorization": "Bearer managed-token" },
+                    "headers": { "Authorization": "[redacted]" },
                     "protocol": protocol,
                     "tls": {
                         "ca-certificate": codex_home.path().join("ca.pem"),
@@ -653,7 +653,7 @@ metrics_exporter = "$METRICS_EXPORTER""#
             "trace_exporter": {
                 "otlp-grpc": {
                     "endpoint": "http://127.0.0.1:4317",
-                    "headers": { "x-api-key": "managed-grpc-secret" },
+                    "headers": { "x-api-key": "[redacted]" },
                     "tls": {
                         "ca-certificate": codex_home.path().join("ca.pem"),
                         "client-certificate": null,
@@ -679,6 +679,73 @@ metrics_exporter = "$METRICS_EXPORTER""#
         )?,
         response["requirements"]["otel"]
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_redacts_otel_exporter_headers_from_effective_config_and_layers() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"[otel]
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:1/v1/logs", protocol = "json", headers = { Authorization = "logs-secret" } } }
+trace_exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:1", headers = { Authorization = "traces-secret" } } }
+metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:1/v1/metrics", protocol = "binary", headers = { Authorization = "metrics-secret" } } }"#,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_args(&[
+            "-c",
+            "otel.exporter.otlp-http.headers.Authorization='session-secret'",
+        ])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await?;
+    let response: ConfigReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    let serialized = serde_json::to_string(&response)?;
+    let effective_otel = response
+        .config
+        .additional
+        .get("otel")
+        .expect("effective OTEL config");
+    let layers = response.layers.as_ref().expect("included config layers");
+    let user_otel = layers
+        .iter()
+        .find(|layer| matches!(&layer.name, ConfigLayerSource::User { .. }))
+        .and_then(|layer| layer.config.get("otel"))
+        .expect("user OTEL config layer");
+
+    let flags = layers
+        .iter()
+        .find(|layer| matches!(layer.name, ConfigLayerSource::SessionFlags))
+        .expect("session flags");
+    assert_eq!(
+        flags.config["otel"],
+        json!({
+            "exporter": { "otlp-http": { "headers": { "Authorization": "[redacted]" } } }
+        })
+    );
+    assert!(!serialized.contains("session-secret"));
+
+    for (field, transport, secret) in [
+        ("exporter", "otlp-http", "logs-secret"),
+        ("trace_exporter", "otlp-grpc", "traces-secret"),
+        ("metrics_exporter", "otlp-http", "metrics-secret"),
+    ] {
+        let expected = json!({ "Authorization": "[redacted]" });
+        assert_eq!(effective_otel[field][transport]["headers"], expected);
+        assert_eq!(user_otel[field][transport]["headers"], expected);
+        assert!(!serialized.contains(secret), "response leaked {field}");
+    }
+
     Ok(())
 }
 

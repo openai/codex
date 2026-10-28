@@ -130,6 +130,18 @@ async fn account_switch_reloads_telemetry_collectors_and_preserves_trace_context
         .received_requests()
         .await
         .context("collector did not record requests")?;
+    for request in requests
+        .iter()
+        .filter(|request| request.url.path().ends_with("/logs"))
+    {
+        assert_eq!(
+            request
+                .headers
+                .get("x-collector-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("test-collector-key")
+        );
+    }
     let exported = |path: &str| {
         requests
             .iter()
@@ -189,7 +201,7 @@ enabled = false
 
 [otel]
 environment = "test"
-exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/logs", protocol = "json" }} }}
+exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/logs", protocol = "json", headers = {{ x-collector-key = "test-collector-key" }} }} }}
 trace_exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/traces", protocol = "json" }} }}
 metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_endpoint}/metrics", protocol = "json" }} }}
 "#

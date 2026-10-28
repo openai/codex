@@ -708,3 +708,6 @@ the app-server host and retry setup.
 `configRequirements/read` exposes managed `otel` settings. `config/read` applies
 those settings to the effective configuration and omits ordinary origins for
 managed fields. Configuration writes that overlap managed settings are rejected.
+
+Exporter header values are redacted in effective config, source layers, managed
+requirements, and write-override metadata. Runtime exporters retain the original values.

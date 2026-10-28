@@ -16553,7 +16553,7 @@
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "Exporter request headers.",
+                    "description": "Header names are retained; values are redacted by the server.",
                     "type": "object"
                   },
                   "protocol": {
@@ -16596,7 +16596,7 @@
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "Exporter request headers.",
+                    "description": "Header names are retained; values are redacted by the server.",
                     "type": "object"
                   },
                   "tls": {

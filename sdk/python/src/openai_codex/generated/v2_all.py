@@ -9157,7 +9157,10 @@ class OtlpHttp(BaseModel):
         populate_by_name=True,
     )
     endpoint: str
-    headers: Annotated[dict[str, str], Field(description="Exporter request headers.")]
+    headers: Annotated[
+        dict[str, str],
+        Field(description="Header names are retained; values are redacted by the server."),
+    ]
     protocol: OtelHttpProtocol
     tls: OtelTlsConfig | None = None
 
@@ -9175,7 +9178,10 @@ class OtlpGrpc(BaseModel):
         populate_by_name=True,
     )
     endpoint: str
-    headers: Annotated[dict[str, str], Field(description="Exporter request headers.")]
+    headers: Annotated[
+        dict[str, str],
+        Field(description="Header names are retained; values are redacted by the server."),
+    ]
     tls: OtelTlsConfig | None = None
 
 

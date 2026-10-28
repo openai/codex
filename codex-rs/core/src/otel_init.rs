@@ -37,7 +37,7 @@ pub fn build_provider(
                 endpoint: endpoint.clone(),
                 headers: headers
                     .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .map(|(name, value)| (name.clone(), value.as_str().to_owned()))
                     .collect(),
                 protocol,
                 tls: tls.as_ref().map(|config| OtelTlsSettings {
@@ -55,7 +55,7 @@ pub fn build_provider(
             endpoint: endpoint.clone(),
             headers: headers
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
+                .map(|(name, value)| (name.clone(), value.as_str().to_owned()))
                 .collect(),
             tls: tls.as_ref().map(|config| OtelTlsSettings {
                 ca_certificate: config.ca_certificate.clone(),

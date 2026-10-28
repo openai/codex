@@ -19,6 +19,7 @@ use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+pub use codex_utils_redacted_string::SerdeRedactedString;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -529,15 +530,19 @@ pub enum OtelExporter {
     Statsig,
     OtlpHttp {
         endpoint: String,
-        /// Exporter request headers.
-        headers: HashMap<String, String>,
+        /// Header names are retained; values are redacted by the server.
+        #[schemars(with = "HashMap<String, String>")]
+        #[ts(as = "HashMap<String, String>")]
+        headers: HashMap<String, SerdeRedactedString>,
         protocol: OtelHttpProtocol,
         tls: Option<OtelTlsConfig>,
     },
     OtlpGrpc {
         endpoint: String,
-        /// Exporter request headers.
-        headers: HashMap<String, String>,
+        /// Header names are retained; values are redacted by the server.
+        #[schemars(with = "HashMap<String, String>")]
+        #[ts(as = "HashMap<String, String>")]
+        headers: HashMap<String, SerdeRedactedString>,
         tls: Option<OtelTlsConfig>,
     },
 }

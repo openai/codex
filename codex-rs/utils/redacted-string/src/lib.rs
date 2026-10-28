@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::Serializer;
 use std::fmt;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -45,5 +46,26 @@ impl From<&str> for RedactedString {
 impl fmt::Debug for RedactedString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("<redacted>")
+    }
+}
+
+/// An API response string whose serialized form always hides the value.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct SerdeRedactedString(RedactedString);
+
+impl SerdeRedactedString {
+    pub const PLACEHOLDER: &'static str = "[redacted]";
+}
+
+impl From<RedactedString> for SerdeRedactedString {
+    fn from(value: RedactedString) -> Self {
+        Self(value)
+    }
+}
+
+impl Serialize for SerdeRedactedString {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(Self::PLACEHOLDER)
     }
 }
