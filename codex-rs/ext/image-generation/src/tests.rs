@@ -192,6 +192,44 @@ fn uses_reserved_image_gen_namespace() {
     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
 }
 
+#[test]
+fn imagegen_code_mode_declaration_describes_generated_image_result() {
+    let spec = imagegen_tool_spec();
+    let definitions = codex_tools::collect_code_mode_tool_definitions(
+        [&spec],
+        /*code_mode_input_schema_max_bytes*/ None,
+    );
+    let [definition] = definitions.as_slice() else {
+        panic!("imagegen should produce one code-mode declaration");
+    };
+    let (_, return_type) = definition
+        .description
+        .rsplit_once("): Promise<")
+        .expect("imagegen declaration should return a promise");
+    assert_eq!(
+        return_type,
+        "{ image_url: string; output_hint?: string; }>; };\n```"
+    );
+}
+
+#[test]
+fn imagegen_output_schema_does_not_change_direct_api_serialization() {
+    let spec = imagegen_tool_spec();
+    let mut without_output_schema = spec.clone();
+    let ToolSpec::Namespace(namespace) = &mut without_output_schema else {
+        panic!("imagegen should advertise a namespace tool");
+    };
+    let ResponsesApiNamespaceTool::Function(function) = &mut namespace.tools[0] else {
+        panic!("imagegen should advertise a function tool");
+    };
+    function.output_schema = None;
+
+    assert_eq!(
+        serde_json::to_value(spec).expect("tool spec should serialize"),
+        serde_json::to_value(without_output_schema).expect("tool spec should serialize")
+    );
+}
+
 #[tokio::test]
 async fn omitted_references_generate_with_fixed_defaults() {
     assert_eq!(
@@ -563,6 +601,13 @@ fn generated_output_omits_oversized_output_hint() {
         result: RESULT.to_string(),
         output_hint: image_generation_output_hint("/tmp", long_path),
     };
+
+    assert_eq!(
+        output.code_mode_result(&function_payload()),
+        serde_json::json!({
+            "image_url": format!("data:image/png;base64,{RESULT}"),
+        })
+    );
 
     let ResponseInputItem::FunctionCallOutput {
         output: response_output,

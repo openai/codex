@@ -704,7 +704,18 @@ fn imagegen_tool_spec() -> ToolSpec {
             strict: false,
             parameters: parse_tool_input_schema(&Value::Object(input_schema))
                 .unwrap_or_else(|err| panic!("imagegen input schema should parse: {err}")),
-            output_schema: None,
+            output_schema: Some(
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "image_url": { "type": "string" },
+                        "output_hint": { "type": "string" }
+                    },
+                    "required": ["image_url"],
+                    "additionalProperties": false
+                })
+                .into(),
+            ),
             defer_loading: None,
         })],
     })

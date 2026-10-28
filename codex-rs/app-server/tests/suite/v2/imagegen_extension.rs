@@ -958,11 +958,15 @@ async fn standalone_image_generation_is_exposed_in_code_mode_only() -> Result<()
     )
     .await??;
 
-    assert!(
-        response_mock
-            .single_request()
-            .body_contains_text("image_gen__imagegen")
-    );
+    assert!(response_mock.single_request().body_contains_text(
+        r#"declare const tools: { image_gen__imagegen(args: {
+  num_last_images_to_include?: number | null;
+  prompt: string;
+  referenced_image_paths?: Array<string> | null;
+  // Whether the output should have a transparent background. Defaults to false.
+  transparent_background?: boolean;
+}): Promise<{ image_url: string; output_hint?: string; }>; };"#
+    ));
 
     Ok(())
 }
