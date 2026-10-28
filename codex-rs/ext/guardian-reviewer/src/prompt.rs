@@ -25,6 +25,50 @@ pub fn compose_guardian_prompt(
     session_id: &str,
     node_repl_evidence_sequence: u64,
 ) -> anyhow::Result<GuardianPromptItems> {
+    let (offset, presentation, transcript_cursor) =
+        select_transcript(&sections, mode, history_version, session_id);
+    let context =
+        codex_guardian_context::prepare_sync_context(sections, profile, offset, presentation)?;
+    Ok(GuardianPromptItems {
+        context,
+        transcript_cursor,
+        node_repl_evidence_sequence,
+    })
+}
+
+/// Prepares and composes any sync request after the host resolves reviewer/model facts.
+pub async fn compose_guardian_prompt_with_preparation(
+    sections: CollectedContext,
+    profile: &ContextProfile,
+    mode: GuardianPromptMode,
+    history_version: u64,
+    session_id: &str,
+    node_repl_evidence_sequence: u64,
+    preparation: codex_guardian_context::SyncPreparation<'_>,
+) -> anyhow::Result<GuardianPromptItems> {
+    let (offset, presentation, transcript_cursor) =
+        select_transcript(&sections, mode, history_version, session_id);
+    let context = codex_guardian_context::prepare_sync_context_with_facts(
+        sections,
+        profile,
+        offset,
+        presentation,
+        preparation,
+    )
+    .await?;
+    Ok(GuardianPromptItems {
+        context,
+        transcript_cursor,
+        node_repl_evidence_sequence,
+    })
+}
+
+fn select_transcript<'a>(
+    sections: &CollectedContext,
+    mode: GuardianPromptMode,
+    history_version: u64,
+    session_id: &'a str,
+) -> (usize, ContextPresentation<'a>, GuardianTranscriptCursor) {
     let (selection, transcript_cursor) =
         mode.select(sections.transcript_entries(), history_version);
     let (offset, presentation) = match selection {
@@ -33,13 +77,7 @@ pub fn compose_guardian_prompt(
             (offset, ContextPresentation::SyncDelta { session_id })
         }
     };
-    let context =
-        codex_guardian_context::prepare_sync_context(sections, profile, offset, presentation)?;
-    Ok(GuardianPromptItems {
-        context,
-        transcript_cursor,
-        node_repl_evidence_sequence,
-    })
+    (offset, presentation, transcript_cursor)
 }
 
 pub fn guardian_truncate_text(content: &str, token_cap: usize) -> (String, bool) {

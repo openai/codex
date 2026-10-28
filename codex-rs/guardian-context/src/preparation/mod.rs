@@ -18,6 +18,7 @@ use crate::RetainedInstructionItem;
 use crate::SectionError;
 use crate::retained_instructions::RetainedInstructionKind;
 use crate::retained_instructions::USER_OMISSION;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
@@ -256,4 +257,67 @@ pub async fn prepare_sync_images<'a, HistoryCost>(
     if !admit_images {
         context.retain_images(|_, _| false);
     }
+}
+
+/// Applies existing instruction and native-message delivery checks in their original order.
+pub fn prepare_sync_delivery(
+    context: &mut ComposedContext,
+    reviewer_history: &[ResponseItemEnvelope],
+) -> Result<(), SectionError> {
+    context.retain_new_instructions(reviewer_history);
+    context.retain_new_native_messages(reviewer_history)
+}
+
+/// Host policy for preparing an image for the review model.
+/// Implementations borrow unchanged images, own resized images, and omit rejected images.
+pub trait SyncImagePreparer: Sync {
+    fn prepare<'image>(
+        &self,
+        image: &'image ImageReference,
+        detail: &mut Option<ImageDetail>,
+    ) -> Option<Cow<'image, ImageReference>>;
+}
+
+/// Model and reviewer facts resolved before preparing any synchronous request.
+/// Image capability is independent of the model context window used for all evidence.
+pub struct SyncPreparation<'a> {
+    pub reviewer_history: &'a [ResponseItemEnvelope],
+    pub context_window: Option<i64>,
+    pub history_tokens: i64,
+    pub supports_images: bool,
+    pub image_preparer: &'a dyn SyncImagePreparer,
+    pub estimate_tokens: fn(&ResponseItem) -> i64,
+}
+
+/// Prepares every synchronous request with host facts available before selection.
+/// Existing entrypoints and prepare-then-compose ordering stay unchanged.
+/// Image admission uses the exact framed cost, as in the existing image policy.
+pub async fn prepare_sync_context_with_facts(
+    context: CollectedContext,
+    profile: &ContextProfile,
+    entry_number_offset: usize,
+    presentation: ContextPresentation<'_>,
+    preparation: SyncPreparation<'_>,
+) -> Result<ComposedContext, SectionError> {
+    let mut context = prepare_sync_context(context, profile, entry_number_offset, presentation)?;
+    if context
+        .section_costs()
+        .any(|(_, cost)| cost.image_count > 0)
+    {
+        prepare_sync_images(
+            &mut context,
+            preparation
+                .reviewer_history
+                .iter()
+                .map(|envelope| &envelope.item),
+            preparation
+                .context_window
+                .filter(|_| preparation.supports_images),
+            |image, detail| preparation.image_preparer.prepare(image, detail),
+            preparation.estimate_tokens,
+            || std::future::ready(preparation.history_tokens),
+        )
+        .await;
+    }
+    Ok(context)
 }

@@ -79,14 +79,16 @@ pub(crate) async fn prepare_prompt(
             /*include_internal*/ true,
         )?;
         let mut context = retained.context.clone();
-        context.retain_new_instructions(
+        codex_guardian_context::prepare_sync_delivery(
+            &mut context,
             &history
                 .for_prompt_annotated(
                     &model.input_modalities,
                     session.services.image_store.as_ref(),
                 )
                 .await,
-        );
+        )
+        .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
         let context = context
             .enforce_budget(
                 RequestBudget {

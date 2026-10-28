@@ -97,6 +97,7 @@ pub use pool::SessionDisposition;
 pub use prompt::GUARDIAN_TRANSCRIPT_START;
 pub use prompt::GuardianPromptItems;
 pub use prompt::compose_guardian_prompt;
+pub use prompt::compose_guardian_prompt_with_preparation;
 
 pub use review::ReviewHost;
 pub use review_action::ReviewAction;

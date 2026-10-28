@@ -85,9 +85,7 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
             session.services.image_store.as_ref(),
         )
         .await;
-    context.retain_new_instructions(&history);
-    context
-        .retain_new_native_messages(&history)
+    codex_guardian_context::prepare_sync_delivery(&mut context, &history)
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     if context.estimated_tokens().saturating_add(minimum_prefix) > maximum {
         context
@@ -155,9 +153,7 @@ pub(crate) async fn finalize(
         .await;
     // Use the history that will actually reach the model. Recompute after every
     // compaction retry; evidence removed by compaction must be delivered again.
-    context.retain_new_instructions(&history);
-    context
-        .retain_new_native_messages(&history)
+    codex_guardian_context::prepare_sync_delivery(&mut context, &history)
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     let prompt = build_prompt(
         history

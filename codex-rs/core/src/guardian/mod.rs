@@ -208,7 +208,7 @@ use prompt::GuardianTranscriptCursor;
 #[cfg(test)]
 use prompt::build_guardian_prompt_items;
 #[cfg(test)]
-use prompt::build_guardian_prompt_items_with_parent_turn;
+use prompt::collect_guardian_prompt_items_with_parent_turn;
 #[cfg(test)]
 use prompt::render_guardian_transcript_entries;
 #[cfg(test)]

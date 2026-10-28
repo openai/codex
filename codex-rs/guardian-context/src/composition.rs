@@ -137,6 +137,41 @@ pub struct ComposedContext {
 }
 
 impl CollectedContext {
+    /// Reports captured images without preparing or copying their payloads.
+    pub fn has_images(&self) -> bool {
+        let has_inline_image = |items: &[UserInput]| {
+            items.iter().any(|item| {
+                matches!(item, UserInput::Image { image, .. } if matches!(image, ImageReference::Inline { .. }))
+            })
+        };
+        self.sections.iter().any(|section| match section {
+            ContextSection::TranscriptImages(images) => !images.images.is_empty(),
+            ContextSection::NodeReplEvidence(evidence) => match &evidence.content {
+                crate::node_repl::NodeReplEvidenceContent::Collected {
+                    responses, mode, ..
+                } => {
+                    *mode == crate::NodeReplReviewEvidenceMode::Multimodal
+                        && responses
+                            .iter()
+                            .any(|response| has_inline_image(&response.items))
+                }
+                crate::node_repl::NodeReplEvidenceContent::Prepared(items) => {
+                    has_inline_image(items)
+                }
+            },
+            ContextSection::ConversationTranscript { .. }
+            | ContextSection::RootConversation { .. }
+            | ContextSection::TrustedUserAnswers { .. }
+            | ContextSection::RetainedUserInstructions { .. }
+            | ContextSection::SenderUserMessages { .. }
+            | ContextSection::PlannedAction(_)
+            | ContextSection::PreviousReviews(_)
+            | ContextSection::TrustedTool(_)
+            | ContextSection::TrustedSkills(_)
+            | ContextSection::PermissionContext { .. } => false,
+        })
+    }
+
     /// All collected entries, before the host applies retention or a delta cursor.
     pub fn transcript_entries(&self) -> &[ConversationTranscriptEntry] {
         self.sections
