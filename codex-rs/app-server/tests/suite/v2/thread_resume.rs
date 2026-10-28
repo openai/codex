@@ -4250,6 +4250,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
                     total_tokens: 150,
                     ..Default::default()
                 },
+                last_usage_includes_reasoning: None,
                 last_token_usage: TokenUsage {
                     input_tokens: 70,
                     output_tokens: 20,
@@ -4361,6 +4362,7 @@ async fn cold_paginated_resume_omits_usage_when_its_turn_is_ambiguous() -> Resul
                     total_tokens: 150,
                     ..Default::default()
                 },
+                last_usage_includes_reasoning: None,
                 last_token_usage: TokenUsage {
                     total_tokens: 90,
                     ..Default::default()
@@ -4645,6 +4647,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
                         total_tokens: 230,
                         codex_rollout_budget_units: None,
                     },
+                    last_usage_includes_reasoning: None,
                     last_token_usage: TokenUsage {
                         input_tokens: 90,
                         cached_input_tokens: 30,

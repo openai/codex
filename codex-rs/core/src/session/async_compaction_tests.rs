@@ -65,6 +65,7 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
             total_tokens: 70_000,
             ..Default::default()
         }),
+        /*includes_reasoning*/ false,
     )
     .await
     .expect("record usage");

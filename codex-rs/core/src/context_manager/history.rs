@@ -246,9 +246,7 @@ impl ContextManager {
             reset_version: 0,
             user_message_revision: 0,
             guardian_review_context_revision: next_guardian_review_context_revision(),
-            token_info: TokenUsageInfo::new_or_append(
-                &None, &None, /*model_context_window*/ None,
-            ),
+            token_info: None,
             reference_context_item: None,
             world_state_baseline: None,
         }
@@ -903,12 +901,14 @@ impl ContextManager {
         &mut self,
         usage: &TokenUsage,
         model_context_window: Option<i64>,
+        includes_reasoning: bool,
     ) {
-        self.token_info = TokenUsageInfo::new_or_append(
+        self.token_info = Some(TokenUsageInfo::new_or_append(
             &self.token_info,
-            &Some(usage.clone()),
+            usage,
+            includes_reasoning,
             model_context_window,
-        );
+        ));
     }
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
@@ -950,9 +950,7 @@ impl ContextManager {
         self.items[start..].iter().map(|envelope| &envelope.item)
     }
 
-    /// When true, the server already accounted for past reasoning tokens and
-    /// the client should not re-estimate them.
-    pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
+    pub(crate) fn get_total_token_usage(&self) -> i64 {
         let last_tokens = self
             .token_info
             .as_ref()
@@ -962,7 +960,11 @@ impl ContextManager {
             .items_after_last_model_generated_item()
             .map(estimate_item_token_count)
             .fold(0i64, i64::saturating_add);
-        if server_reasoning_included {
+        if self
+            .token_info
+            .as_ref()
+            .is_some_and(|info| info.last_usage_includes_reasoning == Some(true))
+        {
             last_tokens.saturating_add(items_after_last_model_generated_tokens)
         } else {
             last_tokens

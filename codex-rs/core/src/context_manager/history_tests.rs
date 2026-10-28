@@ -937,6 +937,33 @@ fn non_last_reasoning_tokens_ignore_entries_after_last_user() {
     assert_eq!(history.get_non_last_reasoning_items_tokens(), 32);
 }
 
+#[test_case(None, 125; "legacy count")]
+#[test_case(Some(false), 125; "exclusive count")]
+#[test_case(Some(true), 100; "inclusive count")]
+fn total_token_usage_respects_saved_reasoning_accounting(
+    includes_reasoning: Option<bool>,
+    expected: i64,
+) {
+    let mut history = create_history_with_items(vec![
+        reasoning_with_encrypted_content(/*len*/ 1_000),
+        user_msg("second"),
+        assistant_msg("counted reply"),
+    ]);
+    let usage = TokenUsage {
+        total_tokens: 100,
+        ..Default::default()
+    };
+    let mut saved = json!({ "last_token_usage": usage, "total_token_usage": usage });
+    if let Some(included) = includes_reasoning {
+        saved["last_usage_includes_reasoning"] = json!(included);
+    }
+    history.set_token_info(Some(
+        serde_json::from_value(saved).expect("saved token count"),
+    ));
+
+    assert_eq!(history.get_total_token_usage(), expected);
+}
+
 #[test]
 fn items_after_last_model_generated_tokens_include_user_and_tool_output() {
     let history = create_history_with_items(vec![
@@ -1160,6 +1187,7 @@ fn total_token_usage_includes_all_items_after_last_model_generated_item() {
             ..Default::default()
         },
         /*model_context_window*/ None,
+        /*includes_reasoning*/ true,
     );
     let added_user = user_msg("new user message");
     let added_tool_output = custom_tool_call_output("tool-tail", "new tool output");
@@ -1169,7 +1197,7 @@ fn total_token_usage_includes_all_items_after_last_model_generated_item() {
     );
 
     assert_eq!(
-        history.get_total_token_usage(/*server_reasoning_included*/ true),
+        history.get_total_token_usage(),
         100 + estimate_item_token_count(&added_user)
             + estimate_item_token_count(&added_tool_output)
     );

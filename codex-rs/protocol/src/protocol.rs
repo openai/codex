@@ -2506,6 +2506,10 @@ pub struct TokenUsageRecord {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    /// Whether the last context count includes reasoning retained from earlier turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_usage_includes_reasoning: Option<bool>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -2514,33 +2518,26 @@ pub struct TokenUsageInfo {
 impl TokenUsageInfo {
     pub fn new_or_append(
         info: &Option<TokenUsageInfo>,
-        last: &Option<TokenUsage>,
+        last: &TokenUsage,
+        includes_reasoning: bool,
         model_context_window: Option<i64>,
-    ) -> Option<Self> {
-        if info.is_none() && last.is_none() {
-            return None;
-        }
-
+    ) -> Self {
         let mut info = match info {
             Some(info) => info.clone(),
             None => Self {
                 total_token_usage: TokenUsage::default(),
+                last_usage_includes_reasoning: None,
                 last_token_usage: TokenUsage::default(),
                 model_context_window,
             },
         };
-        if let Some(last) = last {
-            info.append_last_usage(last);
-        }
+        info.total_token_usage.add_assign(last);
+        info.last_token_usage = last.clone();
+        info.last_usage_includes_reasoning = Some(includes_reasoning);
         if let Some(model_context_window) = model_context_window {
             info.model_context_window = Some(model_context_window);
         }
-        Some(info)
-    }
-
-    pub fn append_last_usage(&mut self, last: &TokenUsage) {
-        self.total_token_usage.add_assign(last);
-        self.last_token_usage = last.clone();
+        info
     }
 
     pub fn fill_to_context_window(&mut self, context_window: i64) {
@@ -2552,6 +2549,7 @@ impl TokenUsageInfo {
             total_tokens: context_window,
             ..TokenUsage::default()
         };
+        self.last_usage_includes_reasoning = None;
         self.last_token_usage = TokenUsage {
             total_tokens: delta,
             ..TokenUsage::default()
@@ -2561,6 +2559,7 @@ impl TokenUsageInfo {
     pub fn full_context_window(context_window: i64) -> Self {
         let mut info = Self {
             total_token_usage: TokenUsage::default(),
+            last_usage_includes_reasoning: None,
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(context_window),
         };
@@ -6627,10 +6626,11 @@ mod tests {
     fn token_usage_info_new_or_append_updates_context_window_when_provided() {
         let initial = Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
+            last_usage_includes_reasoning: None,
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
         });
-        let last = Some(TokenUsage {
+        let last = TokenUsage {
             input_tokens: 10,
             cached_input_tokens: 0,
             cache_write_input_tokens: 0,
@@ -6638,10 +6638,14 @@ mod tests {
             reasoning_output_tokens: 0,
             total_tokens: 10,
             codex_rollout_budget_units: None,
-        });
+        };
 
-        let info = TokenUsageInfo::new_or_append(&initial, &last, Some(128_000))
-            .expect("new_or_append should return info");
+        let info = TokenUsageInfo::new_or_append(
+            &initial,
+            &last,
+            /*includes_reasoning*/ true,
+            Some(128_000),
+        );
 
         assert_eq!(info.model_context_window, Some(128_000));
     }
@@ -6650,10 +6654,11 @@ mod tests {
     fn token_usage_info_new_or_append_preserves_context_window_when_not_provided() {
         let initial = Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
+            last_usage_includes_reasoning: None,
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
         });
-        let last = Some(TokenUsage {
+        let last = TokenUsage {
             input_tokens: 10,
             cached_input_tokens: 0,
             cache_write_input_tokens: 0,
@@ -6661,11 +6666,11 @@ mod tests {
             reasoning_output_tokens: 0,
             total_tokens: 10,
             codex_rollout_budget_units: None,
-        });
+        };
 
-        let info =
-            TokenUsageInfo::new_or_append(&initial, &last, /*model_context_window*/ None)
-                .expect("new_or_append should return info");
+        let info = TokenUsageInfo::new_or_append(
+            &initial, &last, /*includes_reasoning*/ true, /*model_context_window*/ None,
+        );
 
         assert_eq!(info.model_context_window, Some(258_400));
     }

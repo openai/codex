@@ -830,8 +830,7 @@ async fn drain_to_completed(
     prompt: &Prompt,
     phase: CompactionPhase,
 ) -> CodexResult<CompactionResponse> {
-    sess.set_server_reasoning_included(turn_context.model_info().use_responses_lite)
-        .await;
+    let mut includes_reasoning = turn_context.model_info().use_responses_lite;
     let mut stream = client_session
         .stream(
             prompt,
@@ -862,7 +861,7 @@ async fn drain_to_completed(
             // Keep each attempt isolated until the response completes successfully.
             Ok(ResponseEvent::OutputItemDone(item)) => output.push(item),
             Ok(ResponseEvent::ServerReasoningIncluded(included)) => {
-                sess.set_server_reasoning_included(included).await;
+                includes_reasoning = included;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(turn_context, snapshot).await;
@@ -896,8 +895,12 @@ async fn drain_to_completed(
                     usage_metadata.as_ref(),
                 )
                 .await;
-                sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await?;
+                sess.update_token_usage_info(
+                    turn_context,
+                    token_usage.as_ref(),
+                    includes_reasoning,
+                )
+                .await?;
                 return Ok(CompactionResponse {
                     response_id,
                     output,
