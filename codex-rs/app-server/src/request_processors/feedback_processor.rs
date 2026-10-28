@@ -161,7 +161,7 @@ impl FeedbackRequestProcessor {
         let mut feedback_index = None;
         let (snapshot, sqlite_feedback_logs, state_db_ctx) = if include_logs {
             let state_db_ctx = self.state_db.clone();
-            let feedback_thread_ids = match conversation_id {
+            let mut feedback_thread_ids = match conversation_id {
                 Some(conversation_id) => match self
                     .thread_manager
                     .list_agent_subtree_thread_ids(conversation_id)
@@ -177,9 +177,16 @@ impl FeedbackRequestProcessor {
                 },
                 None => Vec::new(),
             };
+            if let (Some(state_db), Some(thread_id)) = (&state_db_ctx, conversation_id) {
+                match state_db.list_attached_thread_ids(thread_id).await {
+                    Ok(attached_ids) => feedback_thread_ids.extend(attached_ids),
+                    Err(err) => {
+                        warn!("failed to list attached threads for feedback on {thread_id}: {err}")
+                    }
+                }
+            }
             let failures =
                 guardian_review_failures(state_db_ctx.as_deref(), &feedback_thread_ids).await;
-            let mut feedback_thread_ids = feedback_thread_ids;
             if let Some(conversation_id) = conversation_id {
                 let index =
                     FeedbackThreadIndex::new(conversation_id, feedback_thread_ids, &failures);

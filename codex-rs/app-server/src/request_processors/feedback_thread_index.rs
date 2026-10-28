@@ -1,6 +1,6 @@
-//! Selects a bounded feedback subtree, preserving the reported thread and prioritizing
-//! children with retained failed reviews. Filenames name archive entries or individual
-//! attachments when archiving fails; the index describes selection, not delivery.
+//! Selects a bounded set of spawned descendants and directly attached threads for feedback,
+//! preserving the reported thread and prioritizing children with retained failed reviews.
+//! Filenames identify selected archive entries or fallback attachments. Delivery is best effort.
 
 use codex_feedback::FeedbackAttachment;
 use codex_feedback::GuardianReviewFailures;

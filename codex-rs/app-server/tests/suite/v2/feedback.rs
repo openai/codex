@@ -93,11 +93,13 @@ async fn feedback_upload_limits_concurrency_and_releases_failed_uploads() -> Res
 
 #[tokio::test]
 async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures() -> Result<()> {
+    use std::collections::HashSet;
     use std::io::Read;
     use std::sync::Arc;
 
     use app_test_support::MockResponsesConfig;
     use codex_app_server_protocol::ClientNotification;
+    use codex_protocol::ThreadId;
     use tokio::io::AsyncReadExt;
     use tokio_rustls::TlsAcceptor;
     use tokio_rustls::rustls;
@@ -190,7 +192,8 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
     MockResponsesConfig::new(&models.uri())
         .with_root_config(&format!("log_dir = {:?}", home.path().join("log")))
         .write(home.path())?;
-    let thread_id = codex_protocol::ThreadId::new();
+    let thread_id = ThreadId::new();
+    let attached_id = ThreadId::new();
     let sqlite = core_test_support::load_default_config_for_test(&home)
         .await
         .sqlite;
@@ -205,29 +208,32 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
         "decision": "original denial",
         "context_omitted": false,
     });
-    for (id, record) in [
-        (thread_id, review.clone()),
-        (codex_protocol::ThreadId::new(), json!({"unrelated": true})),
+    for (id, parent, record) in [
+        (thread_id, None, Some(review.clone())),
+        (attached_id, Some(thread_id), None),
+        (ThreadId::new(), None, Some(json!({"unrelated": true}))),
     ] {
-        let rollout_path = home.path().join(format!("{id}.jsonl"));
-        std::fs::write(&rollout_path, "")?;
-        state
-            .upsert_thread(
-                &codex_state::ThreadMetadataBuilder::new(
+        let rollout_path = home
+            .path()
+            .join(format!("rollout-2026-10-01T12-00-00-{id}.jsonl"));
+        std::fs::write(&rollout_path, serde_json::to_vec(&id)?)?;
+        let mut metadata = codex_state::ThreadMetadataBuilder::new(
+            id,
+            rollout_path,
+            chrono::Utc::now(),
+            codex_protocol::protocol::SessionSource::Cli,
+        )
+        .build("mock_provider");
+        metadata.attached_thread_parent_id = parent;
+        state.upsert_thread(&metadata).await?;
+        if let Some(record) = record {
+            state
+                .record_guardian_review_failure(&codex_feedback::GuardianReviewRecord::new(
                     id,
-                    rollout_path,
-                    chrono::Utc::now(),
-                    codex_protocol::protocol::SessionSource::Cli,
-                )
-                .build("mock_provider"),
-            )
-            .await?;
-        state
-            .record_guardian_review_failure(&codex_feedback::GuardianReviewRecord::new(
-                id,
-                serde_json::to_vec(&record)?,
-            ))
-            .await?;
+                    serde_json::to_vec(&record)?,
+                ))
+                .await?;
+        }
     }
     state.close().await;
     let legacy_path = home.path().join("logs_2.sqlite");
@@ -307,6 +313,7 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
         )
         .await??;
         let mut attachments = std::collections::BTreeMap::new();
+        let mut uploaded_rollouts = HashSet::<ThreadId>::new();
         while let Ok(envelope) = uploads_rx.try_recv() {
             let mut bytes = envelope.as_slice();
             // Skip the envelope header, then decode each length-delimited item.
@@ -317,7 +324,13 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
                 let header: serde_json::Value = serde_json::from_slice(&bytes[..header_end])?;
                 let length = header["length"].as_u64().unwrap() as usize;
                 bytes = &bytes[header_end + 1..];
-                if let Some(filename) = header["filename"].as_str() {
+                if header["filename"] == "rollouts.tar.gz" {
+                    let mut archive =
+                        tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..length]));
+                    for entry in archive.entries()? {
+                        uploaded_rollouts.insert(serde_json::from_reader(entry?)?);
+                    }
+                } else if let Some(filename) = header["filename"].as_str() {
                     attachments.insert(
                         filename.to_string(),
                         String::from_utf8_lossy(&bytes[..length]).into_owned(),
@@ -330,11 +343,13 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
             }
         }
         if phase == Phase::WithoutLogs {
+            assert!(uploaded_rollouts.is_empty());
             assert!(!attachments.contains_key("auto-review-failures.jsonl"));
             assert!(!attachments.contains_key("codex-logs.log"));
             assert!(!attachments.contains_key("codex-logs-legacy.log"));
             continue;
         }
+        assert_eq!(uploaded_rollouts, HashSet::from([thread_id, attached_id]));
         assert_eq!(
             attachments.get("codex-logs-legacy.log"),
             (phase == Phase::Corrupt)
