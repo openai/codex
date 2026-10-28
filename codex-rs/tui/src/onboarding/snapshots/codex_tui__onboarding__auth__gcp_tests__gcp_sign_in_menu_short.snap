@@ -1,0 +1,12 @@
+---
+source: tui/src/onboarding/gcp_tests.rs
+expression: terminal.backend().to_string()
+---
+  Choose how you want to use Codex.
+
+  1. Sign in with ChatGPT
+  2. Sign in with Device Code
+  3. Use an OpenAI API key
+  4. Use Amazon Bedrock
+> 5. Use Google Cloud Vertex AI
+  Press enter to continue

@@ -1,0 +1,16 @@
+---
+source: tui/src/onboarding/gcp_tests.rs
+expression: terminal.backend().to_string()
+---
+> Set up Google Cloud Vertex AI
+
+  Enter the Google Cloud project ID to use with Vertex AI.
+
+  Project ID: test-project
+
+
+
+
+
+
+  enter continue · esc back

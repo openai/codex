@@ -445,6 +445,8 @@ pub enum Feature {
     AuthElicitation,
     /// Offer Amazon Bedrock setup during TUI sign-in onboarding.
     BedrockSetupWizard,
+    /// Offer Google Cloud Vertex AI setup during TUI sign-in onboarding.
+    GcpSetupWizard,
     /// Removed compatibility flag retained as a no-op.
     Personality,
     /// Enable native artifact tools.
@@ -2122,6 +2124,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "bedrock_setup_wizard",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::GcpSetupWizard,
+        key: "gcp_setup_wizard",
+        stage: Stage::Stable,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Personality,

@@ -1044,6 +1044,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "gcp_setup_wizard": {
+              "type": "boolean"
+            },
             "goals": {
               "type": "boolean"
             },
@@ -7691,6 +7694,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "gcp_setup_wizard": {
           "type": "boolean"
         },
         "goals": {

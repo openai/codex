@@ -1,0 +1,7 @@
+---
+source: tui/src/onboarding/gcp_tests.rs
+expression: terminal.backend().to_string()
+---
+> Set up Google Cloud Vertex AI
+
+  Validating credentials and saving configuration…

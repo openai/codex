@@ -51,6 +51,7 @@ use crate::key_hint::KeyBindingListExt;
 use crate::motion::MotionMode;
 use crate::motion::shimmer_text;
 use crate::onboarding::bedrock::BedrockState;
+use crate::onboarding::gcp::GcpState;
 use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
@@ -91,6 +92,8 @@ pub(crate) enum SignInState {
     ApiKeyConfigured,
     Bedrock(BedrockState),
     BedrockConfigured,
+    Gcp(GcpState),
+    GcpConfigured,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +102,7 @@ pub(crate) enum SignInOption {
     DeviceCode,
     ApiKey,
     Bedrock,
+    Gcp,
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
@@ -182,7 +186,7 @@ impl ContinueWithDeviceCodeState {
 
 impl KeyboardHandler for AuthModeWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if self.handle_bedrock_key_event(&key_event) {
+        if self.handle_gcp_key_event(&key_event) || self.handle_bedrock_key_event(&key_event) {
             return;
         }
         if self.handle_api_key_entry_key_event(&key_event) {
@@ -213,6 +217,10 @@ impl KeyboardHandler for AuthModeWidget {
             self.select_option_by_index(/*index*/ 3);
             return;
         }
+        if keys::SELECT_FIFTH.is_pressed(key_event) {
+            self.select_option_by_index(/*index*/ 4);
+            return;
+        }
         if keys::CONFIRM.is_pressed(key_event) {
             let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
             match sign_in_state {
@@ -233,17 +241,22 @@ impl KeyboardHandler for AuthModeWidget {
     }
 
     fn handle_paste(&mut self, pasted: String) {
-        let sign_in_state = self.sign_in_state.read().unwrap();
-        match &*sign_in_state {
-            SignInState::Bedrock(_) => {
-                drop(sign_in_state);
-                let _ = self.handle_bedrock_paste(&pasted);
-            }
+        let mut state = self.sign_in_state.write().unwrap();
+        let input = match &mut *state {
+            SignInState::Bedrock(state) => state.active_input_mut(),
+            SignInState::Gcp(state) => state.active_input_mut(),
             SignInState::ApiKeyEntry(_) => {
-                drop(sign_in_state);
+                drop(state);
                 let _ = self.handle_api_key_entry_paste(pasted);
+                return;
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(input) = input {
+            input.paste(&pasted);
+            self.set_error(/*message*/ None);
+            drop(state);
+            self.request_frame.schedule_frame();
         }
     }
 }
@@ -260,6 +273,7 @@ pub(crate) struct AuthModeWidget {
     pub app_server_request_handle: AppServerRequestHandle,
     pub auth_config: AuthConfig,
     pub bedrock_setup_enabled: bool,
+    pub gcp_setup_enabled: bool,
     pub animations_enabled: bool,
     pub animations_suppressed: Cell<bool>,
 }
@@ -315,6 +329,7 @@ impl AuthModeWidget {
         self.sign_in_state.read().is_ok_and(|guard| match &*guard {
             SignInState::ApiKeyEntry(_) => true,
             SignInState::Bedrock(state) => state.is_text_entry_active(),
+            SignInState::Gcp(state) => state.is_text_entry_active(),
             _ => false,
         })
     }
@@ -322,11 +337,12 @@ impl AuthModeWidget {
     /// Returns whether printable quit shortcuts must be treated as text input.
     ///
     /// OpenAI API-key entry keeps its existing empty-field quit behavior, while
-    /// Bedrock fields accept printable input from their first character.
+    /// Cloud setup fields accept printable input from their first character.
     pub(crate) fn should_suppress_printable_quit(&self) -> bool {
         self.sign_in_state.read().is_ok_and(|guard| match &*guard {
             SignInState::ApiKeyEntry(state) => !state.value.is_empty(),
             SignInState::Bedrock(state) => state.is_text_entry_active(),
+            SignInState::Gcp(state) => state.is_text_entry_active(),
             _ => false,
         })
     }
@@ -359,6 +375,9 @@ impl AuthModeWidget {
             if self.bedrock_setup_enabled {
                 options.push(SignInOption::Bedrock);
             }
+            if self.gcp_setup_enabled {
+                options.push(SignInOption::Gcp);
+            }
         }
         options
     }
@@ -373,6 +392,9 @@ impl AuthModeWidget {
             options.push(SignInOption::ApiKey);
             if self.bedrock_setup_enabled {
                 options.push(SignInOption::Bedrock);
+            }
+            if self.gcp_setup_enabled {
+                options.push(SignInOption::Gcp);
             }
         }
         options
@@ -394,6 +416,9 @@ impl AuthModeWidget {
     }
 
     fn select_option_by_index(&mut self, index: usize) {
+        if !matches!(*self.sign_in_state.read().unwrap(), SignInState::PickMode) {
+            return;
+        }
         let options = self.displayed_sign_in_options();
         if let Some(option) = options.get(index).copied() {
             self.handle_sign_in_option(option);
@@ -426,6 +451,15 @@ impl AuthModeWidget {
                     self.disallow_api_login();
                 }
             }
+            SignInOption::Gcp => {
+                if self.gcp_setup_enabled && self.is_api_login_allowed() {
+                    *self.sign_in_state.write().unwrap() = SignInState::Gcp(GcpState::default());
+                    self.set_error(/*message*/ None);
+                    self.request_frame.schedule_frame();
+                } else if !self.is_api_login_allowed() {
+                    self.disallow_api_login();
+                }
+            }
         }
     }
 
@@ -437,7 +471,7 @@ impl AuthModeWidget {
     }
 
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
-        let mut lines: Vec<Line> = if self.bedrock_setup_enabled {
+        let mut lines: Vec<Line> = if self.bedrock_setup_enabled || self.gcp_setup_enabled {
             vec!["  Choose how you want to use Codex.".into(), "".into()]
         } else {
             vec![
@@ -453,10 +487,12 @@ impl AuthModeWidget {
             ]
         };
 
-        let create_mode_item = |idx: usize,
-                                selected_mode: SignInOption,
-                                text: &str,
-                                description: &str|
+        let options_start = lines.len();
+        let mut compact_options = Vec::new();
+        let mut create_mode_item = |idx: usize,
+                                    selected_mode: SignInOption,
+                                    text: &str,
+                                    description: &str|
          -> Vec<Line<'static>> {
             let is_selected = self.highlighted_mode == selected_mode;
             let caret = if is_selected { ">" } else { " " };
@@ -479,6 +515,7 @@ impl AuthModeWidget {
                     .style(Style::default().add_modifier(Modifier::DIM))
             };
 
+            compact_options.push(line1.clone());
             vec![line1, line2]
         };
 
@@ -511,11 +548,7 @@ impl AuthModeWidget {
                     lines.extend(create_mode_item(
                         idx,
                         option,
-                        if self.bedrock_setup_enabled {
-                            "Use an OpenAI API key"
-                        } else {
-                            "Provide your own API key"
-                        },
+                        "Use an OpenAI API key",
                         "Pay for what you use",
                     ));
                 }
@@ -527,10 +560,19 @@ impl AuthModeWidget {
                         "Connect using your AWS credentials",
                     ));
                 }
+                SignInOption::Gcp => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Use Google Cloud Vertex AI",
+                        "Connect using your Google Cloud credentials",
+                    ));
+                }
             }
             lines.push("".into());
         }
 
+        let options_end = lines.len();
         if !self.is_api_login_allowed() {
             lines.push(
                 "  API key login is disabled by this workspace. Sign in with ChatGPT to continue."
@@ -549,6 +591,14 @@ impl AuthModeWidget {
             lines.push(err.red().into());
         }
 
+        // Keep the options and confirmation hint visible in short terminals.
+        if Paragraph::new(lines.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(area.width)
+            > usize::from(area.height)
+        {
+            lines.splice(options_start..options_end, compact_options);
+        }
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
@@ -1050,10 +1100,12 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ChatGptContinueInBrowser(_)
             | SignInState::ChatGptDeviceCode(_)
             | SignInState::ChatGptSuccessMessage
-            | SignInState::Bedrock(_) => StepState::InProgress,
+            | SignInState::Bedrock(_)
+            | SignInState::Gcp(_) => StepState::InProgress,
             SignInState::ChatGptSuccess
             | SignInState::ApiKeyConfigured
-            | SignInState::BedrockConfigured => StepState::Complete,
+            | SignInState::BedrockConfigured
+            | SignInState::GcpConfigured => StepState::Complete,
         }
     }
 }
@@ -1085,6 +1137,14 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::Bedrock(state) => {
                 state.render(area, buf, self.error_message());
+            }
+            SignInState::Gcp(state) => {
+                state.render(area, buf, self.error_message());
+            }
+            SignInState::GcpConfigured => {
+                Paragraph::new("✓ Google Cloud Vertex AI configured".green())
+                    .wrap(Wrap { trim: false })
+                    .render(area, buf);
             }
             SignInState::BedrockConfigured => {
                 Paragraph::new("✓ Amazon Bedrock configured".green())
@@ -1127,6 +1187,7 @@ mod tests {
     use codex_app_server_client::RemoteAppServerEndpoint;
     use codex_arg0::Arg0DispatchPaths;
     use codex_cloud_config::chatgpt_config_bundle_loader_for_storage;
+    use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
@@ -1219,7 +1280,7 @@ mod tests {
         ));
     }
 
-    async fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
+    pub(super) async fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
         let codex_home_path = codex_home.path().to_path_buf();
         let config = ConfigBuilder::default()
@@ -1271,6 +1332,7 @@ mod tests {
             app_server_request_handle: AppServerRequestHandle::InProcess(client.request_handle()),
             auth_config,
             bedrock_setup_enabled: false,
+            gcp_setup_enabled: false,
             animations_enabled: true,
             animations_suppressed: std::cell::Cell::new(false),
         };
@@ -1339,11 +1401,12 @@ mod tests {
             .build()
             .await
             .unwrap();
-        widget.bedrock_setup_enabled = crate::should_show_bedrock_setup_wizard(
+        widget.bedrock_setup_enabled = crate::should_show_provider_setup_wizard(
             widget.login_status,
             /*requires_openai_auth*/ true,
             &config,
             &widget.app_server_target,
+            Feature::BedrockSetupWizard,
         );
         assert_eq!(
             widget.displayed_sign_in_options(),
@@ -1693,3 +1756,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "gcp_tests.rs"]
+mod gcp_tests;

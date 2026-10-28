@@ -1,0 +1,16 @@
+---
+source: tui/src/onboarding/gcp_tests.rs
+expression: terminal.backend().to_string()
+---
+> Set up Google Cloud Vertex AI
+
+  Press Enter to use global, or enter a Vertex AI location.
+
+  Location (optional): global
+
+
+
+
+
+
+  enter continue · esc back

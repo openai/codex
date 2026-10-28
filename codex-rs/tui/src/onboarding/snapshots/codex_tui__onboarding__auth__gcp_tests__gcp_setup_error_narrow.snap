@@ -1,0 +1,22 @@
+---
+source: tui/src/onboarding/gcp_tests.rs
+expression: terminal.backend().to_string()
+---
+> Set up Google Cloud Vertex AI
+
+  Enter an absolute file path on the
+host running Codex, or press Enter to
+use Application Default Credentials
+(ADC).
+
+  Credential file (optional): -adc.json
+
+  To set up ADC with the Google Cloud
+CLI, run
+  gcloud auth application-default login
+
+
+  enter set up · esc back
+
+provider credential_file must be an
+absolute path

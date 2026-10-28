@@ -1366,16 +1366,25 @@ async fn run_ratatui_app(
         // Authentication can change while any interactive onboarding screen is open.
         startup_account = None;
         let show_login_screen = should_show_login_screen(login_status, requires_openai_auth);
-        let bedrock_setup_enabled = should_show_bedrock_setup_wizard(
+        let bedrock_setup_enabled = should_show_provider_setup_wizard(
             login_status,
             requires_openai_auth,
             &initial_config,
             &app_server_target,
+            Feature::BedrockSetupWizard,
+        );
+        let gcp_setup_enabled = should_show_provider_setup_wizard(
+            login_status,
+            requires_openai_auth,
+            &initial_config,
+            &app_server_target,
+            Feature::GcpSetupWizard,
         );
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
                 show_login_screen,
                 bedrock_setup_enabled,
+                gcp_setup_enabled,
                 show_trust_screen: should_show_trust_screen_flag,
                 remote_project_trust: None,
                 login_status,
@@ -2450,15 +2459,16 @@ fn should_show_login_screen(login_status: LoginStatus, requires_openai_auth: boo
     login_status == LoginStatus::NotAuthenticated
 }
 
-fn should_show_bedrock_setup_wizard(
+fn should_show_provider_setup_wizard(
     login_status: LoginStatus,
     requires_openai_auth: bool,
     config: &Config,
     app_server_target: &AppServerTarget,
+    feature: Feature,
 ) -> bool {
     matches!(app_server_target, AppServerTarget::Embedded)
         && should_show_login_screen(login_status, requires_openai_auth)
-        && config.features.enabled(Feature::BedrockSetupWizard)
+        && config.features.enabled(feature)
         && config.model_provider_id == "openai"
         && config
             .auth_config()

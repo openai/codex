@@ -4,6 +4,8 @@ use super::auth::AuthModeWidget;
 use super::auth::SignInState;
 use super::auth::onboarding_request_id;
 use super::keys;
+use super::provider_setup::FieldDisplay;
+use super::provider_setup::ProviderInput;
 use crate::key_hint::KeyBindingListExt;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_client::AppServerRequestHandle;
@@ -23,7 +25,6 @@ use codex_app_server_protocol::RequestId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -50,15 +51,15 @@ pub(super) struct BedrockState {
 enum BedrockView {
     Discovering(RequestId),
     Methods(BedrockMethodList),
-    ProfileEntry(String),
+    ProfileEntry(ProviderInput),
     AccessKeyEntry {
-        values: [String; 3],
+        values: [ProviderInput; 3],
         selected_field: usize,
     },
-    ApiKeyEntry(String),
+    ApiKeyEntry(ProviderInput),
     RegionEntry {
         credential: BedrockCredential,
-        value: String,
+        value: ProviderInput,
     },
     EnvironmentInstructions,
     Configuring(RequestId),
@@ -177,7 +178,11 @@ impl BedrockState {
         )
     }
 
-    fn active_input_mut(&mut self) -> Option<&mut String> {
+    pub(super) fn is_configuring(&self, id: &RequestId) -> bool {
+        matches!(&self.view, BedrockView::Configuring(active) if active == id)
+    }
+
+    pub(super) fn active_input_mut(&mut self) -> Option<&mut ProviderInput> {
         match &mut self.view {
             BedrockView::ProfileEntry(value)
             | BedrockView::ApiKeyEntry(value)
@@ -190,8 +195,11 @@ impl BedrockState {
         }
     }
 
-    fn enter_region(&mut self, credential: BedrockCredential, value: String) {
-        self.view = BedrockView::RegionEntry { credential, value };
+    fn enter_region(&mut self, credential: BedrockCredential, value: &str) {
+        self.view = BedrockView::RegionEntry {
+            credential,
+            value: value.into(),
+        };
     }
 
     fn select_method(&mut self, method: BedrockMethod) -> Option<BedrockAction> {
@@ -203,7 +211,7 @@ impl BedrockState {
                 if let Some(region) = profile.region {
                     return Some(BedrockAction::Configure(credential, region));
                 }
-                self.enter_region(credential, String::new());
+                self.enter_region(credential, "");
             }
             BedrockMethod::Environment => {
                 let credential = BedrockCredential::Environment;
@@ -214,13 +222,13 @@ impl BedrockState {
                 {
                     return Some(BedrockAction::Configure(credential, region));
                 }
-                self.enter_region(credential, String::new());
+                self.enter_region(credential, "");
             }
             BedrockMethod::OtherMethods => {
                 self.view = BedrockView::Methods(BedrockMethodList::All);
             }
             BedrockMethod::ManualProfile => {
-                self.view = BedrockView::ProfileEntry(String::new());
+                self.view = BedrockView::ProfileEntry(ProviderInput::default());
             }
             BedrockMethod::AccessKeys => {
                 self.view = BedrockView::AccessKeyEntry {
@@ -232,7 +240,7 @@ impl BedrockState {
                 self.view = BedrockView::EnvironmentInstructions;
             }
             BedrockMethod::ApiKey => {
-                self.view = BedrockView::ApiKeyEntry(String::new());
+                self.view = BedrockView::ApiKeyEntry(ProviderInput::default());
             }
         }
         None
@@ -293,57 +301,40 @@ impl BedrockState {
             return self.confirm_input();
         }
         if let Some(input) = self.active_input_mut() {
-            match key_event.code {
-                KeyCode::Backspace => {
-                    input.pop();
-                }
-                KeyCode::Char(character)
-                    if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-                        && !key_event.modifiers.intersects(
-                            KeyModifiers::SUPER | KeyModifiers::CONTROL | KeyModifiers::ALT,
-                        ) =>
-                {
-                    input.push(character);
-                }
-                _ => {}
-            }
+            input.input(*key_event);
         }
         None
     }
 
     fn confirm_input(&mut self) -> Option<BedrockAction> {
         let credential = match &mut self.view {
-            BedrockView::ProfileEntry(value) if !value.trim().is_empty() => {
-                BedrockCredential::Profile(value.trim().to_string())
-            }
-            BedrockView::ApiKeyEntry(value) if !value.trim().is_empty() => {
-                BedrockCredential::ApiKey(value.trim().to_string())
-            }
-            BedrockView::RegionEntry { credential, value } if !value.trim().is_empty() => {
-                return Some(BedrockAction::Configure(
-                    credential.clone(),
-                    value.trim().to_string(),
-                ));
+            BedrockView::ProfileEntry(value) => BedrockCredential::Profile(value.value()?),
+            BedrockView::ApiKeyEntry(value) => BedrockCredential::ApiKey(value.value()?),
+            BedrockView::RegionEntry { credential, value } => {
+                return Some(BedrockAction::Configure(credential.clone(), value.value()?));
             }
             BedrockView::AccessKeyEntry {
                 values,
                 selected_field,
             } => {
                 if *selected_field < 2 {
-                    if !values[*selected_field].trim().is_empty() {
+                    if values[*selected_field].value().is_some() {
                         *selected_field += 1;
                     }
                     return None;
                 }
-                if values[0].trim().is_empty() || values[1].trim().is_empty() {
-                    *selected_field = if values[0].trim().is_empty() { 0 } else { 1 };
+                let Some(access_key_id) = values[0].value() else {
+                    *selected_field = 0;
                     return None;
-                }
+                };
+                let Some(secret_access_key) = values[1].value() else {
+                    *selected_field = 1;
+                    return None;
+                };
                 BedrockCredential::AccessKeys {
-                    access_key_id: values[0].trim().to_string(),
-                    secret_access_key: values[1].trim().to_string(),
-                    session_token: (!values[2].trim().is_empty())
-                        .then(|| values[2].trim().to_string()),
+                    access_key_id,
+                    secret_access_key,
+                    session_token: values[2].value(),
                 }
             }
             _ => return None,
@@ -357,7 +348,7 @@ impl BedrockState {
         {
             return Some(BedrockAction::Configure(credential, region));
         }
-        self.enter_region(credential, String::new());
+        self.enter_region(credential, "");
         None
     }
 
@@ -414,30 +405,22 @@ impl BedrockState {
             BedrockView::ProfileEntry(value) => {
                 lines.push("  Enter the name of your AWS profile.".into());
                 lines.push("".into());
-                lines.push(Line::from(vec![
-                    "  AWS profile: ".into(),
-                    value.clone().cyan(),
-                ]));
+                lines.push(value.line("  AWS profile: ", "", FieldDisplay::Focused, area.width));
             }
             BedrockView::ApiKeyEntry(value) => {
                 lines.push("  Enter your Amazon Bedrock API key.".into());
                 lines.push("".into());
-                let mut masked_value = "•".repeat(value.chars().count().saturating_sub(1));
-                if let Some(character) = value.chars().last() {
-                    masked_value.push(character);
-                }
-                lines.push(Line::from(vec![
-                    "  Bedrock API key: ".into(),
-                    masked_value.cyan(),
-                ]));
+                lines.push(value.line(
+                    "  Bedrock API key: ",
+                    "",
+                    FieldDisplay::FocusedSecret,
+                    area.width,
+                ));
             }
             BedrockView::RegionEntry { value, .. } => {
                 lines.push("  Enter the AWS Region to use with Amazon Bedrock.".into());
                 lines.push("".into());
-                lines.push(Line::from(vec![
-                    "  AWS Region: ".into(),
-                    value.clone().cyan(),
-                ]));
+                lines.push(value.line("  AWS Region: ", "", FieldDisplay::Focused, area.width));
             }
             BedrockView::AccessKeyEntry {
                 values,
@@ -454,23 +437,18 @@ impl BedrockState {
                 .enumerate()
                 {
                     let marker = if index == *selected_field { ">" } else { " " };
-                    let value = if index == 0 {
-                        values[index].clone()
-                    } else if index == *selected_field {
-                        let mut masked_value =
-                            "•".repeat(values[index].chars().count().saturating_sub(1));
-                        if let Some(character) = values[index].chars().last() {
-                            masked_value.push(character);
-                        }
-                        masked_value
-                    } else {
-                        "•".repeat(values[index].chars().count())
+                    let display = match (index == *selected_field, index == 0) {
+                        (true, true) => FieldDisplay::Focused,
+                        (false, true) => FieldDisplay::Unfocused,
+                        (true, false) => FieldDisplay::FocusedSecret,
+                        (false, false) => FieldDisplay::UnfocusedSecret,
                     };
-                    let line = format!("{marker} {label}: {value}");
+                    let line =
+                        values[index].line(&format!("{marker} {label}: "), "", display, area.width);
                     lines.push(if index == *selected_field {
-                        line.cyan().into()
+                        line.cyan()
                     } else {
-                        line.into()
+                        line
                     });
                 }
             }
@@ -764,35 +742,13 @@ impl AuthModeWidget {
         true
     }
 
-    pub(super) fn handle_bedrock_paste(&mut self, pasted: &str) -> bool {
-        let pasted = pasted.trim();
-        if pasted.is_empty() {
-            return false;
-        }
-        let mut guard = self
-            .sign_in_state
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        let SignInState::Bedrock(state) = &mut *guard else {
-            return false;
-        };
-        let Some(input) = state.active_input_mut() else {
-            return false;
-        };
-        input.push_str(pasted);
-        *self.error.write().unwrap_or_else(PoisonError::into_inner) = None;
-        drop(guard);
-        self.request_frame.schedule_frame();
-        true
-    }
-
     fn start_bedrock_setup(
         &mut self,
         credential: BedrockCredential,
         region: String,
         mut fallback: BedrockState,
     ) {
-        fallback.enter_region(credential.clone(), region.clone());
+        fallback.enter_region(credential.clone(), &region);
         let mut configuring = fallback.clone();
         let request_id = onboarding_request_id();
         configuring.view = BedrockView::Configuring(request_id.clone());
@@ -802,14 +758,12 @@ impl AuthModeWidget {
             .unwrap_or_else(PoisonError::into_inner) = SignInState::Bedrock(configuring);
 
         let request_handle = self.app_server_request_handle.clone();
-        let sign_in_state = self.sign_in_state.clone();
-        let error = self.error.clone();
-        let request_frame = self.request_frame.clone();
-        tokio::spawn(async move {
+        let active_request_id = request_id.clone();
+        let request = async move {
             let result = match credential {
                 BedrockCredential::ApiKey(api_key) => request_handle
                     .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
-                        request_id: request_id.clone(),
+                        request_id,
                         params: LoginAccountParams::AmazonBedrock { api_key, region },
                     })
                     .await
@@ -822,7 +776,7 @@ impl AuthModeWidget {
                     }),
                 BedrockCredential::Profile(profile) => request_handle
                     .request_typed::<BedrockSetupResponse>(ClientRequest::BedrockSetup {
-                        request_id: request_id.clone(),
+                        request_id,
                         params: BedrockSetupParams::Profile { profile, region },
                     })
                     .await
@@ -830,7 +784,7 @@ impl AuthModeWidget {
                     .map_err(|error| error.to_string()),
                 BedrockCredential::Environment => request_handle
                     .request_typed::<BedrockSetupResponse>(ClientRequest::BedrockSetup {
-                        request_id: request_id.clone(),
+                        request_id,
                         params: BedrockSetupParams::Environment { region },
                     })
                     .await
@@ -842,7 +796,7 @@ impl AuthModeWidget {
                     session_token,
                 } => request_handle
                     .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
-                        request_id: request_id.clone(),
+                        request_id,
                         params: LoginAccountParams::AmazonBedrockAccessKeys {
                             access_key_id,
                             secret_access_key,
@@ -859,32 +813,9 @@ impl AuthModeWidget {
                         )),
                     }),
             };
-            let mut guard = sign_in_state
-                .write()
-                .unwrap_or_else(PoisonError::into_inner);
-            if !matches!(
-                &*guard,
-                SignInState::Bedrock(state)
-                    if matches!(&state.view, BedrockView::Configuring(active_request_id)
-                        if *active_request_id == request_id)
-            ) {
-                return;
-            }
-            match result {
-                Ok(()) => {
-                    *error.write().unwrap_or_else(PoisonError::into_inner) = None;
-                    // Startup shows GovCloud guidance after the selected provider is reloaded.
-                    *guard = SignInState::BedrockConfigured;
-                }
-                Err(err) => {
-                    *error.write().unwrap_or_else(PoisonError::into_inner) =
-                        Some(format!("Unable to set up Amazon Bedrock: {err}"));
-                    *guard = SignInState::Bedrock(fallback);
-                }
-            }
-            drop(guard);
-            request_frame.schedule_frame();
-        });
+            result.map_err(|err| format!("Unable to set up Amazon Bedrock: {err}"))
+        };
+        self.spawn_provider_setup(active_request_id, SignInState::Bedrock(fallback), request);
     }
 }
 

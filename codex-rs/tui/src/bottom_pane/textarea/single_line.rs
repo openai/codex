@@ -18,7 +18,7 @@ impl TextArea {
         }
     }
 
-    pub(super) fn single_line_viewport(&self, width: u16) -> (usize, u16) {
+    pub(crate) fn single_line_viewport(&self, width: u16) -> (usize, u16) {
         let cursor_width = self.text[self.cursor_pos..]
             .graphemes(/*is_extended*/ true)
             .next()

@@ -24,6 +24,7 @@ pub(crate) const SELECT_SECOND: [KeyBinding; 2] = [
 ];
 pub(crate) const SELECT_THIRD: [KeyBinding; 1] = [key_hint::plain(KeyCode::Char('3'))];
 pub(crate) const SELECT_FOURTH: [KeyBinding; 1] = [key_hint::plain(KeyCode::Char('4'))];
+pub(crate) const SELECT_FIFTH: [KeyBinding; 1] = [key_hint::plain(KeyCode::Char('5'))];
 pub(crate) const CONFIRM: [KeyBinding; 1] = [key_hint::plain(KeyCode::Enter)];
 pub(crate) const CANCEL: [KeyBinding; 1] = [key_hint::plain(KeyCode::Esc)];
 pub(crate) const COPY_LINK: [KeyBinding; 1] = [key_hint::plain(KeyCode::Char('c'))];

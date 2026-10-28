@@ -771,9 +771,10 @@ impl TextArea {
                 return;
             }
             self.insert_str(&c.to_string());
+        } else {
+            tracing::debug!(kind = ?event.kind, modifiers = ?event.modifiers, "Unhandled key event in TextArea");
         }
 
-        tracing::debug!("Unhandled key event in TextArea: {:?}", event);
         self.mouse_selection = None;
     }
 

@@ -106,6 +106,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub remote_project_trust: Option<RemoteProjectTrust>,
     pub show_login_screen: bool,
     pub bedrock_setup_enabled: bool,
+    pub gcp_setup_enabled: bool,
     pub login_status: LoginStatus,
     pub app_server_target: crate::AppServerTarget,
     pub app_server_request_handle: Option<AppServerRequestHandle>,
@@ -133,6 +134,7 @@ impl OnboardingScreen {
             remote_project_trust,
             show_login_screen,
             bedrock_setup_enabled,
+            gcp_setup_enabled,
             login_status,
             app_server_target,
             app_server_request_handle,
@@ -184,6 +186,7 @@ impl OnboardingScreen {
                     app_server_request_handle,
                     auth_config,
                     bedrock_setup_enabled,
+                    gcp_setup_enabled,
                     animations_enabled: local_settings.tui.animations
                         && local_settings.tui.effects.shimmer,
                     animations_suppressed: std::cell::Cell::new(false),
@@ -346,7 +349,7 @@ impl KeyboardHandler for OnboardingScreen {
     /// Route key events to onboarding steps while preserving text-entry safety.
     ///
     /// OpenAI API-key entry suppresses printable quit bindings after typing
-    /// starts, while Bedrock fields suppress them from the first character.
+    /// starts, while cloud provider fields suppress them from the first character.
     /// Control/alt quit chords still work as emergency exits.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
