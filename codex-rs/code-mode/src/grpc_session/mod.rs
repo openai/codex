@@ -94,6 +94,24 @@ impl GrpcCodeModeSessionProvider {
         Self::from_transport(SharedTransport::with_channel(channel))
     }
 
+    /// Uses a caller-owned transport to control connection establishment and recovery.
+    pub fn with_transport<T>(transport: T) -> Self
+    where
+        T: tower::Service<
+                tonic::codegen::http::Request<tonic::body::Body>,
+                Response = tonic::codegen::http::Response<tonic::body::Body>,
+                Error = tonic::Status,
+            > + Clone
+            + Send
+            + Sync
+            + 'static,
+        T::Future: Send + 'static,
+    {
+        Self::from_transport(SharedTransport::with_transport(
+            tower::util::BoxCloneSyncService::new(transport),
+        ))
+    }
+
     fn from_transport(transport: SharedTransport) -> Self {
         Self {
             transport: Arc::new(transport),

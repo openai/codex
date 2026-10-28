@@ -48,6 +48,15 @@ impl SharedTransport {
         )
     }
 
+    pub(super) fn with_transport(transport: GrpcTransport) -> Self {
+        Self::Connected(
+            CodeModeHostClient::new(transport)
+                .accept_compressed(tonic::codec::CompressionEncoding::Zstd)
+                .max_decoding_message_size(MAX_FRAME_BYTES)
+                .max_encoding_message_size(MAX_FRAME_BYTES),
+        )
+    }
+
     pub(super) async fn client(&self) -> Result<GrpcClient, String> {
         let (endpoint, http_client_factory, client) = match self {
             Self::Url {

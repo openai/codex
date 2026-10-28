@@ -1,13 +1,18 @@
 //! Owns the local gRPC code-mode client and host process. Sessions share a lazy
-//! HTTP/2 channel; reconnecting spawns a fresh host, and dropping its I/O kills and
-//! reaps the child. Session recovery and stale cell IDs use the shared gRPC client.
+//! HTTP/2 connection. Only session admission can replace a dead host; other RPCs
+//! use the current generation. Dropping its I/O kills and reaps the child.
 
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::sync::PoisonError;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
@@ -29,12 +34,17 @@ use tokio::process::Child;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 use tokio::process::Command;
+use tonic::Status;
+use tonic::body::Body;
+use tonic::transport::Channel;
 use tonic::transport::Endpoint;
+use tower::ServiceExt;
 use tower::service_fn;
 
 pub(crate) struct ProcessOwnedGrpcCodeModeSessionProvider {
     host_program: PathBuf,
     provider: OnceLock<GrpcCodeModeSessionProvider>,
+    current: Arc<Mutex<Option<HostChannel>>>,
 }
 
 impl ProcessOwnedGrpcCodeModeSessionProvider {
@@ -42,6 +52,7 @@ impl ProcessOwnedGrpcCodeModeSessionProvider {
         Self {
             host_program,
             provider: OnceLock::new(),
+            current: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -63,21 +74,90 @@ impl CodeModeSessionProvider for ProcessOwnedGrpcCodeModeSessionProvider {
         Box::pin(async move {
             self.availability()?;
             let provider = self.provider.get_or_init(|| {
-                let host_program = self.host_program.clone();
-                // The URI is an HTTP/2 authority only; the connector exclusively uses pipes.
-                // A live but unresponsive child can leave both pipes open. Let HTTP/2
-                // detect that and drop the I/O, which reaps the child on reconnect.
+                let transport = Arc::new(HostTransport {
+                    host_program: self.host_program.clone(),
+                    current: self.current.clone(),
+                });
+                GrpcCodeModeSessionProvider::with_transport(service_fn(move |request| {
+                    let transport = transport.clone();
+                    async move { transport.send(request).await }
+                }))
+            });
+            provider.create_session_with_limits(limits).await
+        })
+    }
+}
+
+// Every channel gets exactly one child. Tonic's internal reconnect loop cannot
+// spawn a process, including if the child dies between channel selection and
+// dispatch. Session admission selects a new generation during recovery.
+struct HostTransport {
+    host_program: PathBuf,
+    current: Arc<Mutex<Option<HostChannel>>>,
+}
+
+struct HostChannel {
+    channel: Channel,
+    alive: Arc<AtomicBool>,
+}
+
+impl HostTransport {
+    async fn send(&self, request: http::Request<Body>) -> Result<http::Response<Body>, Status> {
+        self.channel(request.uri().path())?
+            .oneshot(request)
+            .await
+            .map_err(|error| {
+                // Channel errors are transport failures, not host RPC statuses.
+                // In particular a child exiting during handshake can surface as
+                // BrokenPipe, which generic tonic conversion calls Unknown and
+                // would prevent the existing bounded OpenSession retry policy.
+                let mut status = Status::unavailable("code-mode host transport failed");
+                status.set_source(Arc::new(error));
+                status
+            })
+    }
+
+    fn channel(&self, rpc_path: &str) -> Result<Channel, Status> {
+        Ok({
+            let mut current = self.current.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(host) = current
+                .as_ref()
+                .filter(|host| host.alive.load(Ordering::Acquire))
+            {
+                host.channel.clone()
+            } else {
+                if rpc_path != "/codex.code_mode.v1.CodeModeHost/OpenSession" {
+                    return Err(Status::unavailable("code-mode host is not running"));
+                }
+                let connection = HostConnection::spawn(&self.host_program)
+                    .map_err(|error| Status::unavailable(error.to_string()))?;
+                let alive = connection.alive.clone();
+                let connection = Arc::new(Mutex::new(Some(connection)));
+                // Detect a live but unresponsive child even while the connection is idle.
                 let channel = Endpoint::from_static("http://code-mode-host")
                     .http2_keep_alive_interval(Duration::from_secs(/*secs*/ 30))
                     .keep_alive_timeout(Duration::from_secs(/*secs*/ 10))
                     .keep_alive_while_idle(/*enabled*/ true)
                     .connect_with_connector_lazy(service_fn(move |_| {
-                        let host_program = host_program.clone();
-                        async move { HostConnection::spawn(&host_program).map(TokioIo::new) }
+                        let connection = connection
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .take();
+                        async move {
+                            connection.map(TokioIo::new).ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::NotConnected,
+                                    "code-mode host connection ended",
+                                )
+                            })
+                        }
                     }));
-                GrpcCodeModeSessionProvider::with_channel(channel)
-            });
-            provider.create_session_with_limits(limits).await
+                *current = Some(HostChannel {
+                    channel: channel.clone(),
+                    alive,
+                });
+                channel
+            }
         })
     }
 }
@@ -85,6 +165,7 @@ impl CodeModeSessionProvider for ProcessOwnedGrpcCodeModeSessionProvider {
 struct HostConnection {
     io: tokio::io::Join<ChildStdout, ChildStdin>,
     child: Option<Child>,
+    alive: Arc<AtomicBool>,
 }
 
 impl HostConnection {
@@ -119,6 +200,7 @@ impl HostConnection {
         Ok(Self {
             io: tokio::io::join(stdout, stdin),
             child: Some(child),
+            alive: Arc::new(AtomicBool::new(true)),
         })
     }
 }
@@ -153,6 +235,7 @@ impl AsyncWrite for HostConnection {
 
 impl Drop for HostConnection {
     fn drop(&mut self) {
+        self.alive.store(false, Ordering::Release);
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {

@@ -3,6 +3,10 @@
 #[path = "code_mode_dynamic_tools_tests.rs"]
 mod dynamic_tools;
 
+#[cfg(unix)]
+#[path = "code_mode_host_recovery_tests.rs"]
+mod host_recovery;
+
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;

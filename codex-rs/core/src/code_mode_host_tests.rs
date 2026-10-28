@@ -21,6 +21,10 @@ use super::ProcessOwnedGrpcCodeModeSessionProvider;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 20);
 
+#[cfg(unix)]
+#[path = "code_mode_host_lifecycle_tests.rs"]
+mod lifecycle;
+
 async fn execute(
     session: &Arc<dyn CodeModeSession>,
     source: &str,
@@ -92,6 +96,23 @@ async fn grpc_stdio_sessions_share_a_host_and_isolate_state() -> Result<()> {
         vec!["--listen grpc+stdio://".to_string()],
         "both sessions must share one gRPC host process"
     );
+    drop(first);
+    drop(second);
+    drop(provider);
+    #[cfg(unix)]
+    {
+        let pid = recorder.pid()?;
+        timeout(TEST_TIMEOUT, async {
+            while unsafe {
+                libc::kill(pid as libc::pid_t, /*sig*/ 0)
+            } == 0
+            {
+                tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+            }
+        })
+        .await
+        .context("host was not reaped after provider teardown")?;
+    }
     Ok(())
 }
 
