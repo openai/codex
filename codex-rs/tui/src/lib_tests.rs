@@ -106,8 +106,24 @@ async fn bedrock_setup_wizard_requires_eligible_onboarding() -> color_eyre::Resu
             true,
         ),
         (
-            "explicit provider",
+            "explicit OpenAI provider",
             "model_provider = \"openai\"\n[features]\nbedrock_setup_wizard = true\n",
+            LoginStatus::NotAuthenticated,
+            AppServerTarget::Embedded,
+            true,
+        ),
+        (
+            "custom provider",
+            r#"
+model_provider = "test-provider"
+[model_providers.test-provider]
+name = "Test provider"
+base_url = "http://example.test/v1"
+wire_api = "responses"
+requires_openai_auth = true
+[features]
+bedrock_setup_wizard = true
+"#,
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
             false,

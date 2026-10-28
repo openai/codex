@@ -2461,11 +2461,6 @@ fn should_show_bedrock_setup_wizard(
         && config.features.enabled(Feature::BedrockSetupWizard)
         && config.model_provider_id == "openai"
         && config
-            .config_layer_stack
-            .effective_config()
-            .get("model_provider")
-            .is_none()
-        && config
             .auth_config()
             .is_login_method_allowed(ForcedLoginMethod::Api)
 }
