@@ -12,7 +12,10 @@ use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
-use futures::future::join_all;
+use futures::StreamExt;
+use futures::stream;
+
+const MAX_CONCURRENT_IMAGE_AVAILABILITY_CHECKS: usize = 8;
 
 /// Checks distinct file IDs concurrently and replaces only unavailable image content.
 pub(crate) async fn replace_unresolvable_image_files<'a>(
@@ -51,13 +54,14 @@ pub(crate) async fn replace_unresolvable_image_files<'a>(
             _ => {}
         }
     }
-    let results = join_all(file_ids.into_iter().map(|file_id| async move {
-        let resolvable = image_store.is_resolvable(&file_id).await;
-        (file_id, resolvable)
-    }))
-    .await;
+    let mut checks = stream::iter(file_ids)
+        .map(|file_id| async move {
+            let resolvable = image_store.is_resolvable(&file_id).await;
+            (file_id, resolvable)
+        })
+        .buffer_unordered(MAX_CONCURRENT_IMAGE_AVAILABILITY_CHECKS);
     let mut unavailable_file_ids = HashSet::new();
-    for (file_id, resolvable) in results {
+    while let Some((file_id, resolvable)) = checks.next().await {
         if !resolvable {
             unavailable_file_ids.insert(file_id);
         }
