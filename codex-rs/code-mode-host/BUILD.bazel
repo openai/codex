@@ -8,4 +8,6 @@ codex_rust_crate(
 
 release_binary(
     binary = ":codex-code-mode-host",
+    # V8 and its libc++ use aligned new and delete, available on macOS 10.13.
+    macos_x86_64_minimum_os = "10.13",
 )

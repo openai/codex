@@ -152,7 +152,7 @@ def runtime_archive(name, srcs, **kwargs):
         **kwargs
     )
 
-def release_binary(binary, name = "release", **kwargs):
+def release_binary(binary, name = "release", macos_x86_64_minimum_os = "10.12", **kwargs):
     """Expose release_files and release.tar.gz; override name for sibling binaries."""
     kwargs.setdefault("tags", ["manual"])
     kwargs.setdefault("visibility", ["//visibility:public"])
@@ -166,7 +166,7 @@ def release_binary(binary, name = "release", **kwargs):
         }),
         macos_minimum_os = select({
             "@platforms//cpu:aarch64": "11.0",
-            "//conditions:default": "10.12",
+            "//conditions:default": macos_x86_64_minimum_os,
         }),
         symbol_group = select({
             "@platforms//os:macos": "dsym_folder",

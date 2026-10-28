@@ -36,24 +36,6 @@ config_setting(
 )
 
 config_setting(
-    name = "platform_aarch64_unknown_linux_musl",
-    constraint_values = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:linux",
-        "@llvm//constraints/libc:musl",
-    ],
-)
-
-config_setting(
-    name = "platform_x86_64_unknown_linux_musl",
-    constraint_values = [
-        "@platforms//cpu:x86_64",
-        "@platforms//os:linux",
-        "@llvm//constraints/libc:musl",
-    ],
-)
-
-config_setting(
     name = "use_rusty_v8_custom_libcxx",
     flag_values = {
         "@v8//:v8_use_rusty_v8_custom_libcxx": "True",
@@ -94,35 +76,24 @@ alias(
     actual = ":v8_152_2_0_x86_64_pc_windows_gnullvm_bazel",
 )
 
-# Both ordinary consumers and source consumers use the current sandbox ABI.
-# Switch the archive and binding together for source instrumentation. The same
-# root setting is visible in the @v8_targets copy used by rules_rs.
-config_setting(
-    name = "use_rusty_v8_prebuilts",
-    flag_values = {
-        "@//:rusty_v8_from_source": "False",
-    },
-)
-
 alias(
     name = "rusty_v8_archive_for_target",
-    actual = select({
-        ":use_rusty_v8_prebuilts": ":rusty_v8_prebuilt_archive_for_target",
-        "//conditions:default": ":rusty_v8_source_archive_for_target",
-    }),
+    actual = ":rusty_v8_source_archive_for_target",
 )
 
+# Use LLVM's libc-aware Linux selectors for archives and bindings: LLVM musl
+# platforms omit rules_rs' separate libc constraint, which defaults to glibc.
 alias(
     name = "rusty_v8_prebuilt_archive_for_target",
     actual = select({
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":v8_152_2_0_aarch64_pc_windows_msvc",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":v8_152_2_0_x86_64_pc_windows_msvc",
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": "@rusty_v8_152_2_0_aarch64_apple_darwin_archive//file",
-        "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": ":v8_152_2_0_aarch64_unknown_linux_gnu_prebuilt",
+        "@llvm//platforms/config:linux_aarch64_gnu": ":v8_152_2_0_aarch64_unknown_linux_gnu_prebuilt",
         "@rules_rs//rs/platforms/config:x86_64-apple-darwin": "@rusty_v8_152_2_0_x86_64_apple_darwin_archive//file",
-        "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": ":v8_152_2_0_x86_64_unknown_linux_gnu_prebuilt",
-        ":platform_aarch64_unknown_linux_musl": ":v8_152_2_0_aarch64_unknown_linux_musl_prebuilt",
-        ":platform_x86_64_unknown_linux_musl": ":v8_152_2_0_x86_64_unknown_linux_musl_prebuilt",
+        "@llvm//platforms/config:linux_x86_64_gnu": ":v8_152_2_0_x86_64_unknown_linux_gnu_prebuilt",
+        "@llvm//platforms/config:linux_aarch64_musl": ":v8_152_2_0_aarch64_unknown_linux_musl_prebuilt",
+        "@llvm//platforms/config:linux_x86_64_musl": ":v8_152_2_0_x86_64_unknown_linux_musl_prebuilt",
         "//conditions:default": ":rusty_v8_source_archive_for_target",
     }),
 )
@@ -164,25 +135,22 @@ alias(
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":v8_152_2_0_aarch64_apple_darwin_bazel",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":v8_152_2_0_aarch64_pc_windows_gnullvm",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":v8_152_2_0_aarch64_pc_windows_msvc_bazel",
-        "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": ":v8_152_2_0_aarch64_unknown_linux_gnu_bazel",
+        "@llvm//platforms/config:linux_aarch64_gnu": ":v8_152_2_0_aarch64_unknown_linux_gnu_bazel",
         # Rust's compiler-builtins archive does not supply V8's __clear_cache.
         # Use the merged archive containing the ARM64 compiler-rt builtins.
-        ":platform_aarch64_unknown_linux_musl": ":v8_152_2_0_aarch64_unknown_linux_musl_release",
+        "@llvm//platforms/config:linux_aarch64_musl": ":v8_152_2_0_aarch64_unknown_linux_musl_release",
         "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ":v8_152_2_0_x86_64_apple_darwin_bazel",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ":v8_152_2_0_x86_64_pc_windows_gnullvm",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":v8_152_2_0_x86_64_pc_windows_msvc_bazel",
-        "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": ":v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
-        ":platform_x86_64_unknown_linux_musl": ":v8_152_2_0_x86_64_unknown_linux_musl_release",
+        "@llvm//platforms/config:linux_x86_64_gnu": ":v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
+        "@llvm//platforms/config:linux_x86_64_musl": ":v8_152_2_0_x86_64_unknown_linux_musl_release",
         "//conditions:default": ":v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
     }),
 )
 
 alias(
     name = "rusty_v8_binding_for_target",
-    actual = select({
-        ":use_rusty_v8_prebuilts": ":rusty_v8_prebuilt_binding_for_target",
-        "//conditions:default": ":rusty_v8_source_binding_for_target",
-    }),
+    actual = ":rusty_v8_source_binding_for_target",
 )
 
 alias(
@@ -191,11 +159,11 @@ alias(
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": "@rusty_v8_152_2_0_aarch64_pc_windows_msvc_binding//file",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": "@rusty_v8_152_2_0_x86_64_pc_windows_msvc_binding//file",
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": "@rusty_v8_152_2_0_aarch64_apple_darwin_binding//file",
-        "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": "@rusty_v8_152_2_0_aarch64_unknown_linux_gnu_binding//file",
+        "@llvm//platforms/config:linux_aarch64_gnu": "@rusty_v8_152_2_0_aarch64_unknown_linux_gnu_binding//file",
         "@rules_rs//rs/platforms/config:x86_64-apple-darwin": "@rusty_v8_152_2_0_x86_64_apple_darwin_binding//file",
-        "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": "@rusty_v8_152_2_0_x86_64_unknown_linux_gnu_binding//file",
-        ":platform_aarch64_unknown_linux_musl": "@rusty_v8_152_2_0_aarch64_unknown_linux_musl_binding//file",
-        ":platform_x86_64_unknown_linux_musl": "@rusty_v8_152_2_0_x86_64_unknown_linux_musl_binding//file",
+        "@llvm//platforms/config:linux_x86_64_gnu": "@rusty_v8_152_2_0_x86_64_unknown_linux_gnu_binding//file",
+        "@llvm//platforms/config:linux_aarch64_musl": "@rusty_v8_152_2_0_aarch64_unknown_linux_musl_binding//file",
+        "@llvm//platforms/config:linux_x86_64_musl": "@rusty_v8_152_2_0_x86_64_unknown_linux_musl_binding//file",
         "//conditions:default": ":rusty_v8_source_binding_for_target",
     }),
 )
@@ -206,13 +174,13 @@ alias(
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":src_binding_aarch64_apple_darwin_152_2_0_bazel",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_aarch64_pc_windows_gnullvm_152_2_0_bazel",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":src_binding_aarch64_pc_windows_msvc_152_2_0_bazel",
-        "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_aarch64_unknown_linux_gnu_152_2_0_bazel",
-        ":platform_aarch64_unknown_linux_musl": ":src_binding_aarch64_unknown_linux_musl_152_2_0_bazel",
+        "@llvm//platforms/config:linux_aarch64_gnu": ":src_binding_aarch64_unknown_linux_gnu_152_2_0_bazel",
+        "@llvm//platforms/config:linux_aarch64_musl": ":src_binding_aarch64_unknown_linux_musl_152_2_0_bazel",
         "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ":src_binding_x86_64_apple_darwin_152_2_0_bazel",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_x86_64_pc_windows_gnullvm_152_2_0_bazel",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":src_binding_x86_64_pc_windows_msvc_152_2_0_bazel",
-        "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_x86_64_unknown_linux_gnu_152_2_0_bazel",
-        ":platform_x86_64_unknown_linux_musl": ":src_binding_x86_64_unknown_linux_musl_152_2_0_bazel",
+        "@llvm//platforms/config:linux_x86_64_gnu": ":src_binding_x86_64_unknown_linux_gnu_152_2_0_bazel",
+        "@llvm//platforms/config:linux_x86_64_musl": ":src_binding_x86_64_unknown_linux_musl_152_2_0_bazel",
         "//conditions:default": ":src_binding_x86_64_unknown_linux_gnu_152_2_0_bazel",
     }),
 )
@@ -254,8 +222,8 @@ alias(
 cc_library(
     name = "rusty_v8_custom_libcxx_headers",
     defines = select({
-        ":platform_aarch64_unknown_linux_musl": ["ANDROID_HOST_MUSL"],
-        ":platform_x86_64_unknown_linux_musl": ["ANDROID_HOST_MUSL"],
+        "@llvm//platforms/config:linux_aarch64_musl": ["ANDROID_HOST_MUSL"],
+        "@llvm//platforms/config:linux_x86_64_musl": ["ANDROID_HOST_MUSL"],
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
@@ -464,13 +432,13 @@ rust_bindgen(
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ["--target=arm64-apple-darwin"],
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ["--target=aarch64-w64-windows-gnu"],
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ["--target=aarch64-pc-windows-msvc"],
-        "@llvm//platforms/config:linux_aarch64": ["--target=aarch64-unknown-linux-gnu"],
-        ":platform_aarch64_unknown_linux_musl": ["--target=aarch64-unknown-linux-musl"],
+        "@llvm//platforms/config:linux_aarch64_gnu": ["--target=aarch64-unknown-linux-gnu"],
+        "@llvm//platforms/config:linux_aarch64_musl": ["--target=aarch64-unknown-linux-musl"],
         "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ["--target=x86_64-apple-darwin"],
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ["--target=x86_64-w64-windows-gnu"],
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ["--target=x86_64-pc-windows-msvc"],
-        "@llvm//platforms/config:linux_x86_64": ["--target=x86_64-unknown-linux-gnu"],
-        ":platform_x86_64_unknown_linux_musl": ["--target=x86_64-unknown-linux-musl"],
+        "@llvm//platforms/config:linux_x86_64_gnu": ["--target=x86_64-unknown-linux-gnu"],
+        "@llvm//platforms/config:linux_x86_64_musl": ["--target=x86_64-unknown-linux-musl"],
     }),
     header = "@v8_crate_152_2_0//:binding_hpp",
     tags = ["manual"],
@@ -596,7 +564,7 @@ cc_static_library(
 )
 
 cc_static_library(
-    name = "_v8_152_2_0_aarch64_unknown_linux_gnu_bazel",
+    name = "_v8_152_2_0_aarch64_unknown_linux_gnu_bazel_base",
     features = V8_STATIC_LIBRARY_FEATURES,
     visibility = ["//visibility:private"],
     deps = [
@@ -622,6 +590,21 @@ cc_static_library(
     ],
 )
 
+# Rust's compiler-builtins omit __clear_cache on ARM64 Linux, while V8 calls
+# it to flush generated code. Carry compiler-rt in both native archive inputs.
+# llvm-ar's L modifier merges archive members; s writes the symbol index.
+genrule(
+    name = "_v8_152_2_0_aarch64_unknown_linux_gnu_bazel",
+    srcs = [
+        ":_v8_152_2_0_aarch64_unknown_linux_gnu_bazel_base",
+        "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
+    ],
+    outs = ["libv8_152_2_0_aarch64_unknown_linux_gnu.a"],
+    cmd = '$(location @llvm//tools:llvm-ar) qcsL "$@" $(SRCS)',
+    tools = ["@llvm//tools:llvm-ar"],
+    visibility = ["//visibility:private"],
+)
+
 genrule(
     name = "_v8_152_2_0_aarch64_unknown_linux_musl_release",
     srcs = [
@@ -629,21 +612,8 @@ genrule(
         "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
     ],
     outs = ["libv8_152_2_0_aarch64_unknown_linux_musl.a"],
-    cmd = """
-      cat > "$(@D)/merge.mri" <<'EOF'
-create $@
-addlib $(location :_v8_152_2_0_aarch64_unknown_linux_musl_release_base)
-addlib $(location @llvm//runtimes/compiler-rt:clang_rt.builtins.static)
-save
-end
-EOF
-      $(location @llvm//tools:llvm-ar) -M < "$(@D)/merge.mri"
-      $(location @llvm//tools:llvm-ranlib) "$@"
-    """,
-    tools = [
-        "@llvm//tools:llvm-ar",
-        "@llvm//tools:llvm-ranlib",
-    ],
+    cmd = '$(location @llvm//tools:llvm-ar) qcsL "$@" $(SRCS)',
+    tools = ["@llvm//tools:llvm-ar"],
     visibility = ["//visibility:private"],
 )
 

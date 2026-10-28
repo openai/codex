@@ -140,9 +140,14 @@ v8_config(
             "V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP=64",
         ],
     }) + select({
+        # Rusty V8's v8_enable_v8_checks feature is off in Codex. Keep the
+        # matching C++ flag undefined even in debug: it adds a HandleScope
+        # field that Rust would not allocate. DEBUG itself preserves that ABI.
+        # V8's BUILD.gn also selects logging level 2 for debug verification.
+        # Debug-only FATAL_WITH_LOC sites require that level to use the location.
         "@v8//bazel/config:is_debug": [
             "DEBUG",
-            "V8_ENABLE_CHECKS",
+            "V8_LOGGING_LEVEL=2",
         ],
         "//conditions:default": [],
     }) + select({

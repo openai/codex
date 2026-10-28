@@ -96,7 +96,6 @@ jobs:
             # path. V8 consumers under `//codex-rs/...` still participate
             # transitively through `//...`.
             -//third_party/v8:all
-            -//codex-rs/v8-poc:v8-poc-unit-tests
           )
 
           bazel_wrapper_args=(
