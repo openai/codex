@@ -25,11 +25,13 @@ codex-mcp = { workspace = true }
 codex-otel = { workspace = true }
 codex-prompts = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rmcp-client = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 codex-utils-string = { workspace = true }
 rand = { workspace = true }
+rmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -37,6 +39,7 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+codex-models-manager = { workspace = true }
 codex-context-fragments = { workspace = true }
 codex-protocol-test-support = { workspace = true }
 opentelemetry = { workspace = true }
