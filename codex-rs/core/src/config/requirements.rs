@@ -71,6 +71,11 @@ pub(super) fn apply_to_config(
             }
         }
     }
+    if let Some(Sourced { value, source }) = requirements.otel.as_deref() {
+        let conflict =
+            codex_config::apply_otel_requirements(config.otel.get_or_insert_default(), value);
+        push_structured_requirement_override_warning("otel", conflict, source, startup_warnings);
+    }
 }
 
 fn apply_exact_requirement<T>(

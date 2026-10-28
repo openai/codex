@@ -136,6 +136,7 @@ mod model_catalog;
 mod models;
 mod models_refresh_worker;
 mod notification_media;
+mod otel_config;
 mod otel_reloader;
 mod outgoing_message;
 mod plugin_config_reload;

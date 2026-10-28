@@ -599,6 +599,89 @@ async fn config_read_disables_guardian_v2_when_managed_config_requires_guardian_
     Ok(())
 }
 
+#[test_case::test_case("json", "none"; "json_and_disabled_metrics")]
+#[test_case::test_case("binary", "statsig"; "binary_and_statsig_metrics")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_requirements_read_includes_complete_otel_policy_and_headers(
+    protocol: &str,
+    metrics_exporter: &str,
+) -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    // Read policy without starting exporters or opening the example TLS files.
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        r#"[otel]
+tool_result = { max_bytes = 1024 }
+log_user_prompt = false
+log_agent_responses = true
+log_guardian_assessments = false
+environment = "managed"
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:1/v1/logs", protocol = "$PROTOCOL", headers = { Authorization = "Bearer managed-token" }, tls = { ca-certificate = "ca.pem", client-certificate = "client.pem", client-private-key = "client-key.pem" } } }
+trace_exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317", headers = { "x-api-key" = "managed-grpc-secret" }, tls = { ca-certificate = "ca.pem" } } }
+metrics_exporter = "$METRICS_EXPORTER""#
+            .replace("$PROTOCOL", protocol)
+            .replace("$METRICS_EXPORTER", metrics_exporter),
+    )?;
+    let request_id = mcp.send_config_requirements_read_request().await?;
+    let response: serde_json::Value =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        response["requirements"]["otel"],
+        json!({
+            "tool_result": { "max_bytes": 1024 },
+            "log_user_prompt": false,
+            "log_agent_responses": true,
+            "log_guardian_assessments": false,
+            "environment": "managed",
+            "exporter": {
+                "otlp-http": {
+                    "endpoint": "http://127.0.0.1:1/v1/logs",
+                    "headers": { "Authorization": "Bearer managed-token" },
+                    "protocol": protocol,
+                    "tls": {
+                        "ca-certificate": codex_home.path().join("ca.pem"),
+                        "client-certificate": codex_home.path().join("client.pem"),
+                        "client-private-key": codex_home.path().join("client-key.pem"),
+                    },
+                },
+            },
+            "trace_exporter": {
+                "otlp-grpc": {
+                    "endpoint": "http://127.0.0.1:4317",
+                    "headers": { "x-api-key": "managed-grpc-secret" },
+                    "tls": {
+                        "ca-certificate": codex_home.path().join("ca.pem"),
+                        "client-certificate": null,
+                        "client-private-key": null,
+                    },
+                },
+            },
+            "metrics_exporter": metrics_exporter,
+        })
+    );
+    // API clients must preserve certificate paths from servers on either OS.
+    let mut response = response;
+    response["requirements"]["otel"]["exporter"]["otlp-http"]["tls"]["ca-certificate"] =
+        json!(r"C:\certs\ca.pem");
+    response["requirements"]["otel"]["trace_exporter"]["otlp-grpc"]["tls"]["ca-certificate"] =
+        json!("/etc/certs/ca.pem");
+    let typed: ConfigRequirementsReadResponse = serde_json::from_value(response.clone())?;
+    assert_eq!(
+        serde_json::to_value(
+            typed
+                .requirements
+                .and_then(|requirements| requirements.otel)
+        )?,
+        response["requirements"]["otel"]
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_returns_effective_and_layers() -> Result<()> {
     let codex_home = TempDir::new()?;

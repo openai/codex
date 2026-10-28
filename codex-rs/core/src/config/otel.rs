@@ -26,7 +26,7 @@ pub(crate) fn resolve_config(
     let tracestate = resolve_tracestate(config.tracestate, startup_warnings);
 
     OtelConfig {
-        tool_result: config.tool_result,
+        tool_result: config.tool_result.unwrap_or_default(),
         log_user_prompt,
         log_agent_responses: config.log_agent_responses.unwrap_or(false),
         log_guardian_assessments: config.log_guardian_assessments.unwrap_or(false),

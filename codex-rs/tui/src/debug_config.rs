@@ -1001,6 +1001,7 @@ interrupt_message = false
             )])),
             plugins: None,
             marketplaces: None,
+            otel: None,
             apps: None,
             rules: None,
             enforce_residency: Some(ResidencyRequirement::Us),

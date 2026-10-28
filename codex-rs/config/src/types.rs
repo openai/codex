@@ -635,8 +635,7 @@ pub enum OtelExporterKind {
 #[schemars(deny_unknown_fields)]
 pub struct OtelConfigToml {
     /// Byte limit for tool-result log output; independent of model-visible output.
-    #[serde(default)]
-    pub tool_result: codex_protocol::config_types::ToolResultLogConfig,
+    pub tool_result: Option<codex_protocol::config_types::ToolResultLogConfig>,
     /// Log user prompt in traces
     pub log_user_prompt: Option<bool>,
     /// Opt in to logging final main-agent and spawned-subagent responses to an OTLP log exporter.

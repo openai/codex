@@ -3796,9 +3796,6 @@
               "$ref": "#/definitions/ToolResultLogConfig"
             }
           ],
-          "default": {
-            "max_bytes": 2048
-          },
           "description": "Byte limit for tool-result log output; independent of model-visible output."
         },
         "trace_exporter": {

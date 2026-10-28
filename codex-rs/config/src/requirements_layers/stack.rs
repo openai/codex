@@ -10,6 +10,7 @@
 //! - `rules.prefix_rules` append high-priority rules first.
 //! - `hooks` append high-priority event groups first while failing closed on
 //!   active managed-dir conflicts.
+//! - `otel` replaces exact managed values, treating exporters atomically.
 //! - `permissions.filesystem.deny_read` is a high-priority-first union across
 //!   layers.
 //! - `auto_review.required_on_models` is a high-priority-first union across layers.
@@ -18,6 +19,7 @@ use crate::ConfigRequirementsToml;
 use crate::ConfigRequirementsWithSources;
 use crate::RequirementSource;
 use crate::Sourced;
+use crate::config_requirements::merge_otel_requirements;
 use crate::merge::merge_toml_values;
 use std::cell::OnceCell;
 use std::io;
@@ -169,6 +171,23 @@ impl RequirementsLayerStack {
             })?;
         let mut output = ConfigRequirementsWithSources::default();
         populate_merged_regular_fields_with_sources(&mut output, requirements, &layers);
+        // Merge OTEL requirements so higher-priority exact values replace
+        // lower-priority values while exporters stay atomic.
+        let mut otel = None;
+        let mut otel_sources = Vec::new();
+        for layer in &layers {
+            if let Some(incoming) = layer.domain_fields.otel.as_deref()
+                && merge_otel_requirements(&mut otel, incoming)
+            {
+                otel_sources.push(layer.source.clone());
+            }
+        }
+        output.otel = otel.map(|value| {
+            Box::new(Sourced::new(
+                value,
+                RequirementSource::composite(otel_sources.into_iter().rev()),
+            ))
+        });
         let mut rules = None;
         let mut hooks = HookMergeState::new(hook_directory_field);
         let mut hooks_output = None;
@@ -251,6 +270,7 @@ fn populate_merged_regular_fields_with_sources(
         mcp_servers,
         plugins,
         marketplaces,
+        otel: _,
         apps,
         rules: _,
         enforce_residency,

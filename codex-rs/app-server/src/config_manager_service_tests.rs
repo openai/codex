@@ -1704,6 +1704,54 @@ async fn write_value_rejects_exact_managed_requirement() {
     );
 }
 
+#[tokio::test]
+async fn write_value_rejects_managed_otel_values_and_preserves_unmanaged_siblings() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&path, "").expect("write user config");
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"[otel]
+tool_result = { max_bytes = 1024 }
+log_user_prompt = false
+log_agent_responses = true
+log_guardian_assessments = false
+exporter = "none"
+trace_exporter = "none"
+metrics_exporter = "none""#,
+        ),
+    );
+    for (key_path, managed) in [
+        ("otel", true),
+        ("otel.log_user_prompt", true),
+        ("otel.log_agent_responses", true),
+        ("otel.log_guardian_assessments", true),
+        ("otel.exporter.otlp-http.endpoint", true),
+        ("otel.trace_exporter.otlp-grpc.endpoint", true),
+        ("otel.metrics_exporter.otlp-http.headers", true),
+        ("otel.environment", false),
+        ("otel.tool_result.max_bytes", true),
+    ] {
+        let result = service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(path.display().to_string()),
+                key_path: key_path.to_string(),
+                value: serde_json::json!("user"),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await;
+        assert_eq!(
+            result.err().and_then(|error| error.write_error_code()),
+            managed.then_some(ConfigWriteErrorCode::ConfigRequirementReadonly),
+            "OTEL path {key_path}"
+        );
+    }
+}
+
 fn toml_path(tmp: &Path, name: &str) -> String {
     tmp.join(name).to_string_lossy().replace('\\', "\\\\")
 }
@@ -1769,6 +1817,131 @@ enabled = false
         }
         assert!(response.origins.contains_key("model"));
     }
+}
+
+#[tokio::test]
+async fn read_projects_managed_otel_values_and_preserves_unmanaged_settings() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"[otel]
+tool_result = { max_bytes = 1234 }
+log_user_prompt = true
+environment = "user"
+exporter = "statsig""#,
+    )
+    .expect("write user config");
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"[otel]
+log_user_prompt = false
+exporter = "none""#,
+        ),
+    );
+    let response = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("config read should succeed");
+    let otel = response
+        .config
+        .additional
+        .get("otel")
+        .expect("effective OTEL config");
+    assert_eq!(
+        otel,
+        &serde_json::json!({
+            "tool_result": { "max_bytes": 1234 },
+            "log_user_prompt": false,
+            "log_agent_responses": null,
+            "log_guardian_assessments": null,
+            "environment": "user",
+            "exporter": "none",
+            "trace_exporter": null,
+            "metrics_exporter": null,
+            "span_attributes": null,
+            "tracestate": null,
+        }),
+    );
+    for (path, user_owned) in [
+        ("otel.log_user_prompt", false),
+        ("otel.exporter", false),
+        ("otel.environment", true),
+        ("otel.tool_result.max_bytes", true),
+    ] {
+        assert_eq!(response.origins.contains_key(path), user_owned, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn read_projects_managed_otel_tool_result_and_omits_its_origin() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"[otel]
+tool_result = { max_bytes = 1234 }"#,
+    )
+    .expect("write user config");
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"[otel]
+tool_result = { max_bytes = 4096 }"#,
+        ),
+    );
+
+    let response = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("config read should succeed");
+    assert_eq!(
+        response
+            .config
+            .additional
+            .get("otel")
+            .and_then(|otel| otel.get("tool_result")),
+        Some(&serde_json::json!({ "max_bytes": 4096 }))
+    );
+    assert!(!response.origins.contains_key("otel.tool_result.max_bytes"));
+}
+
+#[tokio::test]
+async fn read_keeps_omitted_otel_tool_result_unset() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"[otel]
+environment = "user""#,
+    )
+    .expect("write user config");
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let response = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("config read should succeed");
+
+    assert_eq!(
+        response
+            .config
+            .additional
+            .get("otel")
+            .and_then(|otel| otel.get("tool_result")),
+        Some(&serde_json::Value::Null)
+    );
 }
 
 #[tokio::test]

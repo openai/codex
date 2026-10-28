@@ -351,7 +351,8 @@ impl TurnRequestProcessor {
                 )
                 .await;
         }
-        self.review_start_inner(request_id, params)
+        // Keep review setup from inflating the shared request dispatcher's stack frame.
+        Box::pin(self.review_start_inner(request_id, params))
             .await
             .map(|()| None)
     }

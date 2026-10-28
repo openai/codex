@@ -5,6 +5,7 @@ pub use codex_model_provider_info::ResidencyRequirement;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ToolResultLogConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -39,6 +40,8 @@ use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
+use crate::types::OtelConfigToml;
+use crate::types::OtelExporterKind;
 use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +192,8 @@ pub struct ConfigRequirements {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
     pub marketplaces: Option<Sourced<MarketplaceRequirementsToml>>,
+    // Keep OTEL boxed in both forms so unset values do not inflate ConfigLayerStack/Config stack frames.
+    pub otel: Option<Box<Sourced<OtelRequirementsToml>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
@@ -250,6 +255,7 @@ impl Default for ConfigRequirements {
             mcp_servers: None,
             plugins: None,
             marketplaces: None,
+            otel: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(
                 Constrained::allow_any(/*initial_value*/ None),
@@ -1085,6 +1091,7 @@ pub struct ConfigRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub plugins: Option<BTreeMap<String, PluginRequirementsToml>>,
     pub marketplaces: Option<MarketplaceRequirementsToml>,
+    pub otel: Option<Box<OtelRequirementsToml>>,
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
@@ -1098,6 +1105,36 @@ pub struct ConfigRequirementsToml {
     pub additional_developer_instructions: Option<String>,
     pub guardian_policy_config: Option<String>,
     pub guardian_extra_policy: Option<String>,
+}
+
+/// OTEL settings that may be managed through `requirements.toml`.
+///
+/// Tool-result limits are optional here because `config.toml` defaults them,
+/// while requirements must distinguish unset from managed-to-default.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OtelRequirementsToml {
+    pub tool_result: Option<ToolResultLogConfig>,
+    pub log_user_prompt: Option<bool>,
+    pub log_agent_responses: Option<bool>,
+    pub log_guardian_assessments: Option<bool>,
+    pub environment: Option<String>,
+    pub exporter: Option<OtelExporterKind>,
+    pub trace_exporter: Option<OtelExporterKind>,
+    pub metrics_exporter: Option<OtelExporterKind>,
+}
+
+impl OtelRequirementsToml {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.tool_result.is_none()
+            && self.log_user_prompt.is_none()
+            && self.log_agent_responses.is_none()
+            && self.log_guardian_assessments.is_none()
+            && self.environment.is_none()
+            && self.exporter.is_none()
+            && self.trace_exporter.is_none()
+            && self.metrics_exporter.is_none()
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -1195,6 +1232,7 @@ pub struct ConfigRequirementsWithSources {
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
     pub marketplaces: Option<Sourced<MarketplaceRequirementsToml>>,
+    pub otel: Option<Box<Sourced<OtelRequirementsToml>>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
@@ -1261,6 +1299,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers: _,
             plugins: _,
             marketplaces: _,
+            otel: _,
             apps: _,
             rules: _,
             enforce_residency: _,
@@ -1339,6 +1378,12 @@ impl ConfigRequirementsWithSources {
             }
         );
 
+        if self.otel.is_none()
+            && let Some(value) = other.otel.take()
+        {
+            self.otel = Some(Box::new(Sourced::new(*value, source.clone())));
+        }
+
         if let Some(incoming_auto_review) = other.auto_review.take() {
             if let Some(existing_auto_review) = self.auto_review.as_mut() {
                 let mut source_contributed = false;
@@ -1415,6 +1460,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers,
             plugins,
             marketplaces,
+            otel,
             apps,
             rules,
             enforce_residency,
@@ -1464,6 +1510,7 @@ impl ConfigRequirementsWithSources {
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             plugins: plugins.map(|sourced| sourced.value),
             marketplaces: marketplaces.map(|sourced| sourced.value),
+            otel: otel.map(|sourced| Box::new(sourced.value)),
             apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
@@ -1605,6 +1652,10 @@ impl ConfigRequirementsToml {
                 .as_ref()
                 .is_none_or(MarketplaceRequirementsToml::is_empty)
             && self
+                .otel
+                .as_deref()
+                .is_none_or(OtelRequirementsToml::is_empty)
+            && self
                 .apps
                 .as_ref()
                 .is_none_or(AppsRequirementsToml::is_empty)
@@ -1683,6 +1734,11 @@ impl ConfigRequirementsToml {
         if let Some(enabled) = self.feedback.as_ref().and_then(|feedback| feedback.enabled) {
             config.feedback.get_or_insert_default().enabled = Some(enabled);
         }
+        if let Some(requirements) = &self.otel
+            && !requirements.is_empty()
+        {
+            apply_otel_requirements(config.otel.get_or_insert_default(), requirements);
+        }
     }
 
     /// Returns the exact managed field affected by editing `segments`.
@@ -1702,7 +1758,8 @@ impl ConfigRequirementsToml {
         }) {
             return Some("model_providers");
         }
-        let managed_fields: [(bool, &[&str], &'static str); 9] = [
+        let otel = self.otel.as_ref();
+        let managed_fields: [(bool, &[&str], &'static str); 17] = [
             (
                 self.model_provider.is_some(),
                 &["model_provider"],
@@ -1743,6 +1800,46 @@ impl ConfigRequirementsToml {
                 &["chatgpt_base_url"],
                 "chatgpt_base_url",
             ),
+            (
+                otel.is_some_and(|otel| otel.tool_result.is_some()),
+                &["otel", "tool_result"],
+                "otel.tool_result",
+            ),
+            (
+                otel.is_some_and(|otel| otel.log_user_prompt.is_some()),
+                &["otel", "log_user_prompt"],
+                "otel.log_user_prompt",
+            ),
+            (
+                otel.is_some_and(|otel| otel.log_agent_responses.is_some()),
+                &["otel", "log_agent_responses"],
+                "otel.log_agent_responses",
+            ),
+            (
+                otel.is_some_and(|otel| otel.log_guardian_assessments.is_some()),
+                &["otel", "log_guardian_assessments"],
+                "otel.log_guardian_assessments",
+            ),
+            (
+                otel.is_some_and(|otel| otel.environment.is_some()),
+                &["otel", "environment"],
+                "otel.environment",
+            ),
+            (
+                otel.is_some_and(|otel| otel.exporter.is_some()),
+                &["otel", "exporter"],
+                "otel.exporter",
+            ),
+            (
+                otel.is_some_and(|otel| otel.trace_exporter.is_some()),
+                &["otel", "trace_exporter"],
+                "otel.trace_exporter",
+            ),
+            (
+                otel.is_some_and(|otel| otel.metrics_exporter.is_some()),
+                &["otel", "metrics_exporter"],
+                "otel.metrics_exporter",
+            ),
         ];
 
         managed_fields
@@ -1752,6 +1849,47 @@ impl ConfigRequirementsToml {
             })
     }
 }
+
+macro_rules! otel_merge_functions {
+    ($($field:ident),+ $(,)?) => {
+        /// Merges the supplied fields and reports whether this layer contributed a requirement.
+        pub(crate) fn merge_otel_requirements(
+            requirements: &mut Option<OtelRequirementsToml>,
+            higher_priority: &OtelRequirementsToml,
+        ) -> bool {
+            let mut contributed = false;
+            $(if let Some(value) = &higher_priority.$field {
+                requirements.get_or_insert_default().$field = Some(value.clone());
+                contributed = true;
+            })+
+            contributed
+        }
+
+        /// Applies managed OTEL values and reports whether any configured value was overridden.
+        pub fn apply_otel_requirements(
+            config: &mut OtelConfigToml,
+            requirements: &OtelRequirementsToml,
+        ) -> bool {
+            let mut conflict = false;
+            $(if let Some(value) = &requirements.$field {
+                conflict |= config.$field.as_ref().is_some_and(|current| current != value);
+                config.$field = Some(value.clone());
+            })+
+            conflict
+        }
+    };
+}
+
+otel_merge_functions!(
+    tool_result,
+    log_user_prompt,
+    log_agent_responses,
+    log_guardian_assessments,
+    environment,
+    exporter,
+    trace_exporter,
+    metrics_exporter,
+);
 
 fn config_paths_overlap(segments: &[String], managed_path: &[&str]) -> bool {
     segments
@@ -1821,6 +1959,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             mcp_servers,
             plugins,
             marketplaces,
+            otel,
             apps: _apps,
             rules,
             enforce_residency,
@@ -2208,6 +2347,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             mcp_servers,
             plugins,
             marketplaces,
+            otel,
             exec_policy,
             enforce_residency,
             network,
@@ -2323,6 +2463,78 @@ mod tests {
         }
     }
 
+    #[test_case::test_case(&["otel"], Some("otel.tool_result"); "otel_parent")]
+    #[test_case::test_case(&["otel", "tool_result"], Some("otel.tool_result"); "tool_result")]
+    #[test_case::test_case(&["otel", "tool_result", "max_bytes"], Some("otel.tool_result"); "tool_result_max_bytes")]
+    #[test_case::test_case(&["otel", "log_user_prompt"], Some("otel.log_user_prompt"); "log_user_prompt")]
+    #[test_case::test_case(&["otel", "environment"], Some("otel.environment"); "environment")]
+    #[test_case::test_case(&["otel", "exporter", "otlp-http", "endpoint"], Some("otel.exporter"); "exporter_endpoint")]
+    #[test_case::test_case(&["otel", "trace_exporter"], Some("otel.trace_exporter"); "trace_exporter")]
+    #[test_case::test_case(&["otel", "metrics_exporter"], Some("otel.metrics_exporter"); "metrics_exporter")]
+    #[test_case::test_case(&["otel", "span_attributes", "service.name"], None; "unmanaged_span_attribute")]
+    #[test_case::test_case(&["otel", "tracestate", "user"], None; "unmanaged_tracestate")]
+    fn otel_requirements_project_and_lock_exact_scalar_and_exporter_values(
+        segments: &[&str],
+        expected: Option<&str>,
+    ) -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+[otel]
+tool_result = { max_bytes = 1024 }
+log_user_prompt = false
+environment = "managed"
+exporter = "none"
+trace_exporter = "none"
+metrics_exporter = "none"
+"#,
+        )?;
+        let mut configured: ConfigToml = from_str(
+            r#"
+[otel]
+tool_result = { max_bytes = 4096 }
+log_user_prompt = true
+environment = "user"
+exporter = "statsig"
+trace_exporter = { otlp-grpc = { endpoint = "https://user.example" } }
+metrics_exporter = "statsig"
+span_attributes = { "service.name" = "user" }
+tracestate = { user = { tenant = "preserved" } }
+"#,
+        )?;
+
+        requirements.apply_exact_to_config(&mut configured);
+        assert_eq!(
+            configured,
+            from_str::<ConfigToml>(
+                r#"
+[otel]
+tool_result = { max_bytes = 1024 }
+log_user_prompt = false
+environment = "managed"
+exporter = "none"
+trace_exporter = "none"
+metrics_exporter = "none"
+span_attributes = { "service.name" = "user" }
+tracestate = { user = { tenant = "preserved" } }
+"#
+            )?
+        );
+        assert!(!requirements.is_empty());
+
+        let segments = segments.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            requirements.exact_requirement_for_config_path(&segments),
+            expected,
+        );
+
+        let empty: ConfigRequirementsToml = from_str("[otel]")?;
+        assert!(empty.is_empty());
+        let mut configured = ConfigToml::default();
+        empty.apply_exact_to_config(&mut configured);
+        assert_eq!(configured.otel, None);
+        Ok(())
+    }
+
     #[test]
     fn composite_requirement_source_flattens_and_deduplicates_sources() {
         let mdm_source = RequirementSource::MdmManagedPreferences {
@@ -2378,6 +2590,7 @@ mod tests {
             mcp_servers,
             plugins,
             marketplaces,
+            otel,
             apps,
             rules,
             enforce_residency,
@@ -2447,6 +2660,7 @@ mod tests {
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             plugins: plugins.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             marketplaces: marketplaces.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            otel: otel.map(|value| Box::new(Sourced::new(*value, RequirementSource::Unknown))),
             apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
@@ -2963,6 +3177,10 @@ mod tests {
             mcp_servers: None,
             plugins: None,
             marketplaces: None,
+            otel: Some(Box::new(OtelRequirementsToml {
+                environment: Some("managed".to_string()),
+                ..Default::default()
+            })),
             apps: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
@@ -3056,6 +3274,13 @@ mod tests {
                 mcp_servers: None,
                 plugins: None,
                 marketplaces: None,
+                otel: Some(Box::new(Sourced::new(
+                    OtelRequirementsToml {
+                        environment: Some("managed".to_string()),
+                        ..Default::default()
+                    },
+                    source.clone(),
+                ))),
                 apps: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),

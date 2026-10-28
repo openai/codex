@@ -10337,7 +10337,7 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
     let fixture = create_test_fixture()?;
     let mut cfg = fixture.cfg.clone();
     cfg.otel = Some(OtelConfigToml {
-        tool_result: toml::from_str("max_bytes = 8192").expect("tool-result logging config"),
+        tool_result: Some(toml::from_str("max_bytes = 8192").expect("tool-result logging config")),
         log_agent_responses: Some(true),
         log_guardian_assessments: Some(true),
         exporter: Some(OtelExporterKind::OtlpHttp {
@@ -10690,6 +10690,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         mcp_servers: None,
         plugins: None,
         marketplaces: None,
+        otel: None,
         apps: None,
         rules: None,
         enforce_residency: None,
@@ -13916,6 +13917,133 @@ enabled = false
     assert!(config.startup_warnings.iter().any(|warning| {
         warning.contains("Configured value for `check_for_update_on_startup` is overridden")
     }));
+    Ok(())
+}
+
+#[test_case::test_case(
+    r#"
+[otel]
+tool_result = { max_bytes = 4096 }
+log_user_prompt = true
+environment = "user"
+exporter = { otlp-http = { endpoint = "https://user.example/logs", protocol = "json", headers = { Authorization = "user-secret" } } }
+trace_exporter = { otlp-grpc = { endpoint = "https://user.example:4317" } }
+metrics_exporter = "statsig"
+span_attributes = { "deployment.environment" = "user", machine = "laptop" }
+tracestate = { vendor = { tenant = "user", region = "us" }, other = { keep = "yes" } }
+"#,
+    r#"
+[otel]
+tool_result = { max_bytes = 1024 }
+log_user_prompt = false
+environment = "production"
+exporter = { otlp-http = { endpoint = "https://managed.example/logs", protocol = "binary", headers = { Authorization = "managed-secret" } } }
+trace_exporter = "none"
+metrics_exporter = { otlp-grpc = { endpoint = "https://managed.example:4317" } }
+"#,
+    r#"
+[otel]
+tool_result = { max_bytes = 1024 }
+log_user_prompt = false
+environment = "production"
+exporter = { otlp-http = { endpoint = "https://managed.example/logs", protocol = "binary", headers = { Authorization = "managed-secret" } } }
+trace_exporter = "none"
+metrics_exporter = { otlp-grpc = { endpoint = "https://managed.example:4317" } }
+span_attributes = { "deployment.environment" = "user", machine = "laptop" }
+tracestate = { vendor = { tenant = "user", region = "us" }, other = { keep = "yes" } }
+"#,
+    true; "managed_exact_values_and_user_metadata"
+)]
+#[test_case::test_case(
+    "[otel]\nenvironment = 'user'", "[otel]\ntool_result = { max_bytes = 1024 }",
+    "[otel]\nenvironment = 'user'\ntool_result = { max_bytes = 1024 }", false; "unset_user_limit"
+)]
+#[test_case::test_case(
+    "[otel]\ntool_result = { max_bytes = 2048 }", "[otel]\ntool_result = { max_bytes = 1024 }",
+    "[otel]\ntool_result = { max_bytes = 1024 }", true; "explicit_default_user_limit"
+)]
+#[test_case::test_case(
+    "", "[otel]\ntool_result = {}", "[otel]\ntool_result = { max_bytes = 2048 }", false; "managed_default_limit"
+)]
+#[test_case::test_case(
+    "", "[otel]\ntool_result = { max_bytes = 0 }", "[otel]\ntool_result = { max_bytes = 0 }", false; "managed_zero_limit"
+)]
+#[test_case::test_case(
+    "[otel]\nlog_agent_responses = false\nlog_guardian_assessments = true",
+    "[otel]\nlog_agent_responses = true\nlog_guardian_assessments = false",
+    "[otel]\nlog_agent_responses = true\nlog_guardian_assessments = false", true; "managed_logging_flags"
+)]
+#[tokio::test]
+async fn otel_requirements_resolve_config(
+    user_config: &str,
+    requirements: &str,
+    expected_config: &str,
+    expect_override_warning: bool,
+) -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), user_config)?;
+    let config = load_with_enterprise_requirement(&codex_home, requirements).await?;
+    let expected: ConfigToml =
+        toml::from_str(expected_config).expect("expected OTEL config should deserialize");
+    let mut warnings = Vec::new();
+    assert_eq!(
+        config.otel,
+        super::otel::resolve_config(expected.otel.unwrap_or_default(), &mut warnings)
+    );
+    assert_eq!(
+        config
+            .startup_warnings
+            .iter()
+            .find(|warning| warning.contains("Configured values under `otel` are overridden"))
+            .map(String::as_str),
+        expect_override_warning.then_some(
+            "Configured values under `otel` are overridden by requirements from enterprise-managed requirements Base requirements (req_1).",
+        ),
+    );
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .all(|warning| !warning.contains("managed-secret"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn analytics_disabled_preserves_managed_metrics_exporter() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[analytics]
+enabled = false
+"#,
+    )?;
+
+    let config = load_with_enterprise_requirement(
+        &codex_home,
+        r#"
+[otel]
+metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:1/v1/metrics", protocol = "json" } }
+"#,
+    )
+    .await?;
+
+    assert!(matches!(
+        config.otel.metrics_exporter,
+        OtelExporterKind::OtlpHttp { .. }
+    ));
+    assert!(
+        crate::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            /*service_name_override*/ None,
+            /*default_analytics_enabled*/ true,
+        )
+        .expect("managed metrics configuration should remain valid")
+        .is_some(),
+        "analytics.enabled=false should preserve the custom managed metrics exporter"
+    );
     Ok(())
 }
 

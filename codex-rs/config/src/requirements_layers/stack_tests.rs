@@ -341,6 +341,104 @@ refresh_interval_ms = 12345
 }
 
 #[test]
+fn otel_requirements_compose_exact_values_and_atomic_exporters_with_relative_tls_paths() {
+    let low_dir = tempdir().expect("low-priority requirements directory");
+    let high_dir = tempdir().expect("high-priority requirements directory");
+    let low_base = AbsolutePathBuf::from_absolute_path(low_dir.path()).expect("absolute low base");
+    let high_base =
+        AbsolutePathBuf::from_absolute_path(high_dir.path()).expect("absolute high base");
+
+    let low = layer(
+        "req_low",
+        "Low",
+        r#"
+[otel]
+tool_result = { max_bytes = 1024 }
+log_user_prompt = true
+environment = "low"
+exporter = { otlp-http = { endpoint = "https://low.example", protocol = "json", headers = { stale = "low" }, tls = { ca-certificate = "low-ca.pem" } } }
+trace_exporter = { otlp-grpc = { endpoint = "https://low.example", tls = { client-certificate = "low-client.pem" } } }
+metrics_exporter = "statsig"
+"#,
+    )
+    .with_base_dir(low_base);
+    let high = layer(
+        "req_high",
+        "High",
+        r#"
+[otel]
+tool_result = { max_bytes = 4096 }
+log_user_prompt = false
+environment = "high"
+exporter = { otlp-http = { endpoint = "https://high.example", protocol = "binary", tls = { ca-certificate = "high-ca.pem" } } }
+metrics_exporter = "none"
+"#,
+    )
+    .with_base_dir(high_base);
+    let expected_source = RequirementSource::composite([high.source.clone(), low.source.clone()]);
+    let composed = compose_requirements_for_hostname(
+        vec![low, high, layer("empty", "Empty", "[otel]")],
+        /*hostname*/ None,
+    )
+    .expect("compose OTEL requirements")
+    .expect("requirements present")
+    .otel
+    .expect("OTEL requirements present");
+    assert_eq!(composed.source, expected_source);
+
+    let expected = r#"
+[otel]
+tool_result = { max_bytes = 4096 }
+log_user_prompt = false
+environment = "high"
+exporter = { otlp-http = { endpoint = "https://high.example", protocol = "binary", tls = { ca-certificate = '$HIGH_CA' } } }
+trace_exporter = { otlp-grpc = { endpoint = "https://low.example", tls = { client-certificate = '$LOW_CLIENT' } } }
+metrics_exporter = "none"
+"#
+    .replace(
+        "$HIGH_CA",
+        &high_dir.path().join("high-ca.pem").display().to_string(),
+    )
+    .replace(
+        "$LOW_CLIENT",
+        &low_dir.path().join("low-client.pem").display().to_string(),
+    );
+    assert_eq!(
+        composed.value,
+        *expected_requirements(expected).otel.unwrap()
+    );
+
+    assert_eq!(compose(vec![layer("empty", "Empty", "[otel]")]), Ok(None));
+}
+
+#[test]
+fn managed_otel_trace_metadata_is_rejected_with_its_requirements_source() {
+    for field in ["span_attributes", "tracestate"] {
+        let error = compose(vec![layer(
+            "req_metadata",
+            "Managed policy",
+            &format!("[otel]\n{field} = {{}}"),
+        )])
+        .expect_err("metadata is unsupported");
+        let RequirementsCompositionError::Parse {
+            layer_source,
+            message,
+        } = error
+        else {
+            panic!("expected a layer parse error: {error:?}");
+        };
+        assert_eq!(
+            layer_source,
+            RequirementSource::EnterpriseManaged {
+                id: "req_metadata".to_string(),
+                name: "Managed policy".to_string(),
+            },
+        );
+        assert!(message.contains(&format!("unknown field `{field}`")));
+    }
+}
+
+#[test]
 fn provider_auth_missing_command_is_rejected_after_composition() {
     let err = compose(vec![
         layer("low", "Name", "[model_providers.gateway]\nname = 'Gateway'"),
