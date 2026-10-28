@@ -1,6 +1,7 @@
 """Discover and download published Codex packages for contract runners."""
 
 import json
+import random
 import re
 import subprocess
 import sys
@@ -16,7 +17,7 @@ PACKAGE = "codex-package-x86_64-unknown-linux-musl.tar.gz"
 
 def github_read(args: list[str]) -> str:
     """Retry release reads unless the error is known permanent; never retry verification."""
-    for attempt, delay in enumerate((2, 5, 0), start=1):
+    for attempt, delay in enumerate((2, 5, 15, 45, 0), start=1):
         try:
             return subprocess.check_output(
                 args, text=True, stderr=subprocess.PIPE, timeout=120
@@ -58,6 +59,7 @@ def github_read(args: list[str]) -> str:
             )
             if not will_retry:
                 raise
+            delay += random.randint(0, delay // 2)
             print(f"Retrying GitHub release read in {delay}s.", file=sys.stderr)
             time.sleep(delay)
 
