@@ -12,7 +12,8 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use url::Url;
 
-const BROWSER_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 180);
+// Give users enough time to complete browser sign-in, including MFA when required.
+const BROWSER_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub(super) struct CallbackListener {
     server: Arc<Server>,
