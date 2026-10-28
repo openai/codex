@@ -4,6 +4,9 @@ use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+const TRACE_REQUESTS: &str =
+    "codex_app_server::message_processor=trace,codex_app_server::outgoing_message=trace";
+
 const PARENT_PROMPT: &str = "spawn a child and wait for it";
 const CHILD_PROMPT: &str = "child: finish first";
 const SPAWN_CALL_ID: &str = "spawn-call";
@@ -86,10 +89,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
     );
     let output = test
         .cmd()
-        .env(
-            "RUST_LOG",
-            "codex_app_server::message_processor=trace,codex_app_server::outgoing_message=trace",
-        )
+        .env("RUST_LOG", TRACE_REQUESTS)
         .arg("--skip-git-repo-check")
         .arg("--json")
         .arg("-c")
@@ -138,7 +138,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
             .filter(|line| line.contains("app-server typed request"))
             .count(),
         0,
-        "the unrelated completion must not issue thread/read: {stderr}"
+        "the unrelated completion must not read history: {stderr}"
     );
     assert_eq!(
         lines[*primary_completion + 1..]
@@ -146,7 +146,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
             .filter(|line| line.contains("app-server typed request"))
             .count(),
         2,
-        "the primary completion should issue thread/read and thread/unsubscribe: {stderr}"
+        "the primary completion should read its items and unsubscribe: {stderr}"
     );
 
     assert_eq!(
@@ -158,5 +158,68 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
         "only the primary completion should issue an extra request: {stderr}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_fork_recovers_only_its_own_turn() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let test = test_codex_exec();
+    let last_message = test.cwd_path().join("last-message");
+    let mut events = vec![responses::ev_response_created("parent")];
+    // The parent's final answer must survive recovery across multiple item pages.
+    for index in 0..120 {
+        events.push(responses::ev_assistant_message(
+            &format!("msg-{index}"),
+            "working",
+        ));
+    }
+    events.push(responses::ev_assistant_message("answer", "parent done"));
+    events.push(responses::ev_completed("parent"));
+    let _parent_response = responses::mount_sse_once(&server, responses::sse(events)).await;
+    let parent = test
+        .cmd_with_server(&server)
+        .args(["--skip-git-repo-check", "--json", "--output-last-message"])
+        .arg(&last_message)
+        .arg("Produce a long turn")
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_to_string(last_message)?, "parent done");
+    let stdout = std::str::from_utf8(&parent.get_output().stdout)?;
+    let started: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap())?;
+    let parent_id = started["thread_id"].as_str().expect("parent thread ID");
+
+    let error = wiremock::ResponseTemplate::new(400).set_body_json(json!({
+        "error": {"code": "model_not_found", "message": "Unknown model", "type": "invalid_request_error"}
+    }));
+    let _fork_response = responses::mount_response_once(&server, error).await;
+    let fork = test
+        .cmd_with_server(&server)
+        .env("RUST_LOG", TRACE_REQUESTS)
+        .args(["--skip-git-repo-check", "--json", "fork", parent_id, "Fail"])
+        .assert()
+        .code(1);
+    let stdout = std::str::from_utf8(&fork.get_output().stdout)?;
+    let terminal: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap())?;
+    assert_eq!(
+        terminal,
+        json!({"type": "turn.failed", "error": {"message": "Unknown model"}})
+    );
+
+    let stderr = std::str::from_utf8(&fork.get_output().stderr)?;
+    let (_, completion) = stderr
+        .split_once("app-server event: turn/completed")
+        .expect("fork completed");
+    assert!(
+        !completion.contains("app-server event: deprecationNotice"),
+        "{completion}"
+    );
+    assert_eq!(
+        completion.matches("app-server typed request").count(),
+        2,
+        "the failed turn needs one item page and an unsubscribe: {completion}"
+    );
     Ok(())
 }

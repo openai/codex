@@ -39,6 +39,10 @@ use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemsListCursor;
+use codex_app_server_protocol::ThreadItemsListParams;
+use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -155,6 +159,7 @@ pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
@@ -1028,7 +1033,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
 
     let mut daybreak_enabled = config.daybreak_enabled;
     // Resolve resume and fork through existing app-server thread lifecycle APIs.
-    let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
+    let (history_mode, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
         command.as_ref()
     {
         if let Some(thread_id) =
@@ -1054,7 +1059,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             daybreak_enabled = daybreak_override
                 .or(response.thread.daybreak_enabled)
                 .unwrap_or(false);
-            (session_configured.thread_id, session_configured)
+            (response.thread.history_mode, session_configured)
         } else {
             let response = start_thread(&client, &mut request_ids, &config, &thread_source)
                 .await
@@ -1062,7 +1067,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let session_configured =
                 session_configured_from_thread_start_response(&response, &config)
                     .map_err(anyhow::Error::msg)?;
-            (session_configured.thread_id, session_configured)
+            (response.thread.history_mode, session_configured)
         }
     } else if let Some(ExecCommand::Fork(args)) = command.as_ref() {
         let source_args = crate::cli::ResumeArgs {
@@ -1150,16 +1155,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             .or(response.thread.daybreak_enabled)
             .or(source_daybreak)
             .unwrap_or(false);
-        (session_configured.thread_id, session_configured)
+        (response.thread.history_mode, session_configured)
     } else {
         let response = start_thread(&client, &mut request_ids, &config, &thread_source)
             .await
             .map_err(anyhow::Error::msg)?;
         let session_configured = session_configured_from_thread_start_response(&response, &config)
             .map_err(anyhow::Error::msg)?;
-        (session_configured.thread_id, session_configured)
+        (response.thread.history_mode, session_configured)
     };
 
+    let primary_thread_id = fallback_session_configured.thread_id;
     if let Some(worktree) = managed_worktree.as_ref() {
         worktree
             .manager
@@ -1367,6 +1373,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 ) {
                     maybe_backfill_turn_completed_items(
                         config.ephemeral,
+                        history_mode,
                         &client,
                         &mut request_ids,
                         &mut notification,
@@ -1737,14 +1744,13 @@ fn should_process_notification(
 
 async fn maybe_backfill_turn_completed_items(
     thread_ephemeral: bool,
+    history_mode: ThreadHistoryMode,
     client: &InProcessAppServerClient,
     request_ids: &mut RequestIdSequencer,
     notification: &mut ServerNotification,
 ) {
     // In-process delivery may drop non-terminal item notifications under backpressure while still
-    // guaranteeing `turn/completed`. Because app-server currently emits that completion with an
-    // empty `turn.items`, exec does one last `thread/read` here so human/json output can recover
-    // the final message and reconcile any still-running items before shutdown.
+    // guaranteeing `turn/completed`. Recover the completed turn's items before shutdown.
     if !should_backfill_turn_completed_items(thread_ephemeral, notification) {
         return;
     }
@@ -1752,6 +1758,53 @@ async fn maybe_backfill_turn_completed_items(
     let ServerNotification::TurnCompleted(payload) = notification else {
         return;
     };
+
+    if history_mode == ThreadHistoryMode::Paginated {
+        let completion_items = payload.turn.items.clone();
+        let mut items = Vec::new();
+        let mut cursor = None;
+        let mut seen_cursors = HashSet::new();
+        loop {
+            let page: ThreadItemsListResponse = match client
+                .request_typed(ClientRequest::ThreadItemsList {
+                    request_id: request_ids.next(),
+                    params: ThreadItemsListParams {
+                        thread_id: payload.thread_id.clone(),
+                        turn_id: Some(payload.turn.id.clone()),
+                        cursor,
+                        limit: None,
+                        sort_direction: None,
+                    },
+                })
+                .await
+            {
+                Ok(page) => page,
+                Err(err) => {
+                    warn!("thread/items/list failed during turn completion: {err}");
+                    return;
+                }
+            };
+            items.extend(page.data.into_iter().map(ThreadItem::from));
+            let Some(next) = page.next_cursor else { break };
+            if !seen_cursors.insert(next.clone()) {
+                warn!("thread/items/list returned a repeated cursor during turn completion");
+                return;
+            }
+            cursor = Some(ThreadItemsListCursor::Opaque(next));
+        }
+        for completion_item in completion_items {
+            if let Some(item) = items
+                .iter_mut()
+                .find(|item| item.id() == completion_item.id())
+            {
+                *item = completion_item;
+            } else {
+                items.push(completion_item);
+            }
+        }
+        payload.turn.items = items;
+        return;
+    }
 
     let response = send_request_with_response::<ThreadReadResponse>(
         client,
