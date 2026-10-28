@@ -283,6 +283,7 @@
 //!   [`ChatComposer::handle_paste`], which first commits buffered typing before classifying the
 //!   pasted text. This preserves the order when a paste arrives before the next burst-flush tick;
 //!   buffered keys have already been classified and go directly through `apply_paste`.
+//!   Image detection probes only regular files. Pasted device and FIFO paths stay literal.
 //! - Startup recovery previews held keys with the live Vim Replace policy without consuming them.
 //!   Buffered pastes remain literal in recovery so large-paste and image classification stays with
 //!   the live paste path.
@@ -1267,8 +1268,11 @@ impl ChatComposer {
             return false;
         };
 
-        // normalize_pasted_path already handles Windows → WSL path conversion,
-        // so we can directly try to read the image dimensions.
+        // Opening a serial device or FIFO can block the input loop.
+        if !path_buf.is_file() {
+            return false;
+        }
+
         match image::image_dimensions(&path_buf) {
             Ok((width, height)) => {
                 tracing::info!("OK: {pasted}");

@@ -1,10 +1,31 @@
-//! Raw paste tabs remain draft text until the user explicitly submits or queues it.
+//! Composer paste handling for literal paths and raw tabs.
 
 use super::tests::new_test_composer;
 use super::*;
 use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+
+#[cfg(unix)]
+#[test]
+fn pasting_fifo_path_keeps_it_editable() {
+    let dir = tempfile::tempdir().unwrap();
+    let name = "tty.usbserial-110";
+    let status = std::process::Command::new("mkfifo")
+        .arg(dir.path().join(name))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let (mut composer, _rx) = new_test_composer();
+    let prefix = shlex::try_quote(dir.path().to_str().unwrap()).unwrap();
+    composer.handle_paste(format!("{prefix}/{name}"));
+    composer.handle_key_event(KeyEvent::from(KeyCode::Backspace));
+    insta::assert_snapshot!(
+        composer.current_text().strip_prefix(prefix.as_ref()).unwrap(),
+        @"/tty.usbserial-11"
+    );
+}
 
 #[test]
 fn paste_burst_tabs_preserve_multiline_draft() {
