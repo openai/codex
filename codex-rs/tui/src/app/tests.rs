@@ -8702,7 +8702,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario
         filename_ts,
         "2025-01-05T12:00:00Z",
         "unused preview",
-        Some("test-provider"),
+        Some(config.model_provider_id.as_str()),
         /*git_info*/ None,
     )
     .expect("materialized rollout should be created");

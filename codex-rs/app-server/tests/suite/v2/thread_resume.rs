@@ -6782,3 +6782,221 @@ async fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<Ro
         rollout_file_path,
     })
 }
+
+#[test_case::test_case(false, false; "missing_definition_config_override")]
+#[test_case::test_case(false, true; "missing_definition_typed_override")]
+#[test_case::test_case(true, false; "policy_conflict_config_override")]
+#[test_case::test_case(true, true; "policy_conflict_typed_override")]
+#[tokio::test]
+async fn thread_resume_returns_provider_error_even_with_provider_override(
+    policy_conflict: bool,
+    typed_override: bool,
+) -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(home.path())?;
+    let thread_id = create_fake_rollout(
+        home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved history",
+        Some("old_provider"),
+        /*git_info*/ None,
+    )?;
+    if policy_conflict {
+        let config_path = home.path().join("config.toml");
+        let config = std::fs::read_to_string(&config_path)?;
+        let server_uri = server.uri();
+        std::fs::write(
+            config_path,
+            format!(
+                "{config}\n[model_providers.old_provider]\nname = 'Original provider'\nbase_url = '{server_uri}/v1'\n"
+            ),
+        )?;
+        std::fs::write(
+            home.path().join("requirements.toml"),
+            "model_provider = 'mock_provider'",
+        )?;
+    }
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let expected = if policy_conflict {
+        codex_app_server_protocol::ModelProviderError::ModelProviderPolicyConflict {
+            model_provider: "old_provider".into(),
+            required_model_provider: "mock_provider".into(),
+        }
+    } else {
+        codex_app_server_protocol::ModelProviderError::ModelProviderNotConfigured {
+            model_provider: "old_provider".into(),
+        }
+    };
+    // Model and reasoning overrides must not discard the provider being validated.
+    for mut params in [
+        ThreadResumeParams::default(),
+        ThreadResumeParams {
+            model: Some("gpt-5.1-codex".into()),
+            ..Default::default()
+        },
+        ThreadResumeParams {
+            config: Some(std::collections::HashMap::from([(
+                "model".into(),
+                json!("gpt-5.1-codex"),
+            )])),
+            ..Default::default()
+        },
+        ThreadResumeParams {
+            config: Some(std::collections::HashMap::from([(
+                "model_reasoning_effort".into(),
+                json!("high"),
+            )])),
+            ..Default::default()
+        },
+    ] {
+        params.thread_id = thread_id.clone();
+        let id = client.send_thread_resume_request(params).await?;
+        let error = client
+            .read_stream_until_error_message(RequestId::Integer(id))
+            .await?;
+        assert_eq!(
+            error.error,
+            JSONRPCErrorError {
+                code: -32600,
+                message: expected.to_string(),
+                data: Some(serde_json::to_value(&expected)?),
+            }
+        );
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("mock server should record received requests")
+            .iter()
+            .all(|request| !request.url.path().ends_with("/responses"))
+    );
+    // Failure leaves the history readable and does not create a live session with a new provider.
+    let id = client
+        .send_raw_request(
+            "thread/read",
+            Some(json!({"threadId": thread_id, "includeTurns": true})),
+        )
+        .await?;
+    let read: codex_app_server_protocol::ThreadReadResponse = client.read_response(id).await?;
+    assert_eq!(read.thread.model_provider, "old_provider");
+    // Provider overrides must not bypass admission for the saved provider.
+    let id = client
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            model: Some("gpt-5.1-codex".into()),
+            model_provider: typed_override.then(|| "mock_provider".into()),
+            config: (!typed_override).then(|| {
+                std::collections::HashMap::from([("model_provider".into(), json!("mock_provider"))])
+            }),
+            ..Default::default()
+        })
+        .await?;
+    let error = client
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert_eq!(error.error.data, Some(serde_json::to_value(expected)?));
+    Ok(())
+}
+
+#[test_case::test_case(false; "missing_definition")]
+#[test_case::test_case(true; "provider_mismatch")]
+#[tokio::test]
+async fn thread_resume_recovers_after_provider_configuration_is_restored(
+    configured: bool,
+) -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(home.path())?;
+    let thread_id = create_fake_rollout(
+        home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved history",
+        Some("old_provider"),
+        /*git_info*/ None,
+    )?;
+    let config_path = home.path().join("config.toml");
+    if configured {
+        let config = std::fs::read_to_string(&config_path)?;
+        let server_uri = server.uri();
+        std::fs::write(
+            &config_path,
+            format!(
+                "{config}\n[model_providers.old_provider]\nname = 'Original provider'\nbase_url = '{server_uri}/v1'\n"
+            ),
+        )?;
+    }
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let params = ThreadResumeParams {
+        thread_id,
+        ..Default::default()
+    };
+    let id = client.send_thread_resume_request(params.clone()).await?;
+    let error = client
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert_eq!(
+        error
+            .error
+            .data
+            .as_ref()
+            .expect("provider error should include structured data")["type"],
+        if configured {
+            "modelProviderMismatch"
+        } else {
+            "modelProviderNotConfigured"
+        }
+    );
+    if configured {
+        for overrides in [
+            ThreadResumeParams {
+                model_provider: Some("mock_provider".into()),
+                ..params.clone()
+            },
+            ThreadResumeParams {
+                config: Some(std::collections::HashMap::from([(
+                    "model_provider".into(),
+                    json!("mock_provider"),
+                )])),
+                ..params.clone()
+            },
+        ] {
+            let id = client.send_thread_resume_request(overrides).await?;
+            let overridden = client
+                .read_stream_until_error_message(RequestId::Integer(id))
+                .await?;
+            assert_eq!(overridden.error, error.error);
+        }
+    }
+    let id = client
+        .send_raw_request(
+            "thread/read",
+            Some(json!({"threadId": params.thread_id, "includeTurns": true})),
+        )
+        .await?;
+    let read: codex_app_server_protocol::ThreadReadResponse = client.read_response(id).await?;
+    assert_eq!(read.thread.model_provider, "old_provider");
+    let config = std::fs::read_to_string(&config_path)?;
+    let restored = if configured {
+        config.replace(
+            "model_provider = \"mock_provider\"",
+            "model_provider = \"old_provider\"",
+        )
+    } else {
+        config.replace("mock_provider", "old_provider")
+    };
+    std::fs::write(config_path, restored)?;
+    let id = client.send_thread_resume_request(params).await?;
+    let resumed: ThreadResumeResponse = client.read_response(id).await?;
+    assert_eq!(resumed.model_provider, "old_provider");
+    Ok(())
+}

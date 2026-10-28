@@ -193,7 +193,7 @@ impl ThreadQueueRequestProcessor {
         let thread = loaded_thread
             .ok_or_else(|| invalid_request("resume the thread before starting a queued message"))?;
         self.config_manager
-            .check_thread_model_provider(thread.config().await.as_ref())
+            .check_thread_model_provider_for_input(thread.config().await.as_ref())
             .await
             .map_err(|error| config_load_error(&error))?;
         let submission = self

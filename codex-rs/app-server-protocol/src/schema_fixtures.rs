@@ -64,6 +64,7 @@ pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap
         visit_client_response_types(visitor);
     })?;
     collect_typescript_fixture_file::<ClientNotification>(&mut files, &mut seen)?;
+    collect_typescript_fixture_file::<crate::ModelProviderError>(&mut files, &mut seen)?;
     collect_typescript_fixture_file::<ServerRequest>(&mut files, &mut seen)?;
     visit_typescript_fixture_dependencies(&mut files, &mut seen, |visitor| {
         visit_server_response_types(visitor);

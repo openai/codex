@@ -16111,6 +16111,81 @@
         "title": "ModelProviderCapabilitiesReadResponse",
         "type": "object"
       },
+      "ModelProviderError": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Structured JSON-RPC error data. Unknown errors must retain the client's normal fallback.",
+        "oneOf": [
+          {
+            "properties": {
+              "currentModelProvider": {
+                "type": "string"
+              },
+              "modelProvider": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "modelProviderMismatch"
+                ],
+                "title": "ModelProviderMismatchv2::ModelProviderErrorType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "currentModelProvider",
+              "modelProvider",
+              "type"
+            ],
+            "title": "ModelProviderMismatchv2::ModelProviderError",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "modelProvider": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "modelProviderNotConfigured"
+                ],
+                "title": "ModelProviderNotConfiguredv2::ModelProviderErrorType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "modelProvider",
+              "type"
+            ],
+            "title": "ModelProviderNotConfiguredv2::ModelProviderError",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "modelProvider": {
+                "type": "string"
+              },
+              "requiredModelProvider": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "modelProviderPolicyConflict"
+                ],
+                "title": "ModelProviderPolicyConflictv2::ModelProviderErrorType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "modelProvider",
+              "requiredModelProvider",
+              "type"
+            ],
+            "title": "ModelProviderPolicyConflictv2::ModelProviderError",
+            "type": "object"
+          }
+        ],
+        "title": "ModelProviderError"
+      },
       "ModelRerouteReason": {
         "enum": [
           "highRiskCyberActivity"

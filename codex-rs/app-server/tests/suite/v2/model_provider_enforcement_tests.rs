@@ -1,17 +1,15 @@
-//! Verifies provider requirements at app-server input and queue admission boundaries.
+//! Verifies provider selection and requirements at app-server input and queue admission boundaries.
 
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server::in_process;
-use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadQueueAddParams;
 use codex_app_server_protocol::ThreadQueueAddResponse;
 use codex_app_server_protocol::ThreadQueueListParams;
@@ -44,6 +42,7 @@ use wiremock::MockServer;
 
 #[test_case("other"; "selection_changes")]
 #[test_case("gateway"; "definition_changes")]
+#[test_case("default"; "default_selection_changes")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_requirement_changes_reject_inputs_to_existing_threads(
     required_selection: &str,
@@ -80,7 +79,17 @@ base_url = "{}/v1"
         other.uri(),
     );
     let requirements_path = home.path().join("requirements.toml");
-    std::fs::write(&requirements_path, &requirements)?;
+    if required_selection == "default" {
+        std::fs::write(
+            &requirements_path,
+            requirements.replace("model_provider = \"gateway\"", ""),
+        )?;
+        let path = home.path().join("config.toml");
+        let config = std::fs::read_to_string(&path)?;
+        std::fs::write(path, config.replace("mock_provider", "gateway"))?;
+    } else {
+        std::fs::write(&requirements_path, &requirements)?;
+    }
     let mut server = TestAppServer::builder()
         .with_codex_home(home.path())
         .with_json_logging("warn")
@@ -127,13 +136,31 @@ base_url = "{}/v1"
     } else {
         requirements.replace(gateway.uri(), &other.uri())
     };
-    std::fs::write(requirements_path, updated)?;
+    let provider_error = if required_selection == "default" {
+        let path = home.path().join("config.toml");
+        let config = std::fs::read_to_string(&path)?;
+        std::fs::write(
+            path,
+            config.replace("model_provider = \"gateway\"", "model_provider = \"other\""),
+        )?;
+        codex_app_server_protocol::ModelProviderError::ModelProviderMismatch {
+            model_provider: "gateway".into(),
+            current_model_provider: "other".into(),
+        }
+    } else {
+        std::fs::write(requirements_path, updated)?;
+        codex_app_server_protocol::ModelProviderError::ModelProviderPolicyConflict {
+            model_provider: "gateway".into(),
+            required_model_provider: required_selection.into(),
+        }
+    };
     let expected_error = JSONRPCErrorError {
         code: -32600,
-        message: "failed to load configuration: Your organization's required model provider settings changed. Restart Codex to apply them; this request was not sent".to_string(),
-        data: None,
+        message: provider_error.to_string(),
+        data: Some(serde_json::to_value(provider_error)?),
     };
     for (method, params) in [
+        ("thread/resume", json!({"threadId": started.thread.id})),
         (
             "thread/goal/set",
             json!({"threadId": started.thread.id, "objective": "Blocked objective"}),
@@ -256,46 +283,71 @@ base_url = "{}/v1"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_config_changes_do_not_block_existing_threads() -> Result<()> {
+async fn provider_selection_can_be_restored_for_existing_threads() -> Result<()> {
     let provider = MockServer::start().await;
     let home = TempDir::new()?;
     MockResponsesConfig::new(&provider.uri()).write(home.path())?;
+    let path = home.path().join("config.toml");
+    let original = std::fs::read_to_string(&path)?;
     let mut server = TestAppServer::builder()
         .with_codex_home(home.path())
         .build_initialized()
         .await?;
     let started = server.start_thread(ThreadStartParams::default()).await?;
-    let requests = responses::mount_sse_sequence(
+    let requests = responses::mount_sse_once(
         &provider,
-        vec![
-            responses::sse(vec![responses::ev_completed("first")]),
-            responses::sse(vec![responses::ev_completed("second")]),
-        ],
+        responses::sse(vec![responses::ev_completed("restored")]),
     )
     .await;
-    for local_settings in ["model_provider = 'openai'", "invalid toml !!!"] {
-        std::fs::write(home.path().join("config.toml"), local_settings)?;
-        let id = server
-            .send_turn_start_request(TurnStartParams {
-                thread_id: started.thread.id.clone(),
-                input: vec![UserInput::Text {
-                    text: "Continue on the original provider.".into(),
-                    text_elements: Vec::new(),
-                }],
-                ..Default::default()
-            })
-            .await?;
-        let _: TurnStartResponse = server.read_response(id).await?;
-        server
-            .read_stream_until_notification_message("turn/completed")
-            .await?;
-    }
-    assert_eq!(requests.requests().len(), 2);
+    std::fs::write(
+        &path,
+        original.replace(
+            "model_provider = \"mock_provider\"",
+            "model_provider = \"openai\"",
+        ),
+    )?;
+    let params = TurnStartParams {
+        thread_id: started.thread.id.clone(),
+        input: vec![UserInput::Text {
+            text: "Continue on the original provider.".into(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let id = server.send_turn_start_request(params.clone()).await?;
+    let error = server
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert_eq!(
+        error.error.data,
+        Some(serde_json::to_value(
+            codex_app_server_protocol::ModelProviderError::ModelProviderMismatch {
+                model_provider: "mock_provider".into(),
+                current_model_provider: "openai".into(),
+            }
+        )?)
+    );
+    assert!(requests.requests().is_empty());
+    let id = server
+        .send_raw_request(
+            "thread/read",
+            Some(json!({"threadId": started.thread.id, "includeTurns": false})),
+        )
+        .await?;
+    let read: codex_app_server_protocol::ThreadReadResponse = server.read_response(id).await?;
+    assert_eq!(read.thread.model_provider, "mock_provider");
+    std::fs::write(path, original)?;
+    let id = server.send_turn_start_request(params).await?;
+    let _: TurnStartResponse = server.read_response(id).await?;
+    server
+        .read_stream_until_notification_message("turn/completed")
+        .await?;
+    assert_eq!(requests.requests().len(), 1);
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result<()> {
+async fn malformed_system_defaults_reject_input_until_provider_can_be_resolved() -> Result<()> {
     let provider = MockServer::start().await;
     let home = TempDir::new()?;
     MockResponsesConfig::new(&provider.uri()).write(home.path())?;
@@ -310,7 +362,7 @@ async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result
             .build()
             .await?,
     );
-    let mut client = in_process::start(InProcessStartArgs {
+    let client = in_process::start(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config,
         cli_overrides: Vec::new(),
@@ -365,23 +417,9 @@ async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result
             },
         })
         .await?
-        .expect("turn/start should succeed");
-    let _: TurnStartResponse = serde_json::from_value(response)?;
-    timeout(Duration::from_secs(/*secs*/ 60), async {
-        loop {
-            let Some(event) = client.next_event().await else {
-                anyhow::bail!("app-server stopped before turn/completed");
-            };
-            if let InProcessServerEvent::ServerNotification(notification) = event
-                && let ServerNotification::TurnCompleted(completed) = notification.as_ref()
-                && completed.thread_id == started.thread.id
-            {
-                return Ok::<(), anyhow::Error>(());
-            }
-        }
-    })
-    .await??;
-    assert_eq!(requests.requests().len(), 1);
+        .expect_err("cannot verify the selected provider from malformed configuration");
+    assert_eq!(response.code, -32600);
+    assert!(requests.requests().is_empty());
     client.shutdown().await?;
     Ok(())
 }

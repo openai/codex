@@ -2,6 +2,7 @@
 
 use super::focus_palette::PtyCodex;
 use super::focus_palette::write_test_config;
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use app_test_support::create_fake_rollout;
@@ -92,12 +93,24 @@ async fn history_lookup_uses_server_provider_with_local_and_embedded_servers() -
                 ]);
             }
             let mut terminal = PtyCodex::start_cli(&cwd, home, &args)?;
-            let (expected, excluded) = if embedded || explicit {
+            let (expected, excluded) = if action == "resume" && last && explicit {
+                // The explicit provider selects the saved chat, but the daemon independently
+                // checks whether its configured provider can activate that chat.
+                (
+                    "This chat uses openai, but your current provider is server-provider.",
+                    "Server provider history",
+                )
+            } else if embedded || explicit {
                 ("Client provider history", "Server provider history")
             } else {
                 ("Server provider history", "Client provider history")
             };
-            terminal.wait_for_screen(expected)?;
+            terminal.wait_for_screen(expected).with_context(|| {
+                format!(
+                    "{action}: embedded={embedded}, last={last}, explicit={explicit}; screen:\n{}",
+                    terminal.screen_contents()
+                )
+            })?;
             ensure!(
                 !terminal.screen_contains(excluded),
                 "{action}: unexpected provider history"

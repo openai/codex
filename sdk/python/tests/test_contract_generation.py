@@ -119,3 +119,26 @@ def test_schema_generation_failure_does_not_update_python(monkeypatch):
     with pytest.raises(subprocess.CalledProcessError):
         runpy.run_path(str(script), run_name="__main__")
     assert calls == ["cargo"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "modelProviderNotConfigured", "modelProvider": "old-provider"},
+        {
+            "type": "modelProviderMismatch",
+            "modelProvider": "old-provider",
+            "currentModelProvider": "current-provider",
+        },
+        {
+            "type": "modelProviderPolicyConflict",
+            "modelProvider": "old-provider",
+            "requiredModelProvider": "required-provider",
+        },
+    ],
+)
+def test_model_provider_errors_round_trip_wire_names(payload):
+    from openai_codex.generated.v2_all import ModelProviderError
+
+    error = ModelProviderError.model_validate(payload)
+    assert error.model_dump(by_alias=True) == payload

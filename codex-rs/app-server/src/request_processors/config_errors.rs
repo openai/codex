@@ -14,6 +14,19 @@ fn cloud_config_bundle_load_error(err: &std::io::Error) -> Option<&CloudConfigBu
 }
 
 pub(crate) fn config_load_error(err: &std::io::Error) -> JSONRPCErrorError {
+    let mut current = err
+        .get_ref()
+        .map(|error| error as &(dyn std::error::Error + 'static));
+    while let Some(source) = current {
+        if let Some(provider_error) =
+            source.downcast_ref::<codex_app_server_protocol::ModelProviderError>()
+        {
+            let mut error = invalid_request(provider_error.to_string());
+            error.data = serde_json::to_value(provider_error).ok();
+            return error;
+        }
+        current = source.source();
+    }
     let data = cloud_config_bundle_load_error(err).map(|cloud_error| {
         let mut data = serde_json::json!({
             "reason": "cloudConfigBundle",

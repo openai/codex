@@ -1010,12 +1010,14 @@ async fn resume_revalidates_persisted_thread_after_config_load(
                 (resumed.thread.git_info, resumed.thread.project_id),
                 (expected_git_info.clone(), expected_project_id.clone())
             );
+            // Each resume attempt loads the current provider selection and then the
+            // saved thread config. Changed metadata must trigger another full attempt.
             if matches!(mutation, ResumeMutation::Unchanged) {
-                assert_eq!(resume_config_loads, 1);
+                assert_eq!(resume_config_loads, 2);
             } else {
                 assert!(
-                    resume_config_loads >= 2,
-                    "changed persisted metadata must reload config"
+                    resume_config_loads >= 4,
+                    "changed persisted metadata must reload both provider and thread config"
                 );
             }
             turn_result?;

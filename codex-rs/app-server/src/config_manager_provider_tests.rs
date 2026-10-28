@@ -1,4 +1,4 @@
-//! Checks retained providers against managed policy without reloading session configuration.
+//! Checks retained providers against managed policy and the current provider selection.
 
 use super::*;
 use anyhow::Result;
@@ -259,5 +259,64 @@ async fn catalog_reload_uses_latest_model_provider() -> Result<()> {
         .await?
         .config;
     assert_eq!(refreshed.model_provider_id, "openai");
+    Ok(())
+}
+
+/// Invocation overrides and selected profiles still define the current provider.
+#[test_case("model_provider", "gateway"; "explicit_provider")]
+#[test_case("profile", "gateway-profile"; "selected_profile")]
+#[tokio::test]
+async fn input_provider_check_uses_effective_selection(key: &str, value: &str) -> Result<()> {
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"
+model_provider = "openai"
+[model_providers.gateway]
+name = "Gateway"
+"#,
+    )?;
+    let mut loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    let cli_overrides = if key == "profile" {
+        std::fs::write(
+            home.path().join(format!("{value}.config.toml")),
+            "model_provider = 'gateway'\n[model_providers.gateway]\nname = 'Gateway'\n",
+        )?;
+        loader_overrides.user_config_path = Some(AbsolutePathBuf::from_absolute_path(
+            home.path().join(format!("{value}.config.toml")),
+        )?);
+        loader_overrides.user_config_profile = Some(value.parse()?);
+        Vec::new()
+    } else {
+        vec![(key.into(), TomlValue::String(value.into()))]
+    };
+    let manager = ConfigManager::new_for_tests(
+        home.path().to_path_buf(),
+        cli_overrides,
+        loader_overrides,
+        CloudConfigBundleLoader::default(),
+    );
+    let current = manager
+        .load_latest_config(Some(home.path().to_path_buf()))
+        .await?;
+    assert_eq!(current.model_provider_id, "gateway");
+    manager
+        .check_thread_model_provider_for_input(&current)
+        .await?;
+    let default_manager =
+        ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    let error = default_manager
+        .check_thread_model_provider_for_input(&current)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<ModelProviderError>()),
+        Some(&ModelProviderError::ModelProviderMismatch {
+            model_provider: "gateway".into(),
+            current_model_provider: "openai".into(),
+        })
+    );
     Ok(())
 }

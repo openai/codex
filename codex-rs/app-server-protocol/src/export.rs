@@ -133,6 +133,7 @@ pub fn generate_ts_with_options(
     export_client_responses(out_dir)?;
     ClientNotification::export_all_to(out_dir)?;
     crate::UserVerificationRpcError::export_all_to(out_dir)?;
+    crate::ModelProviderError::export_all_to(out_dir)?;
 
     ServerRequest::export_all_to(out_dir)?;
     export_server_responses(out_dir)?;
@@ -233,6 +234,10 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     schemas.push(write_json_schema::<crate::UserVerificationRpcError>(
         out_dir,
         "v2::UserVerificationRpcError",
+    )?);
+    schemas.push(write_json_schema::<crate::ModelProviderError>(
+        out_dir,
+        "v2::ModelProviderError",
     )?);
     schemas.extend(export_client_param_schemas(out_dir)?);
     schemas.extend(export_client_response_schemas(out_dir)?);

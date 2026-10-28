@@ -247,12 +247,23 @@ fn merge_persisted_resume_metadata(
     typesafe_overrides: &mut ConfigOverrides,
     persisted_metadata: &ThreadMetadata,
 ) {
-    if has_model_resume_override(request_overrides.as_ref(), typesafe_overrides) {
+    let has_model_override =
+        has_model_resume_override(request_overrides.as_ref(), typesafe_overrides);
+
+    // Model and reasoning overrides do not imply a provider change.
+    if typesafe_overrides.model_provider.is_none()
+        && !request_overrides
+            .as_ref()
+            .is_some_and(|overrides| overrides.contains_key("model_provider"))
+    {
+        typesafe_overrides.model_provider = Some(persisted_metadata.model_provider.clone());
+    }
+
+    if has_model_override {
         return;
     }
 
     typesafe_overrides.model = persisted_metadata.model.clone();
-    typesafe_overrides.model_provider = Some(persisted_metadata.model_provider.clone());
 
     if let Some(reasoning_effort) = persisted_metadata.reasoning_effort.as_ref() {
         request_overrides.get_or_insert_with(HashMap::new).insert(
@@ -292,7 +303,9 @@ fn has_model_resume_override(
 ) -> bool {
     typesafe_overrides.model.is_some()
         || typesafe_overrides.model_provider.is_some()
-        || request_overrides.is_some_and(|overrides| overrides.contains_key("model"))
+        || request_overrides.is_some_and(|overrides| {
+            overrides.contains_key("model") || overrides.contains_key("model_provider")
+        })
         || request_overrides
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
 }
@@ -2564,7 +2577,7 @@ impl ThreadRequestProcessor {
         let (_, thread) = self.load_thread(&thread_id).await?;
         ensure_direct_input_allowed(thread.as_ref()).await?;
         self.config_manager
-            .check_thread_model_provider(thread.config().await.as_ref())
+            .check_thread_model_provider_for_input(thread.config().await.as_ref())
             .await
             .map_err(|error| config_load_error(&error))?;
         self.submit_core_op(request_id, thread.as_ref(), Op::Compact)
@@ -4252,7 +4265,32 @@ impl ThreadRequestProcessor {
                 drop(_thread_list_state_permit);
                 let config = self
                     .config_manager
-                    .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+                    .load_for_resume(
+                        resume_source_thread
+                            .as_ref()
+                            .map(|thread| thread.model_provider.as_str())
+                            .filter(|provider| !provider.is_empty())
+                            .or_else(|| {
+                                config_state
+                                    .persisted_metadata
+                                    .as_ref()
+                                    .map(|metadata| metadata.model_provider.as_str())
+                            })
+                            .or_else(|| match &thread_history {
+                                InitialHistory::Resumed(resumed) => {
+                                    resumed.history.iter().find_map(|item| match item {
+                                        RolloutItem::SessionMeta(meta) => {
+                                            meta.meta.model_provider.as_deref()
+                                        }
+                                        _ => None,
+                                    })
+                                }
+                                _ => None,
+                            }),
+                        request_overrides,
+                        typesafe_overrides,
+                        history_cwd,
+                    )
                     .await
                     .map_err(|err| config_load_error(&err))?;
                 *prepared_config = Some(PreparedResumeConfig {
@@ -4710,6 +4748,10 @@ impl ThreadRequestProcessor {
                     mismatch_details.join("; ")
                 );
             }
+            self.config_manager
+                .check_thread_model_provider_for_input(existing_thread.config().await.as_ref())
+                .await
+                .map_err(|err| config_load_error(&err))?;
             let redact_resume_payloads =
                 should_redact_thread_resume_payloads(app_server_client_name.as_deref());
             let include_turns = !params.exclude_turns;

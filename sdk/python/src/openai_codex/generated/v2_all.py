@@ -2786,6 +2786,59 @@ class ModelProviderCapabilitiesReadResponse(BaseModel):
     web_search: Annotated[bool, Field(alias="webSearch")]
 
 
+class ModelProviderMismatchModelProviderError(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    current_model_provider: Annotated[str, Field(alias="currentModelProvider")]
+    model_provider: Annotated[str, Field(alias="modelProvider")]
+    type: Annotated[
+        Literal["modelProviderMismatch"],
+        Field(title="ModelProviderMismatchv2::ModelProviderErrorType"),
+    ]
+
+
+class ModelProviderNotConfiguredModelProviderError(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    model_provider: Annotated[str, Field(alias="modelProvider")]
+    type: Annotated[
+        Literal["modelProviderNotConfigured"],
+        Field(title="ModelProviderNotConfiguredv2::ModelProviderErrorType"),
+    ]
+
+
+class ModelProviderPolicyConflictModelProviderError(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    model_provider: Annotated[str, Field(alias="modelProvider")]
+    required_model_provider: Annotated[str, Field(alias="requiredModelProvider")]
+    type: Annotated[
+        Literal["modelProviderPolicyConflict"],
+        Field(title="ModelProviderPolicyConflictv2::ModelProviderErrorType"),
+    ]
+
+
+class ModelProviderError(
+    RootModel[
+        ModelProviderMismatchModelProviderError
+        | ModelProviderNotConfiguredModelProviderError
+        | ModelProviderPolicyConflictModelProviderError
+    ]
+):
+    root: Annotated[
+        ModelProviderMismatchModelProviderError
+        | ModelProviderNotConfiguredModelProviderError
+        | ModelProviderPolicyConflictModelProviderError,
+        Field(
+            description="Structured JSON-RPC error data. Unknown errors must retain the client's normal fallback.",
+            title="ModelProviderError",
+        ),
+    ]
+
+
 class ModelRerouteReason(RootModel[Literal["highRiskCyberActivity"]]):
     root: Literal["highRiskCyberActivity"]
 

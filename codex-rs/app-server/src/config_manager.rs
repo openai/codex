@@ -1,3 +1,4 @@
+use codex_app_server_protocol::ModelProviderError;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_config::managed_config_bundle_loader;
 use codex_config::CloudConfigBundleLoader;
@@ -37,12 +38,6 @@ use tracing::warn;
 
 #[path = "application_network.rs"]
 pub(crate) mod application_network;
-
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Your organization's required model provider settings changed. Restart Codex to apply them; this request was not sent"
-)]
-pub(crate) struct ModelProviderRequirementsChanged;
 
 /// Shared app-server entry point for loading effective Codex configuration.
 #[derive(Clone)]
@@ -408,7 +403,12 @@ impl ConfigManager {
         if selection_changed || definition_changed {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
-                ModelProviderRequirementsChanged,
+                ModelProviderError::ModelProviderPolicyConflict {
+                    model_provider: current.model_provider_id.clone(),
+                    required_model_provider: requirements
+                        .model_provider
+                        .unwrap_or_else(|| current.model_provider_id.clone()),
+                },
             ));
         }
         Ok(())
@@ -428,6 +428,27 @@ impl ConfigManager {
         self.update_managed_config_loader(auth, &bootstrap);
         let config = self.load_latest_config(cwd).await;
         Ok(CloudStartupConfig { bootstrap, config })
+    }
+
+    /// Admits resumed threads and input only on the currently selected provider.
+    pub(crate) async fn check_thread_model_provider_for_input(
+        &self,
+        current: &Config,
+    ) -> std::io::Result<()> {
+        self.check_thread_model_provider(current).await?;
+        let configured = self
+            .load_latest_config(Some(current.cwd.to_path_buf()))
+            .await?;
+        if current.model_provider_id != configured.model_provider_id {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                ModelProviderError::ModelProviderMismatch {
+                    model_provider: current.model_provider_id.clone(),
+                    current_model_provider: configured.model_provider_id,
+                },
+            ));
+        }
+        Ok(())
     }
 
     /// Installs local policy before cloud access; failed policy loads block traffic while
@@ -514,6 +535,89 @@ impl ConfigManager {
         })
     }
 
+    /// Validates saved and requested providers before resume overrides or policy can replace them.
+    pub(crate) async fn load_for_resume(
+        &self,
+        saved_provider: Option<&str>,
+        request_overrides: Option<HashMap<String, serde_json::Value>>,
+        typesafe_overrides: ConfigOverrides,
+        cwd: Option<PathBuf>,
+    ) -> std::io::Result<Config> {
+        let requested_provider = typesafe_overrides.model_provider.clone().or_else(|| {
+            request_overrides
+                .as_ref()
+                .and_then(|values| values.get("model_provider"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+        // Resolve the selection before the saved provider is applied as a resume override.
+        let current_provider = self
+            .load_latest_config(typesafe_overrides.cwd.clone().or_else(|| cwd.clone()))
+            .await
+            .map(|config| config.model_provider_id);
+        self.load_with_validation(
+            &self.current_cli_overrides(),
+            request_overrides,
+            typesafe_overrides,
+            cwd,
+            |config, _overrides, layers| {
+                let requested_provider = requested_provider
+                    .as_deref()
+                    .or(config.model_provider.as_deref())
+                    .unwrap_or("openai");
+                // Validate the saved route even when a client sends a provider override.
+                for provider in [
+                    saved_provider.unwrap_or(requested_provider),
+                    requested_provider,
+                ] {
+                    if let Some(required) = layers.required_model_provider()
+                        && required != provider
+                    {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            ModelProviderError::ModelProviderPolicyConflict {
+                                model_provider: provider.to_owned(),
+                                required_model_provider: required.to_owned(),
+                            },
+                        ));
+                    }
+                    if !config.model_providers.contains_key(provider)
+                        && !built_in_model_providers(config.openai_base_url.clone())
+                            .contains_key(provider)
+                    {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            ModelProviderError::ModelProviderNotConfigured {
+                                model_provider: provider.to_owned(),
+                            },
+                        ));
+                    }
+                }
+                let current_provider = current_provider?;
+                for provider in [
+                    saved_provider.unwrap_or(requested_provider),
+                    requested_provider,
+                ] {
+                    if provider != current_provider {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            ModelProviderError::ModelProviderMismatch {
+                                model_provider: provider.to_owned(),
+                                current_model_provider: current_provider,
+                            },
+                        ));
+                    }
+                }
+                Ok(())
+            },
+        )
+        .await
+        .and_then(|config| {
+            config.validate_windows_mxc_requirement()?;
+            Ok(config)
+        })
+    }
+
     /// Reload sources using the task's session flags before materializing config.
     pub(crate) async fn load_permission_config_for_thread(
         &self,
@@ -561,8 +665,30 @@ impl ConfigManager {
         &self,
         cli_overrides: &[(String, TomlValue)],
         request_overrides: Option<HashMap<String, serde_json::Value>>,
+        typesafe_overrides: ConfigOverrides,
+        fallback_cwd: Option<PathBuf>,
+    ) -> std::io::Result<Config> {
+        self.load_with_validation(
+            cli_overrides,
+            request_overrides,
+            typesafe_overrides,
+            fallback_cwd,
+            |_, _, _| Ok(()),
+        )
+        .await
+    }
+
+    async fn load_with_validation(
+        &self,
+        cli_overrides: &[(String, TomlValue)],
+        request_overrides: Option<HashMap<String, serde_json::Value>>,
         mut typesafe_overrides: ConfigOverrides,
         fallback_cwd: Option<PathBuf>,
+        validate: impl FnOnce(
+            &codex_config::config_toml::ConfigToml,
+            &ConfigOverrides,
+            &ConfigLayerStack,
+        ) -> std::io::Result<()>,
     ) -> std::io::Result<Config> {
         let mcp_ema_cancellation = self.capture_mcp_ema_cancellation();
         let policy_load = self.refresh_application_network_policy().await?;
@@ -593,7 +719,7 @@ impl ConfigManager {
             .fallback_cwd(fallback_cwd)
             .cloud_config_bundle(policy_load.cloud_config.clone())
             .thread_config_loader(Arc::clone(&self.thread_config_loader))
-            .build()
+            .build_with_validation(validate)
             .await;
         let mut config = result?;
         self.check_application_policy_load(&policy_load)?;

@@ -14,9 +14,12 @@ use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::LoginAccountResponse;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerRequest;
@@ -289,6 +292,16 @@ supports_websockets = false
 
     let mut thread_ids = Vec::new();
     for provider in ["bearer_provider", "mock_provider"] {
+        let config_id = app_server
+            .send_config_value_write_request(ConfigValueWriteParams {
+                file_path: None,
+                key_path: "model_provider".into(),
+                value: json!(provider),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await?;
+        let _: ConfigWriteResponse = app_server.read_response(config_id).await?;
         let thread = app_server
             .start_thread(ThreadStartParams {
                 model_provider: Some(provider.into()),
