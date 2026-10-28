@@ -41,5 +41,17 @@ codex_rust_crate(
         "@platforms//os:macos": 1,
         "//conditions:default": 0,
     }),
+    unit_test_srcs = glob([
+        "src/**/*_test.rs",
+        "src/**/*_tests.rs",
+        "src/**/tests.rs",
+        "src/**/tests/**/*.rs",
+    ]) + [
+        "src/apps/render.rs",
+        "src/config/schema.rs",
+        "src/context/world_state/test_support.rs",
+        "src/guardian/test_host.rs",
+        "src/plugins/test_support.rs",
+    ],
     unit_test_timeout = "long",
 )

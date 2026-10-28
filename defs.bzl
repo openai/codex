@@ -187,6 +187,7 @@ def codex_rust_crate(
         crate_name,
         crate_features = [],
         crate_srcs = None,
+        unit_test_srcs = [],
         crate_edition = None,
         proc_macro = False,
         build_script_enabled = True,
@@ -232,6 +233,8 @@ def codex_rust_crate(
             optional functionality to a separate crate.
         crate_srcs: Optional explicit library srcs; [] disables the library target.
             Defaults to `src/**/*.rs` excluding binary entrypoints.
+        unit_test_srcs: Rust modules loaded only under cfg(test). Excluded from
+            library and binary sources, but available when compiling unit tests.
         crate_edition: Rust edition override, if not default.
             You probably don't want this, it's only here for a single caller.
         proc_macro: Whether this crate builds a proc-macro library.
@@ -315,6 +318,7 @@ def codex_rust_crate(
     binaries = package_data["binaries"]
 
     lib_srcs = crate_srcs if crate_srcs != None else native.glob(["src/**/*.rs"], exclude = binaries.values(), allow_empty = True)
+    lib_srcs = [src for src in lib_srcs if src not in unit_test_srcs]
 
     maybe_deps = []
 
@@ -359,6 +363,7 @@ def codex_rust_crate(
             name = unit_test_binary,
             crate = name,
             crate_features = crate_features,
+            compile_data = unit_test_srcs,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
             # Unit tests also compile to standalone Windows executables, so
             # keep their stack reserve aligned with binaries and integration
@@ -434,7 +439,7 @@ def codex_rust_crate(
             # Isolate status inputs in build-commit-env's cheap action so its
             # output, and hence this compiler input, changes only with the commit.
             rustc_env_files = ["//bazel/build-info:build-commit-env"] if binary in binaries_with_build_commit else [],
-            srcs = native.glob(["src/**/*.rs"], exclude = [main], allow_empty = True) + [main],
+            srcs = native.glob(["src/**/*.rs"], exclude = [main] + unit_test_srcs, allow_empty = True) + [main],
             testonly = binary in test_only_binaries,
             stamp = 0,
             version = crate_version,
@@ -451,6 +456,7 @@ def codex_rust_crate(
             name = binary_unit_test_binary,
             crate = ":" + binary,
             crate_features = crate_features,
+            compile_data = unit_test_srcs,
             deps = all_crate_deps(normal_dev = True),
             rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
                 "--remap-path-prefix=../codex-rs=",

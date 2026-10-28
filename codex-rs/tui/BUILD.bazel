@@ -22,4 +22,13 @@ codex_rust_crate(
     },
     # The startup symlink test applies its own Seatbelt policy, which cannot be nested.
     test_tags = ["no-sandbox"],
+    unit_test_srcs = glob([
+        "src/**/*_test_support.rs",
+        "src/**/*_tests.rs",
+        "src/**/*_tests/**/*.rs",
+        "src/**/test_fixtures.rs",
+        "src/**/test_support.rs",
+        "src/**/tests.rs",
+        "src/**/tests/**/*.rs",
+    ]) + ["src/test_backend.rs"],
 )
