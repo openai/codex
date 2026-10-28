@@ -77,10 +77,12 @@ use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
+use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListToolsResult;
 use rmcp::model::NumberOrString;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ProtocolVersion;
+use rmcp::model::ResourceTemplate;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerConfig;
 use rmcp::model::Tool;
@@ -299,7 +301,22 @@ struct RefreshTestTransportFactory {
 
 impl ServerHandler for RefreshTestTransportFactory {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, McpError> {
+        Ok(ListResourceTemplatesResult::with_all_items(vec![
+            ResourceTemplate::new("test://{id}", "test-template"),
+        ]))
     }
 
     async fn list_tools(
@@ -2229,6 +2246,68 @@ async fn hosted_apps_protocol_mode_is_independent_of_generic_mode() -> anyhow::R
         );
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_template_listings_skip_only_hosted_apps() -> anyhow::Result<()> {
+    let name = CODEX_APPS_MCP_SERVER_NAME;
+    let codex_home = tempdir()?;
+    let cache = create_codex_apps_tools_cache_context(
+        codex_home.path().into(),
+        /*account_id*/ None,
+        /*chatgpt_user_id*/ None,
+    );
+    let mut manager = create_test_manager_with_ready_apps_client(
+        cache, "test", /*list_started*/ None, /*release_list*/ None,
+    )
+    .await?;
+    let server = reusable_server_config("http://localhost/mcp");
+    let template = ResourceTemplate::new("test://{id}", "test-template");
+    for (registration, expected) in [
+        (
+            crate::McpServerRegistration::from_hosted_apps(
+                "host",
+                /*contribution_order*/ 0,
+                server.clone(),
+            ),
+            Vec::new(),
+        ),
+        (
+            crate::McpServerRegistration::from_extension(
+                name.to_string(),
+                "extension",
+                /*contribution_order*/ 0,
+                server,
+            ),
+            vec![template],
+        ),
+    ] {
+        let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().into());
+        let mut catalog = crate::ResolvedMcpCatalog::builder();
+        catalog.register(registration);
+        config.mcp_server_catalog = catalog.build();
+        let config = Arc::new(config);
+        Arc::get_mut(&mut manager).expect("unbound manager").config = Some(Arc::clone(&config));
+
+        let binding = manager
+            .capture_binding_with_metadata(
+                config,
+                /*plugins_available*/ false,
+                &[],
+                &HashSet::new(),
+            )
+            .await;
+        assert_eq!(
+            binding
+                .list_resource_templates(name, /*params*/ None)
+                .await?
+                .resource_templates,
+            expected
+        );
+        let all = binding.list_all_resource_templates(|_| true).await;
+        assert_eq!(all.get(name), (!expected.is_empty()).then_some(&expected));
+    }
     Ok(())
 }
 

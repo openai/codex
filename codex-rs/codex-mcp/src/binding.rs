@@ -131,6 +131,9 @@ impl McpBinding {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
+        if self.connections.skips_resource_template_listing(server) {
+            return Ok(ListResourceTemplatesResult::with_all_items(Vec::new()));
+        }
         if self.clients.client(server).is_some() {
             self.clients.list_resource_templates(server, params).await
         } else {
@@ -145,7 +148,9 @@ impl McpBinding {
         include_server: impl Fn(&str) -> bool,
     ) -> HashMap<String, Vec<ResourceTemplate>> {
         self.clients
-            .list_all_resource_templates(include_server)
+            .list_all_resource_templates(|server| {
+                include_server(server) && !self.connections.skips_resource_template_listing(server)
+            })
             .await
     }
 

@@ -86,11 +86,9 @@ impl McpConnectionSet {
         include_server: impl Fn(&str) -> bool,
     ) -> HashMap<String, Vec<ResourceTemplate>> {
         let mut join_set = JoinSet::new();
-        for (server_name, view) in self
-            .servers
-            .iter()
-            .filter(|(server_name, _)| include_server(server_name))
-        {
+        for (server_name, view) in self.servers.iter().filter(|(server_name, _)| {
+            include_server(server_name) && !self.skips_resource_template_listing(server_name)
+        }) {
             let server_name = server_name.clone();
             let Ok(client) = view.connection.client().await else {
                 continue;
@@ -150,6 +148,20 @@ impl McpConnectionSet {
             .list_resource_templates(params, timeout)
             .await
             .with_context(|| format!("resources/templates/list failed for `{server}`"))
+    }
+
+    // Hosted Apps always returns an empty list. Resume discovery if it gains templates.
+    pub(crate) fn skips_resource_template_listing(&self, server: &str) -> bool {
+        self.contains_server(server)
+            && self
+                .config
+                .as_ref()
+                .and_then(|config| config.mcp_server_catalog.server(server))
+                .is_some_and(|registration| {
+                    registration
+                        .source()
+                        .is_host_owned_apps(server, registration.config())
+                })
     }
 
     pub async fn read_resource(

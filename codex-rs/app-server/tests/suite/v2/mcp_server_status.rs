@@ -1,3 +1,5 @@
+use super::mcp_resource::ResourceTestEnvironment;
+use super::mcp_resource::start_resource_test_app_server;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -36,6 +38,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_rmcp_client::McpOAuthCallbackMode;
 use codex_rmcp_client::resolve_mcp_oauth_callback_url;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::skip_if_remote;
 use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
@@ -63,9 +66,11 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use url::Url;
+use wiremock::Match;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_partial_json;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -166,6 +171,58 @@ async fn mcp_server_status_list_reuses_thread_connection() -> Result<()> {
         .filter(|method| matches!(method.as_str(), "initialize" | "tools/list"))
         .collect();
     assert_eq!(discovery_methods, ["initialize", "tools/list"]);
+    Ok(())
+}
+
+#[test_case(false; "standalone")]
+#[test_case(true; "thread runtime")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_mcp_server_status_skips_codex_apps_resource_templates(
+    thread_runtime: bool,
+) -> Result<()> {
+    let server = MockServer::start().await;
+    let apps = AppsTestServer::mount(&server).await?;
+    let (_home, mut app_server) = start_resource_test_app_server(
+        &apps.chatgpt_base_url,
+        &server.uri(),
+        ResourceTestEnvironment::Auto,
+    )
+    .await?;
+    let thread_id = if thread_runtime {
+        Some(
+            app_server
+                .start_thread(ThreadStartParams::default())
+                .await?
+                .thread
+                .id,
+        )
+    } else {
+        None
+    };
+    let response: ListMcpServerStatusResponse = app_server
+        .request(|request_id| ClientRequest::McpServerStatusList {
+            request_id,
+            params: ListMcpServerStatusParams {
+                cursor: None,
+                limit: None,
+                detail: Some(McpServerStatusDetail::Full),
+                thread_id,
+                server_name: Some("codex_apps".to_string()),
+            },
+        })
+        .await?;
+    let [status] = response.data.as_slice() else {
+        anyhow::bail!("expected the selected Apps server in the full inventory");
+    };
+    assert_eq!(status.name, "codex_apps");
+    assert!(status.resource_templates.is_empty());
+    let requests = server.received_requests().await.expect("recorded requests");
+    let was_requested = |method: &str| {
+        let matcher = body_partial_json(json!({ "method": method }));
+        requests.iter().any(|request| matcher.matches(request))
+    };
+    assert!(was_requested("resources/list"));
+    assert!(!was_requested("resources/templates/list"));
     Ok(())
 }
 
