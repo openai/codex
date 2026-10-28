@@ -81,7 +81,7 @@ runs:
       run: mkdir -p "$RUNNER_TEMP/dotslash-curl" && echo retry-all-errors > "$RUNNER_TEMP/dotslash-curl/.curlrc"
 
     - name: Install DotSlash
-      uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+      uses: meta/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
       env:
         CURL_HOME: ${{ runner.temp }}/dotslash-curl
 
