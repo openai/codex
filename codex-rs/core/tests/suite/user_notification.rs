@@ -2,6 +2,8 @@
 
 use codex_core::TurnInputRequest;
 
+use codex_protocol::models::ImageReference;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
@@ -22,14 +24,14 @@ use responses::start_mock_server;
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<()> {
+async fn notify_receives_user_text_while_the_model_receives_attachments() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 
     let sse1 = sse(vec![ev_assistant_message("m1", "Done"), ev_completed("r1")]);
 
-    responses::mount_sse_once(&server, sse1).await;
+    let response = responses::mount_sse_once(&server, sse1).await;
 
     let notify_dir = TempDir::new()?;
     // write a script to the notify that touches a file next to it
@@ -48,18 +50,36 @@ mv "${tmp_path}" "${payload_path}""#,
     let notify_script_str = notify_script.to_str().unwrap().to_string();
 
     let TestCodex { codex, .. } = test_codex()
+        .with_model_info_override("gpt-5.5", |info| {
+            info.input_modalities.push(InputModality::Audio);
+        })
         .with_config(move |cfg| cfg.notify = Some(vec![notify_script_str]))
         .build(&server)
         .await?;
 
-    // 1) Normal user input – should hit server once.
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let audio_url = "data:audio/wav;base64,AAAA";
     codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "hello world".into(),
-            text_elements: Vec::new(),
-        }]))
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![
+            UserInput::Text {
+                text: "hello world".into(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Image {
+                image: ImageReference::Inline {
+                    image_url: image_url.into(),
+                },
+                detail: None,
+            },
+            UserInput::Audio {
+                audio_url: audio_url.into(),
+            },
+        ]))
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let request = response.single_request();
+    assert_eq!(request.message_input_image_urls("user"), [image_url]);
+    assert_eq!(request.message_input_audio_urls("user"), [audio_url]);
 
     // We fork the notify script, so we need to wait for it to write to the file.
     fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;

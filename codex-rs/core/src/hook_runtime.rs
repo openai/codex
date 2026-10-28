@@ -31,6 +31,7 @@ use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::FunctionCallOutputItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::AskForApproval;
@@ -61,7 +62,8 @@ use tracing::instrument;
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::event_mapping::parse_turn_item;
+use crate::event_mapping::is_contextual_user_message_content;
+use crate::event_mapping::user_input_parts;
 use crate::guardian::GuardianReviewContext;
 use crate::hook_environment_executor::with_environment_hooks;
 use crate::hook_environment_executor::with_tool_environment_hooks;
@@ -616,21 +618,38 @@ pub(crate) async fn run_post_compact_hooks(
     }
 }
 
+pub(crate) fn legacy_notify_input_messages(input: &[ResponseItem]) -> Vec<String> {
+    input
+        .iter()
+        .filter_map(|item| {
+            let ResponseItem::Message { role, content, .. } = item else {
+                return None;
+            };
+            if role != "user" || is_contextual_user_message_content(content) {
+                return None;
+            }
+            Some(
+                user_input_parts(content)
+                    .filter_map(|(_, part)| match part {
+                        ContentItem::InputText { text } => Some(text.as_str()),
+                        ContentItem::InputImage { .. }
+                        | ContentItem::InputAudio { .. }
+                        | ContentItem::OutputText { .. } => None,
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_legacy_after_agent_hook(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    input: &[ResponseItem],
+    input_messages: Vec<String>,
     last_assistant_message: Option<String>,
 ) -> bool {
     let mut abort_message = None;
-    let input_messages = input
-        .iter()
-        .filter_map(|item| match parse_turn_item(item) {
-            Some(TurnItem::UserMessage(user_message)) => Some(user_message.message()),
-            _ => None,
-        })
-        .collect();
     let hooks = sess.hooks();
     for hook_outcome in hooks
         .dispatch(codex_hooks::HookPayload {
