@@ -436,7 +436,11 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
     let catalog = ModelsResponse {
         models: vec![model],
     };
-    let models_manager = StaticModelsManager::new(/*auth_manager*/ None, catalog.clone());
+    let models_manager = StaticModelsManager::new(
+        /*auth_manager*/ None,
+        catalog.clone(),
+        codex_models_manager::ModelOrigin::ExplicitConfig,
+    );
 
     let mut config = test_config().await;
     config.model = Some("model-a".to_string());

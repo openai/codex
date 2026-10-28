@@ -370,10 +370,19 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         &self,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
+        let origin = if config_model_catalog.is_some() {
+            codex_models_manager::ModelOrigin::ExplicitConfig
+        } else {
+            codex_models_manager::ModelOrigin::Bundled
+        };
         let model_catalog = config_model_catalog
             .or_else(|| codex_models_manager::bundled_models_response().ok())
             .unwrap_or_default();
-        Arc::new(StaticModelsManager::new(self.auth_manager(), model_catalog))
+        Arc::new(StaticModelsManager::new(
+            self.auth_manager(),
+            model_catalog,
+            origin,
+        ))
     }
 
     /// Creates a model manager that can use a caller-provided cache for remote catalogs.
@@ -546,6 +555,7 @@ impl ConfiguredModelProvider {
             return Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
+                codex_models_manager::ModelOrigin::ExplicitConfig,
             ));
         }
         let endpoint = Arc::new(

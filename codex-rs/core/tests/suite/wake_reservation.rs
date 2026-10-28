@@ -24,7 +24,6 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -50,12 +49,12 @@ struct GatedModelsManager {
 }
 
 impl ModelsManager for GatedModelsManager {
-    fn raw_model_catalog(
+    fn model_catalog_with_origins(
         &self,
         strategy: RefreshStrategy,
         factory: HttpClientFactory,
-    ) -> ModelsManagerFuture<'_, ModelsResponse> {
-        self.inner.raw_model_catalog(strategy, factory)
+    ) -> ModelsManagerFuture<'_, Vec<codex_models_manager::CatalogModel>> {
+        self.inner.model_catalog_with_origins(strategy, factory)
     }
 
     fn get_remote_models(&self) -> ModelsManagerFuture<'_, Vec<ModelInfo>> {
@@ -145,7 +144,11 @@ async fn interrupt_during_wake_context_construction_does_not_start_turn() -> any
     let server = responses::start_mock_server().await;
     let requests = responses::mount_sse_once(&server, responses::sse_completed("initial")).await;
     let models = Arc::new(GatedModelsManager {
-        inner: StaticModelsManager::new(/*auth_manager*/ None, bundled_models_response()?),
+        inner: StaticModelsManager::new(
+            /*auth_manager*/ None,
+            bundled_models_response()?,
+            codex_models_manager::ModelOrigin::ExplicitConfig,
+        ),
         gate_next_lookup: AtomicBool::new(/*v*/ false),
         context_build: Gate::default(),
     });

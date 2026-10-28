@@ -132,8 +132,17 @@ async fn guardian_review_turns_and_tools_reach_analytics() -> Result<()> {
     let server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
     mount_analytics_capture(&server, codex_home.path()).await?;
+    let catalog_path = codex_home.path().join("guardian-models.json");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec(&bundled_models_response()?)?,
+    )?;
     MockResponsesConfig::new(&server.uri())
-        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
+        .with_root_config(&format!(
+            "chatgpt_base_url = \"{}\"\nmodel_catalog_json = {}",
+            server.uri(),
+            serde_json::to_string(&catalog_path)?
+        ))
         .with_provider_config("supports_websockets = false")
         .enable_feature(Feature::GuardianApproval)
         .disable_feature(Feature::Apps)

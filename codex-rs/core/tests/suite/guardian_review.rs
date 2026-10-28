@@ -26,6 +26,7 @@ use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_login::AuthHeaders;
 use codex_login::CodexAuth;
+use codex_models_manager::ModelOrigin;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
@@ -96,6 +97,7 @@ use wiremock::Mock;
 use wiremock::ResponseTemplate;
 use wiremock::http::Method;
 use wiremock::matchers::method;
+use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 use super::guardian_mcp_elicitation::guardian_blocking_samples;
@@ -208,6 +210,8 @@ async fn guardian_session_inherits_parent_http_fallback(
         config.approvals_reviewer = ApprovalsReviewer::User;
         config.guardian_policy_config = Some(configured_policy.to_string());
         config.guardian_policy_template = Some(configured_template.to_string());
+        config.model_catalog =
+            Some(codex_models_manager::bundled_models_response().expect("valid catalog"));
     });
     let test = builder.build_with_auto_env(&server).await?;
 
@@ -310,6 +314,83 @@ async fn guardian_session_inherits_parent_http_fallback(
     );
     test.codex.shutdown_and_wait().await?;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(ModelOrigin::Bundled, "gateway-main"; "bundled_reviewer_falls_back")]
+#[test_case(ModelOrigin::Provider, "codex-auto-review"; "advertised_reviewer")]
+#[test_case(ModelOrigin::ExplicitConfig, "codex-auto-review"; "configured_reviewer")]
+async fn guardian_custom_gateway_selects_reviewer_by_catalog_origin(
+    origin: ModelOrigin,
+    expected_model: &str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mut reviewer_model = codex_models_manager::bundled_models_response()?
+        .models
+        .into_iter()
+        .find(|model| model.slug == "codex-auto-review")
+        .expect("reviewer fixture");
+    reviewer_model.use_responses_lite = false;
+    let catalog = ModelsResponse {
+        models: vec![
+            codex_models_manager::model_info::model_info_from_slug("gateway-main"),
+            reviewer_model,
+        ],
+    };
+    Mock::given(method("GET"))
+        .and(path("/catalog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&catalog))
+        .mount(&server)
+        .await;
+    let catalog_url = format!("{}/catalog", server.uri());
+    let responses = mount_sse_sequence(&server, vec![
+        sse(vec![ev_response_created("parent"), ev_function_call(
+            "action", "exec_command",
+            r#"{"cmd":"true","sandbox_permissions":"require_escalated","justification":"test"}"#,
+        ), ev_completed("parent")]),
+        sse(vec![ev_response_created("review"), ev_assistant_message(
+            "decision", r#"{"outcome":"deny"}"#,
+        ), ev_completed("review")]),
+        sse(vec![ev_completed("done")]),
+    ]).await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model = Some("gateway-main".to_string());
+            config.model_catalog = match origin {
+                ModelOrigin::ExplicitConfig => Some(catalog),
+                ModelOrigin::Bundled | ModelOrigin::Provider => None,
+            };
+            config.model_provider.model_catalog_url = match origin {
+                ModelOrigin::Provider => Some(catalog_url.into()),
+                ModelOrigin::Bundled | ModelOrigin::ExplicitConfig => None,
+            };
+            config.model_provider.name = "Gateway".to_string();
+            config.model_provider.supports_websockets = false;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "run a command".to_string(),
+            text_elements: vec![],
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let requests = responses.requests();
+    let reviewer = requests
+        .iter()
+        .find(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
+        .expect("Guardian must review the action");
+    assert_eq!(reviewer.body_json()["model"], expected_model);
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 
@@ -421,6 +502,8 @@ for (const phase of ["before", "after"]) {
             config.model_provider.supports_websockets = false;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::User;
+            config.model_catalog =
+                Some(codex_models_manager::bundled_models_response().expect("valid catalog"));
         })
         .build_with_auto_env(&server)
         .await?;

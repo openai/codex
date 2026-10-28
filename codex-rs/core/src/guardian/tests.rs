@@ -1742,6 +1742,7 @@ fn build_guardian_transcript_preserves_recent_tool_context_when_user_history_is_
 
 enum GuardianTestCatalog {
     Bundled,
+    Explicit,
     ParentOnly,
 }
 
@@ -1788,6 +1789,7 @@ async fn guardian_reuse_respects_effective_policy_and_personality_opt_out(
         .models_manager = Arc::new(StaticModelsManager::new(
         /*auth_manager*/ None,
         ModelsResponse { models: vec![] },
+        codex_models_manager::ModelOrigin::ExplicitConfig,
     ));
     seed_guardian_parent_history(&session, &turn).await;
 
@@ -1874,6 +1876,18 @@ async fn guardian_request_model_for_auto_review(
     let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
     match catalog {
         GuardianTestCatalog::Bundled => {}
+        GuardianTestCatalog::Explicit => {
+            let auth_manager = Arc::clone(&session.services.auth_manager);
+            Arc::get_mut(&mut session)
+                .expect("unique session")
+                .services
+                .models_manager = Arc::new(StaticModelsManager::new(
+                Some(auth_manager),
+                codex_models_manager::bundled_models_response().expect("valid catalog"),
+                codex_models_manager::ModelOrigin::ExplicitConfig,
+            ));
+            crate::guardian::test_host::install(&session, &turn.config);
+        }
         GuardianTestCatalog::ParentOnly => {
             let parent_model = turn.model_info().as_ref().clone();
             let auth_manager = Arc::clone(&session.services.auth_manager);
@@ -1882,6 +1896,7 @@ async fn guardian_request_model_for_auto_review(
                 ModelsResponse {
                     models: vec![parent_model],
                 },
+                codex_models_manager::ModelOrigin::ExplicitConfig,
             );
             Arc::get_mut(&mut session)
                 .expect("session should be unique")
@@ -1993,7 +2008,7 @@ async fn guardian_review_uses_preferred_review_model_without_model_catalog_overr
     let (request_model, parent_model, preferred_model, analytics_result) =
         guardian_request_model_for_auto_review(
             /*auto_review_model_override*/ None,
-            GuardianTestCatalog::Bundled,
+            GuardianTestCatalog::Explicit,
         )
         .await?;
 
@@ -2387,6 +2402,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         ModelsResponse {
             models: vec![reviewer_model],
         },
+        codex_models_manager::ModelOrigin::ExplicitConfig,
     ));
     let turn_mut = Arc::get_mut(&mut turn).expect("turn should be unique");
     update_turn_settings_for_test(turn_mut, |settings| {
@@ -3832,7 +3848,17 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
 #[tokio::test]
 async fn guardian_review_session_config_clears_context_overrides_for_distinct_effective_model() {
     let server = start_mock_server().await;
-    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let auth_manager = Arc::clone(&session.services.auth_manager);
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .services
+        .models_manager = Arc::new(StaticModelsManager::new(
+        Some(auth_manager),
+        codex_models_manager::bundled_models_response().expect("valid catalog"),
+        codex_models_manager::ModelOrigin::ExplicitConfig,
+    ));
+    crate::guardian::test_host::install(&session, &turn.config);
     let mut config = (*turn.config).clone();
     config.model = Some("codex-auto-review".to_string());
     config.model_context_window = Some(900_000);
@@ -3870,6 +3896,7 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
         ModelsResponse {
             models: vec![parent_model],
         },
+        codex_models_manager::ModelOrigin::ExplicitConfig,
     ));
     let mut config = (*turn.config).clone();
     config.model = Some("stale-parent-model".to_string());

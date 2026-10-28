@@ -78,14 +78,23 @@ pub(crate) async fn resolve_review_model(
     Arc<codex_protocol::openai_models::ModelInfo>,
 ) {
     let turn = context.turn();
-    let available_models = session
-        .services
-        .models_manager
-        .list_models(
+    let models_manager = &session.services.models_manager;
+    let catalog = models_manager
+        .model_catalog_with_origins(
             codex_models_manager::manager::RefreshStrategy::Offline,
             turn.config.http_client_factory(),
         )
         .await;
+    let available_models = models_manager.build_available_models(
+        catalog
+            .into_iter()
+            .filter(|entry| {
+                context.model_info.auto_review_model_override.is_some()
+                    || entry.origin != codex_models_manager::ModelOrigin::Bundled
+            })
+            .map(|entry| entry.model)
+            .collect(),
+    );
     let default_review_model_id = turn.provider.approval_review_preferred_model();
     let review_model = codex_guardian_reviewer::select_review_model(
         &context.model_info,

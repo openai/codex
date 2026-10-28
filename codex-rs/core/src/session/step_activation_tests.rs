@@ -348,6 +348,7 @@ impl GatedModelsManager {
                 inner: StaticModelsManager::new(
                     /*auth_manager*/ None,
                     ModelsResponse { models },
+                    codex_models_manager::ModelOrigin::ExplicitConfig,
                 ),
                 first_b_lookup: StdMutex::new(Some(Arc::clone(&lookup))),
             }),
@@ -357,12 +358,12 @@ impl GatedModelsManager {
 }
 
 impl ModelsManager for GatedModelsManager {
-    fn raw_model_catalog(
+    fn model_catalog_with_origins(
         &self,
         strategy: RefreshStrategy,
         factory: HttpClientFactory,
-    ) -> ModelsManagerFuture<'_, ModelsResponse> {
-        self.inner.raw_model_catalog(strategy, factory)
+    ) -> ModelsManagerFuture<'_, Vec<codex_models_manager::CatalogModel>> {
+        self.inner.model_catalog_with_origins(strategy, factory)
     }
 
     fn get_remote_models(&self) -> ModelsManagerFuture<'_, Vec<ModelInfo>> {
