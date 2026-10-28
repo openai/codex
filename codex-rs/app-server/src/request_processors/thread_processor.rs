@@ -701,7 +701,8 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         params: ThreadArchiveParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        match self.thread_archive_inner(params).await {
+        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        match self.thread_archive_response(params).await {
             Ok((response, archived_thread_ids)) => {
                 self.outgoing
                     .send_response(request_id.clone(), response)
@@ -833,14 +834,22 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         params: ThreadUnarchiveParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        match self.thread_unarchive_inner(params).await {
-            Ok((response, notification)) => {
+        // Queue every restoration notification before another list mutation can run.
+        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        match self.thread_unarchive_response(params).await {
+            Ok((response, unarchived_thread_ids)) => {
                 self.outgoing
                     .send_response(request_id.clone(), response)
                     .await;
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadUnarchived(notification))
-                    .await;
+                for thread_id in unarchived_thread_ids {
+                    self.outgoing
+                        .send_server_notification(ServerNotification::ThreadUnarchived(
+                            ThreadUnarchivedNotification {
+                                thread_id: thread_id.to_string(),
+                            },
+                        ))
+                        .await;
+                }
                 Ok(None)
             }
             Err(error) => Err(error),
@@ -1778,14 +1787,6 @@ impl ThreadRequestProcessor {
         }
     }
 
-    async fn thread_archive_inner(
-        &self,
-        params: ThreadArchiveParams,
-    ) -> Result<(ThreadArchiveResponse, Vec<String>), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        self.thread_archive_response(params).await
-    }
-
     async fn thread_archive_response(
         &self,
         params: ThreadArchiveParams,
@@ -2173,26 +2174,27 @@ impl ThreadRequestProcessor {
         }
     }
 
-    async fn thread_unarchive_inner(
-        &self,
-        params: ThreadUnarchiveParams,
-    ) -> Result<(ThreadUnarchiveResponse, ThreadUnarchivedNotification), JSONRPCErrorError> {
-        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        let (response, thread_id) = self.thread_unarchive_response(params).await?;
-        Ok((response, ThreadUnarchivedNotification { thread_id }))
-    }
-
     async fn thread_unarchive_response(
         &self,
         params: ThreadUnarchiveParams,
-    ) -> Result<(ThreadUnarchiveResponse, String), JSONRPCErrorError> {
+    ) -> Result<(ThreadUnarchiveResponse, Vec<ThreadId>), JSONRPCErrorError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
 
+        let subtree_thread_ids = self
+            .state_db_spawn_subtree_thread_ids(thread_id)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("failed to list spawned descendants while unarchiving {thread_id}: {err:?}");
+                vec![thread_id]
+            });
         let fallback_provider = self.config.model_provider_id.clone();
-        let stored_thread = self
+        let (stored_thread, restored_thread_ids) = self
             .thread_store
-            .unarchive_thread(StoreArchiveThreadParams { thread_id })
+            .unarchive_threads(
+                StoreArchiveThreadParams { thread_id },
+                subtree_thread_ids.into_iter().skip(1).collect(),
+            )
             .await
             .map_err(|err| thread_store_mutation_error("unarchive", err))?;
         let (mut thread, _) =
@@ -2209,8 +2211,7 @@ impl ThreadRequestProcessor {
             /*has_in_progress_turn*/ false,
         );
         self.attach_thread_name(thread_id, &mut thread).await;
-        let thread_id = thread.id.clone();
-        Ok((ThreadUnarchiveResponse { thread }, thread_id))
+        Ok((ThreadUnarchiveResponse { thread }, restored_thread_ids))
     }
 
     async fn thread_revert_response(

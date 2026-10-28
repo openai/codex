@@ -24,6 +24,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
+use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -174,31 +175,10 @@ async fn thread_archive_shuts_down_resumed_archived_descendant() -> Result<()> {
         .request(|request_id| ClientRequest::ThreadArchive {
             request_id,
             params: ThreadArchiveParams {
-                thread_id: parent_id.clone(),
+                thread_id: child_id.clone(),
             },
         })
         .await?;
-    for _ in 0..2 {
-        let _: ThreadArchivedNotification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_notification("thread/archived"),
-        )
-        .await??;
-    }
-
-    let _: ThreadUnarchiveResponse = mcp
-        .request(|request_id| ClientRequest::ThreadUnarchive {
-            request_id,
-            params: ThreadUnarchiveParams {
-                thread_id: parent_id.clone(),
-            },
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("thread/unarchived"),
-    )
-    .await??;
     let _: ThreadResumeResponse = mcp
         .request(|request_id| ClientRequest::ThreadResume {
             request_id,
@@ -275,7 +255,7 @@ async fn thread_archive_shuts_down_resumed_archived_descendant() -> Result<()> {
         .request(|request_id| ClientRequest::ThreadArchive {
             request_id,
             params: ThreadArchiveParams {
-                thread_id: parent_id,
+                thread_id: parent_id.clone(),
             },
         })
         .await?;
@@ -286,6 +266,14 @@ async fn thread_archive_shuts_down_resumed_archived_descendant() -> Result<()> {
         })
         .await?;
     assert_eq!(data, Vec::<String>::new());
+
+    unarchive(&mut mcp, &parent_id).await?;
+    assert!(
+        find_thread_path_by_id_str(codex_home.path(), &child_id, /*state_db_ctx*/ None)
+            .await?
+            .is_some(),
+        "restoring the parent should also restore the independently archived child"
+    );
 
     Ok(())
 }
@@ -425,8 +413,10 @@ async fn thread_archive_without_turns(history_mode: ThreadHistoryMode) -> Result
     Ok(())
 }
 
+#[test_case::test_case(false; "restore the whole subtree")]
+#[test_case::test_case(true; "continue past a child restore failure")]
 #[tokio::test]
-async fn thread_archive_archives_spawned_descendants() -> Result<()> {
+async fn thread_archive_and_unarchive_spawned_descendants(fail_child_restore: bool) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
@@ -459,6 +449,10 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
     let parent_thread_id = ThreadId::from_string(&parent_id)?;
     let child_thread_id = ThreadId::from_string(&child_id)?;
     let grandchild_thread_id = ThreadId::from_string(&grandchild_id)?;
+    let child_rollout_path =
+        find_thread_path_by_id_str(codex_home.path(), &child_id, /*state_db_ctx*/ None)
+            .await?
+            .expect("child rollout path");
     let state_db = StateRuntime::init(
         codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
         "mock_provider".into(),
@@ -497,16 +491,14 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
         })
         .await?;
 
-    let mut archived_ids = Vec::new();
-    for _ in 0..3 {
-        let archived_notification: ThreadArchivedNotification = timeout(
+    for thread_id in [&parent_id, &grandchild_id, &child_id] {
+        let notification: ThreadArchivedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_notification("thread/archived"),
         )
         .await??;
-        archived_ids.push(archived_notification.thread_id);
+        assert_eq!(&notification.thread_id, thread_id);
     }
-    assert_eq!(archived_ids, vec![parent_id, grandchild_id, child_id]);
 
     for thread_id in [parent_thread_id, child_thread_id, grandchild_thread_id] {
         assert!(
@@ -530,6 +522,34 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
             "expected archived rollout for {thread_id} to exist"
         );
     }
+
+    if fail_child_restore {
+        std::fs::create_dir_all(&child_rollout_path)?;
+    }
+    unarchive(&mut mcp, &parent_id).await?;
+    let expected = if fail_child_restore {
+        vec![&parent_id, &grandchild_id]
+    } else {
+        vec![&parent_id, &child_id, &grandchild_id]
+    };
+    for thread_id in expected {
+        let notification: ThreadUnarchivedNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_notification("thread/unarchived"),
+        )
+        .await??;
+        assert_eq!(&notification.thread_id, thread_id);
+    }
+    assert_eq!(
+        find_archived_thread_path_by_id_str(
+            codex_home.path(),
+            &child_id,
+            /*state_db_ctx*/ None
+        )
+        .await?
+        .is_some(),
+        fail_child_restore
+    );
 
     Ok(())
 }
@@ -681,17 +701,10 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
     )
     .await??;
 
-    let _: ThreadUnarchiveResponse = mcp
-        .request(|request_id| ClientRequest::ThreadUnarchive {
-            request_id,
-            params: ThreadUnarchiveParams {
-                thread_id: parent_id.clone(),
-            },
-        })
-        .await?;
+    unarchive(&mut mcp, &parent_id).await?;
     wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
         event["event_type"] == "codex_thread_archive_event"
-            && event["event_params"]["thread_id"] == parent_id
+            && event["event_params"]["thread_id"] == grandchild_id
             && event["event_params"]["action"] == "unarchived"
     })
     .await?;
@@ -733,6 +746,7 @@ async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
         (parent_id.as_str(), "archived"),
         (grandchild_id.as_str(), "archived"),
         (parent_id.as_str(), "unarchived"),
+        (grandchild_id.as_str(), "unarchived"),
     ];
     assert_eq!(archive_events.len(), expected.len());
     for (event, (thread_id, action)) in archive_events.iter().zip(expected) {
@@ -826,6 +840,16 @@ async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<
         .is_some(),
         "parent should be moved into archived sessions"
     );
+
+    // Break descendant discovery without changing the stored parent.
+    let pool = state_db
+        .sqlite()
+        .open_read_write_pool(&state_db.sqlite().state_db_path())
+        .await?;
+    sqlx::query("DROP TABLE thread_spawn_edges")
+        .execute(&pool)
+        .await?;
+    unarchive(&mut mcp, &parent_id).await?;
 
     Ok(())
 }
@@ -953,5 +977,18 @@ fn assert_paths_match_on_disk(actual: &Path, expected: &Path) -> std::io::Result
     let actual = actual.canonicalize()?;
     let expected = expected.canonicalize()?;
     assert_eq!(actual, expected);
+    Ok(())
+}
+
+async fn unarchive(mcp: &mut TestAppServer, thread_id: &str) -> Result<()> {
+    let response: ThreadUnarchiveResponse = mcp
+        .request(|request_id| ClientRequest::ThreadUnarchive {
+            request_id,
+            params: ThreadUnarchiveParams {
+                thread_id: thread_id.to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(response.thread.id, thread_id);
     Ok(())
 }
