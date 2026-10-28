@@ -1383,7 +1383,9 @@ See the Codex keymap documentation for supported actions and examples."
                             && wait_for_drain
                         {
                             tokio::time::sleep_until(deadline).await;
-                            color_eyre::eyre::bail!("Server connection could not be restored");
+                            color_eyre::eyre::bail!(
+                                "Automatic reconnect timed out waiting for the server to finish shutting down."
+                            );
                         }
                         attempt.await
                     }));

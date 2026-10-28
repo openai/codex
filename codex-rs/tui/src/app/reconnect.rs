@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::app_server_session::ResumeModelSettings;
+use crate::app_server_session::is_server_shutting_down_error;
 use crate::dynamic_tools_mcp::ThreadToolTransport;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -62,16 +63,21 @@ pub(super) async fn reconnect(
             tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 120)
         }
     };
+    // Track only the stage. Transport errors can contain endpoint credentials.
+    let mut stage = "connecting to the server";
     for delay in [0, 1, 2, 4].into_iter().chain(std::iter::repeat(/*elt*/ 8)) {
         let attempt = async {
             tokio::time::sleep(Duration::from_secs(delay)).await;
+            stage = "connecting to the server";
             let client = crate::app_server_connection::connect(&target).await?;
             let mut session = AppServerSession::new(backend_id, client, mode)
                 .with_local_codex_home(&config.codex_home)
                 .with_remote_cwd_override(remote_cwd.clone())
                 .with_thread_tool_transport(task_tools.clone());
+            stage = "loading session settings";
             let bootstrap = session.bootstrap(&config).await?;
             let thread = if let Some(thread_id) = thread_id {
+                stage = "resuming the conversation";
                 match session
                     .resume_thread(
                         &local_settings,
@@ -90,14 +96,14 @@ pub(super) async fn reconnect(
                     {
                         return Err(error);
                     }
-                    // Unloading threads use the same code as unavailable conversations, but
-                    // ordinary resume can reattach once the unload finishes.
+                    // Draining servers and unloading threads both reject resume temporarily.
                     Err(error)
                         if matches!(
                             error.downcast_ref::<TypedRequestError>(),
                             Some(TypedRequestError::Server { method, source })
                                 if method == "thread/resume" && source.code == -32600
-                                    && source.message.starts_with(&format!("thread {thread_id} is closing;"))
+                                    && (is_server_shutting_down_error(source)
+                                        || source.message.starts_with(&format!("thread {thread_id} is closing;")))
                         ) =>
                     {
                         return Err(error);
@@ -127,9 +133,9 @@ pub(super) async fn reconnect(
             Ok(Err(_)) => {}
             Err(_) => break,
         }
-        // Transport errors can contain endpoint credentials. Do not render or log them.
     }
-    color_eyre::eyre::bail!("Server connection could not be restored")
+    tracing::warn!(stage, "automatic reconnect timed out");
+    color_eyre::eyre::bail!("Automatic reconnect timed out while {stage}.")
 }
 
 impl App {

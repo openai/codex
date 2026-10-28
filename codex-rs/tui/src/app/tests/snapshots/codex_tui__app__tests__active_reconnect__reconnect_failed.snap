@@ -1,7 +1,8 @@
 ---
 source: tui/src/app/tests/active_reconnect_tests.rs
-expression: "render_bottom_popup(&app.chat_widget, 80)"
+expression: "format!(\"{error}\\n{}\", render_bottom_popup(&app.chat_widget, 80))"
 ---
+Automatic reconnect timed out while connecting to the server.
 • Reconnect failed — check the endpoint, then relaunch (0s)
 
 

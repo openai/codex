@@ -191,6 +191,19 @@ async fn lost_mutation_reply_preserves_work_without_resubmitting() -> Result<()>
             AppRunControl::Exit(ExitReason::UserRequested)
         ));
     }
+    for command in ["/exit", "/quit"] {
+        app.chat_widget
+            .restore_user_message_to_composer(command.into());
+        app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(KeyCode::Enter.into()))
+            .await?;
+        let exit = std::iter::from_fn(|| events.try_recv().ok())
+            .find(|event| matches!(event, AppEvent::Exit(_)))
+            .expect("quit command should request exit");
+        assert!(matches!(
+            app.handle_event(&mut tui, &mut session, exit).await?,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+    }
     session.shutdown().await?;
     assert_eq!(server.await??, vec!["initialize", "turn/start"]);
     Ok(())

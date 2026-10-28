@@ -173,7 +173,7 @@
 //!
 //! During reconnection, `handle_restricted_key` edits the draft directly without popup dispatch,
 //! composer shortcuts, or submission; `?` becomes literal input. Enter and Tab leave the draft
-//! intact until reconnection succeeds, except for the local `/warnings` command.
+//! intact until reconnection succeeds, except for `/warnings`, `/config`, `/quit`, and `/exit`.
 //! When connected but the thread is unavailable, configured
 //! submit keys may dispatch explicitly allowed recovery and local commands; other drafts stay put.
 //! Empty-prompt agents navigation remains available with its usual editor and draft guards.
