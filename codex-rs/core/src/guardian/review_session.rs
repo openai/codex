@@ -5,6 +5,7 @@
 #[path = "review_session_setup.rs"]
 mod setup;
 pub use setup::PreparedGuardianContext;
+pub(super) use setup::prepare_review;
 pub use setup::prepare_review_prewarm;
 pub(crate) use setup::run_guardian_review_session;
 

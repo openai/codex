@@ -92,43 +92,40 @@ pub enum GuardianReviewSessionOutcome {
     StaleAuthorization,
 }
 
-impl From<GuardianReviewSessionOutcome> for GuardianReviewOutcome {
-    fn from(outcome: GuardianReviewSessionOutcome) -> Self {
-        match outcome {
-            GuardianReviewSessionOutcome::Completed(Ok(Some(message))) => {
-                match crate::parse_guardian_assessment(&message) {
-                    Ok(assessment) => Self::Completed(assessment),
-                    Err(error) => Self::Error(GuardianReviewError::parse(error)),
-                }
+impl GuardianReviewSessionOutcome {
+    /// Extract the assessment produced by one reviewer session, preserving failures.
+    pub fn into_assessment(self) -> Result<GuardianAssessment, GuardianReviewError> {
+        match self {
+            Self::Completed(Ok(Some(message))) => {
+                crate::parse_guardian_assessment(&message).map_err(GuardianReviewError::parse)
             }
-            GuardianReviewSessionOutcome::Completed(Ok(None)) => {
-                Self::Error(GuardianReviewError::session(anyhow::anyhow!(
-                    "guardian review completed without an assessment payload"
-                )))
-            }
-            GuardianReviewSessionOutcome::Completed(Err(error)) => {
-                Self::Error(GuardianReviewError::session(error))
-            }
-            GuardianReviewSessionOutcome::PromptBuildFailed(error) => {
-                Self::Error(GuardianReviewError::prompt_build(error))
-            }
-            GuardianReviewSessionOutcome::InputBudgetExceeded => {
-                Self::Error(GuardianReviewError::InputBudgetExceeded)
-            }
-            GuardianReviewSessionOutcome::SessionFailed {
+            Self::Completed(Ok(None)) => Err(GuardianReviewError::session(anyhow::anyhow!(
+                "guardian review completed without an assessment payload"
+            ))),
+            Self::Completed(Err(error)) => Err(GuardianReviewError::session(error)),
+            Self::PromptBuildFailed(error) => Err(GuardianReviewError::prompt_build(error)),
+            Self::InputBudgetExceeded => Err(GuardianReviewError::InputBudgetExceeded),
+            Self::SessionFailed {
                 error,
                 error_info,
                 retry_at,
-            } => Self::Error(GuardianReviewError::Session {
+            } => Err(GuardianReviewError::Session {
                 message: error.to_string(),
                 error_info,
                 retry_at,
             }),
-            GuardianReviewSessionOutcome::TimedOut => Self::Error(GuardianReviewError::Timeout),
-            GuardianReviewSessionOutcome::Aborted => Self::Error(GuardianReviewError::Cancelled),
-            GuardianReviewSessionOutcome::StaleAuthorization => {
-                Self::Error(GuardianReviewError::StaleAuthorization)
-            }
+            Self::TimedOut => Err(GuardianReviewError::Timeout),
+            Self::Aborted => Err(GuardianReviewError::Cancelled),
+            Self::StaleAuthorization => Err(GuardianReviewError::StaleAuthorization),
+        }
+    }
+}
+
+impl From<GuardianReviewSessionOutcome> for GuardianReviewOutcome {
+    fn from(outcome: GuardianReviewSessionOutcome) -> Self {
+        match outcome.into_assessment() {
+            Ok(assessment) => Self::Completed(assessment),
+            Err(error) => Self::Error(error),
         }
     }
 }

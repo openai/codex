@@ -205,6 +205,60 @@ fn guardian_exec_command_request(id: &str) -> GuardianApprovalRequest {
     }
 }
 
+#[tokio::test]
+async fn isolated_review_returns_assessment_for_prepared_action() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let assessment = serde_json::json!({
+        "risk_level": "medium",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "Publishing the requested documentation change."
+    });
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("assessment", &assessment.to_string()),
+            ev_completed("review"),
+        ]),
+    )
+    .await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+    let history = session.clone_history().await;
+    let later = codex_protocol::models::ResponseInputItem::Message {
+        role: "user".into(),
+        content: vec![codex_protocol::models::input_text(
+            "Instruction added after capture.",
+        )],
+        phase: None,
+    };
+    session
+        .record_conversation_items(&turn, turn.model_info(), &[later.into()])
+        .await;
+    let input = review::ReviewInput {
+        history,
+        context: GuardianReviewContext::from(&turn),
+        request: guardian_exec_command_request("supplied-action"),
+        reasons: ApprovalRequestReasons::default(),
+        session,
+    };
+    let result = input
+        .assess_isolated(
+            codex_guardian_reviewer::ReviewDeadline::Unlimited,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("isolated assessment");
+    assert_eq!(result, serde_json::from_value(assessment)?);
+    let request = mock.single_request();
+    let rendered = serde_json::to_string(&request.input())?;
+    assert!(rendered.contains("Please check the repo visibility"));
+    assert!(rendered.contains("Need to push the reviewed docs fix."));
+    assert!(!rendered.contains("Instruction added after capture."));
+    Ok(())
+}
+
 fn guardian_mcp_request(server: &str, tool_name: &str) -> GuardianApprovalRequest {
     GuardianApprovalRequest::McpToolCall {
         id: "mcp-1".to_string(),

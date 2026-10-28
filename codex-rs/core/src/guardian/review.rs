@@ -9,6 +9,7 @@ use codex_analytics::GuardianApprovalRequestSource;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_features::Feature;
+use codex_guardian_reviewer::GuardianAssessment;
 use codex_guardian_reviewer::GuardianReviewError;
 use codex_guardian_reviewer::GuardianReviewOutcome;
 #[cfg(test)]
@@ -29,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::GuardianNodeReplPolicy;
 use crate::context::GuardianReviewEvidence;
+use crate::context_manager::ContextManager;
 use crate::session::session::Session;
 
 use super::ApprovalRequestReasons;
@@ -157,6 +159,87 @@ struct ReviewAttemptOptions {
     deadline: ReviewDeadline,
 }
 
+/// A prepared action and the parent transcript to use as evidence for it.
+pub(super) struct ReviewInput {
+    pub(super) session: Arc<Session>,
+    pub(super) context: GuardianReviewContext,
+    pub(super) history: ContextManager,
+    pub(super) request: GuardianApprovalRequest,
+    pub(super) reasons: ApprovalRequestReasons,
+}
+
+impl ReviewInput {
+    fn into_params(
+        self,
+        config: GuardianReviewSessionConfig,
+        category: GuardianScope,
+        options: ReviewAttemptOptions,
+    ) -> GuardianReviewSessionParams {
+        GuardianReviewSessionParams {
+            parent_session: self.session,
+            parent_history: self.history,
+            reasoning_summary: self.context.reasoning_summary,
+            personality: self.context.personality,
+            parent_context: self.context,
+            spawn_config: config.spawn_config,
+            node_repl_policy: config.node_repl_policy,
+            request: self.request,
+            category,
+            reasons: self.reasons,
+            authorization: options.authorization,
+            schema: guardian_output_schema(),
+            review_model: config.review_model,
+            external_cancel: options.external_cancel,
+            deadline: options.deadline,
+        }
+    }
+
+    /// Assess the supplied request in a fresh reviewer without publishing a live approval.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by the recorded-call stack layer")
+    )]
+    pub(super) async fn assess_isolated(
+        self,
+        deadline: ReviewDeadline,
+        cancellation: &CancellationToken,
+    ) -> Result<GuardianAssessment, GuardianReviewError> {
+        let review = async {
+            let pool = self.session.guardian_review_session().ok_or_else(|| {
+                GuardianReviewError::session(anyhow::anyhow!("Guardian reviewer is unavailable"))
+            })?;
+            let config = guardian_review_session_config(&self.session, &self.context)
+                .await
+                .map_err(GuardianReviewError::prompt_build)?;
+            let category = self.request.guardian_scope();
+            let params = self.into_params(
+                config,
+                category,
+                ReviewAttemptOptions {
+                    authorization: None,
+                    external_cancel: Some(cancellation.clone()),
+                    deadline,
+                },
+            );
+            let prepared = super::review_session::prepare_review(params)
+                .await
+                .map_err(GuardianReviewError::prompt_build)?;
+            Ok::<_, GuardianReviewError>(pool.review_isolated(&prepared).await.0)
+        };
+        let outcome = match run_before_review_deadline(
+            deadline,
+            Some(cancellation),
+            Box::pin(review),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(interruption) => interruption,
+        };
+        outcome.into_assessment()
+    }
+}
+
 /// Runs the guardian in a locked-down reusable review session.
 ///
 /// The guardian itself should not mutate state or trigger further approvals, so
@@ -208,28 +291,18 @@ async fn run_guardian_review_session_before_deadline(
             );
         }
     };
-    let (session_outcome, session_analytics_result) =
-        Box::pin(super::review_session::run_guardian_review_session(
-            pool,
-            GuardianReviewSessionParams {
-                parent_session: Arc::clone(&session),
-                parent_context: context.clone(),
-                parent_history: session.clone_history().await,
-                spawn_config: session_config.spawn_config,
-                node_repl_policy: session_config.node_repl_policy,
-                request,
-                category,
-                reasons,
-                authorization: options.authorization,
-                schema: guardian_output_schema(),
-                review_model: session_config.review_model,
-                reasoning_summary: context.reasoning_summary,
-                personality: context.personality,
-                external_cancel: options.external_cancel,
-                deadline: options.deadline,
-            },
-        ))
-        .await;
+    let input = ReviewInput {
+        history: session.clone_history().await,
+        session,
+        context,
+        request,
+        reasons,
+    };
+    let params = input.into_params(session_config, category, options);
+    let (session_outcome, session_analytics_result) = Box::pin(
+        super::review_session::run_guardian_review_session(pool, params),
+    )
+    .await;
 
     (session_outcome.into(), session_analytics_result)
 }

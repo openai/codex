@@ -203,7 +203,7 @@ impl PreparedGuardianContext {
 }
 
 #[derive(Clone)]
-pub(super) struct PreparedReview {
+pub(in crate::guardian) struct PreparedReview {
     context: Arc<PreparedGuardianContext>,
     params: Arc<GuardianReviewSessionParams>,
     recovery_requested: Arc<AtomicBool>,
@@ -360,7 +360,7 @@ pub(crate) async fn run_guardian_review_session(
     (outcome, analytics)
 }
 
-pub(super) async fn prepare_review(
+pub(in crate::guardian) async fn prepare_review(
     params: GuardianReviewSessionParams,
 ) -> anyhow::Result<PreparedReview> {
     let context = PreparedGuardianContext::prepare(
