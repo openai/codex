@@ -9,6 +9,10 @@ use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 
+#[cfg(test)]
+#[path = "thread_listener_shutdown_tests.rs"]
+mod listener_shutdown_tests;
+
 #[derive(Clone)]
 pub(super) struct ListenerTaskContext {
     pub(super) thread_manager: Arc<ThreadManager>,
@@ -497,20 +501,20 @@ async fn start_listener(
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
-        loop {
+        let shutdown_complete = loop {
             tokio::select! {
                 biased;
                 _ = &mut cancel_rx => {
                     // Listener was superseded or the thread is being torn down.
-                    break;
+                    break false;
                 }
                 listener_command = listener_command_rx.recv() => {
                     let Some(listener_command) = listener_command else {
-                        break;
+                        break false;
                     };
                     handle_thread_listener_command(
                         conversation_id,
-                        &conversation,
+                        Some(&conversation),
                         codex_home.as_path(),
                         &thread_state_manager,
                         &thread_state,
@@ -526,7 +530,7 @@ async fn start_listener(
                         Ok(event) => event,
                         Err(err) => {
                             tracing::warn!("thread.next_event() failed with: {err}");
-                            break;
+                            break false;
                         }
                     };
 
@@ -589,7 +593,7 @@ async fn start_listener(
                     )
                     .await;
                     if is_shutdown_complete {
-                        drained_tx.send_replace(true);
+                        break true;
                     }
                 }
                 idle_guard = async {
@@ -601,7 +605,7 @@ async fn start_listener(
                     }
                 } => {
                     let Some(_idle_guard) = idle_guard else {
-                        break;
+                        break false;
                     };
                     if !unloading_state.should_unload_now() {
                         continue;
@@ -652,11 +656,9 @@ async fn start_listener(
                                 conversation_id, &thread_state, listener_generation,
                             ).await {
                                 pending.remove(&conversation_id);
-                                break;
+                                break false;
                             }
                         }
-                        // Release the status receiver before removing its watch entry.
-                        drop(unloading_state);
                         outgoing_for_task
                             .cancel_requests_for_thread(conversation_id, /*error*/ None)
                             .await;
@@ -706,11 +708,9 @@ async fn start_listener(
                                 conversation_id, &thread_state, listener_generation,
                             ).await {
                                 pending.remove(&conversation_id);
-                                break;
+                                break false;
                             }
                         }
-                        // Release the status receiver before removing its watch entry.
-                        drop(unloading_state);
                         outgoing_for_task
                             .cancel_requests_for_thread(conversation_id, /*error*/ None)
                             .await;
@@ -738,7 +738,97 @@ async fn start_listener(
                         conversation.clone(),
                     )
                     .await;
-                    break;
+                    break false;
+                }
+            }
+        };
+        // The thread owns its event sender, so waiting for channel closure retains
+        // the runtime. Keep only the notification relay after ShutdownComplete.
+        drop(conversation);
+        drop(config);
+        drop(thread_manager);
+        drop(turn_cost_worker);
+
+        if shutdown_complete {
+            drained_tx.send_replace(true);
+            let relay_command = |command| {
+                handle_thread_listener_command(
+                    conversation_id,
+                    /*conversation*/ None,
+                    codex_home.as_path(),
+                    &thread_state_manager,
+                    &thread_state,
+                    &thread_watch_manager,
+                    &outgoing_for_task,
+                    &pending_thread_unloads,
+                    command,
+                )
+            };
+            // Preserve the existing queue for late request resolutions and ordered
+            // notifications until normal listener cancellation or replacement.
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut cancel_rx => break,
+                    listener_command = listener_command_rx.recv() => {
+                        let Some(listener_command) = listener_command else {
+                            break;
+                        };
+                        relay_command(listener_command).await;
+                    }
+                    // Keep relaying commands while waiting for a cold resume or goal mutation.
+                    resume_guard = async {
+                        if unloading_state.wait_for_unloading_trigger().await {
+                            Some(ThreadState::lock_goal_resume(&thread_state).await)
+                        } else {
+                            None
+                        }
+                    } => {
+                        {
+                            let Some(resume_guard) = resume_guard else {
+                                break;
+                            };
+                            // A goal mutation may have queued a command between the select's
+                            // receive poll and the lock acquisition. Deliver it before cleanup.
+                            if !listener_command_rx.is_empty() {
+                                continue;
+                            }
+                            let mut pending = pending_thread_unloads.lock().await;
+                            if !unloading_state.should_unload_now() {
+                                continue;
+                            }
+                            if let Some(existing) = pending.get(&conversation_id) {
+                                let mut completion = existing.subscribe();
+                                drop(pending);
+                                drop(resume_guard);
+                                tokio::select! {
+                                    _ = &mut cancel_rx => break,
+                                    _ = completion.changed() => continue,
+                                }
+                            }
+                            if !thread_state_manager.remove_unsubscribed_listener(
+                                conversation_id, &thread_state, listener_generation,
+                            ).await {
+                                break;
+                            }
+                            // Fence this thread while cleanup awaits without blocking other threads.
+                            pending.insert(conversation_id, watch::channel(()).0);
+                        }
+                        // A producer may still hold the retired sender. Deliver every command
+                        // it queued successfully and let later sends take their fallback.
+                        listener_command_rx.close();
+                        while let Some(command) = listener_command_rx.recv().await {
+                            relay_command(command).await;
+                        }
+                        outgoing_for_task
+                            .cancel_requests_for_thread(conversation_id, /*error*/ None)
+                            .await;
+                        thread_watch_manager
+                            .remove_thread(&conversation_id.to_string())
+                            .await;
+                        pending_thread_unloads.lock().await.remove(&conversation_id);
+                        return;
+                    }
                 }
             }
         }
@@ -830,7 +920,7 @@ pub(super) async fn unload_thread_without_subscribers(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_thread_listener_command(
     conversation_id: ThreadId,
-    conversation: &Arc<CodexThread>,
+    conversation: Option<&Arc<CodexThread>>,
     codex_home: &Path,
     thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
@@ -844,6 +934,10 @@ pub(super) async fn handle_thread_listener_command(
             request: resume_request,
             completion_tx,
         } => {
+            let Some(conversation) = conversation else {
+                // Dropping the completion sender returns the closing error.
+                return;
+            };
             handle_pending_thread_resume_request(
                 conversation_id,
                 conversation,
@@ -1049,15 +1143,12 @@ pub(super) async fn handle_pending_thread_resume_request(
 
     {
         let pending_thread_unloads = pending_thread_unloads.lock().await;
-        if pending_thread_unloads.contains_key(&conversation_id) {
+        if pending_thread_unloads.contains_key(&conversation_id)
+            || matches!(conversation.agent_status().await, AgentStatus::Shutdown)
+        {
             drop(pending_thread_unloads);
             outgoing
-                .send_error(
-                    request_id,
-                    invalid_request(format!(
-                        "thread {conversation_id} is closing; retry thread/resume after the thread is closed"
-                    )),
-                )
+                .send_error(request_id, thread_closing_for_resume(conversation_id))
                 .await;
             return;
         }

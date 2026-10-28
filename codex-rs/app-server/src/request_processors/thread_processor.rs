@@ -13,6 +13,7 @@ use super::thread_enrichment::enrich_loaded_threads;
 use super::thread_fork_goal::inherit_thread_goal_snapshot;
 use super::thread_input::can_accept_direct_input;
 use super::thread_input::ensure_direct_input_allowed;
+use super::thread_lifecycle::thread_closing_for_resume;
 use super::*;
 use crate::connection_rpc_gate::ConnectionRpcGate;
 use crate::error_code::method_not_found;
@@ -1099,13 +1100,14 @@ impl ThreadRequestProcessor {
         self.outgoing
             .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
-        self.thread_state_manager
-            .remove_thread_state(thread_id)
-            .await;
+        // The state entry owns the resume lock. Remove the watch while a cold resume
+        // still has to wait for this teardown to finish.
         self.thread_watch_manager
             .remove_thread(&thread_id.to_string())
             .await;
-        self.pending_thread_unloads.lock().await.remove(&thread_id);
+        self.thread_state_manager
+            .remove_thread_state(thread_id)
+            .await;
     }
 
     async fn thread_unsubscribe_response_inner(
@@ -1116,17 +1118,21 @@ impl ThreadRequestProcessor {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        if self.thread_manager.get_thread(thread_id).await.is_err() {
-            self.finalize_thread_teardown(thread_id).await;
-            return Ok(ThreadUnsubscribeResponse {
-                status: ThreadUnsubscribeStatus::NotLoaded,
-            });
-        };
-
+        // Terminal cleanup must not remove a replacement published by a cold resume.
+        let _goal_resume_guard = self.thread_state_manager.lock_goal_resume(thread_id).await;
         let was_subscribed = self
             .thread_state_manager
             .unsubscribe_connection_from_thread(thread_id, connection_id)
             .await;
+
+        if self.thread_manager.get_thread(thread_id).await.is_err() {
+            if !self.thread_state_manager.has_subscribers(thread_id).await {
+                self.finalize_thread_teardown(thread_id).await;
+            }
+            return Ok(ThreadUnsubscribeResponse {
+                status: ThreadUnsubscribeStatus::NotLoaded,
+            });
+        };
 
         let status = if was_subscribed {
             ThreadUnsubscribeStatus::Unsubscribed
@@ -3866,7 +3872,10 @@ impl ThreadRequestProcessor {
             .await;
 
         for thread_id in thread_ids {
-            if self.thread_manager.get_thread(thread_id).await.is_err() {
+            let _goal_resume_guard = self.thread_state_manager.lock_goal_resume(thread_id).await;
+            if self.thread_manager.get_thread(thread_id).await.is_err()
+                && !self.thread_state_manager.has_subscribers(thread_id).await
+            {
                 // Reconcile stale app-server bookkeeping when the thread has already been
                 // removed from the core manager.
                 self.finalize_thread_teardown(thread_id).await;
@@ -3909,9 +3918,7 @@ impl ThreadRequestProcessor {
                 .await
                 .contains_key(&thread_id)
         {
-            return Err(invalid_request(format!(
-                "thread {thread_id} is closing; retry thread/resume after the thread is closed"
-            )));
+            return Err(thread_closing_for_resume(thread_id));
         }
 
         if params.sandbox.is_some() && params.permissions.is_some() {
@@ -3937,7 +3944,10 @@ impl ThreadRequestProcessor {
                 RunningThreadResumeResult::Handled(completion) => {
                     // The listener may need this permit to finish the response.
                     drop(_thread_list_state_permit);
-                    let _ = completion.await;
+                    // A stopped listener can discard an accepted command before responding.
+                    completion
+                        .await
+                        .map_err(|_| thread_closing_for_resume(&params.thread_id))?;
                     return Ok(ControlFlow::Break(()));
                 }
                 RunningThreadResumeResult::NotRunning(stored_thread) => stored_thread,
@@ -4040,10 +4050,7 @@ impl ThreadRequestProcessor {
                 .await
                 .contains_key(&resumed.conversation_id)
         {
-            return Err(invalid_request(format!(
-                "thread {} is closing; retry thread/resume after the thread is closed",
-                resumed.conversation_id
-            )));
+            return Err(thread_closing_for_resume(resumed.conversation_id));
         }
         let paginated_thread_id = resume_source_thread.as_ref().and_then(|thread| {
             matches!(thread.history_mode, ThreadHistoryMode::Paginated).then_some(thread.thread_id)
@@ -4104,7 +4111,9 @@ impl ThreadRequestProcessor {
             {
                 RunningThreadResumeResult::Handled(completion) => {
                     drop(_thread_list_state_permit);
-                    let _ = completion.await;
+                    completion
+                        .await
+                        .map_err(|_| thread_closing_for_resume(child_thread_id))?;
                     Ok(ControlFlow::Break(()))
                 }
                 RunningThreadResumeResult::NotRunning(_) => Err(invalid_request(
@@ -4573,6 +4582,10 @@ impl ThreadRequestProcessor {
         Some(persisted_metadata)
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "listener state creation must be serialized against terminal listener cleanup"
+    )]
     #[tracing::instrument(level = "trace", skip_all)]
     async fn resume_running_thread(
         &self,
@@ -4740,10 +4753,17 @@ impl ThreadRequestProcessor {
                 Vec::new()
             };
 
-            let thread_state = self
-                .thread_state_manager
-                .thread_state(existing_thread_id)
-                .await;
+            let thread_state = {
+                let pending = self.pending_thread_unloads.lock().await;
+                if pending.contains_key(&existing_thread_id)
+                    || matches!(existing_thread.agent_status().await, AgentStatus::Shutdown)
+                {
+                    return Err(thread_closing_for_resume(existing_thread_id));
+                }
+                self.thread_state_manager
+                    .thread_state(existing_thread_id)
+                    .await
+            };
             self.ensure_listener_task_running(
                 existing_thread_id,
                 existing_thread.clone(),
@@ -4776,9 +4796,7 @@ impl ThreadRequestProcessor {
                 thread_state.listener_command_tx()
             };
             let Some(listener_command_tx) = listener_command_tx else {
-                return Err(internal_error(format!(
-                    "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener is not running"
-                )));
+                return Err(thread_closing_for_resume(existing_thread_id));
             };
 
             let (emit_thread_goal_update, thread_goal_state_db) = self
@@ -4860,9 +4878,7 @@ impl ThreadRequestProcessor {
                 completion_tx,
             };
             if listener_command_tx.send(command).is_err() {
-                return Err(internal_error(format!(
-                    "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
-                )));
+                return Err(thread_closing_for_resume(existing_thread_id));
             }
             return Ok(RunningThreadResumeResult::Handled(completion_rx));
         }

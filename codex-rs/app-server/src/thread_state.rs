@@ -541,6 +541,7 @@ impl ThreadStateManager {
     pub(crate) async fn remove_thread_state(&self, thread_id: ThreadId) {
         let thread_state = {
             let mut state = self.state.lock().await;
+            self.unregister_listener_command_tx(thread_id);
             let thread_state = state
                 .threads
                 .remove(&thread_id)
@@ -551,7 +552,6 @@ impl ThreadStateManager {
             });
             thread_state
         };
-        self.unregister_listener_command_tx(thread_id);
 
         if let Some(thread_state) = thread_state {
             let mut thread_state = thread_state.lock().await;
@@ -646,7 +646,6 @@ impl ThreadStateManager {
         true
     }
 
-    #[cfg(test)]
     pub(crate) async fn has_subscribers(&self, thread_id: ThreadId) -> bool {
         self.state
             .lock()
