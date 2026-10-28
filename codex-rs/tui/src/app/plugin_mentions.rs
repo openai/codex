@@ -1,26 +1,38 @@
 //! Plugin mention capability enrichment for the TUI.
 //!
-//! Mention inventory comes from app-server `plugin/list`, matching the GUI
-//! client. The current API exposes plugin-level mention metadata there, but not
-//! effective per-session capability summaries.
+//! Mention inventory comes from app-server `plugin/installed` so loading
+//! mentions does not fetch the browsable plugin catalog. The API exposes
+//! plugin-level mention metadata, but not effective per-session capability summaries.
 
-use super::background_requests::request_plugin_list;
 use super::*;
 use codex_app_server_protocol::PluginAvailability;
-use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginInstalledParams;
+use codex_app_server_protocol::PluginInstalledResponse;
 use codex_app_server_protocol::PluginSummary;
+use codex_app_server_protocol::RequestId;
 use codex_plugin::PluginCapabilitySummary;
 
 pub(super) async fn fetch_plugin_mentions(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
 ) -> Result<Vec<PluginCapabilitySummary>> {
-    let response = request_plugin_list(request_handle, cwd).await?;
-    Ok(plugin_mentions_from_list_response(response))
+    let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin installed cwd must be absolute")?;
+    let request_id = RequestId::String(format!("plugin-installed-{}", Uuid::new_v4()));
+    let response = request_handle
+        .request_typed(ClientRequest::PluginInstalled {
+            request_id,
+            params: PluginInstalledParams {
+                cwds: Some(vec![cwd]),
+                install_suggestion_plugin_names: None,
+            },
+        })
+        .await
+        .wrap_err("plugin/installed failed in TUI")?;
+    Ok(plugin_mentions_from_installed_response(response))
 }
 
-fn plugin_mentions_from_list_response(
-    response: PluginListResponse,
+fn plugin_mentions_from_installed_response(
+    response: PluginInstalledResponse,
 ) -> Vec<PluginCapabilitySummary> {
     response
         .marketplaces
@@ -89,7 +101,6 @@ mod tests {
     use codex_app_server_protocol::PluginAuthPolicy;
     use codex_app_server_protocol::PluginAvailability;
     use codex_app_server_protocol::PluginInstallPolicy;
-    use codex_app_server_protocol::PluginListResponse;
     use codex_app_server_protocol::PluginMarketplaceEntry;
     use codex_app_server_protocol::PluginShareContext;
     use codex_app_server_protocol::PluginShareDiscoverability;
@@ -97,7 +108,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn plugin_mentions_use_plugin_list_summaries_and_gui_eligibility() {
+    fn plugin_mentions_use_installed_summaries_and_gui_eligibility() {
         let active = plugin_summary("active");
         let active_shared = shared_plugin_summary("active-shared");
         let mut disabled_by_admin = plugin_summary("disabled-by-admin");
@@ -107,7 +118,7 @@ mod tests {
         let mut uninstalled = plugin_summary("uninstalled");
         uninstalled.installed = false;
 
-        let response = PluginListResponse {
+        let response = PluginInstalledResponse {
             marketplaces: vec![PluginMarketplaceEntry {
                 name: "server-marketplace".to_string(),
                 path: None,
@@ -121,31 +132,19 @@ mod tests {
                 ],
             }],
             marketplace_load_errors: Vec::new(),
-            featured_plugin_ids: Vec::new(),
         };
 
         assert_eq!(
-            plugin_mentions_from_list_response(response),
-            vec![
-                PluginCapabilitySummary {
-                    config_name: "active@server-marketplace".to_string(),
-                    display_name: "active".to_string(),
-                    plugin_namespace: Some("active".to_string()),
-                    description: Some("server-marketplace".to_string()),
-                    has_skills: false,
-                    mcp_server_names: Vec::new(),
-                    app_connector_ids: Vec::new(),
-                },
-                PluginCapabilitySummary {
-                    config_name: "active-shared@server-marketplace".to_string(),
-                    display_name: "active-shared".to_string(),
-                    plugin_namespace: Some("active-shared".to_string()),
-                    description: Some("server-marketplace".to_string()),
-                    has_skills: false,
-                    mcp_server_names: Vec::new(),
-                    app_connector_ids: Vec::new(),
-                }
-            ]
+            plugin_mentions_from_installed_response(response),
+            ["active", "active-shared"].map(|name| PluginCapabilitySummary {
+                config_name: format!("{name}@server-marketplace"),
+                display_name: name.to_string(),
+                plugin_namespace: Some(name.to_string()),
+                description: Some("server-marketplace".to_string()),
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            })
         );
     }
 
