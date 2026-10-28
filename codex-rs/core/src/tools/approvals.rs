@@ -623,7 +623,7 @@ impl Session {
         }
         let is_network_approval = matches!(&action, ApprovalAction::NetworkAccess { .. });
         let review_id = new_guardian_review_id();
-        let action = crate::guardian::ReviewAction::from_approval_action(action, &context);
+        let action = crate::guardian::from_approval_action(action, &context);
 
         let reasons = ApprovalRequestReasons {
             approval: ctx.approval_reason.clone(),

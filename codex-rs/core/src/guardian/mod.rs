@@ -66,6 +66,7 @@ pub use review_session::prepare_review_prewarm;
 
 pub(crate) use codex_guardian_reviewer::prompt_cache_key_override_for_review_session;
 pub(crate) use runtime::ReviewAction;
+pub(crate) use runtime::from_approval_action;
 
 pub(crate) use codex_guardian_reviewer::GUARDIAN_REVIEWER_NAME;
 pub(crate) use codex_guardian_reviewer::REVIEW_TIMEOUT as GUARDIAN_REVIEW_TIMEOUT;

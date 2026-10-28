@@ -34,6 +34,7 @@ mod prompt;
 mod reporting;
 mod retry;
 mod review;
+mod review_action;
 mod review_evidence;
 mod review_state;
 pub use review_state::CheckpointRecovery;
@@ -93,6 +94,7 @@ pub use prompt::GuardianPromptItems;
 pub use prompt::compose_guardian_prompt;
 
 pub use review::ReviewHost;
+pub use review_action::ReviewAction;
 
 pub use completion::ReviewCompletion;
 pub use completion::complete_review;

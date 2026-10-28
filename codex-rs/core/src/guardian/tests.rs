@@ -664,8 +664,8 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
     missing_context.environments.environments.truncate(1);
     for request in requests {
         let action = runtime::ReviewAction::from(request.clone());
-        assert!(action.validate(&context).is_ok());
-        assert!(action.validate(&missing_context).is_err());
+        assert!(runtime::validate(&action, &context).is_ok());
+        assert!(runtime::validate(&action, &missing_context).is_err());
         let environment_id = request.target_environment_id().unwrap().to_string();
         assert_eq!(
             guardian_approval_request_to_json(&request)?["environment_id"],
@@ -702,9 +702,11 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
         }
     }
     assert!(
-        runtime::ReviewAction::from(network_request("missing"))
-            .validate(&context)
-            .is_err()
+        runtime::validate(
+            &runtime::ReviewAction::from(network_request("missing")),
+            &context,
+        )
+        .is_err()
     );
     Ok(())
 }
@@ -1402,70 +1404,6 @@ async fn build_guardian_prompt_items_explains_network_access_review_scope() -> a
     Ok(())
 }
 
-#[test_case::test_case(SandboxPermissions::UseDefault)]
-#[test_case::test_case(SandboxPermissions::RequireEscalated)]
-#[test_case::test_case(SandboxPermissions::WithAdditionalPermissions)]
-fn guardian_write_stdin_preserves_input_and_foreign_cwd(
-    sandbox_permissions: SandboxPermissions,
-) -> serde_json::Result<()> {
-    let cwd = PathUri::parse("file:///C:/workspace").expect("valid executor cwd");
-    let input = "confirm\n";
-    let additional_permissions =
-        if sandbox_permissions == SandboxPermissions::WithAdditionalPermissions {
-            Some(serde_json::from_value(
-                serde_json::json!({"network":{"enabled":true}}),
-            )?)
-        } else {
-            None
-        };
-    let action = GuardianApprovalRequest::WriteStdin {
-        id: "terminal-open".to_string(),
-        approval_id: "terminal-write".to_string(),
-        environment_id: "windows-executor".to_string(),
-        process_id: 1000,
-        input: input.to_string(),
-        cwd: cwd.clone(),
-        tty: true,
-        sandbox_permissions,
-        additional_permissions: additional_permissions.clone(),
-    };
-
-    let mut expected = serde_json::json!({
-        "tool": "write_stdin",
-        "environment_id": "windows-executor",
-        "session_id": 1000,
-        "chars": input,
-        "cwd": r"C:\workspace",
-        "sandbox_permissions": sandbox_permissions,
-        "tty": true,
-    });
-    if let Some(permissions) = additional_permissions {
-        expected["additional_permissions"] = serde_json::to_value(permissions)?;
-    }
-    assert_eq!(guardian_approval_request_to_json(&action)?, expected);
-    assert_eq!(
-        guardian_assessment_action(&action).expect("reported approval action"),
-        GuardianAssessmentAction::WriteStdin {
-            approval_id: "terminal-write".to_string(),
-            process_id: "1000".to_string(),
-            stdin: input.to_string(),
-            cwd,
-        },
-    );
-    assert_eq!(
-        (
-            guardian_request_target_item_id(&action),
-            guardian_request_turn_id(&action, "current-turn"),
-        ),
-        (Some("terminal-open"), "current-turn"),
-    );
-    assert_eq!(
-        ReviewAction::from(action).tool_call_id.as_deref(),
-        Some("terminal-write")
-    );
-    Ok(())
-}
-
 #[test_case::test_case(Some("windows"), r"C:\workspace"; "windows")]
 #[test_case::test_case(Some("linux"), "/C:/workspace"; "posix")]
 #[test_case::test_case(None, r"C:\workspace"; "legacy")]
@@ -1495,7 +1433,7 @@ async fn guardian_exec_command_uses_executor_cwd_convention(
         tty: false,
         proposed_execpolicy_amendment: None,
     };
-    let action = ReviewAction::from_approval_action(action, &context)
+    let action = from_approval_action(action, &context)
         .request
         .expect("Guardian request should render executor cwd");
 

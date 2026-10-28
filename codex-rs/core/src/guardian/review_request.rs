@@ -1,6 +1,7 @@
 //! Binds an immutable action and root lifetime to fresh per-attempt authorization evidence.
 //! The extension chooses effects; this adapter supplies evidence, validation and publication.
 
+use super::super::runtime::validate;
 use super::*;
 use crate::codex_thread::GuardianAuthorizationVersion;
 use codex_config::config_toml::CircuitBreakAction;
@@ -130,7 +131,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             reasons: _,
             options,
         } = self.clone();
-        let request = match request.validate(&context) {
+        let request = match validate(&request, &context) {
             Ok(request) => request.clone(),
             Err(decision) => return Err(decision),
         };
@@ -307,7 +308,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
     }
 
     fn validate_action(&self) -> Result<(&str, Option<&str>), ReviewDecision> {
-        let request = self.request.validate(&self.context)?;
+        let request = validate(&self.request, &self.context)?;
         Ok((
             guardian_request_turn_id(request, &self.context.turn().sub_id),
             guardian_request_target_item_id(request),
