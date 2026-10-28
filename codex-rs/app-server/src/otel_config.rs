@@ -25,6 +25,8 @@ pub(crate) fn map_otel_requirements_to_api(otel: OtelRequirementsToml) -> OtelRe
         exporter: otel.exporter.map(map_otel_exporter_to_api),
         trace_exporter: otel.trace_exporter.map(map_otel_exporter_to_api),
         metrics_exporter: otel.metrics_exporter.map(map_otel_exporter_to_api),
+        span_attributes: otel.span_attributes,
+        tracestate: otel.tracestate,
     }
 }
 

@@ -9207,8 +9207,10 @@ class OtelRequirements(BaseModel):
     log_guardian_assessments: bool | None = None
     log_user_prompt: bool | None = None
     metrics_exporter: OtelExporter | None = None
+    span_attributes: dict[str, Any] | None = None
     tool_result: OtelToolResultLogConfig | None = None
     trace_exporter: OtelExporter | None = None
+    tracestate: dict[str, Any] | None = None
 
 
 class OverriddenMetadata(BaseModel):

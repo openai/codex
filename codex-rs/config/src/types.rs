@@ -662,7 +662,7 @@ pub struct OtelConfigToml {
     pub metrics_exporter: Option<OtelExporterKind>,
 
     /// Attributes to add to every exported trace span.
-    pub span_attributes: Option<BTreeMap<String, String>>,
+    pub span_attributes: Option<HashMap<String, String>>,
 
     /// Semicolon-separated `key:value` fields to upsert into W3C tracestate members.
     pub tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
@@ -679,7 +679,7 @@ pub struct OtelConfig {
     pub exporter: OtelExporterKind,
     pub trace_exporter: OtelExporterKind,
     pub metrics_exporter: OtelExporterKind,
-    pub span_attributes: BTreeMap<String, String>,
+    pub span_attributes: HashMap<String, String>,
     pub tracestate: BTreeMap<String, BTreeMap<String, String>>,
 }
 
@@ -694,7 +694,7 @@ impl Default for OtelConfig {
             exporter: OtelExporterKind::None,
             trace_exporter: OtelExporterKind::None,
             metrics_exporter: OtelExporterKind::Statsig,
-            span_attributes: BTreeMap::new(),
+            span_attributes: HashMap::new(),
             tracestate: BTreeMap::new(),
         }
     }

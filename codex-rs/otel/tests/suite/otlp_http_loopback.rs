@@ -411,7 +411,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
         trace_exporter: OtelExporter::None,
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
-        span_attributes: BTreeMap::new(),
+        span_attributes: HashMap::new(),
         tracestate: BTreeMap::new(),
     })?
     .expect("otel provider");
@@ -471,7 +471,7 @@ fn otel_provider_rejects_header_unsafe_configured_tracestate() {
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
-        span_attributes: BTreeMap::new(),
+        span_attributes: HashMap::new(),
         tracestate: BTreeMap::from([(
             "example".to_string(),
             BTreeMap::from([("alpha".to_string(), "one\ntwo".to_string())]),
@@ -537,7 +537,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
-        span_attributes: BTreeMap::from([(
+        span_attributes: HashMap::from([(
             "test.configured_attribute".to_string(),
             "configured-value".to_string(),
         )]),
@@ -683,7 +683,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
-        span_attributes: BTreeMap::new(),
+        span_attributes: HashMap::new(),
         tracestate: BTreeMap::new(),
     })?
     .expect("otel provider");
@@ -777,7 +777,7 @@ fn otlp_http_exporter_times_out_when_collector_stalls_during_bounded_shutdown() 
             },
             metrics_exporter: OtelExporter::None,
             runtime_metrics: false,
-            span_attributes: BTreeMap::new(),
+            span_attributes: HashMap::new(),
             tracestate: BTreeMap::new(),
         })
         .expect("build otel provider")
@@ -877,7 +877,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
                 },
                 metrics_exporter: OtelExporter::None,
                 runtime_metrics: false,
-                span_attributes: BTreeMap::new(),
+                span_attributes: HashMap::new(),
                 tracestate: BTreeMap::new(),
             })
             .map_err(|err| err.to_string())?

@@ -39,7 +39,7 @@ let settings = OtelSettings {
         tls: None,
     },
     metrics_exporter: OtelExporter::None,
-    span_attributes: std::collections::BTreeMap::new(),
+    span_attributes: std::collections::HashMap::new(),
     tracestate: std::collections::BTreeMap::new(),
 };
 

@@ -341,7 +341,7 @@ refresh_interval_ms = 12345
 }
 
 #[test]
-fn otel_requirements_compose_exact_values_and_atomic_exporters_with_relative_tls_paths() {
+fn otel_requirements_compose_exact_values_atomic_exporters_and_metadata() {
     let low_dir = tempdir().expect("low-priority requirements directory");
     let high_dir = tempdir().expect("high-priority requirements directory");
     let low_base = AbsolutePathBuf::from_absolute_path(low_dir.path()).expect("absolute low base");
@@ -359,6 +359,8 @@ environment = "low"
 exporter = { otlp-http = { endpoint = "https://low.example", protocol = "json", headers = { stale = "low" }, tls = { ca-certificate = "low-ca.pem" } } }
 trace_exporter = { otlp-grpc = { endpoint = "https://low.example", tls = { client-certificate = "low-client.pem" } } }
 metrics_exporter = "statsig"
+span_attributes = { shared = "low", lower = "preserved" }
+tracestate = { shared = { tenant = "low", region = "us" }, lower = { tenant = "preserved" }, empty = {} }
 "#,
     )
     .with_base_dir(low_base);
@@ -372,12 +374,22 @@ log_user_prompt = false
 environment = "high"
 exporter = { otlp-http = { endpoint = "https://high.example", protocol = "binary", tls = { ca-certificate = "high-ca.pem" } } }
 metrics_exporter = "none"
+span_attributes = { shared = "high", higher = "added" }
+tracestate = { shared = { tenant = "replacement" }, lower = {}, higher = { tenant = "added" } }
 "#,
     )
     .with_base_dir(high_base);
     let expected_source = RequirementSource::composite([high.source.clone(), low.source.clone()]);
     let composed = compose_requirements_for_hostname(
-        vec![low, high, layer("empty", "Empty", "[otel]")],
+        vec![
+            low,
+            high,
+            layer(
+                "empty",
+                "Empty",
+                "[otel]\nspan_attributes = {}\ntracestate = { lower = {} }",
+            ),
+        ],
         /*hostname*/ None,
     )
     .expect("compose OTEL requirements")
@@ -394,6 +406,8 @@ environment = "high"
 exporter = { otlp-http = { endpoint = "https://high.example", protocol = "binary", tls = { ca-certificate = '$HIGH_CA' } } }
 trace_exporter = { otlp-grpc = { endpoint = "https://low.example", tls = { client-certificate = '$LOW_CLIENT' } } }
 metrics_exporter = "none"
+span_attributes = { shared = "high", lower = "preserved", higher = "added" }
+tracestate = { shared = { tenant = "replacement", region = "us" }, lower = { tenant = "preserved" }, higher = { tenant = "added" } }
 "#
     .replace(
         "$HIGH_CA",
@@ -407,34 +421,25 @@ metrics_exporter = "none"
         composed.value,
         *expected_requirements(expected).otel.unwrap()
     );
+    assert_eq!(
+        compose(vec![layer(
+            "mixed",
+            "Mixed",
+            "[otel]\nexporter = 'none'\nspan_attributes = {}\ntracestate = { empty = {} }",
+        )]),
+        Ok(Some(expected_requirements("[otel]\nexporter = 'none'"))),
+    );
 
-    assert_eq!(compose(vec![layer("empty", "Empty", "[otel]")]), Ok(None));
-}
-
-#[test]
-fn managed_otel_trace_metadata_is_rejected_with_its_requirements_source() {
-    for field in ["span_attributes", "tracestate"] {
-        let error = compose(vec![layer(
-            "req_metadata",
-            "Managed policy",
-            &format!("[otel]\n{field} = {{}}"),
-        )])
-        .expect_err("metadata is unsupported");
-        let RequirementsCompositionError::Parse {
-            layer_source,
-            message,
-        } = error
-        else {
-            panic!("expected a layer parse error: {error:?}");
-        };
+    for empty in [
+        "[otel]",
+        "[otel.span_attributes]",
+        "[otel.tracestate.empty]",
+    ] {
         assert_eq!(
-            layer_source,
-            RequirementSource::EnterpriseManaged {
-                id: "req_metadata".to_string(),
-                name: "Managed policy".to_string(),
-            },
+            compose(vec![layer("empty", "Empty", empty)]),
+            Ok(None),
+            "{empty}",
         );
-        assert!(message.contains(&format!("unknown field `{field}`")));
     }
 }
 

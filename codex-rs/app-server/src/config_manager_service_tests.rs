@@ -1722,7 +1722,9 @@ log_agent_responses = true
 log_guardian_assessments = false
 exporter = "none"
 trace_exporter = "none"
-metrics_exporter = "none""#,
+metrics_exporter = "none"
+span_attributes = { "service.name" = "managed-service" }
+tracestate = { managed = { tenant = "enterprise" }, empty = {} }"#,
         ),
     );
     for (key_path, managed) in [
@@ -1733,8 +1735,14 @@ metrics_exporter = "none""#,
         ("otel.exporter.otlp-http.endpoint", true),
         ("otel.trace_exporter.otlp-grpc.endpoint", true),
         ("otel.metrics_exporter.otlp-http.headers", true),
+        ("otel.span_attributes.\"service.name\"", true),
+        ("otel.tracestate.managed.tenant", true),
         ("otel.environment", false),
         ("otel.tool_result.max_bytes", true),
+        ("otel.span_attributes.\"service.version\"", false),
+        ("otel.tracestate.local.tenant", false),
+        ("otel.tracestate.managed.region", false),
+        ("otel.tracestate.empty.tenant", false),
     ] {
         let result = service
             .write_value(ConfigValueWriteParams {
@@ -1829,7 +1837,9 @@ async fn read_projects_managed_otel_values_and_preserves_unmanaged_settings() {
 tool_result = { max_bytes = 1234 }
 log_user_prompt = true
 environment = "user"
-exporter = "statsig""#,
+exporter = "statsig"
+span_attributes = { "service.name" = "user-service", "service.version" = "user-version" }
+tracestate = { managed = { tenant = "user-tenant", region = "us" }, local = { tenant = "preserved" }, empty = { tenant = "also-preserved" } }"#,
     )
     .expect("write user config");
     let service = ConfigManager::new_for_tests(
@@ -1839,7 +1849,9 @@ exporter = "statsig""#,
         CloudConfigBundleFixture::loader_with_enterprise_requirement(
             r#"[otel]
 log_user_prompt = false
-exporter = "none""#,
+exporter = "none"
+span_attributes = { "service.name" = "managed-service" }
+tracestate = { managed = { tenant = "enterprise" }, empty = {} }"#,
         ),
     );
     let response = service
@@ -1865,15 +1877,28 @@ exporter = "none""#,
             "exporter": "none",
             "trace_exporter": null,
             "metrics_exporter": null,
-            "span_attributes": null,
-            "tracestate": null,
+            "span_attributes": {
+                "service.name": "managed-service",
+                "service.version": "user-version",
+            },
+            "tracestate": {
+                "managed": { "tenant": "enterprise", "region": "us" },
+                "local": { "tenant": "preserved" },
+                "empty": { "tenant": "also-preserved" },
+            },
         }),
     );
     for (path, user_owned) in [
         ("otel.log_user_prompt", false),
         ("otel.exporter", false),
+        ("otel.span_attributes.service.name", false),
+        ("otel.tracestate.managed.tenant", false),
+        ("otel.tracestate.managed.region", true),
         ("otel.environment", true),
         ("otel.tool_result.max_bytes", true),
+        ("otel.span_attributes.service.version", true),
+        ("otel.tracestate.local.tenant", true),
+        ("otel.tracestate.empty.tenant", true),
     ] {
         assert_eq!(response.origins.contains_key(path), user_owned, "{path}");
     }

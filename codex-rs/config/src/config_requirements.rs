@@ -1122,6 +1122,8 @@ pub struct OtelRequirementsToml {
     pub exporter: Option<OtelExporterKind>,
     pub trace_exporter: Option<OtelExporterKind>,
     pub metrics_exporter: Option<OtelExporterKind>,
+    pub span_attributes: Option<HashMap<String, String>>,
+    pub tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 impl OtelRequirementsToml {
@@ -1134,6 +1136,17 @@ impl OtelRequirementsToml {
             && self.exporter.is_none()
             && self.trace_exporter.is_none()
             && self.metrics_exporter.is_none()
+            && !self.has_metadata()
+    }
+
+    fn has_metadata(&self) -> bool {
+        self.span_attributes
+            .as_ref()
+            .is_some_and(|fields| !fields.is_empty())
+            || self
+                .tracestate
+                .as_ref()
+                .is_some_and(|members| members.values().any(|fields| !fields.is_empty()))
     }
 }
 
@@ -1847,6 +1860,11 @@ impl ConfigRequirementsToml {
             .find_map(|(is_managed, managed_path, field)| {
                 (is_managed && config_paths_overlap(segments, managed_path)).then_some(field)
             })
+            .or_else(|| {
+                otel.and_then(|otel| {
+                    exact_otel_metadata_requirement_for_config_path(otel, segments)
+                })
+            })
     }
 }
 
@@ -1862,6 +1880,15 @@ macro_rules! otel_merge_functions {
                 requirements.get_or_insert_default().$field = Some(value.clone());
                 contributed = true;
             })+
+            if higher_priority.has_metadata() {
+                let target = requirements.get_or_insert_default();
+                merge_otel_metadata(
+                    &mut target.span_attributes,
+                    &mut target.tracestate,
+                    higher_priority,
+                );
+                contributed = true;
+            }
             contributed
         }
 
@@ -1875,6 +1902,11 @@ macro_rules! otel_merge_functions {
                 conflict |= config.$field.as_ref().is_some_and(|current| current != value);
                 config.$field = Some(value.clone());
             })+
+            conflict |= merge_otel_metadata(
+                &mut config.span_attributes,
+                &mut config.tracestate,
+                requirements,
+            );
             conflict
         }
     };
@@ -1890,6 +1922,70 @@ otel_merge_functions!(
     trace_exporter,
     metrics_exporter,
 );
+
+fn merge_otel_metadata(
+    span_attributes: &mut Option<HashMap<String, String>>,
+    tracestate: &mut Option<BTreeMap<String, BTreeMap<String, String>>>,
+    requirements: &OtelRequirementsToml,
+) -> bool {
+    let mut conflict = false;
+    if let Some(attributes) = &requirements.span_attributes
+        && !attributes.is_empty()
+    {
+        let configured = span_attributes.get_or_insert_default();
+        for (key, value) in attributes {
+            conflict |= configured
+                .insert(key.clone(), value.clone())
+                .is_some_and(|configured| configured != *value);
+        }
+    }
+    if let Some(members) = &requirements.tracestate {
+        for (member, fields) in members.iter().filter(|(_, fields)| !fields.is_empty()) {
+            let configured = tracestate
+                .get_or_insert_default()
+                .entry(member.clone())
+                .or_default();
+            for (key, value) in fields {
+                conflict |= configured
+                    .insert(key.clone(), value.clone())
+                    .is_some_and(|configured| configured != *value);
+            }
+        }
+    }
+    conflict
+}
+
+fn exact_otel_metadata_requirement_for_config_path(
+    requirements: &OtelRequirementsToml,
+    segments: &[String],
+) -> Option<&'static str> {
+    if requirements
+        .span_attributes
+        .as_ref()
+        .is_some_and(|attributes| {
+            attributes.keys().any(|key| {
+                config_paths_overlap(segments, &["otel", "span_attributes", key.as_str()])
+            })
+        })
+    {
+        return Some("otel.span_attributes");
+    }
+
+    requirements
+        .tracestate
+        .as_ref()
+        .is_some_and(|members| {
+            members.iter().any(|(member, fields)| {
+                fields.keys().any(|field| {
+                    config_paths_overlap(
+                        segments,
+                        &["otel", "tracestate", member.as_str(), field.as_str()],
+                    )
+                })
+            })
+        })
+        .then_some("otel.tracestate")
+}
 
 fn config_paths_overlap(segments: &[String], managed_path: &[&str]) -> bool {
     segments
@@ -2471,9 +2567,16 @@ mod tests {
     #[test_case::test_case(&["otel", "exporter", "otlp-http", "endpoint"], Some("otel.exporter"); "exporter_endpoint")]
     #[test_case::test_case(&["otel", "trace_exporter"], Some("otel.trace_exporter"); "trace_exporter")]
     #[test_case::test_case(&["otel", "metrics_exporter"], Some("otel.metrics_exporter"); "metrics_exporter")]
-    #[test_case::test_case(&["otel", "span_attributes", "service.name"], None; "unmanaged_span_attribute")]
-    #[test_case::test_case(&["otel", "tracestate", "user"], None; "unmanaged_tracestate")]
-    fn otel_requirements_project_and_lock_exact_scalar_and_exporter_values(
+    #[test_case::test_case(&["otel", "span_attributes"], Some("otel.span_attributes"); "span_attributes")]
+    #[test_case::test_case(&["otel", "span_attributes", "service.name"], Some("otel.span_attributes"); "span_attributes_service_name")]
+    #[test_case::test_case(&["otel", "span_attributes", "other"], None; "span_attributes_other")]
+    #[test_case::test_case(&["otel", "tracestate"], Some("otel.tracestate"); "tracestate")]
+    #[test_case::test_case(&["otel", "tracestate", "managed", "tenant"], Some("otel.tracestate"); "tracestate_managed_tenant")]
+    #[test_case::test_case(&["otel", "tracestate", "managed"], Some("otel.tracestate"); "tracestate_managed")]
+    #[test_case::test_case(&["otel", "tracestate", "managed", "region"], None; "tracestate_managed_region")]
+    #[test_case::test_case(&["otel", "tracestate", "other"], None; "tracestate_other")]
+    #[test_case::test_case(&["otel", "tracestate", "empty"], None; "tracestate_empty")]
+    fn otel_requirements_project_exact_values_and_lock_only_managed_map_entries(
         segments: &[&str],
         expected: Option<&str>,
     ) -> Result<()> {
@@ -2486,6 +2589,8 @@ environment = "managed"
 exporter = "none"
 trace_exporter = "none"
 metrics_exporter = "none"
+span_attributes = { "service.name" = "managed" }
+tracestate = { managed = { tenant = "enterprise" }, empty = {} }
 "#,
         )?;
         let mut configured: ConfigToml = from_str(
@@ -2497,8 +2602,8 @@ environment = "user"
 exporter = "statsig"
 trace_exporter = { otlp-grpc = { endpoint = "https://user.example" } }
 metrics_exporter = "statsig"
-span_attributes = { "service.name" = "user" }
-tracestate = { user = { tenant = "preserved" } }
+span_attributes = { "service.name" = "user", other = "preserved" }
+tracestate = { managed = { tenant = "user", region = "us" }, other = { keep = "yes" } }
 "#,
         )?;
 
@@ -2514,8 +2619,8 @@ environment = "managed"
 exporter = "none"
 trace_exporter = "none"
 metrics_exporter = "none"
-span_attributes = { "service.name" = "user" }
-tracestate = { user = { tenant = "preserved" } }
+span_attributes = { "service.name" = "managed", other = "preserved" }
+tracestate = { managed = { tenant = "enterprise", region = "us" }, other = { keep = "yes" } }
 "#
             )?
         );
@@ -2527,11 +2632,17 @@ tracestate = { user = { tenant = "preserved" } }
             expected,
         );
 
-        let empty: ConfigRequirementsToml = from_str("[otel]")?;
-        assert!(empty.is_empty());
-        let mut configured = ConfigToml::default();
-        empty.apply_exact_to_config(&mut configured);
-        assert_eq!(configured.otel, None);
+        for empty in [
+            "[otel]",
+            "[otel.span_attributes]",
+            "[otel.tracestate.empty]",
+        ] {
+            let requirements: ConfigRequirementsToml = from_str(empty)?;
+            assert!(requirements.is_empty(), "{empty}");
+            let mut configured = ConfigToml::default();
+            requirements.apply_exact_to_config(&mut configured);
+            assert_eq!(configured.otel, None, "{empty}");
+        }
         Ok(())
     }
 

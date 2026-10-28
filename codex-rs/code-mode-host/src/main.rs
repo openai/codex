@@ -120,7 +120,7 @@ fn build_trace_provider(endpoint: &str) -> anyhow::Result<OtelProvider> {
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
-        span_attributes: BTreeMap::new(),
+        span_attributes: HashMap::new(),
         tracestate: BTreeMap::new(),
     })
     .map_err(|error| anyhow::anyhow!("failed to build code-mode host OTEL provider: {error}"))?

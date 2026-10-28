@@ -513,6 +513,8 @@ pub struct OtelRequirements {
     pub exporter: Option<OtelExporter>,
     pub trace_exporter: Option<OtelExporter>,
     pub metrics_exporter: Option<OtelExporter>,
+    pub span_attributes: Option<HashMap<String, String>>,
+    pub tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

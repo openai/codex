@@ -40,6 +40,7 @@ use opentelemetry_sdk::trace::TracerProviderBuilder;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor as TokioBatchSpanProcessor;
 use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::error::Error;
 use std::io;
 use std::mem::ManuallyDrop;
@@ -411,7 +412,7 @@ fn normalize_host_name(host_name: &str) -> Option<String> {
 
 fn tracer_provider_builder(
     resource: &Resource,
-    span_attributes: BTreeMap<String, String>,
+    span_attributes: HashMap<String, String>,
 ) -> TracerProviderBuilder {
     let builder = SdkTracerProvider::builder().with_resource(resource.clone());
     if span_attributes.is_empty() {
@@ -429,7 +430,7 @@ fn tracer_provider_builder(
 /// per-span metadata, so they need to be attached before each span is exported.
 #[derive(Debug)]
 struct SpanAttributesProcessor {
-    attributes: BTreeMap<String, String>,
+    attributes: HashMap<String, String>,
 }
 
 impl SpanProcessor for SpanAttributesProcessor {
@@ -536,7 +537,7 @@ fn build_logger(
 fn build_tracer_provider(
     resource: &Resource,
     exporter: &OtelExporter,
-    span_attributes: BTreeMap<String, String>,
+    span_attributes: HashMap<String, String>,
     factory: &codex_http_client::HttpClientFactory,
 ) -> Result<SdkTracerProvider, Box<dyn Error>> {
     let span_exporter = match crate::config::resolve_exporter(exporter) {
@@ -876,7 +877,7 @@ mod tests {
             trace_exporter: OtelExporter::None,
             metrics_exporter: OtelExporter::None,
             runtime_metrics: false,
-            span_attributes: BTreeMap::new(),
+            span_attributes: HashMap::new(),
             tracestate: BTreeMap::new(),
         }
     }

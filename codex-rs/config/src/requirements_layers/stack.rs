@@ -10,7 +10,8 @@
 //! - `rules.prefix_rules` append high-priority rules first.
 //! - `hooks` append high-priority event groups first while failing closed on
 //!   active managed-dir conflicts.
-//! - `otel` replaces exact managed values, treating exporters atomically.
+//! - `otel` replaces exact managed values, treats exporters atomically, and
+//!   merges span attributes and fields within each tracestate member by key.
 //! - `permissions.filesystem.deny_read` is a high-priority-first union across
 //!   layers.
 //! - `auto_review.required_on_models` is a high-priority-first union across layers.

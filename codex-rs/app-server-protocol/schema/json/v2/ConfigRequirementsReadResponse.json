@@ -1294,6 +1294,15 @@
             }
           ]
         },
+        "span_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "tool_result": {
           "anyOf": [
             {
@@ -1312,6 +1321,18 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "tracestate": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "type": [
+            "object",
+            "null"
           ]
         }
       },

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt::Display;
 
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
@@ -40,16 +41,16 @@ pub(crate) fn resolve_config(
 }
 
 fn resolve_span_attributes(
-    span_attributes: Option<BTreeMap<String, String>>,
+    span_attributes: Option<HashMap<String, String>>,
     startup_warnings: &mut Vec<String>,
-) -> BTreeMap<String, String> {
+) -> HashMap<String, String> {
     let Some(span_attributes) = span_attributes else {
-        return BTreeMap::new();
+        return HashMap::new();
     };
 
-    let mut valid_attributes = BTreeMap::new();
+    let mut valid_attributes = HashMap::new();
     for (key, value) in span_attributes {
-        let attribute = BTreeMap::from([(key.clone(), value.clone())]);
+        let attribute = HashMap::from([(key.clone(), value.clone())]);
         if let Err(err) = codex_otel::validate_span_attributes(&attribute) {
             push_invalid_config_warning("otel.span_attributes", err, startup_warnings);
             continue;
