@@ -38,6 +38,7 @@ struct ApplyPatchApprovalAction<'a> {
 struct WriteStdinApprovalAction<'a> {
     tool: &'static str,
     session_id: i32,
+    original_command: &'a str,
     chars: &'a str,
     cwd: LegacyAppPathString,
     sandbox_permissions: SandboxPermissions,
@@ -140,6 +141,7 @@ pub fn guardian_approval_request_to_json(
         ),
         GuardianApprovalRequest::WriteStdin {
             process_id,
+            original_command,
             input,
             cwd,
             tty,
@@ -149,6 +151,7 @@ pub fn guardian_approval_request_to_json(
         } => serialize_guardian_action(WriteStdinApprovalAction {
             tool: "write_stdin",
             session_id: *process_id,
+            original_command,
             chars: input,
             cwd: cwd.clone().into(),
             sandbox_permissions: *sandbox_permissions,

@@ -653,6 +653,7 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
             approval_id: "stdin-secondary".to_string(),
             environment_id: "secondary".to_string(),
             process_id: 42,
+            original_command: "bash".to_string(),
             input: "cat private/secret.txt\n".to_string(),
             cwd: cwd.clone().into(),
             tty: true,

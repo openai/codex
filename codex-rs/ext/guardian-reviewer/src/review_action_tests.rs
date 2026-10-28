@@ -16,7 +16,7 @@ use pretty_assertions::assert_eq;
 #[test_case::test_case(SandboxPermissions::UseDefault)]
 #[test_case::test_case(SandboxPermissions::RequireEscalated)]
 #[test_case::test_case(SandboxPermissions::WithAdditionalPermissions)]
-fn guardian_write_stdin_preserves_input_and_foreign_cwd(
+fn guardian_write_stdin_preserves_original_command_input_and_foreign_cwd(
     sandbox_permissions: SandboxPermissions,
 ) -> serde_json::Result<()> {
     let cwd = PathUri::parse("file:///C:/workspace").expect("valid executor cwd");
@@ -34,6 +34,7 @@ fn guardian_write_stdin_preserves_input_and_foreign_cwd(
         approval_id: "terminal-write".to_string(),
         environment_id: "windows-executor".to_string(),
         process_id: 1000,
+        original_command: "python helper.py --project 'example site'".to_string(),
         input: input.to_string(),
         cwd: cwd.clone(),
         tty: true,
@@ -45,6 +46,7 @@ fn guardian_write_stdin_preserves_input_and_foreign_cwd(
         "tool": "write_stdin",
         "environment_id": "windows-executor",
         "session_id": 1000,
+        "original_command": "python helper.py --project 'example site'",
         "chars": input,
         "cwd": r"C:\workspace",
         "sandbox_permissions": sandbox_permissions,

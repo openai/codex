@@ -195,7 +195,6 @@ impl From<&Arc<TurnContext>> for GuardianReviewContext {
 #[cfg(test)]
 use codex_guardian_reviewer::guardian_output_schema;
 
-pub(crate) use approval_request::format_guardian_action_pretty;
 #[cfg(test)]
 use approval_request::guardian_assessment_action;
 #[cfg(test)]

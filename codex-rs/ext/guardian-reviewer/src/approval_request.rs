@@ -37,6 +37,8 @@ pub enum GuardianApprovalRequest {
         approval_id: String,
         environment_id: String,
         process_id: i32,
+        /// Command used to launch the receiving terminal, not its current state.
+        original_command: String,
         input: String,
         cwd: PathUri,
         tty: bool,

@@ -1,5 +1,6 @@
 //! Exercises retained terminal grants and strict stdin review through the agent API.
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
@@ -342,13 +343,14 @@ async fn strict_stdin_review_reaches_guardian_with_sandbox_prompts_disabled() ->
     extensions.approval_review_contributor(calls.clone());
     let harness = harness(test_codex().with_extensions(Arc::new(extensions.build()))).await?;
     let test = harness.test();
+    let original_command = format!("/bin/bash --noprofile --norc # {}", "x".repeat(8_000));
     let opened = mount_sse_sequence(
         harness.server(),
         vec![
             tool_response(
                 "open",
                 "exec_command",
-                json!({"cmd":"/bin/bash --noprofile --norc", "tty":true, "yield_time_ms":200}),
+                json!({"cmd":original_command, "tty":true, "yield_time_ms":200}),
             ),
             tool_response(
                 "baseline",
@@ -420,13 +422,21 @@ async fn strict_stdin_review_reaches_guardian_with_sandbox_prompts_disabled() ->
         *calls.0.lock().unwrap(),
         vec!["strict", "denied", "allowed"]
     );
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|request| request.body_contains_text("Planned action JSON:"))
-            .count(),
-        2
-    );
+    let original_commands = requests
+        .iter()
+        .filter(|request| request.body_contains_text("Planned action JSON:"))
+        .map(|request| {
+            let text = request.message_input_texts("user").join("\n");
+            let (_, action) = text
+                .rsplit_once("Planned action JSON:\n")
+                .context("planned stdin action")?;
+            let (action, _) = action
+                .split_once("\n>>> APPROVAL REQUEST END")
+                .context("end of planned stdin action")?;
+            Ok(serde_json::from_str::<Value>(action)?["original_command"].clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(original_commands, vec![json!(original_command); 2]);
     let output = requests.last().unwrap().function_call_output("allowed");
     assert!(output.to_string().contains("STDIN_REVIEW_OK"), "{output}");
     Ok(())

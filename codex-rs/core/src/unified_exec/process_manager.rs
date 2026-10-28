@@ -934,7 +934,7 @@ impl UnifiedExecProcessManager {
                     "terminal input and permission details are too large to review safely; use a smaller input or start a new terminal with fewer grants".to_string(),
                 ))
             };
-            let reviewed = crate::guardian::format_guardian_action_pretty(
+            let mut reviewed = codex_guardian_reviewer::guardian_approval_request_to_json(
                 &approval
                     .clone()
                     .into_guardian_request(/*exec_command_cwd_convention*/ None)
@@ -943,8 +943,14 @@ impl UnifiedExecProcessManager {
                     })?,
             )
             .map_err(|_| unreviewable_input_error())?;
-            // Bound the entire serialized action plus its reason, including JSON
-            // escaping. Reject, never execute an unreviewed tail.
+            // Launch context uses Guardian's normal request budget, not the stdin limit.
+            if let Some(fields) = reviewed.as_object_mut() {
+                fields.remove("original_command");
+            }
+            let reviewed =
+                serde_json::to_string_pretty(&reviewed).map_err(|_| unreviewable_input_error())?;
+            // Bound the input and permission details plus their reason, including
+            // JSON escaping. Reject, never execute an unreviewed tail.
             let oversized =
                 reviewed.len().saturating_add(approval_reason.len()) > MAX_STDIN_APPROVAL_BYTES;
             let size_check_result = if oversized {

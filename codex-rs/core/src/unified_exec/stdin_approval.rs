@@ -276,6 +276,7 @@ impl ProcessEntry {
             approval_id: context.call_id.clone(),
             environment_id: self.environment_id.clone(),
             process_id: self.process_id,
+            original_command: self.hook_command.clone(),
             input: input.to_string(),
             cwd: self.cwd.clone(),
             tty: self.tty,
