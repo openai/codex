@@ -1,0 +1,24 @@
+---
+source: cli/tests/doctor_enterprise_network.rs
+expression: stdout
+---
+Codex Doctor v0.0.0
+
+Notes
+   [XX] config       config could not be loaded - Fix the reported config error, then rerun codex doctor.
+-------------------------------------------------------------
+
+Configuration
+  [XX] config       config could not be loaded - Fix the reported config error, then rerun codex doctor.
+      feature flags            0 enabled · 0 overridden
+      error                    invalid configuration
+      file                     <CODEX_HOME>/config.toml
+      line                     1
+      column                   18
+      network diagnostics      effective network configuration is unavailable
+
+-------------------------------------------------------------
+0 ok | 1 notes | 0 warn | 1 fail failed
+
+--summary compact output           --all expand truncated lists
+--json redacted report

@@ -154,8 +154,9 @@ const NARROW_TERMINAL_ROWS: u16 = 24;
 
 /// Options for building a local Codex diagnostic report.
 ///
-/// The command always runs the full diagnostic set. Human output includes
-/// detailed diagnostics by default; --summary keeps the terminal output compact.
+/// The command runs the full diagnostic set unless `--network-only` is selected.
+/// Human output includes detailed diagnostics by default; --summary keeps the terminal output
+/// compact.
 #[derive(Debug, Parser)]
 pub struct DoctorCommand {
     /// Internal isolated filesystem probe; exits before loading configuration.
@@ -165,6 +166,10 @@ pub struct DoctorCommand {
     /// Emit a redacted machine-readable report.
     #[arg(long, default_value_t = false)]
     json: bool,
+
+    /// Run config, network environment, provider HTTP, and Responses WebSocket checks.
+    #[arg(long, default_value_t = false)]
+    network_only: bool,
 
     /// Limit database integrity scans when collecting a feedback attachment.
     #[arg(long, hide = true, default_value_t = false)]
@@ -358,6 +363,12 @@ async fn build_report(
     arg0_paths: &Arg0DispatchPaths,
 ) -> DoctorReport {
     let progress = doctor_progress(command.json);
+    if command.network_only {
+        let checks =
+            network::checks(root_config_overrides, interactive, arg0_paths, &progress).await;
+        progress.settle();
+        return report_from_checks(checks);
+    }
     let mut checks = Vec::new();
     checks.push(run_sync_check("system", progress.clone(), system_check));
     checks.push(run_async_check("endpoint protection", progress.clone(), security::check()).await);
@@ -525,42 +536,7 @@ async fn build_report(
                 state_check,
                 reachability_check,
             ) = tokio::join!(
-                async {
-                    run_sync_check("config", progress.clone(), || {
-                        let check = DoctorCheck::new(
-                            "config.load",
-                            "config",
-                            CheckStatus::Fail,
-                            "config could not be loaded",
-                        )
-                        .remediation("Fix the reported config error, then rerun codex doctor.");
-                        // Error messages can echo config values. Report only typed metadata,
-                        // including errors wrapped by io::Error, whose source skips the wrapper.
-                        let config_error = err.chain().find_map(|cause| {
-                            cause.downcast_ref::<ConfigLoadError>().or_else(|| {
-                                cause
-                                    .downcast_ref::<std::io::Error>()?
-                                    .get_ref()?
-                                    .downcast_ref::<ConfigLoadError>()
-                            })
-                        });
-                        if let Some(error) = config_error {
-                            let error = error.config_error();
-                            return check
-                                .detail("error: invalid configuration")
-                                .detail(format!("file: {}", error.path.display()))
-                                .detail(format!("line: {}", error.range.start.line))
-                                .detail(format!("column: {}", error.range.start.column));
-                        }
-                        let io_error = err
-                            .chain()
-                            .find_map(|cause| cause.downcast_ref::<std::io::Error>());
-                        match io_error {
-                            Some(error) => check.detail(format!("error: {}", error.kind())),
-                            None => check.detail("error: configuration load failed"),
-                        }
-                    })
-                },
+                async { run_sync_check("config", progress.clone(), || config_load_failure(err)) },
                 async {
                     run_sync_check("network", progress.clone(), || {
                         network::check(/*config*/ None)
@@ -603,6 +579,10 @@ async fn build_report(
 
     progress.settle();
 
+    report_from_checks(checks)
+}
+
+fn report_from_checks(checks: Vec<DoctorCheck>) -> DoctorReport {
     let overall_status = overall_status(&checks);
     DoctorReport {
         schema_version: 1,
@@ -610,6 +590,41 @@ async fn build_report(
         overall_status,
         codex_version: env!("CARGO_PKG_VERSION").to_string(),
         checks,
+    }
+}
+
+fn config_load_failure(err: &anyhow::Error) -> DoctorCheck {
+    let check = DoctorCheck::new(
+        "config.load",
+        "config",
+        CheckStatus::Fail,
+        "config could not be loaded",
+    )
+    .remediation("Fix the reported config error, then rerun codex doctor.");
+    // Error messages can echo config values. Report only typed metadata,
+    // including errors wrapped by io::Error, whose source skips the wrapper.
+    let config_error = err.chain().find_map(|cause| {
+        cause.downcast_ref::<ConfigLoadError>().or_else(|| {
+            cause
+                .downcast_ref::<std::io::Error>()?
+                .get_ref()?
+                .downcast_ref::<ConfigLoadError>()
+        })
+    });
+    if let Some(error) = config_error {
+        let error = error.config_error();
+        return check
+            .detail("error: invalid configuration")
+            .detail(format!("file: {}", error.path.display()))
+            .detail(format!("line: {}", error.range.start.line))
+            .detail(format!("column: {}", error.range.start.column));
+    }
+    let io_error = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>());
+    match io_error {
+        Some(error) => check.detail(format!("error: {}", error.kind())),
+        None => check.detail("error: configuration load failed"),
     }
 }
 

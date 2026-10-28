@@ -1,0 +1,19 @@
+---
+source: cli/tests/doctor_enterprise_network.rs
+expression: stdout
+---
+Codex Doctor v0.0.0
+
+Configuration
+  [ok] config       loaded
+
+Connectivity
+  [ok] network      network-related environment looks readable
+  [ok] websocket    Responses WebSocket is not enabled for the active provider
+  [ok] reachability active provider endpoints are reachable over HTTP
+
+-------------------------------------------------------------
+4 ok | 0 warn | 0 fail ok
+
+Run codex doctor without --summary for detailed diagnostics.
+--all expand truncated lists       --json redacted report

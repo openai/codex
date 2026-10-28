@@ -8,7 +8,10 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::write_chatgpt_auth;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_state::SqliteConfig;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
@@ -17,6 +20,232 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+async fn local_provider() -> Result<(MockServer, TempDir)> {
+    let server = MockServer::start().await;
+    for (request_method, request_path, status) in
+        [("HEAD", "/v1/responses", 200), ("GET", "/v1/models", 401)]
+    {
+        Mock::given(method(request_method))
+            .and(path(request_path))
+            .respond_with(ResponseTemplate::new(status).insert_header("x-request-id", "fixture-id"))
+            .mount(&server)
+            .await;
+    }
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"ephemeral\"\ncheck_for_update_on_startup = false\nmodel_provider = \"local\"\n[model_providers.local]\nname = \"local\"\nbase_url = \"{}/v1\"\nwire_api = \"responses\"\n",
+            server.uri()
+        ),
+    )?;
+    Ok((server, home))
+}
+
+fn local_command(home: &TempDir) -> Result<Command> {
+    let mut command = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?);
+    command
+        .current_dir(home.path())
+        .env("CODEX_HOME", home.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .stdin(Stdio::null());
+    for name in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_API_KEY",
+        "OPENAI_API_KEY",
+        "CODEX_CA_CERTIFICATE",
+        "SSL_CERT_FILE",
+        "OPENAI_WORKLOAD_IDENTITY_CONTEXT",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+        "OPENAI_FEDERATION_RULE_ID",
+    ] {
+        command.env_remove(name);
+    }
+    Ok(command)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_only_selects_checks_without_database_or_mcp_scans() -> Result<()> {
+    let (server, home) = local_provider().await?;
+    Mock::given(path("/unrelated-mcp"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let sqlite =
+        SqliteConfig::new_for_testing(AbsolutePathBuf::try_from(home.path().to_path_buf())?);
+    let database = sqlite.logs_db_path();
+    std::fs::write(&database, "not a SQLite database")?;
+    let mcp_url = format!("{}/unrelated-mcp", server.uri());
+    let output = local_command(&home)?
+        .args(["doctor", "--network-only", "--json", "--all", "--feedback"])
+        .arg("-c")
+        .arg(format!("mcp_servers.unrelated.url={mcp_url:?}"))
+        .output()?;
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    assert!(output.status.success(), "{report:#}");
+    let checks = report["checks"].as_object().unwrap();
+    assert_eq!(
+        checks.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![
+            "config.load",
+            "network.env",
+            "network.provider_reachability",
+            "network.websocket_reachability",
+        ]
+    );
+    assert_eq!(std::fs::read_to_string(database)?, "not a SQLite database");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_only_reports_recoverable_config_warnings_and_effective_config() -> Result<()> {
+    let (_server, home) = local_provider().await?;
+    let baseline_output = local_command(&home)?
+        .args(["doctor", "--network-only", "--json"])
+        .output()?;
+    let baseline_report: Value = serde_json::from_slice(&baseline_output.stdout)?;
+    assert!(baseline_output.status.success(), "{baseline_report:#}");
+    let baseline_warning_count =
+        baseline_report["checks"]["config.load"]["details"]["startup warnings"]
+            .as_str()
+            .unwrap_or("0")
+            .parse::<usize>()?;
+    let config_path = home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        format!("{config}\n[otel.span_attributes]\n\"\" = \"missing-key\"\n"),
+    )?;
+    let output = local_command(&home)?
+        .args(["doctor", "--network-only", "--json"])
+        .output()?;
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    assert!(output.status.success(), "{report:#}");
+    let config_check = &report["checks"]["config.load"];
+    let warning_count = config_check["details"]["startup warnings"]
+        .as_str()
+        .context("missing startup-warning count")?
+        .parse::<usize>()?;
+    let warnings = &config_check["details"]["startup warning"];
+    let startup_warning = std::iter::once(warnings)
+        .chain(warnings.as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .find(|warning| warning.starts_with("Ignoring invalid `otel.span_attributes` config"))
+        .context("missing recoverable OTEL config warning")?;
+    let check_statuses = report["checks"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(id, check)| (id.clone(), check["status"].clone()))
+        .collect::<serde_json::Map<_, _>>();
+    assert_eq!(
+        json!({
+            "overallStatus": report["overallStatus"],
+            "checkStatuses": check_statuses,
+            "config": {
+                "summary": config_check["summary"],
+                "scope": config_check["details"]["configuration scope"],
+                "provider": config_check["details"]["model provider"],
+                "startupWarnings": warning_count,
+                "startupWarning": startup_warning,
+            },
+        }),
+        json!({
+            "overallStatus": "warning",
+            "checkStatuses": {
+                "config.load": "warning",
+                "network.env": "ok",
+                "network.provider_reachability": "ok",
+                "network.websocket_reachability": "ok",
+            },
+            "config": {
+                "summary": "config loaded",
+                "scope": "invocation config, including cloud-managed policy",
+                "provider": "local",
+                "startupWarnings": baseline_warning_count + 1,
+                "startupWarning": "Ignoring invalid `otel.span_attributes` config: configured span attribute key must not be empty",
+            },
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_only_config_failure_does_not_guess_probe_targets() -> Result<()> {
+    let proxy = MockServer::start().await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "model_provider = sk-config-credential-fixture\n",
+    )?;
+    let output = local_command(&home)?
+        .args(["doctor", "--network-only", "--json"])
+        .env("HTTP_PROXY", proxy.uri())
+        .env("HTTPS_PROXY", proxy.uri())
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("sk-config-credential-fixture"));
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(report["checks"].as_object().unwrap().len(), 1);
+    assert_eq!(report["checks"]["config.load"]["status"], "fail");
+    assert_eq!(
+        report["checks"]["config.load"]["details"]["network diagnostics"],
+        "effective network configuration is unavailable"
+    );
+    assert!(proxy.received_requests().await.unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_only_human_output() -> Result<()> {
+    let (_server, home) = local_provider().await?;
+    let output = local_command(&home)?
+        .args([
+            "doctor",
+            "--network-only",
+            "--summary",
+            "--ascii",
+            "--no-color",
+        ])
+        .output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(output.status.success(), "{stdout}");
+    insta::assert_snapshot!("network_only_human_output", stdout);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_only_config_failure_human_output() -> Result<()> {
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "model_provider = sk-config-credential-fixture\n",
+    )?;
+    let output = local_command(&home)?
+        .args(["doctor", "--network-only", "--all", "--ascii", "--no-color"])
+        .output()?;
+    let stdout = String::from_utf8(output.stdout)?;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!stdout.contains("sk-config-credential-fixture"));
+    // Config loading may canonicalize the directory, rendering may shorten it,
+    // and Windows uses backslashes.
+    // Normalize the rendered config-file row while retaining its label and filename.
+    let file_row = Regex::new(r"(?m)^(      file +).+[\\/]config\.toml$")?;
+    assert!(file_row.is_match(&stdout), "{stdout}");
+    let stdout = file_row.replace_all(&stdout, "${1}<CODEX_HOME>/config.toml");
+    insta::assert_snapshot!("network_only_config_failure_human_output", stdout);
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn doctor_reports_cloud_filesystem_policy_and_rejects_invalid_requirements() -> Result<()> {

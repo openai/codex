@@ -1,7 +1,10 @@
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 #[cfg(target_os = "macos")]
 use codex_http_client::MacosSystemProxyConfiguration;
@@ -11,13 +14,66 @@ use codex_http_client::RouteFailureClass;
 #[cfg(target_os = "macos")]
 use codex_http_client::macos_system_proxy_configuration;
 use codex_login::default_client::create_client_without_request_logging;
+use codex_tui::Cli as TuiCli;
+use codex_utils_cli::CliConfigOverrides;
 use http::HeaderMap;
 use http::Method;
 
 use super::CheckStatus;
 use super::DoctorCheck;
+use super::DoctorProgress;
 use super::push_proxy_env_details;
 use super::read_probe_file;
+
+pub(super) async fn checks(
+    overrides: CliConfigOverrides,
+    interactive: &TuiCli,
+    arg0_paths: &Arg0DispatchPaths,
+    progress: &Arc<dyn DoctorProgress>,
+) -> Vec<DoctorCheck> {
+    progress.begin("config");
+    let config_started = Instant::now();
+    let config = match super::load_config(overrides, interactive, arg0_paths).await {
+        Ok(config) => config,
+        Err(error) => {
+            let check = super::config_load_failure(&error)
+                .detail("network diagnostics: effective network configuration is unavailable");
+            progress.finish("config", check.status);
+            return vec![check];
+        }
+    };
+    let config_duration = config_started.elapsed();
+    let mut config_check = super::config_check(&config).detail(format!(
+        "configuration load ms: {}",
+        config_duration.as_millis()
+    ));
+    config_check.duration_ms = config_duration.as_millis().try_into().unwrap_or(u64::MAX);
+    progress.finish("config", config_check.status);
+    let auth_manager = codex_login::AuthManager::shared_from_config(
+        &config, /*enable_codex_api_key_env*/ true,
+    )
+    .await
+    .ok();
+    let plan = super::provider_reachability_plan(&config);
+    #[cfg(target_os = "macos")]
+    let url = plan.endpoints.first().map(|endpoint| endpoint.url.clone());
+    let (network, websocket, reachability) = tokio::join!(
+        async { super::run_sync_check("network", progress.clone(), || check(Some(&config))) },
+        super::run_async_check(
+            "websocket",
+            progress.clone(),
+            super::websocket_reachability_check(&config, auth_manager)
+        ),
+        super::run_async_check(
+            "provider reachability",
+            progress.clone(),
+            super::provider_reachability_check(plan)
+        ),
+    );
+    #[cfg(target_os = "macos")]
+    let reachability = with_system_proxy_remediation(reachability, &config, url.as_deref());
+    vec![config_check, network, websocket, reachability]
+}
 
 pub(super) fn check(config: Option<&Config>) -> DoctorCheck {
     let mut details = Vec::new();
