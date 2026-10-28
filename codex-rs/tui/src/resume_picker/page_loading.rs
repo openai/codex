@@ -129,13 +129,12 @@ impl PaginationState {
         if self.is_loading() {
             return None;
         }
+        if matches!(self.next_cursor, Some(PageCursor::SourcesPending)) {
+            return None;
+        }
         self.next_cursor
             .clone()
             .map(|cursor| (cursor, self.next_page_mode))
-    }
-
-    pub(super) fn is_pending(&self, request_token: usize) -> bool {
-        matches!(self.loading, LoadingState::Pending(pending) if pending.request_token == request_token)
     }
 
     pub(super) fn is_loading(&self) -> bool {

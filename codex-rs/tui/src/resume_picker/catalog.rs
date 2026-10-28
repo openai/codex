@@ -30,10 +30,17 @@ pub(super) struct PageRequest {
 }
 
 impl ThreadCatalog {
-    pub(super) fn has_more(&self, excluded: &HashSet<BackendId>) -> bool {
-        self.sources
-            .iter()
-            .any(|(id, source)| !source.exhausted && !excluded.contains(id))
+    pub(super) fn next_cursor(&self, excluded: &HashSet<BackendId>) -> Option<PageCursor> {
+        if self.sources.iter().any(|(id, source)| {
+            !source.exhausted && source.pending.is_none() && !excluded.contains(id)
+        }) {
+            Some(PageCursor::Catalog)
+        } else {
+            self.sources
+                .values()
+                .any(|source| source.pending.is_some())
+                .then_some(PageCursor::SourcesPending)
+        }
     }
 
     pub(super) fn reset(&mut self) {

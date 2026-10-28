@@ -8,6 +8,21 @@ use futures::StreamExt;
 use futures::stream::SelectAll;
 use std::collections::HashSet;
 
+struct PendingPage {
+    request: PageLoadRequest,
+    page: catalog::PageRequest,
+}
+
+fn completion_page(catalog: &catalog::ThreadCatalog, failed: &HashSet<BackendId>) -> PickerPage {
+    PickerPage {
+        rows: Vec::new(),
+        history_modes: HashMap::new(),
+        next_cursor: catalog.next_cursor(failed),
+        num_scanned_files: 0,
+        reached_scan_cap: false,
+    }
+}
+
 pub(super) struct Source {
     pub(super) backend_id: BackendId,
     pub(super) loader: PickerLoader,
@@ -42,11 +57,9 @@ pub(super) fn spawn(
     }
     let task = tokio::spawn(async move {
         let mut catalog = catalog::ThreadCatalog::default();
-        let mut pending = HashMap::new();
+        let mut pending: HashMap<BackendId, PendingPage> = HashMap::new();
+        let mut awaiting_completion = None;
         let mut failed = HashSet::new();
-        let mut current: Option<PageLoadRequest> = None;
-        let mut succeeded = false;
-        let mut error = None;
         loop {
             tokio::select! {
                 biased;
@@ -55,24 +68,43 @@ pub(super) fn spawn(
                     let Some(request) = request else { break };
                     match request {
                         PickerLoadRequest::Page(request) => {
-                            succeeded = false;
                             if request.cursor.is_none() {
                                 catalog.reset();
                                 pending.clear();
+                                awaiting_completion = None;
                                 failed.retain(|id| !workers.contains_key(id));
                             }
-                            error = workers.is_empty().then(|| std::io::Error::other("No session backends are available."));
+                            let request_token = request.request_token;
+                            let mut started = false;
                             for (id, worker) in &workers {
                                 if failed.contains(id) { continue; }
                                 if let Some(page) = catalog.begin_page(*id, request.mode) {
                                     let mut source_request = request.clone();
                                     source_request.cursor = page.cursor.clone();
                                     source_request.mode = page.mode;
-                                    pending.insert(*id, page);
+                                    pending.insert(*id, PendingPage {
+                                        request: source_request.clone(),
+                                        page,
+                                    });
                                     worker(PickerLoadRequest::Page(source_request));
+                                    started = true;
                                 }
                             }
-                            current = Some(request);
+                            if started {
+                                awaiting_completion = Some(request);
+                            } else {
+                                let page = if workers.is_empty() {
+                                    Err(std::io::Error::other("No session backends are available."))
+                                } else {
+                                    Ok(completion_page(&catalog, &failed))
+                                };
+                                let _ = output.send(BackgroundEvent::Page {
+                                    request_token,
+                                    search_token: request.search_token,
+                                    mode: request.mode,
+                                    page,
+                                });
+                            }
                         }
                         request => {
                             let backend = match &request {
@@ -104,73 +136,104 @@ pub(super) fn spawn(
                         None => {
                             workers.remove(&id);
                             failed.insert(id);
-                            let Some(request) = current.as_ref().filter(|_| pending.contains_key(&id)) else { continue };
-                            BackgroundEvent::Page { request_token: request.request_token, search_token: request.search_token, mode: request.mode,
-                                page: Err(std::io::Error::other("The session backend disconnected.")) }
+                            let Some(pending_page) = pending.get(&id) else { continue };
+                            BackgroundEvent::Page {
+                                request_token: pending_page.request.request_token,
+                                search_token: pending_page.request.search_token,
+                                mode: pending_page.request.mode,
+                                page: Err(std::io::Error::other("The session backend disconnected.")),
+                            }
                         }
                     };
                     match event {
                         BackgroundEvent::Page { request_token, page, .. } => {
-                            if current.as_ref().is_none_or(|request| request.request_token != request_token) { continue; }
-                            let Some(mut page_request) = pending.remove(&id) else { continue };
-                            let should_fallback = page_request.mode == PageLoadMode::StateDbOnly
-                                && page_request.cursor.is_none()
+                            let Some(pending_page) = pending.get(&id) else { continue };
+                            if pending_page.request.request_token != request_token { continue; }
+                            let Some(mut pending_page) = pending.remove(&id) else { continue };
+                            let is_initial_page = pending_page.page.cursor.is_none();
+                            let should_fallback = pending_page.page.mode == PageLoadMode::StateDbOnly
+                                && is_initial_page
                                 && workers.contains_key(&id)
                                 && (page.is_err()
                                     || page.as_ref().is_ok_and(|page| page.rows.is_empty()));
                             if should_fallback {
-                                let Some(request) = current.as_mut() else {
-                                    continue;
-                                };
-                                request.mode = PageLoadMode::StoreDefault;
-                                let mut fallback = request.clone();
-                                fallback.cursor = page_request.cursor.clone();
-                                page_request.mode = PageLoadMode::StoreDefault;
-                                pending.insert(id, page_request);
+                                if let Some(request) = awaiting_completion.as_mut()
+                                    && request.request_token == request_token
+                                {
+                                    request.mode = PageLoadMode::StoreDefault;
+                                }
+                                let mut fallback = pending_page.request;
+                                fallback.mode = PageLoadMode::StoreDefault;
+                                fallback.cursor = pending_page.page.cursor.clone();
+                                pending_page.page.mode = PageLoadMode::StoreDefault;
+                                pending_page.request = fallback.clone();
+                                pending.insert(id, pending_page);
                                 workers[&id](PickerLoadRequest::Page(fallback));
                                 continue;
                             }
+                            let mut wait_for_other_source = false;
+                            let mut completion_error = None;
                             match page {
                                 Ok(page) => {
-                                    let Some(Ok(mut page)) = catalog.finish_page(page_request, Ok(page)) else { continue };
-                                    succeeded = true;
-                                    // Only the catalog owns source cursors. The UI receives a
-                                    // continuation marker once this round's workers have replied.
-                                    page.next_cursor = None;
-                                    let _ = output.send(BackgroundEvent::PartialPage { request_token, page });
+                                    let Some(Ok(mut page)) = catalog.finish_page(pending_page.page, Ok(page)) else { continue };
+                                    page.next_cursor = catalog.next_cursor(&failed);
+                                    let _ = output.send(BackgroundEvent::PartialPage {
+                                        listing_token: pending_page.request.listing_token,
+                                        page,
+                                    });
                                 }
                                 Err(err) => {
-                                    let Some(Err(err)) = catalog.finish_page(page_request, Err(err)) else { continue };
+                                    let Some(Err(err)) = catalog.finish_page(pending_page.page, Err(err)) else { continue };
                                     failed.insert(id);
-                                    error = Some(err);
-                                    let _ = output.send(BackgroundEvent::SourceError { request_token });
+                                    if let Some(request) = awaiting_completion.as_mut()
+                                        && request.request_token == request_token
+                                    {
+                                        request.mode = PageLoadMode::StoreDefault;
+                                    }
+                                    let _ = output.send(BackgroundEvent::SourceError {
+                                        listing_token: pending_page.request.listing_token,
+                                        next_cursor: catalog.next_cursor(&failed),
+                                    });
+                                    if is_initial_page {
+                                        wait_for_other_source = pending.values().any(|pending| {
+                                            pending.request.request_token == request_token
+                                        });
+                                        completion_error = Some(err);
+                                    }
                                 }
+                            }
+                            let can_continue = matches!(
+                                catalog.next_cursor(&failed),
+                                Some(PageCursor::Catalog)
+                            );
+                            let completes_source_request = awaiting_completion
+                                .as_ref()
+                                .is_some_and(|request| {
+                                    request.request_token == request_token
+                                        && !wait_for_other_source
+                                });
+                            if (completes_source_request || can_continue)
+                                && let Some(request) = awaiting_completion.take()
+                            {
+                                let page = if completes_source_request {
+                                    completion_error.map_or_else(
+                                        || Ok(completion_page(&catalog, &failed)),
+                                        Err,
+                                    )
+                                } else {
+                                    Ok(completion_page(&catalog, &failed))
+                                };
+                                let _ = output.send(BackgroundEvent::Page {
+                                    request_token: request.request_token,
+                                    search_token: request.search_token,
+                                    mode: request.mode,
+                                    page,
+                                });
                             }
                         }
                         event => { let _ = output.send(event); }
                     }
                 }
-            }
-            if pending.is_empty()
-                && let Some(request) = current.take()
-            {
-                let page = if !succeeded && let Some(error) = error.take() {
-                    Err(error)
-                } else {
-                    Ok(PickerPage {
-                        rows: Vec::new(),
-                        history_modes: HashMap::new(),
-                        next_cursor: catalog.has_more(&failed).then_some(PageCursor::Catalog),
-                        num_scanned_files: 0,
-                        reached_scan_cap: false,
-                    })
-                };
-                let _ = output.send(BackgroundEvent::Page {
-                    request_token: request.request_token,
-                    search_token: request.search_token,
-                    mode: request.mode,
-                    page,
-                });
             }
         }
         drop(workers);

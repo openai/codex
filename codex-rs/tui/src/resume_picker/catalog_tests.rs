@@ -25,7 +25,7 @@ fn listed(thread: ThreadId, cursor: Option<&str>) -> PickerPage {
 fn cursor(request: &PageRequest) -> Option<&str> {
     request.cursor.as_ref().map(|cursor| match cursor {
         PageCursor::AppServer(value) => value.as_str(),
-        PageCursor::Catalog => panic!("unexpected catalog cursor"),
+        PageCursor::Catalog | PageCursor::SourcesPending => panic!("unexpected catalog cursor"),
     })
 }
 
