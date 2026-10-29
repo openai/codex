@@ -67,7 +67,11 @@ async fn application_network_defaults_and_null_base_url_are_exposed() -> Result<
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn application_destinations_stay_separate_from_agent_network() -> Result<()> {
-    for table in ["network_proxy", "experimental_network"] {
+    for table in [
+        "network_proxy",
+        "experimental_network",
+        "permissions.network",
+    ] {
         let home = TempDir::new()?;
         std::fs::write(
             home.path().join("requirements.toml"),

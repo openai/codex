@@ -295,3 +295,34 @@ fn removed_private_desktop_setting_has_migration_hint() {
         "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `windows.sandbox_private_desktop` is ignored. Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
     );
 }
+
+#[test]
+fn managed_network_unknown_fields_are_reported_for_each_spelling() {
+    let config = ConfigLayerStack::new(
+        Vec::new(),
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .unwrap();
+    for table in [
+        "network_proxy",
+        "experimental_network",
+        "permissions.network",
+    ] {
+        let requirements = RequirementsLayerEntry::from_toml(
+            crate::RequirementSource::Unknown,
+            format!(
+                "[{table}]\nenabld = true\n[{table}.domains]\n'example.com' = 'allow'\n\
+                 [[{table}.header_injections]]\nhost = 'example.com'\nmethods = ['GET']\n\
+                 path_prefixes = ['/']\nheaders = {{}}\nunknown = true\n"
+            ),
+        );
+        assert_eq!(
+            ignored_config_warning(&config, &[requirements]),
+            Some(format!(
+                "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings.\n  requirements (<unspecified>): `{table}.enabld` is ignored.\n  requirements (<unspecified>): `{table}.header_injections.0.unknown` is ignored."
+            )),
+            "{table}"
+        );
+    }
+}

@@ -50,6 +50,7 @@ impl DenyReadMergeState {
                     filesystem: Some(FilesystemRequirementsToml {
                         deny_read: Some(self.deny_read),
                     }),
+                    network: None,
                     profiles: Default::default(),
                 },
                 source,
@@ -67,9 +68,9 @@ impl DenyReadMergeState {
                 deny_read.push(pattern);
             }
         }
-        if existing.source != source {
-            existing.source = RequirementSource::composite([existing.source.clone(), source]);
-        }
+        // The normalized filesystem constraint must name the layers that supplied denials,
+        // not layers that only supplied sibling profiles.
+        existing.source = source;
     }
 
     fn merge_source(&mut self, source: &RequirementSource) {

@@ -453,6 +453,12 @@ pub(crate) fn map_requirements_to_api(
         }
         None => ConfigRequirementsToml::default(),
     };
+    let network = requirements
+        .permissions
+        .as_ref()
+        .and_then(|permissions| permissions.network.as_deref())
+        .cloned()
+        .or_else(|| requirements.network.clone());
 
     Some(ConfigRequirements {
         model_provider: requirements.model_provider,
@@ -578,7 +584,7 @@ pub(crate) fn map_requirements_to_api(
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
-        network: requirements.network.map(map_network_requirements_to_api),
+        network: network.map(map_network_requirements_to_api),
         auto_review: requirements
             .auto_review
             .map(|auto_review| AutoReviewRequirements {

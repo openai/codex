@@ -3,6 +3,7 @@
 use crate::CONFIG_TOML_FILE;
 use crate::ConfigLayerStack;
 use crate::ConfigRequirementsToml;
+use crate::NetworkRequirementsToml;
 use crate::RequirementsLayerEntry;
 use crate::config_toml::ConfigToml;
 use crate::diagnostics::ConfigDiagnosticSource;
@@ -277,11 +278,28 @@ pub(crate) fn ignored_config_warning(
             .as_ref()
             .map(|base_dir| AbsolutePathBufGuard::new(base_dir.as_path()));
         strip_cloud_auth_requirements(&source, &mut value);
+        // The flattened permissions deserializer consumes unknown network keys.
+        // Inspect that table separately to retain the usual typo diagnostics.
+        let permissions_network = value
+            .get("permissions")
+            .and_then(|permissions| permissions.get("network"))
+            .cloned();
         fields.extend(
             ignored_toml_value_fields::<ConfigRequirementsToml>(value)
                 .into_iter()
                 .map(|path| (format!("requirements ({source})"), path)),
         );
+        if let Some(network) = permissions_network {
+            fields.extend(
+                ignored_toml_value_fields::<NetworkRequirementsToml>(network)
+                    .into_iter()
+                    .map(|path| {
+                        let mut full_path = vec!["permissions".to_string(), "network".to_string()];
+                        full_path.extend(path);
+                        (format!("requirements ({source})"), full_path)
+                    }),
+            );
+        }
     }
 
     if fields.is_empty() {
@@ -305,7 +323,7 @@ pub(crate) fn ignored_config_warning(
                 " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
             }
             ["network_proxy"] => {
-                " Use [permissions.<name>.network] for network settings, or [network_proxy] in requirements.toml for enforced network policy."
+                " Use [features.network_proxy] or [permissions.<name>.network] for settings in config.toml, or [network_proxy], [permissions.network], or [experimental_network] for enforced policy in requirements.toml."
             }
             ["allowed_permissions"] => {
                 " Use [allowed_permission_profiles] and default_permissions; the old allowlist is ignored even when both forms are present."

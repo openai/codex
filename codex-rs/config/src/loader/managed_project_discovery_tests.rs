@@ -161,7 +161,11 @@ async fn managed_network_requirements_control_broker_project_discovery() -> anyh
     let requirements_path = fixture._temp.path().join("requirements.toml");
     fixture.overrides.system_requirements_path = Some(requirements_path.clone());
 
-    for table in ["network_proxy", "experimental_network"] {
+    for table in [
+        "network_proxy",
+        "experimental_network",
+        "permissions.network",
+    ] {
         for enabled in [false, true] {
             std::fs::write(
                 &requirements_path,
@@ -187,6 +191,47 @@ async fn managed_network_requirements_control_broker_project_discovery() -> anyh
                 (expected.clone(), expected),
                 "{table}, enabled = {enabled}"
             );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_discovery_rejects_invalid_network_requirements() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new()?;
+    let path = fixture._temp.path().join("requirements.toml");
+    fixture.overrides.system_requirements_path = Some(path.clone());
+    for table in ["network_proxy", "experimental_network"] {
+        for (nested, message) in [
+            ("http_port = 8090", "exactly one surface"),
+            ("enabled = false", "exactly one surface"),
+            ("", "rename the managed profile"),
+            (
+                "extends = ':workspace'\nenabled = true",
+                "rename the managed profile",
+            ),
+        ] {
+            std::fs::write(&path, format!("[{table}]\n[permissions.network]\n{nested}"))?;
+            let local = load_local_config_layers_with_overrides(
+                &TestFileSystem,
+                &fixture.home,
+                &fixture.cwd,
+                &fixture.overrides,
+            )
+            .await
+            .expect_err("executor-local discovery must reject mixed network requirements");
+            let canonical = load_config_layers_state(
+                &TestFileSystem,
+                &fixture.home,
+                Some(fixture.cwd.clone()),
+                &[],
+                fixture.overrides.clone(),
+                &NoopThreadConfigLoader,
+            )
+            .await
+            .expect_err("startup must reject mixed network requirements");
+            assert_eq!(local.to_string(), canonical.to_string());
+            assert!(local.to_string().contains(message), "{local}");
         }
     }
     Ok(())
@@ -316,6 +361,8 @@ async fn project_cannot_define_or_rebind_credentials_via_permission_profiles() -
     let fixture = Fixture::new()?;
     let trusted = r#"
 [permissions.bridge]
+[permissions.network]
+extends = "bridge"
 [permissions.vault.network.mitm]
 version = 2
 [[permissions.vault.network.mitm.actions.token.inject_request_headers]]
@@ -333,8 +380,10 @@ action = ["token"]
         format!("{}{trusted}", fixture.trust("trusted")),
     )?;
     let managed = r#"
+[permissions.network]
+enabled = true
 [permissions.documents]
-extends = "bridge"
+extends = "network"
 [permissions.documents.network.mitm]
 version = 2
 [permissions.documents.network.mitm.hooks.public]
@@ -362,6 +411,11 @@ action = ["token"]"#,
             r#"[permissions.bridge]
 extends = "vault""#,
             "inheritance of MITM profile bridge",
+        ),
+        (
+            r#"[permissions.network]
+extends = "vault""#,
+            "inheritance of MITM profile network",
         ),
     ] {
         std::fs::write(&project_config, project)?;

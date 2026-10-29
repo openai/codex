@@ -1,0 +1,30 @@
+---
+source: tui/src/debug_config.rs
+expression: "outputs.join(\"\\n\\n\")"
+---
+network_proxy:
+/debug-config
+
+Config layer stack (lowest precedence first):
+  <none>
+
+Requirements:
+  - network_proxy: enabled=true (source: <unspecified>)
+
+experimental_network:
+/debug-config
+
+Config layer stack (lowest precedence first):
+  <none>
+
+Requirements:
+  - network_proxy: enabled=true (source: <unspecified>)
+
+permissions.network:
+/debug-config
+
+Config layer stack (lowest precedence first):
+  <none>
+
+Requirements:
+  - permissions.network: enabled=true (source: <unspecified>)

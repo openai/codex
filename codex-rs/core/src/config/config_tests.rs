@@ -2434,6 +2434,117 @@ enabled = true
 }
 
 #[tokio::test]
+async fn managed_network_requirements_ignore_disabled_proxy_feature_config() -> std::io::Result<()>
+{
+    let feature_config = r#"
+[features.network_proxy]
+enabled = true
+dangerously_allow_all_unix_sockets = true
+allow_local_binding = true
+domains = { "unmanaged.example" = "allow" }
+unix_sockets = { "/tmp/unmanaged.sock" = "allow" }
+"#;
+    let requirements = r#"
+default_permissions = "managed-primary"
+
+[features]
+network_proxy = false
+
+[allowed_permission_profiles]
+managed-primary = true
+managed-secondary = true
+
+[permissions.network]
+enabled = true
+allow_upstream_proxy = false
+domains = { "shared.example" = "allow", "blocked.example" = "deny" }
+
+[permissions.managed-primary]
+extends = ":workspace"
+
+[permissions.managed-primary.network]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+dangerously_allow_all_unix_sockets = false
+domains = { "primary.example" = "allow" }
+unix_sockets = { "/tmp/primary.sock" = "allow" }
+
+[permissions.managed-secondary]
+extends = "managed-primary"
+
+[permissions.managed-secondary.network]
+proxy_url = "http://127.0.0.1:43129"
+"#;
+    let mut baseline: Option<(NetworkProxySpec, NetworkProxySpec)> = None;
+
+    for source in ["baseline", "user", "trusted project"] {
+        let codex_home = TempDir::new()?;
+        let workspace = TempDir::new()?;
+        let workspace_key = TomlValue::String(project_trust_key(workspace.path()));
+        let user_features = if source == "user" { feature_config } else { "" };
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"
+[projects.{workspace_key}]
+trust_level = "trusted"
+{user_features}
+"#
+            ),
+        )?;
+        if source == "trusted project" {
+            let project_config_dir = workspace.path().join(".codex");
+            std::fs::create_dir_all(&project_config_dir)?;
+            std::fs::write(project_config_dir.join(CONFIG_TOML_FILE), feature_config)?;
+        }
+
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(workspace.path().to_path_buf()),
+                ..Default::default()
+            })
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
+            )
+            .build()
+            .await?;
+
+        assert!(!config.features.enabled(Feature::NetworkProxy), "{source}");
+        assert!(config.managed_network_requirements_enabled(), "{source}");
+        let active_profile = config
+            .permissions
+            .active_permission_profile()
+            .expect("managed profile should be active");
+        let initial = config
+            .permissions
+            .network
+            .as_ref()
+            .expect("shared requirements should enable the proxy");
+        let mut selected_profile = active_profile;
+        selected_profile.id = "managed-secondary".to_string();
+        let reselected = config
+            .network_proxy_spec_for_active_permission_profile(
+                &selected_profile,
+                config.permissions.permission_profile(),
+            )?
+            .expect("reselected managed profile should retain the proxy");
+
+        if let Some((baseline_initial, baseline_reselected)) = &baseline {
+            assert_eq!(initial, baseline_initial, "{source} initial");
+            assert_eq!(&reselected, baseline_reselected, "{source} reselected");
+        } else {
+            assert!(initial.enabled());
+            assert!(reselected.enabled());
+            assert_eq!(initial.proxy_host_and_port(), "127.0.0.1:43128");
+            assert_eq!(reselected.proxy_host_and_port(), "127.0.0.1:43129");
+            baseline = Some((initial.clone(), reselected));
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;

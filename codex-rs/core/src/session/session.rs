@@ -1591,11 +1591,8 @@ impl Session {
                 state.reasoning_effort_pin = pin.as_ref().clone();
             }
             state.active_disabled_plugin_ids = session_configuration.disabled_plugin_ids.clone();
-            let managed_network_requirements_configured = config
-                .config_layer_stack
-                .requirements_toml()
-                .network
-                .is_some();
+            let managed_network_requirements_configured =
+                config.config_layer_stack.requirements().network.is_some();
             let managed_network_requirements_enabled =
                 config.managed_network_requirements_enabled();
             let network_approval = Arc::new(NetworkApprovalService::default());

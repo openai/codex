@@ -4,6 +4,33 @@ use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 #[test]
+fn cloud_validation_rejects_mixed_network_requirements() {
+    let home = tempdir().expect("tempdir");
+    let base_dir = AbsolutePathBuf::from_absolute_path(home.path()).expect("absolute path");
+    let mut bundle = CloudConfigBundle::default();
+    for alias in ["experimental_network", "network_proxy"] {
+        let nested = "[permissions.network]\nenabled = false";
+        let top_level = format!("[{alias}]\nenabled = false");
+        for contents in [
+            vec![format!("{nested}\n{top_level}")],
+            vec![nested.to_owned(), top_level],
+        ] {
+            bundle.requirements_toml.enterprise_managed = contents
+                .into_iter()
+                .enumerate()
+                .map(|(index, contents)| CloudRequirementsFragment {
+                    id: index.to_string(),
+                    name: index.to_string(),
+                    contents,
+                })
+                .collect();
+            let err = validate_bundle(&bundle, &base_dir).expect_err("mixed policy spellings");
+            assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::InvalidBundle);
+        }
+    }
+}
+
+#[test]
 fn cloud_fragments_combine_before_provider_validation() {
     let home = tempdir().expect("tempdir");
     let base_dir = AbsolutePathBuf::from_absolute_path(home.path()).expect("absolute path");

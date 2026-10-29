@@ -358,8 +358,18 @@ fn render_debug_config_lines(
     }
 
     if let Some(network) = requirements.network.as_ref() {
+        let key = if requirements_toml
+            .permissions
+            .as_ref()
+            .and_then(|permissions| permissions.network.as_ref())
+            .is_some()
+        {
+            "permissions.network"
+        } else {
+            "network_proxy"
+        };
         requirement_lines.push(requirement_line(
-            "network_proxy",
+            key,
             format_network_constraints(&network.value),
             Some(&network.source),
         ));
@@ -670,6 +680,7 @@ mod tests {
     use codex_config::ConfigLayerStack;
     use codex_config::ConfigRequirements;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::ConfigRequirementsWithSources;
     use codex_config::Constrained;
     use codex_config::ConstrainedWithSource;
     use codex_config::ConstraintError;
@@ -1230,6 +1241,27 @@ interrupt_message = false
         assert!(rendered.contains(&format!(
             "network_proxy: unix_sockets={{/tmp/blocked.sock=deny, /tmp/codex.sock=allow}} (source: {requirements_source})"
         )));
+    }
+
+    #[test]
+    fn debug_config_network_requirement_surfaces() {
+        let mut outputs = Vec::new();
+        for table in [
+            "network_proxy",
+            "experimental_network",
+            "permissions.network",
+        ] {
+            let toml: ConfigRequirementsToml =
+                toml::from_str(&format!("[{table}]\nenabled = true")).expect("requirements");
+            let mut sourced = ConfigRequirementsWithSources::default();
+            sourced.merge_unset_fields(RequirementSource::Unknown, toml.clone());
+            let requirements = ConfigRequirements::try_from(sourced).expect("valid requirements");
+            let stack =
+                ConfigLayerStack::new(Vec::new(), requirements, toml).expect("config layer stack");
+            outputs.push(format!("{table}:\n{}", render_stack_to_text(&stack)));
+        }
+
+        insta::assert_snapshot!(outputs.join("\n\n"));
     }
 
     #[test]

@@ -339,19 +339,33 @@ fallback for unrecognized structured error variants.
 
 ## Managed network requirements
 
-Use `[network_proxy]` in `requirements.toml` for shared managed network constraints.
-`[experimental_network]` remains a compatibility alias. A single requirements layer cannot
-contain both names; across layers, they merge with normal precedence. The
-`configRequirements/read.network` response exposes the resulting constraints.
+In `requirements.toml`, put shared network constraints directly in `[permissions.network]`,
+alongside `[permissions.filesystem]`:
+
+```toml
+[permissions.network]
+enabled = true
+```
+
+`[network_proxy]` and its compatibility alias `[experimental_network]` still work.
+Do not mix either with `[permissions.network]`, even across requirements layers. A single
+layer cannot use both top-level names; across layers the top-level names merge with normal
+precedence. `configRequirements/read` returns the result in `requirements.network`.
 
 In `config.toml`, `[features.network_proxy]` configures the proxy, while
 `[permissions.<profile>.network]` configures a profile's network settings. Managed requirements
 remain separate and override conflicting profile settings. They can start the proxy without
 enabling the feature; feature settings apply only when the feature is enabled.
 
+In `requirements.toml`, `network` is reserved, like `filesystem`. Rename any managed profile
+named `network` and update its references before upgrading. An empty `[permissions.network]`
+is rejected because it is indistinguishable from an old empty profile. Omit the table when
+there are no shared network settings. A profile named `network` is still allowed in `config.toml`.
+
 Policy publishers must continue using `[experimental_network]` until every client and policy
-validation layer supports `[network_proxy]`. Older clients or intermediaries may ignore or strip
-the new spelling, or skip host-local validation. This reader change does not migrate or
+validation layer supports the chosen new spelling. Older clients or intermediaries may ignore or
+strip constraints in `[network_proxy]` or `[permissions.network]`; intermediaries may also skip
+host-local validation. This reader change does not migrate or
 version-gate published policy bundles.
 
 # Amazon Bedrock authentication

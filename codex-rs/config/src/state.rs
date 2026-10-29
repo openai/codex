@@ -265,8 +265,8 @@ pub struct ConfigLayerStack {
 
     /// Raw requirements data as loaded from requirements.toml/MDM/legacy
     /// sources. This preserves the original allow-lists so they can be
-    /// surfaced via APIs.
-    requirements_toml: ConfigRequirementsToml,
+    /// surfaced via APIs. Keep it off the stack of futures that carry a config.
+    requirements_toml: Box<ConfigRequirementsToml>,
 
     /// Whether execpolicy should skip `.rules` files from user and project config-layer folders.
     ignore_user_and_project_exec_policy_rules: bool,
@@ -323,7 +323,7 @@ impl ConfigLayerStack {
             model_provider_requirements,
             layers,
             requirements,
-            requirements_toml,
+            requirements_toml: Box::new(requirements_toml),
             ignore_user_and_project_exec_policy_rules: false,
             startup_warnings: None,
             is_projectless: false,

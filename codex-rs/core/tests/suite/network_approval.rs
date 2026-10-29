@@ -118,6 +118,7 @@ const NETWORK_TEST_TARGET: &str = "http://codex-network-test.invalid:80";
 
 #[test_case("experimental_network"; "legacy_requirements")]
 #[test_case("network_proxy"; "proxy_requirements")]
+#[test_case("permissions.network"; "canonical_requirements")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg_attr(
     not(target_os = "linux"),
@@ -1139,19 +1140,34 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
     Ok(())
 }
 
+#[test_case("experimental_network"; "legacy_requirements")]
+#[test_case("network_proxy"; "proxy_requirements")]
+#[test_case("permissions.network"; "canonical_requirements")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg_attr(
     not(target_os = "linux"),
     ignore = "requires the trusted Linux proxy bridge"
 )]
-async fn user_network_approval_once_session_and_denial_semantics() -> Result<()> {
+async fn user_network_approval_once_session_and_denial_semantics(
+    requirements_table: &str,
+) -> Result<()> {
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let test = managed_network_unified_exec_test(&server).await?;
+    let test = managed_network_unified_exec_builder(&[])?
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                "[{requirements_table}]\nenabled = true\nallow_local_binding = true\n"
+            )),
+        )
+        .build_with_remote_and_local_env(&server)
+        .await?;
+    assert!(test.config.managed_network_requirements_enabled());
+    assert!(test.config.permissions.network.is_some());
+    assert!(test.session_configured.network_proxy.is_some());
     let environments = vec![local(test.config.cwd.clone())];
 
     mount_exec_network_turn(
