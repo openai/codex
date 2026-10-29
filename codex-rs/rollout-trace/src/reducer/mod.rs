@@ -88,10 +88,18 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
     let event_log_path = bundle_dir.join(RAW_EVENT_LOG_FILE_NAME);
     let event_log = File::open(&event_log_path)
         .with_context(|| format!("open trace event log {}", event_log_path.display()))?;
+    let mut event_log = BufReader::new(event_log);
     let mut event_count = 0;
-    for (line_index, line) in BufReader::new(event_log).lines().enumerate() {
-        let line_number = line_index + 1;
-        let line = line.with_context(|| format!("read trace event line {line_number}"))?;
+    let mut line = String::new();
+    for line_number in 1.. {
+        line.clear();
+        if event_log
+            .read_line(&mut line)
+            .with_context(|| format!("read trace event line {line_number}"))?
+            == 0
+        {
+            break;
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -115,14 +123,21 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
             event.rollout_id == reducer.rollout.rollout_id,
             "trace event belongs to another rollout"
         );
+        // A short write or copy can leave the entire marker except its final newline.
+        // Only the writer's complete record establishes clean closure.
+        if matches!(event.payload, RawTraceEventPayload::RecordingCompleted)
+            && !line.ends_with('\n')
+        {
+            break;
+        }
         reducer.apply_event(event)?;
     }
     for payload in reducer.rollout.raw_payloads.values() {
-        let file = File::open(reducer.bundle_dir.join(&payload.path))
-            .with_context(|| format!("missing payload {}", payload.raw_payload_id))?;
-        // Validate even opaque bodies without allocating their strings or objects.
-        // A nonempty file alone is not evidence that a copy finished writing JSON.
-        serde_json::from_reader::<_, IgnoredAny>(BufReader::new(file))
+        // IgnoredAny checks JSON structure but skips UTF-8 validation inside strings.
+        // Read one body as text so opaque payloads get both checks without a JSON tree.
+        let body = std::fs::read_to_string(reducer.bundle_dir.join(&payload.path))
+            .with_context(|| format!("read payload {}", payload.raw_payload_id))?;
+        serde_json::from_str::<IgnoredAny>(&body)
             .with_context(|| format!("invalid payload {}", payload.raw_payload_id))?;
     }
     // Spawn edges prefer the child task message as their target, but a child can

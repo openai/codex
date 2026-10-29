@@ -74,6 +74,8 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
     // A syntactically valid prefix is still an incomplete export.
     let path = bundle_dir.join("trace.jsonl");
     let events = fs::read_to_string(&path)?;
+    fs::write(&path, events.strip_suffix('\n').unwrap())?;
+    assert!(!replay_bundle(&bundle_dir)?.recording_complete);
     let (prefix, _) = events.trim_end().rsplit_once('\n').unwrap();
     fs::write(&path, prefix)?;
     assert!(!replay_bundle(&bundle_dir)?.recording_complete);
@@ -93,6 +95,8 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
         .find(|payload| payload.kind == RawPayloadKind::ProtocolEvent)
         .unwrap();
     fs::write(bundle_dir.join(&opaque.path), "{\"truncated\":")?;
+    assert!(replay_bundle(&bundle_dir).is_err());
+    fs::write(bundle_dir.join(&opaque.path), b"{\"value\":\"\xff\"}")?;
     assert!(replay_bundle(&bundle_dir).is_err());
     fs::remove_file(bundle_dir.join(&opaque.path))?;
     assert!(replay_bundle(&bundle_dir).is_err());
