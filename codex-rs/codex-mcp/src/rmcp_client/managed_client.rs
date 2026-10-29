@@ -59,6 +59,18 @@ impl ManagedClient {
         }
     }
 
+    async fn with_lease_request<T>(&self, operation: impl Future<Output = Result<T>>) -> Result<T> {
+        // Keep one copy of the request future as it passes through both lease scopes.
+        let operation = std::pin::pin!(operation);
+        self.with_active_shared_lease(async {
+            match self.connection_sharing.server_lease() {
+                Some(lease) => lease.requests.scope(operation).await,
+                None => operation.await,
+            }
+        })
+        .await?
+    }
+
     pub(crate) async fn call_tool(
         &self,
         name: String,
@@ -66,7 +78,20 @@ impl ManagedClient {
         meta_for_session: impl Fn(&ServerCapabilities) -> Result<Option<Value>> + Send + Sync,
         timeout: Option<Duration>,
     ) -> Result<rmcp::model::CallToolResult> {
-        self.with_active_shared_lease(async {
+        let meta_for_session = |caps: &ServerCapabilities| {
+            let mut meta = meta_for_session(caps)?;
+            if let Some(lease) = self.connection_sharing.server_lease() {
+                meta.get_or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow!("MCP tool metadata must be an object"))?
+                    .insert(
+                        crate::connection_pool::LEASE_META_KEY.to_owned(),
+                        serde_json::json!(lease.id),
+                    );
+            }
+            Ok(meta)
+        };
+        self.with_lease_request(async {
             if let Some(send_elicitation) = &self.shared_elicitation {
                 self.client
                     .call_tool_with_elicitation(
@@ -83,7 +108,7 @@ impl ManagedClient {
                     .await
             }
         })
-        .await?
+        .await
     }
 
     /// Lists resources within this chat's lease lifetime.
@@ -109,10 +134,16 @@ impl ManagedClient {
     /// Reads a resource using this chat's input authority and lease lifetime.
     pub(crate) async fn read_resource(
         &self,
-        params: rmcp::model::ReadResourceRequestParams,
+        mut params: rmcp::model::ReadResourceRequestParams,
         timeout: Option<Duration>,
     ) -> Result<rmcp::model::ReadResourceResult> {
-        self.with_active_shared_lease(async {
+        if let Some(lease) = self.connection_sharing.server_lease() {
+            params.meta.get_or_insert_default().insert(
+                crate::connection_pool::LEASE_META_KEY.to_owned(),
+                serde_json::json!(lease.id),
+            );
+        }
+        self.with_lease_request(async {
             if let Some(send_elicitation) = &self.shared_elicitation {
                 self.client
                     .read_resource_with_elicitation(params, timeout, Arc::clone(send_elicitation))
@@ -121,7 +152,7 @@ impl ManagedClient {
                 self.client.read_resource(params, timeout).await
             }
         })
-        .await?
+        .await
     }
 
     pub(crate) async fn listed_catalog(&self) -> (Vec<ToolInfo>, Option<Arc<serde_json::Value>>) {

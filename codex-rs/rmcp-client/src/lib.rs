@@ -96,6 +96,7 @@ pub use perform_oauth_login::perform_oauth_login_return_url;
 pub use perform_oauth_login::perform_oauth_login_silent;
 pub use perform_oauth_login::perform_oauth_login_with_callback_input;
 pub use protocol_mode::McpProtocolMode;
+pub use request_cancellation::RequestScope;
 pub use rmcp::model::ElicitationAction;
 pub use rmcp_client::CancellableEventStreamRequest;
 pub use rmcp_client::Elicitation;

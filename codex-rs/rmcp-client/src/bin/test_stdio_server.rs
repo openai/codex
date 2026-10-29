@@ -62,6 +62,23 @@ const DYNAMIC_SERVER_METADATA_ENV: &str = "MCP_TEST_DYNAMIC_SERVER_METADATA";
 const INITIALIZE_BARRIER_FILE_ENV: &str = "MCP_TEST_INITIALIZE_BARRIER_FILE";
 const SERVER_INSTRUCTIONS_ENV: &str = "MCP_TEST_SERVER_INSTRUCTIONS";
 
+const LEASE_EVENTS_FILE_ENV: &str = "MCP_TEST_LEASE_EVENTS_FILE";
+
+/// Record only the lease protocol for the app-server unload regression.
+fn record_lease_event(method: &str, id: &serde_json::Value) -> Result<(), McpError> {
+    use std::io::Write;
+    if let Some(path) = std::env::var_os(LEASE_EVENTS_FILE_ENV) {
+        let event = serde_json::json!([method, id]);
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut file| writeln!(file, "{event}"))
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+    }
+    Ok(())
+}
+
 fn dynamic_server_process_label() -> Option<String> {
     std::env::var_os(DYNAMIC_SERVER_METADATA_ENV)
         .is_some()
@@ -548,6 +565,17 @@ impl ServerHandler for TestToolServer {
             JsonObject::new(),
         )]));
 
+        if std::env::var_os(LEASE_EVENTS_FILE_ENV).is_some() {
+            capabilities
+                .extensions
+                .get_or_insert_default()
+                .insert("codex/connection-lease".to_owned(), JsonObject::new());
+        } else if std::env::var_os("MCP_TEST_EXPERIMENTAL_LEASE_ONLY").is_some() {
+            capabilities
+                .experimental
+                .get_or_insert_default()
+                .insert("codex/connection-lease".to_owned(), JsonObject::new());
+        }
         let server_info = ServerConfig::new(capabilities);
         let server_info = match dynamic_server_process_label() {
             Some(process_label) => server_info
@@ -689,11 +717,44 @@ impl ServerHandler for TestToolServer {
         }
     }
 
+    async fn on_custom_request(
+        &self,
+        request: rmcp::model::CustomRequest,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+    ) -> Result<rmcp::model::CustomResult, McpError> {
+        if std::env::var_os(LEASE_EVENTS_FILE_ENV).is_none()
+            || !matches!(
+                request.method.as_str(),
+                "codex/connection/open" | "codex/connection/release"
+            )
+            || !context
+                .client_capabilities()
+                .and_then(|caps| caps.extensions)
+                .is_some_and(|caps| caps.contains_key("codex/connection-lease"))
+        {
+            return Err(McpError::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                request.method,
+                None,
+            ));
+        }
+        let id = request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("leaseId"))
+            .ok_or_else(|| McpError::invalid_params("missing lease ID", None))?;
+        record_lease_event(&request.method, id)?;
+        Ok(rmcp::model::CustomResult(serde_json::json!({})))
+    }
+
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        if let Some(lease) = context.meta.get("codex/connectionLease") {
+            record_lease_event("tools/call", lease)?;
+        }
         match request.name.as_ref() {
             "search_tools" if std::env::var_os("MCP_TEST_DISCOVER_TOOLS").is_some() => {
                 self.tools_discovered.store(true, Ordering::Release);

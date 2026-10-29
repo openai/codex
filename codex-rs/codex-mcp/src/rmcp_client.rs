@@ -40,6 +40,7 @@ use crate::codex_apps::prepare_openai_file_params_for_model;
 use crate::connection_pool::ConnectionKey;
 use crate::connection_pool::ConnectionSharing;
 use crate::connection_pool::ConnectionSlot;
+use crate::connection_pool::LEASE_CAPABILITY;
 use crate::connection_pool::SharingNegotiation;
 use crate::elicitation::ElicitationRequestManager;
 use crate::executor_environment_http_client::ExecutorEnvironmentHttpClient;
@@ -1140,6 +1141,13 @@ async fn start_server_task(
     };
     let mut params =
         mcp_initialize_request_params(client_elicitation_capability, client_mcp_extensions);
+    if sharing_negotiation.is_some() {
+        params
+            .capabilities
+            .extensions
+            .get_or_insert_default()
+            .insert(LEASE_CAPABILITY.to_owned(), Default::default());
+    }
     if auth_changes.is_some() {
         params
             .capabilities
@@ -1344,7 +1352,8 @@ pub(crate) fn mcp_initialize_request_params(
     }
     let extensions = client_mcp_extensions
         .iter()
-        .filter(|(id, _)| *id != MCP_NETWORK_POLICY_META_CAPABILITY)
+        // Only Core can open and release leases on a pooled connection.
+        .filter(|(id, _)| !matches!(*id, MCP_NETWORK_POLICY_META_CAPABILITY | LEASE_CAPABILITY))
         .filter_map(|(id, settings)| {
             settings
                 .as_object()
@@ -1662,6 +1671,7 @@ mod tests {
                 ),
                 (OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({})),
                 (MCP_APP_UI_EXTENSION_ID.to_string(), app_ui.clone()),
+                (LEASE_CAPABILITY.to_string(), serde_json::json!({})),
             ]),
         );
         assert_eq!(

@@ -31,6 +31,7 @@ async fn stdio_sharing_follows_protocol_and_enablement_for_loaded_chats() -> Res
     for (modern, modern_without_sharing) in [(false, false), (true, false), (true, true)] {
         let responses = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
         let codex_home = TempDir::new()?;
+        let lease_log = codex_home.path().join("leases.jsonl");
         let command = toml::Value::String(stdio_server_bin()?);
         // Exercise both pool-driven protocol selection and modern connections without pooling.
         let mut config = format!("[features]\nmcp_2026_07_28 = {modern_without_sharing}\n");
@@ -39,8 +40,15 @@ async fn stdio_sharing_follows_protocol_and_enablement_for_loaded_chats() -> Res
                 "[mcp_servers.{name}]\ncommand = {command}\nenabled_tools = [\"echo\"]\n\
                  [mcp_servers.{name}.env]\nMCP_TEST_DYNAMIC_SERVER_METADATA = \"1\"\n"
             ));
+            // Exercise lease accounting on the shared server in the mixed-protocol case.
+            if name == "alpha" && !modern {
+                let log = toml::Value::String(lease_log.to_string_lossy().into_owned());
+                config.push_str(&format!("MCP_TEST_LEASE_EVENTS_FILE = {log}\n"));
+            }
             if name == "beta" && modern {
+                // An experimental-only advertisement must leave this server usable without leases.
                 config.push_str("CODEX_MCP_PROTOCOL_VERSION = \"2026-07-28\"\n");
+                config.push_str("MCP_TEST_EXPERIMENTAL_LEASE_ONLY = \"1\"\n");
             } else if name == "beta" {
                 config.push_str("CODEX_MCP_PROTOCOL_VERSION = \"2025-06-18\"\n");
             }
@@ -78,6 +86,28 @@ async fn stdio_sharing_follows_protocol_and_enablement_for_loaded_chats() -> Res
         unload_thread(&mut app, &first.id).await?;
         assert_eq!(call_servers(&mut app, &second.id).await?, second_processes);
         unload_thread(&mut app, &second.id).await?;
+        if !modern {
+            let log = std::fs::read_to_string(&lease_log)?;
+            let events = log
+                .lines()
+                .map(serde_json::from_str::<(&str, &str)>)
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(events.len(), 6, "{events:?}");
+            let (a, b) = (events[0].1, events[2].1);
+            assert_ne!(a, b);
+            assert!(events.iter().all(|(_, id)| *id != "forged"));
+            assert_eq!(
+                events,
+                [
+                    ("codex/connection/open", a),
+                    ("tools/call", a),
+                    ("codex/connection/open", b),
+                    ("tools/call", b),
+                    ("codex/connection/release", a),
+                    ("tools/call", b),
+                ]
+            );
+        }
         #[cfg(unix)]
         for process in first_processes.values().chain(second_processes.values()) {
             core_test_support::process::wait_for_process_exit(
@@ -129,7 +159,7 @@ async fn call_servers(
                     server: name.to_string(),
                     tool: "echo".to_string(),
                     arguments: Some(json!({ "message": "ping" })),
-                    meta: None,
+                    meta: Some(json!({"codex/connectionLease": "forged"})),
                 },
             })
             .await?;
