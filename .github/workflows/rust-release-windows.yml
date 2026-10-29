@@ -9,8 +9,7 @@ env:
 jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    # Parallel Bazel artifacts are advisory while Cargo remains the release path.
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
+    # Desktop consumers require successful Cargo and Bazel release artifacts.
     runs-on: ${{ matrix.runs_on }}
     environment:
       name: bazel
@@ -309,7 +308,6 @@ jobs:
     needs:
       - build-windows-binaries
     name: Build Windows symbols - ${{ matrix.target }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -370,7 +368,6 @@ jobs:
       - build-windows-binaries
       - build-windows-voice
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ${{ matrix.runs_on }}
     environment:
       name: azure-artifact-signing

@@ -59,8 +59,7 @@ jobs:
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    # Parallel Bazel artifacts are advisory while Cargo remains the release path.
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
+    # Desktop consumers require successful Cargo and Bazel release artifacts.
     runs-on: ${{ matrix.runner }}
     environment:
       name: bazel
@@ -637,7 +636,6 @@ jobs:
     needs: [build, build-macos-voice]
     if: ${{ always() && needs.build.result == 'success' && needs.build-macos-voice.result == 'success' }}
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment:
@@ -883,7 +881,6 @@ jobs:
   package-macos:
     needs: sign-macos-binaries
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: macos-15-xlarge
     timeout-minutes: 45
     permissions:
@@ -1171,7 +1168,6 @@ jobs:
   sign-macos-dmg:
     needs: package-macos
     name: Sign macOS DMG - ${{ matrix.target }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment:
@@ -1276,7 +1272,6 @@ jobs:
       - package-macos
       - sign-macos-dmg
     name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
-    continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: macos-15-xlarge
     timeout-minutes: 30
     permissions:

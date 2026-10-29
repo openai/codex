@@ -1,4 +1,4 @@
-# Verified side packages, published by rust-release.yml when enabled.
+# Verified Cargo and Bazel side packages, published by rust-release.yml when enabled.
 # The legacy CLI, npm, installer and DMG packages are unchanged.
 # Required secrets in the codesigning environment:
 # - CODEX_CLI_PROVISIONING_PROFILE_BASE64: profile approved for public distribution.
@@ -32,9 +32,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        build-system: [cargo, bazel]
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     env:
       TARGET: ${{ matrix.target }}
+      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
       PROVISIONED_MACOS: "true"
       PROFILE_SHA256: ${{ secrets.CODEX_CLI_PROVISIONING_PROFILE_SHA256 }}
       CERTIFICATE_SHA256: ${{ secrets.AKV_CODESIGN_CERTIFICATE_SHA256 }}
@@ -62,7 +64,7 @@ jobs:
             --certificate-sha256 "$CERTIFICATE_SHA256" --team-id "$TEAM_ID"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.target }}
+          name: ${{ matrix.target }}${{ env.ARTIFACT_SUFFIX }}
           path: standard
       - name: Extract the verified package from this tag-release run
         run: |
@@ -71,7 +73,7 @@ jobs:
           import os
           import tarfile
           from pathlib import Path
-          with tarfile.open(f"standard/codex-package-{os.environ['TARGET']}.tar.gz") as archive:
+          with tarfile.open(f"standard/codex-package-{os.environ['TARGET']}{os.environ['ARTIFACT_SUFFIX']}.tar.gz") as archive:
               archive.extractall("package", filter="data")
           metadata = json.loads(Path("package/codex-package.json").read_text())
           if metadata["target"] != os.environ["TARGET"]:
@@ -100,18 +102,18 @@ jobs:
             --profile "$RUNNER_TEMP/codex-cli.provisionprofile" --profile-sha256 "$PROFILE_SHA256" \
             --certificate-sha256 "$CERTIFICATE_SHA256" --team-id "$TEAM_ID"
           mkdir signed
-          tar -czf "signed/codex-provisioned-package-$TARGET.tar.gz" -C package \
+          tar -czf "signed/codex-provisioned-package-$TARGET$ARTIFACT_SUFFIX.tar.gz" -C package \
             bin codex-resources codex-path codex-package.json CodexCLI.app
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: provisioned-macos-signed-candidate-${{ matrix.target }}
+          name: provisioned-macos-signed-candidate-${{ matrix.target }}${{ env.ARTIFACT_SUFFIX }}
           path: signed/*.tar.gz
           if-no-files-found: error
       - name: Retain signing reports
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: provisioned-macos-signing-reports-${{ matrix.target }}
+          name: provisioned-macos-signing-reports-${{ matrix.target }}${{ env.ARTIFACT_SUFFIX }}
           path: signing-verification/
           if-no-files-found: warn
 
@@ -129,6 +131,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        build-system: [cargo, bazel]
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
         include:
           - target: aarch64-apple-darwin
             runner: macos-15-xlarge
@@ -136,6 +140,7 @@ jobs:
             runner: macos-15-intel
     env:
       TARGET: ${{ matrix.target }}
+      ARTIFACT_SUFFIX: ${{ matrix.build-system == 'bazel' && '-bazel' || '' }}
       PROVISIONED_MACOS: "true"
       PROFILE_SHA256: ${{ secrets.CODEX_CLI_PROVISIONING_PROFILE_SHA256 }}
       CERTIFICATE_SHA256: ${{ secrets.AKV_CODESIGN_CERTIFICATE_SHA256 }}
@@ -149,7 +154,7 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: provisioned-macos-signed-candidate-${{ matrix.target }}
+          name: provisioned-macos-signed-candidate-${{ matrix.target }}${{ env.ARTIFACT_SUFFIX }}
           path: signed
       - name: Extract candidate and load independent verification profile
         env:
@@ -162,7 +167,7 @@ jobs:
           from pathlib import Path
           profile = Path(os.environ["RUNNER_TEMP"]) / "codex-cli.provisionprofile"
           profile.write_bytes(base64.b64decode("".join(os.environ["PROFILE_BASE64"].split()), validate=True))
-          with tarfile.open(f"signed/codex-provisioned-package-{os.environ['TARGET']}.tar.gz") as archive:
+          with tarfile.open(f"signed/codex-provisioned-package-{os.environ['TARGET']}{os.environ['ARTIFACT_SUFFIX']}.tar.gz") as archive:
               archive.extractall("package", filter="data")
           PY
       - name: Verify signatures, profile, architecture, stapling and Gatekeeper
@@ -176,20 +181,20 @@ jobs:
           spctl --assess --type execute --verbose=4 package/CodexCLI.app
           python3 .github/scripts/macos-signing/sign_macos_cli_package.py verify package "${profile_args[@]}"
           mkdir verified
-          tar -czf "verified/codex-provisioned-package-$TARGET.tar.gz" -C package \
+          tar -czf "verified/codex-provisioned-package-$TARGET$ARTIFACT_SUFFIX.tar.gz" -C package \
             bin codex-resources codex-path codex-package.json CodexCLI.app
-          (cd verified && shasum -a 256 "codex-provisioned-package-$TARGET.tar.gz" > SHA256SUMS)
+          (cd verified && shasum -a 256 "codex-provisioned-package-$TARGET$ARTIFACT_SUFFIX.tar.gz" > SHA256SUMS)
       - uses: ./.github/actions/setup-ci
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.5"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.target }}-app-server
+          name: ${{ matrix.target }}-app-server${{ env.ARTIFACT_SUFFIX }}
           path: app-server
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.target }}-symbols
+          name: ${{ matrix.target }}-symbols${{ env.ARTIFACT_SUFFIX }}
           path: symbols
       - name: Test the exact verified package, including sandboxed code mode
         working-directory: scripts/codex_package/smoke_tests
@@ -199,20 +204,20 @@ jobs:
           # This repackaging does not change debug code. The normal release's
           # primary symbols omit app-server symbols, so skip symbol-only tests.
           uv run --frozen pytest -v --compression gzip --package-target "$TARGET" \
-            --cli-archive "$CODEX_REPO_ROOT/verified/codex-provisioned-package-$TARGET.tar.gz" \
-            --app-server-archive "$CODEX_REPO_ROOT/app-server/codex-app-server-package-$TARGET.tar.gz" \
-            --symbols-archive "$CODEX_REPO_ROOT/symbols/codex-symbols-$TARGET.tar.gz" \
+            --cli-archive "$CODEX_REPO_ROOT/verified/codex-provisioned-package-$TARGET$ARTIFACT_SUFFIX.tar.gz" \
+            --app-server-archive "$CODEX_REPO_ROOT/app-server/codex-app-server-package-$TARGET$ARTIFACT_SUFFIX.tar.gz" \
+            --symbols-archive "$CODEX_REPO_ROOT/symbols/codex-symbols-$TARGET$ARTIFACT_SUFFIX.tar.gz" \
             test_codex_package.py -k 'not debug_symbols'
       - name: Retain verified candidate only after package tests pass
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: provisioned-macos-verified-candidate-${{ matrix.target }}
+          name: provisioned-macos-verified-candidate-${{ matrix.target }}${{ env.ARTIFACT_SUFFIX }}
           path: verified/*
           if-no-files-found: error
       - name: Retain verification reports
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: provisioned-macos-verification-reports-${{ matrix.target }}
+          name: provisioned-macos-verification-reports-${{ matrix.target }}${{ env.ARTIFACT_SUFFIX }}
           path: signing-verification/
           if-no-files-found: warn

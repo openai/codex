@@ -11,6 +11,18 @@
           "path": "bin/codex"
         }
       }
+    },
+    "codex-provisioned-bazel": {
+      "platforms": {
+        "macos-aarch64": {
+          "regex": "^codex-provisioned-package-aarch64-apple-darwin-bazel\\.tar\\.gz$",
+          "path": "bin/codex"
+        },
+        "macos-x86_64": {
+          "regex": "^codex-provisioned-package-x86_64-apple-darwin-bazel\\.tar\\.gz$",
+          "path": "bin/codex"
+        }
+      }
     }
   }
 }
