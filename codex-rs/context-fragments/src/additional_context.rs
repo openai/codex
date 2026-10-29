@@ -7,7 +7,7 @@ use codex_utils_string::truncate_middle_with_token_budget;
 
 use crate::ContextualUserFragment;
 
-const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 1_000;
+pub const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 1_000;
 const MAX_DERIVED_TOOL_NAME_CHARS: usize = 128;
 const ADDITIONAL_CONTEXT_TOOL_NAMESPACE: &str = "agent";
 const ADDITIONAL_CONTEXT_END_MARKER_SUFFIX: &str = ">";

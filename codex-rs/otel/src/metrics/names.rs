@@ -70,6 +70,28 @@ pub const STARTUP_PREWARM_DURATION_METRIC: &str = "codex.startup_prewarm.duratio
 pub const STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC: &str =
     "codex.startup_prewarm.age_at_first_turn_ms";
 pub const THREAD_STARTED_METRIC: &str = "codex.thread.started";
+/// Submitted additional-context entries, including unchanged entries, by kind and truncation status.
+/// The name tag is included only when explicitly supplied; opaque source keys are never tags.
+pub const ADDITIONAL_CONTEXT_COUNT_METRIC: &str = "codex.additional_context";
+/// UTF-8 value bytes before/after truncation, excluding message wrappers; after includes the marker.
+pub const ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC: &str = "codex.additional_context.value_bytes";
+pub const ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS: &[f64] = &[
+    0.0,
+    256.0,
+    512.0,
+    1_000.0,
+    2_000.0,
+    4_000.0,
+    8_000.0,
+    16_000.0,
+    32_000.0,
+    64_000.0,
+    128_000.0,
+    256_000.0,
+    512_000.0,
+    1_024_000.0,
+    4_096_000.0,
+];
 pub const THREAD_SKILLS_ENABLED_TOTAL_METRIC: &str = "codex.thread.skills.enabled_total";
 pub const THREAD_SKILLS_KEPT_TOTAL_METRIC: &str = "codex.thread.skills.kept_total";
 pub const THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC: &str =

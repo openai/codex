@@ -1,12 +1,17 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_features::Feature;
+use codex_otel::ADDITIONAL_CONTEXT_COUNT_METRIC;
+use codex_otel::ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -18,6 +23,10 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ScopeMetrics;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -702,6 +711,205 @@ async fn additional_context_values_are_truncated_before_model_input(
         external_text.len()
     );
 
+    Ok(())
+}
+
+#[test_case::test_case(false; "messages")]
+#[test_case::test_case(true; "tool_outputs")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn additional_context_metrics_record_submitted_sizes_and_truncation(
+    tool_outputs: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory(
+            "test",
+            "additional-context",
+            env!("CARGO_PKG_VERSION"),
+            InMemoryMetricExporter::default(),
+        )
+        .with_runtime_reader(),
+    )?;
+    let test = test_codex()
+        .with_model("gpt-6-sol")
+        .with_config(move |config| {
+            config
+                .features
+                .set_enabled(Feature::UntrustedAsToolOutput, tool_outputs)
+                .expect("test config should allow feature update");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mut options = test.start_thread_options().await;
+    options.thread_extension_init.insert(metrics.clone());
+    let thread = test.thread_manager.start_thread(options).await?.thread;
+    let application = AdditionalContextKind::Application;
+    let untrusted = AdditionalContextKind::Untrusted;
+    let cases = [
+        (
+            "application_limit",
+            application,
+            None,
+            "a".repeat(4_000),
+            false,
+        ),
+        (
+            "application_over",
+            application,
+            None,
+            "a".repeat(4_001),
+            true,
+        ),
+        (
+            "opaque_named_limit",
+            untrusted,
+            Some("browser_limit"),
+            "b".repeat(4_000),
+            false,
+        ),
+        (
+            "opaque_named_over",
+            untrusted,
+            Some("browser_over"),
+            "b".repeat(4_001),
+            true,
+        ),
+        // Size is measured in UTF-8 bytes; the unnamed entry must not acquire a key-derived label.
+        ("opaque_unnamed", untrusted, None, "é".repeat(2_001), true),
+        ("opaque_empty", untrusted, None, String::new(), false),
+    ];
+    let values = cases
+        .iter()
+        .map(|(key, kind, name, value, _)| {
+            (
+                key.to_string(),
+                AdditionalContextEntry {
+                    name: name.map(str::to_owned),
+                    kind: *kind,
+                    value: value.clone(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for turn in 0..2 {
+        let request = mount_sse_once(&server, sse(vec![ev_completed("context-metrics")])).await;
+        thread
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: format!("inspect context {turn}"),
+                    text_elements: Vec::new(),
+                }])
+                .with_additional_context(values.clone())
+                .with_thread_settings(ThreadSettingsOverrides {
+                    model: Some("gpt-5.5".to_string()),
+                    ..Default::default()
+                }),
+            )
+            .await?;
+        wait_for_event_match(&thread, |event| {
+            matches!(event, EventMsg::TurnComplete(_)).then_some(())
+        })
+        .await;
+        let request = request.single_request();
+        assert_eq!(request.body_json()["model"], "gpt-5.5");
+        // Repeated submissions are measured even though retained context is deduplicated.
+        assert_eq!(
+            request.inputs_of_type("function_call_output").len(),
+            if tool_outputs { 4 } else { 0 }
+        );
+        for (key, kind, _, _, _) in &cases {
+            let role = match kind {
+                AdditionalContextKind::Application => "developer",
+                AdditionalContextKind::Untrusted if tool_outputs => continue,
+                AdditionalContextKind::Untrusted => "user",
+            };
+            assert_eq!(
+                request
+                    .message_input_texts(role)
+                    .iter()
+                    .filter(|text| text.contains(key))
+                    .count(),
+                1,
+            );
+        }
+    }
+
+    let context_attribute = |attribute: &opentelemetry::KeyValue| {
+        (!matches!(
+            attribute.key.as_str(),
+            "auth_mode" | "session_source" | "originator" | "service_name" | "app.version"
+        ))
+        .then(|| (attribute.key.to_string(), attribute.value.to_string()))
+    };
+    let snapshot = metrics.snapshot()?;
+    let mut counts = BTreeMap::new();
+    let mut sizes = BTreeMap::new();
+    for metric in snapshot.scope_metrics().flat_map(ScopeMetrics::metrics) {
+        match metric.name() {
+            ADDITIONAL_CONTEXT_COUNT_METRIC => {
+                let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                    panic!("additional context count must be a counter");
+                };
+                for point in sum.data_points() {
+                    counts.insert(
+                        point
+                            .attributes()
+                            .filter_map(context_attribute)
+                            .collect::<BTreeMap<_, _>>(),
+                        point.value(),
+                    );
+                }
+            }
+            ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC => {
+                let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+                    panic!("additional context size must be a histogram");
+                };
+                for point in histogram.data_points() {
+                    sizes.insert(
+                        point
+                            .attributes()
+                            .filter_map(context_attribute)
+                            .collect::<BTreeMap<_, _>>(),
+                        (point.count(), point.sum()),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut expected_counts = BTreeMap::new();
+    let mut expected_sizes = BTreeMap::new();
+    for (_, kind, name, value, truncated) in cases {
+        let kind = match kind {
+            AdditionalContextKind::Application => "application",
+            AdditionalContextKind::Untrusted => "untrusted",
+        };
+        let mut tags = BTreeMap::from([
+            ("kind".to_string(), kind.to_string()),
+            ("model".to_string(), "gpt-5.5".to_string()),
+            ("truncated".to_string(), truncated.to_string()),
+        ]);
+        if let Some(name) = name {
+            tags.insert("name".to_string(), name.to_string());
+        }
+        expected_counts.insert(tags.clone(), 2);
+        // The marker is outside the retained-text budget, so a truncated value can grow.
+        let after_bytes = if truncated {
+            4_000 + "…1 tokens truncated…".len()
+        } else {
+            value.len()
+        };
+        for (stage, bytes) in [("before", value.len()), ("after", after_bytes)] {
+            let mut tags = tags.clone();
+            tags.insert("stage".to_string(), stage.to_string());
+            expected_sizes.insert(tags, (2, 2.0 * bytes as f64));
+        }
+    }
+    assert_eq!(counts, expected_counts);
+    assert_eq!(sizes, expected_sizes);
+    metrics.shutdown()?;
     Ok(())
 }
 

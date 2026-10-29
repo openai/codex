@@ -441,7 +441,8 @@ async fn start_or_steer(
             session
                 .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
                 .await;
-            let mut task_input = merge_additional_context_input(session, additional_context).await;
+            let mut task_input =
+                merge_additional_context_input(session, &turn_context, additional_context).await;
             if has_explicit_input {
                 task_input.push(
                     pending_turn_input(
@@ -591,7 +592,8 @@ async fn start_if_idle(
         .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
 
-    let mut task_input = merge_additional_context_input(session, additional_context).await;
+    let mut task_input =
+        merge_additional_context_input(session, &turn_context, additional_context).await;
     let sender_messages = capture_sender_user_messages(session, &mut input).await;
     match kind {
         TurnStartKind::User => {
@@ -910,7 +912,9 @@ impl Session {
         {
             return Err(NotSubmittedReason::ActiveTurnOutputSchemaMismatch);
         }
-        let mut pending_input = merge_additional_context_input(self, additional_context).await;
+        let mut pending_input =
+            merge_additional_context_input(self, &active_task.turn_context, additional_context)
+                .await;
 
         active_task
             .turn_context
@@ -953,6 +957,7 @@ impl Session {
 
 async fn merge_additional_context_input(
     session: &Session,
+    turn_context: &TurnContext,
     additional_context: BTreeMap<String, AdditionalContextEntry>,
 ) -> Vec<TurnInput> {
     let format = if session.enabled(Feature::UntrustedAsToolOutput) {
@@ -962,7 +967,9 @@ async fn merge_additional_context_input(
     };
     let additional_context_input = {
         let mut state = session.state.lock().await;
-        state.additional_context.merge(additional_context, format)
+        state
+            .additional_context
+            .merge(additional_context, format, &turn_context.session_telemetry)
     };
     additional_context_input
         .into_iter()

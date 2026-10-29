@@ -8,6 +8,7 @@ mod recap_prompt;
 pub use additional_context::AdditionalContextDeveloperFragment;
 pub use additional_context::AdditionalContextToolOutput;
 pub use additional_context::AdditionalContextUserFragment;
+pub use additional_context::MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS;
 pub use annotated_content::AnnotatedContent;
 pub use annotated_content::message_from_parts;
 pub use annotated_content::set_annotated_content;
