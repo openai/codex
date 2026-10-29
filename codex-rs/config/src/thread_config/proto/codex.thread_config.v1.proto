@@ -53,6 +53,11 @@ message ModelProvider {
   optional string project_id = 20;
   optional string location = 21;
   optional string credential_file = 22;
+  optional ModelProviderCapabilities capabilities = 23;
+}
+
+message ModelProviderCapabilities {
+  optional bool cyber_access_programs = 1;
 }
 
 message StringMap {

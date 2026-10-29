@@ -1386,10 +1386,8 @@ impl Session {
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         turn_context.final_output_json_schema = options.final_output_json_schema;
-        turn_context.cyber_access_program = cyber_access_program::for_provider(
-            &turn_context.config.model_provider_id,
-            options.cyber_access_program,
-        );
+        turn_context.cyber_access_program =
+            cyber_access_program::for_provider(&turn_context.config, options.cyber_access_program);
         // Tool observers retain this turn's selection even after a later turn starts.
         if let Some(program) = turn_context.cyber_access_program {
             turn_context.extension_data.insert(program);

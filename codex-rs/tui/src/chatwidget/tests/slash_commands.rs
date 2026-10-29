@@ -2231,9 +2231,46 @@ async fn slash_copy_picker_remains_available_from_parent_owned_threads() {
 
 #[tokio::test]
 async fn slash_daybreak_offers_an_application_when_unavailable() {
+    assert_daybreak_catalog_and_account_gates("openai").await;
+}
+
+#[tokio::test]
+async fn slash_daybreak_custom_provider_requires_capability() {
+    assert_daybreak_catalog_and_account_gates("proxy").await;
+}
+
+async fn assert_daybreak_catalog_and_account_gates(provider_id: &str) {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.has_chatgpt_account = true;
-    chat.config.model_provider_id = "openai".into();
+    chat.config.model_provider_id = provider_id.into();
+    if provider_id == "proxy" {
+        for capability in [None, Some(false)] {
+            chat.config.model_provider.capabilities =
+                Some(codex_model_provider_info::ModelProviderCapabilities {
+                    cyber_access_programs: capability,
+                    ..Default::default()
+                });
+            chat.config
+                .model_providers
+                .insert(provider_id.into(), chat.config.model_provider.clone());
+            assert!(!chat.daybreak_account_eligible());
+            assert!(chat.daybreak_command_description().is_none());
+        }
+        chat.config.model_provider.capabilities =
+            Some(codex_model_provider_info::ModelProviderCapabilities {
+                cyber_access_programs: Some(true),
+                ..Default::default()
+            });
+    }
+    chat.config
+        .model_providers
+        .insert(provider_id.into(), chat.config.model_provider.clone());
+    // Session updates change the provider ID; eligibility must not use the startup definition.
+    chat.config.model_provider.capabilities = None;
+    assert!(chat.daybreak_account_eligible());
+    chat.config.model_provider_id = "unknown-provider".into();
+    assert!(!chat.daybreak_account_eligible());
+    chat.config.model_provider_id = provider_id.into();
     let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
     model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
         cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],

@@ -1081,3 +1081,31 @@ fn builtin_openai_catalog_accepts_existing_chatgpt_hosts() {
         );
     }
 }
+
+#[test]
+fn cyber_access_program_capability_uses_provider_identity_and_explicit_overrides() {
+    for provider_id in [
+        OPENAI_PROVIDER_ID,
+        "proxy",
+        AMAZON_BEDROCK_PROVIDER_ID,
+        GCP_PROVIDER_ID,
+    ] {
+        for configured in [None, Some(false), Some(true)] {
+            // A custom provider cannot gain the default by copying OpenAI's display name.
+            let config = match configured {
+                Some(enabled) => format!(
+                    "name = \"OpenAI\"\n[capabilities]\ncyber_access_programs = {enabled}\n"
+                ),
+                None => "name = \"OpenAI\"\n".to_owned(),
+            };
+            let provider: ModelProviderInfo = toml::from_str(&config).unwrap();
+            assert_eq!(
+                provider.supports_cyber_access_programs(provider_id),
+                configured.unwrap_or(provider_id == OPENAI_PROVIDER_ID),
+            );
+            let round_trip: ModelProviderInfo =
+                toml::from_str(&toml::to_string(&provider).unwrap()).unwrap();
+            assert_eq!(round_trip, provider);
+        }
+    }
+}

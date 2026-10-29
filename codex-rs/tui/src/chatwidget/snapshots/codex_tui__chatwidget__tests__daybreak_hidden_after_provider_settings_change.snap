@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+assertion_line: 200
+expression: popup
+---
+› /daybreak
+
+  profile: work · provider: server-updated           Plan mode (⇧tab to cycle)

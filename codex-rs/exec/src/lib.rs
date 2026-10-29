@@ -1228,6 +1228,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         &mut request_ids,
                         &session_configured.model,
                         &session_configured.model_provider_id,
+                        config
+                            .model_providers
+                            .get(&session_configured.model_provider_id),
                         daybreak_enabled,
                     )
                     .await?

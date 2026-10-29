@@ -107,6 +107,14 @@ async fn session_header_uses_catalog_display_name_without_changing_model() {
 async fn session_and_settings_sync_server_provider_id() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.config.model_provider.base_url = Some("https://local-provider.example/v1".to_string());
+    chat.has_chatgpt_account = true;
+    chat.config
+        .features
+        .enable(Feature::CliDaybreak)
+        .expect("enable Daybreak");
+    chat.config
+        .model_providers
+        .insert("server-bedrock".into(), chat.config.model_provider.clone());
     chat.local_settings.tui.status_line = Some(vec!["profile".into(), "provider".into()]);
     chat.refresh_status_line();
     assert_eq!(status_line_text(&chat), None);
@@ -133,10 +141,15 @@ async fn session_and_settings_sync_server_provider_id() {
     });
     let mut provider = chat.config.model_provider.clone();
     provider.env_key = Some("CUSTOM_API_KEY".to_string());
+    provider.capabilities = Some(codex_model_provider_info::ModelProviderCapabilities {
+        cyber_access_programs: Some(true),
+        ..Default::default()
+    });
     chat.config
         .model_providers
         .insert(first.model_provider_id.clone(), provider);
     chat.handle_thread_session(first.clone());
+    assert!(chat.daybreak_account_eligible());
     let displayed = status(&mut chat);
     assert!(displayed.contains("Model provider:") && displayed.contains("server-ollama"));
     assert!(!displayed.contains("local-provider.example"));
@@ -149,12 +162,17 @@ async fn session_and_settings_sync_server_provider_id() {
     let mut other = configured_thread_session(ThreadId::new());
     other.model_provider_id = "server-bedrock".to_string();
     chat.handle_thread_session_quiet(other);
+    assert!(!chat.daybreak_account_eligible());
     let displayed = status(&mut chat);
     assert!(displayed.contains("server-bedrock"));
     assert!(!displayed.contains("server-ollama"));
 
     chat.handle_thread_session_quiet(first);
     assert_eq!(chat.config.model_provider_id, "server-ollama");
+    assert!(chat.daybreak_account_eligible());
+    chat.bottom_pane
+        .set_composer_text("/daybreak".to_string(), Vec::new(), Vec::new());
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("broader access"));
 
     chat.config.config_layer_stack = chat
         .config
@@ -172,10 +190,23 @@ async fn session_and_settings_sync_server_provider_id() {
         /*replay_kind*/ None,
     );
     assert!(status(&mut chat).contains("server-updated"));
+    assert!(!chat.daybreak_account_eligible());
     insta::assert_snapshot!(
         status_line_text(&chat).unwrap(),
         @"profile: work · provider: server-updated"
     );
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(!popup.contains("broader access"));
+    assert_chatwidget_snapshot!("daybreak_hidden_after_provider_settings_change", popup);
+
+    let mut restored = thread_settings_for_test("gpt-5.4", first_id);
+    restored.thread_settings.model_provider = "server-ollama".to_string();
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(restored),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.daybreak_account_eligible());
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("broader access"));
 }
 
 fn start_safety_buffering_test_turn(

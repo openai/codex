@@ -3042,6 +3042,10 @@
       "additionalProperties": false,
       "description": "Overrides for the optional API features supported by a custom provider.",
       "properties": {
+        "cyber_access_programs": {
+          "description": "Whether the provider accepts explicit `access_programs.cyber` selections. Defaults to enabled for the built-in OpenAI provider and disabled otherwise. This does not grant program access or change authentication.",
+          "type": "boolean"
+        },
         "external_web_access": {
           "description": "Whether hosted web search may access the live web.",
           "type": "boolean"

@@ -694,6 +694,14 @@ other non-default provider fields are not supported"
         }
     }
 
+    /// Whether explicit Cyber programs may be selected and forwarded to this provider.
+    /// Use the configured provider ID, never its user-controlled display name, for defaults.
+    pub fn supports_cyber_access_programs(&self, provider_id: &str) -> bool {
+        self.capabilities
+            .and_then(|capabilities| capabilities.cyber_access_programs)
+            .unwrap_or(provider_id == OPENAI_PROVIDER_ID)
+    }
+
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
     }

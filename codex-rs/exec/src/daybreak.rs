@@ -11,6 +11,7 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::openai_models::ModelAccessPrograms;
 
 pub(crate) async fn program_for_turn(
@@ -18,11 +19,15 @@ pub(crate) async fn program_for_turn(
     client: &InProcessAppServerClient,
     request_ids: &mut RequestIdSequencer,
     model: &str,
-    provider: &str,
+    provider_id: &str,
+    provider: Option<&ModelProviderInfo>,
     enabled: bool,
 ) -> anyhow::Result<Option<CyberAccessProgram>> {
-    if provider != "openai" {
-        anyhow::ensure!(!enabled, "Daybreak requires the OpenAI model provider");
+    if !provider.is_some_and(|provider| provider.supports_cyber_access_programs(provider_id)) {
+        anyhow::ensure!(
+            !enabled,
+            "Daybreak requires a model provider with Cyber access program support"
+        );
         return Ok(None);
     }
 

@@ -29,7 +29,13 @@ impl ChatWidget {
     /// UI and turn-selection eligibility; the catalog and server still determine program access.
     pub(crate) fn daybreak_account_eligible(&self) -> bool {
         self.daybreak_feature_enabled()
-            && self.config.model_provider_id == "openai"
+            && self
+                .config
+                .model_providers
+                .get(&self.config.model_provider_id)
+                .is_some_and(|provider| {
+                    provider.supports_cyber_access_programs(&self.config.model_provider_id)
+                })
             && (self.has_chatgpt_account
                 || matches!(
                     self.status_account_display,
@@ -504,6 +510,7 @@ impl ChatWidget {
         let cwd_changed = self.config.cwd != settings.cwd;
         self.apply_thread_settings_cwd(settings.cwd.clone());
         self.config.model_provider_id = settings.model_provider.clone();
+        self.set_daybreak_enabled(self.daybreak_enabled);
         self.set_service_tier(settings.service_tier.clone());
         if let Err(err) = self
             .config

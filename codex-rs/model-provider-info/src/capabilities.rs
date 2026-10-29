@@ -11,6 +11,10 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelProviderCapabilities {
+    /// Whether the provider accepts explicit `access_programs.cyber` selections.
+    /// Defaults to enabled for the built-in OpenAI provider and disabled otherwise.
+    /// This does not grant program access or change authentication.
+    pub cyber_access_programs: Option<bool>,
     /// Whether hosted web search may access the live web.
     pub external_web_access: Option<bool>,
     /// Remote context-compaction protocol; omission preserves provider defaults.

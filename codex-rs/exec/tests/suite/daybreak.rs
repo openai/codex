@@ -98,6 +98,67 @@ async fn exec_rejects_daybreak_for_non_openai_provider() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_custom_provider_daybreak_uses_capability() -> anyhow::Result<()> {
+    let (test, server) = configured_daybreak_exec().await?;
+    std::fs::remove_file(test.home_path().join("auth.json"))?;
+    let config_path = test.home_path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    for capability in [None, Some(false), Some(true)] {
+        let capability_config = capability
+            .map(|value| format!("capabilities.cyber_access_programs = {value}\n"))
+            .unwrap_or_default();
+        std::fs::write(
+            &config_path,
+            format!(
+                "{config}model_provider = 'proxy'\n[model_providers.proxy]\nname = 'Proxy'\nbase_url = '{}'\nwire_api = 'responses'\nrequires_openai_auth = true\n{capability_config}",
+                server.uri()
+            ),
+        )?;
+        for (enabled, expected) in [(true, "daybreak_blue"), (false, "standard")] {
+            let rejected = enabled && capability != Some(true);
+            let previous_requests = responses::received_responses_requests(&server).await.len();
+            let response = if rejected {
+                None
+            } else {
+                Some(responses::mount_sse_once(&server, responses::sse_completed("response")).await)
+            };
+            let assertion = test
+                .cmd_with_server(&server)
+                .env_remove("CODEX_ACCESS_TOKEN")
+                .args([
+                    "--skip-git-repo-check",
+                    "-c",
+                    &format!("daybreak={enabled}"),
+                    "hello",
+                ])
+                .assert();
+            if rejected {
+                assertion.failure().stderr(predicate::str::contains(
+                    "Daybreak requires a model provider with Cyber access program support",
+                ));
+                assert_eq!(
+                    responses::received_responses_requests(&server).await.len(),
+                    previous_requests
+                );
+            } else {
+                assertion.success();
+                assert_eq!(
+                    response
+                        .expect("successful turn response")
+                        .single_request()
+                        .body_json()
+                        .get("access_programs"),
+                    (capability == Some(true))
+                        .then(|| json!({"cyber": expected}))
+                        .as_ref()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn configured_daybreak_exec() -> anyhow::Result<(TestCodexExecBuilder, wiremock::MockServer)>
 {
     let test = test_codex_exec();

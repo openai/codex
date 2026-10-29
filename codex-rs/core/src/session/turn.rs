@@ -1472,7 +1472,7 @@ async fn maybe_run_previous_model_inline_compact(
     // Combining the previous model with the current turn's program can produce a pair
     // that the server rejects.
     previous_model_turn_context.cyber_access_program = cyber_access_program::for_provider(
-        &previous_model_turn_context.config.model_provider_id,
+        &previous_model_turn_context.config,
         previous_turn_settings.cyber_access_program,
     );
     let previous_model_turn_context = Arc::new(previous_model_turn_context);
