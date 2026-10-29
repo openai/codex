@@ -4,6 +4,7 @@ use super::HyperlinkLine;
 use super::annotate_web_urls;
 use super::mark_buffer_hyperlinks;
 use super::visible_lines_ref;
+use crate::render::line_utils::line_to_borrowed;
 use crate::render::renderable::Renderable;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::CellWidth;
@@ -101,6 +102,18 @@ impl Renderable for HyperlinkRows {
 impl Widget for &HyperlinkLine {
     fn render(self, area: Rect, buf: &mut Buffer) {
         self.line.clone().render(area, buf);
+        self.mark_cells(area, buf);
+    }
+}
+
+impl HyperlinkLine {
+    /// Paint a fitted, left-aligned row using the terminal cell widths of its graphemes.
+    pub(crate) fn render_fitted(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(line_to_borrowed(&self.line)).render(area, buf);
+        self.mark_cells(area, buf);
+    }
+
+    fn mark_cells(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;
         }

@@ -254,7 +254,13 @@ impl StatusSurfacePreviewData {
             self.value_for(item.preview_item())
                 .map(|value| (item, value.to_string()))
         });
-        status_line_from_segments(segments, use_theme_colors, self.thread_id)
+        status_line_from_segments(
+            segments,
+            use_theme_colors,
+            self.thread_id,
+            /*pull_request_url*/ None,
+        )
+        .map(|line| line.line)
     }
 }
 

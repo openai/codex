@@ -1,13 +1,18 @@
+use ratatui::buffer::CellWidth;
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use unicode_segmentation::UnicodeSegmentation;
 
-use crate::width::display_width;
+/// Paragraph paints each visible grapheme separately, even when the whole string
+/// has a narrower Unicode width (for example, Arabic lam followed by alef).
+pub(crate) fn span_width(span: &Span<'_>) -> usize {
+    span.styled_graphemes(Style::default())
+        .map(|g| usize::from(g.symbol.cell_width()))
+        .sum()
+}
 
 pub(crate) fn line_width(line: &Line<'_>) -> usize {
-    line.iter()
-        .map(|span| display_width(span.content.as_ref()))
-        .sum()
+    line.iter().map(span_width).sum()
 }
 
 pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
@@ -24,7 +29,7 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
     let mut spans_out: Vec<Span<'static>> = Vec::with_capacity(spans.len());
 
     for span in spans {
-        let span_width = display_width(span.content.as_ref());
+        let span_width = span_width(&span);
 
         if span_width == 0 {
             spans_out.push(span);
@@ -41,20 +46,18 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
             continue;
         }
 
-        let style = span.style;
-        let text = span.content.as_ref();
-        let mut end_idx = 0usize;
-        for (idx, grapheme) in text.grapheme_indices(/*is_extended*/ true) {
-            let grapheme_width = display_width(grapheme);
+        let mut prefix = String::new();
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let grapheme_width = usize::from(grapheme.symbol.cell_width());
             if used + grapheme_width > max_width {
                 break;
             }
-            end_idx = idx + grapheme.len();
+            prefix.push_str(grapheme.symbol);
             used += grapheme_width;
         }
 
-        if end_idx > 0 {
-            spans_out.push(Span::styled(text[..end_idx].to_string(), style));
+        if !prefix.is_empty() {
+            spans_out.push(Span::styled(prefix, span.style));
         }
 
         break;

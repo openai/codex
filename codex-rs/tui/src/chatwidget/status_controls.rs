@@ -83,13 +83,9 @@ impl ChatWidget {
     }
 
     /// Sets the currently rendered footer status-line value.
-    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
-        self.bottom_pane.set_status_line(status_line);
-    }
-
-    /// Sets the terminal hyperlink target for the currently rendered footer status line.
-    pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) {
-        self.bottom_pane.set_status_line_hyperlink(url);
+    pub(crate) fn set_status_line(&mut self, status_line: Option<HyperlinkLine>) {
+        self.bottom_pane
+            .set_status_line(status_line.map(Into::into));
     }
 
     /// Forwards the contextual active-agent label into the bottom-pane footer pipeline.

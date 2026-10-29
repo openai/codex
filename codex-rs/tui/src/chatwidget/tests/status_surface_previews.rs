@@ -35,9 +35,10 @@ async fn thread_color_preview_matches_footer() {
                         .map(|item| (item, chat.status_line_value_for_item(item).unwrap())),
                     use_colors,
                     Some(id),
+                    /*pull_request_url*/ None,
                 )
                 .unwrap();
-                assert_eq!(line, footer);
+                assert_eq!(line, footer.line);
                 snapshot.push(format!("colors={use_colors}: {line:?}"));
             }
             insta::assert_snapshot!(snapshot.join("\n"));

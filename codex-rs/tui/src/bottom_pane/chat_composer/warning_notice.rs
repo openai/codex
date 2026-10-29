@@ -3,6 +3,7 @@
 //! Only the count and warning label receive an amber accent; surrounding hints stay muted.
 
 use super::*;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 
 impl ChatComposer {
     pub(crate) fn warning_notice_contains(&self, position: ratatui::layout::Position) -> bool {

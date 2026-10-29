@@ -1,6 +1,8 @@
 //! Persistent status survives transient footer modes and suggestion overlays.
 
 use super::*;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::strip_osc8;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -14,7 +16,9 @@ fn composer() -> ChatComposer {
         /*disable_paste_burst*/ true,
     );
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("MODEL · ~/project · Context 20% used")));
+    composer.set_status_line(Some(
+        Line::from("MODEL · ~/project · Context 20% used").into(),
+    ));
     composer
 }
 
@@ -101,9 +105,14 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
     );
     insta::assert_snapshot!("fullscreen_plan_cycle_hint", wide);
 
-    let (narrow, _) = render(&composer, /*width*/ 44, /*footer*/ None);
-    assert!(narrow.contains("Plan mode"), "{narrow}");
-    assert!(!narrow.contains("⇧tab"), "{narrow}");
+    let mut status = HyperlinkLine::from("project · ");
+    status.push_span("PR #42".underlined(), Some("https://example.com/pull/42"));
+    composer.set_status_line(Some(status.into()));
+    composer.set_active_agent_label(Some("reviewer".to_string()));
+    let (narrow, _) = render(&composer, /*width*/ 37, /*footer*/ None);
+    let row = narrow.lines().rev().nth(1).expect("persistent status row");
+    insta::assert_snapshot!(strip_osc8(row).trim(), @"project · PR #42 · rev… Plan mode");
+    composer.set_active_agent_label(/*active_agent_label*/ None);
 
     composer.set_task_running(/*running*/ true);
     let (running, _) = render(&composer, /*width*/ 100, /*footer*/ None);

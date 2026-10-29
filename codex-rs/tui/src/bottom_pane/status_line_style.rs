@@ -3,19 +3,19 @@
 use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Styled;
-use ratatui::text::Line;
 use ratatui::text::Span;
 
 use super::status_line_setup::StatusLineItem;
 use crate::render::highlight::foreground_style_for_scopes;
 use crate::style::readable_color_on;
 use crate::style::secondary_text_style;
+use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::effective_stdout_color_level;
 use crate::thread_color::thread_color;
 use codex_protocol::ThreadId;
 
-const STATUS_LINE_SEPARATOR: &str = " · ";
+pub(crate) const STATUS_LINE_SEPARATOR: &str = " · ";
 const STATUS_LINE_COLOR_SATURATION_PERCENT: u16 = 85;
 const STATUS_LINE_COLOR_BRIGHTNESS_PERCENT: u16 = 100;
 
@@ -98,29 +98,38 @@ pub(crate) fn status_line_from_segments<I>(
     segments: I,
     use_theme_colors: bool,
     thread_id: Option<ThreadId>,
-) -> Option<Line<'static>>
+    pull_request_url: Option<&str>,
+) -> Option<HyperlinkLine>
 where
     I: IntoIterator<Item = (StatusLineItem, String)>,
 {
-    status_line_from_segments_with_resolver(segments, use_theme_colors, thread_id, |accent| {
-        foreground_style_for_scopes(accent.scopes())
-    })
+    status_line_from_segments_with_resolver(
+        segments,
+        use_theme_colors,
+        thread_id,
+        pull_request_url,
+        |accent| foreground_style_for_scopes(accent.scopes()),
+    )
 }
 
 fn status_line_from_segments_with_resolver<I, F>(
     segments: I,
     use_theme_colors: bool,
     thread_id: Option<ThreadId>,
+    pull_request_url: Option<&str>,
     theme_style_for_accent: F,
-) -> Option<Line<'static>>
+) -> Option<HyperlinkLine>
 where
     I: IntoIterator<Item = (StatusLineItem, String)>,
     F: Fn(StatusLineAccent) -> Option<Style>,
 {
-    let mut spans = Vec::new();
-    for (item, text) in segments {
-        if !spans.is_empty() {
-            spans.push(STATUS_LINE_SEPARATOR.set_style(secondary_text_style()));
+    let mut line = HyperlinkLine::default();
+    for (item, mut text) in segments {
+        // Paragraph skips control characters, so they must not enter this single row's link offsets.
+        text.retain(|ch| !ch.is_control());
+        if !line.line.spans.is_empty() {
+            line.line
+                .push_span(STATUS_LINE_SEPARATOR.set_style(secondary_text_style()));
         }
         let style = if use_theme_colors
             && matches!(
@@ -150,15 +159,14 @@ where
         } else {
             style
         };
-        let style = if item == StatusLineItem::PullRequestNumber {
-            style.underlined()
+        if item == StatusLineItem::PullRequestNumber {
+            line.push_span(Span::styled(text, style.underlined()), pull_request_url);
         } else {
-            style
-        };
-        spans.push(Span::styled(text, style));
+            line.line.push_span(Span::styled(text, style));
+        }
     }
 
-    (!spans.is_empty()).then(|| Line::from(spans))
+    (!line.line.spans.is_empty()).then_some(line)
 }
 
 fn soften_status_line_style(mut style: Style) -> Style {
@@ -219,6 +227,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
+    use ratatui::text::Line;
 
     fn line_text(line: &Line<'static>) -> String {
         line.spans
@@ -237,9 +246,11 @@ mod tests {
             ],
             /*use_theme_colors*/ true,
             /*thread_id*/ None,
+            /*pull_request_url*/ None,
             |_| None,
         )
-        .expect("status line");
+        .expect("status line")
+        .line;
 
         assert_eq!(line_text(&line), "gpt-5 · /repo · main");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
@@ -259,12 +270,14 @@ mod tests {
             ],
             /*use_theme_colors*/ true,
             /*thread_id*/ None,
+            /*pull_request_url*/ None,
             |accent| match accent {
                 StatusLineAccent::Model => Some(Style::default().red()),
                 _ => None,
             },
         )
-        .expect("status line");
+        .expect("status line")
+        .line;
 
         assert_eq!(line.spans[0].style.fg, Some(Color::Red));
         assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
@@ -282,9 +295,11 @@ mod tests {
             ],
             /*use_theme_colors*/ true,
             /*thread_id*/ None,
+            /*pull_request_url*/ None,
             |_| None,
         )
-        .expect("thread usage status line");
+        .expect("thread usage status line")
+        .line;
 
         assert_eq!(line_text(&line), "5.2 credits · ~$0.21");
         assert_eq!(line.spans[0].style, line.spans[2].style);
@@ -303,9 +318,11 @@ mod tests {
                 [(StatusLineItem::ModelName, "gpt-5".to_string())],
                 /*use_theme_colors*/ true,
                 /*thread_id*/ None,
+                /*pull_request_url*/ None,
                 |_| Some(Style::default().fg(Color::Rgb(255, 0, 0))),
             )
-            .expect("status line");
+            .expect("status line")
+            .line;
 
             assert_eq!(
                 line.spans[0].style.fg,
@@ -327,9 +344,11 @@ mod tests {
             ],
             /*use_theme_colors*/ false,
             /*thread_id*/ None,
+            /*pull_request_url*/ None,
             |_| Some(Style::default().red()),
         )
-        .expect("status line");
+        .expect("status line")
+        .line;
 
         assert_eq!(line_text(&line), "gpt-5 · Context 12% used");
         assert_eq!(line.spans[0].style, secondary_text_style());
@@ -343,9 +362,11 @@ mod tests {
             [(StatusLineItem::PullRequestNumber, "PR #20252".to_string())],
             /*use_theme_colors*/ false,
             /*thread_id*/ None,
+            /*pull_request_url*/ None,
             |_| None,
         )
-        .expect("status line");
+        .expect("status line")
+        .line;
 
         assert_eq!(line.spans[0].style, secondary_text_style().underlined());
     }
@@ -357,6 +378,7 @@ mod tests {
                 Vec::<(StatusLineItem, String)>::new(),
                 /*use_theme_colors*/ true,
                 /*thread_id*/ None,
+                /*pull_request_url*/ None,
                 |_| None,
             ),
             None
@@ -385,6 +407,7 @@ mod tests {
                 ],
                 /*use_theme_colors*/ true,
                 /*thread_id*/ None,
+                /*pull_request_url*/ None,
                 |accent| {
                     let rgb = match accent {
                         StatusLineAccent::Model => (240, 210, 160),
@@ -394,7 +417,8 @@ mod tests {
                     Some(Style::default().fg(crate::terminal_palette::rgb_color(rgb)))
                 },
             )
-            .expect("status line");
+            .expect("status line")
+            .line;
             let area = Rect::new(
                 /*x*/ 0, /*y*/ 0, /*width*/ 42, /*height*/ 1,
             );
@@ -445,8 +469,10 @@ mod tests {
             ],
             /*use_theme_colors*/ true,
             /*thread_id*/ None,
+            /*pull_request_url*/ None,
         )
-        .expect("status line");
+        .expect("status line")
+        .line;
         if level == "0" {
             assert_eq!(
                 line.spans

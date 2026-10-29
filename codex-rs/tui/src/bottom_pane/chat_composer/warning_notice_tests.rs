@@ -16,7 +16,7 @@ fn composer() -> ChatComposer {
     // Keep layout fixtures independent of platform-specific default shortcuts.
     composer.footer.show_warnings_key = Some(crate::key_hint::plain(KeyCode::F(2)).into());
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("MODEL · ~/project")));
+    composer.set_status_line(Some(Line::from("MODEL · ~/project").into()));
     composer
 }
 

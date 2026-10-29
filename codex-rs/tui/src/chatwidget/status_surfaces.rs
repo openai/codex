@@ -206,7 +206,6 @@ impl ChatWidget {
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
             self.set_status_line(/*status_line*/ None);
-            self.set_status_line_hyperlink(/*url*/ None);
             return;
         }
 
@@ -221,13 +220,8 @@ impl ChatWidget {
             segments,
             self.local_settings.tui.status_line_use_colors,
             self.thread_id,
+            self.status_line_pull_request_url(),
         ));
-        let hyperlink_url = selections
-            .status_line_items
-            .contains(&StatusLineItem::PullRequestNumber)
-            .then(|| self.status_line_pull_request_url())
-            .flatten();
-        self.set_status_line_hyperlink(hyperlink_url);
     }
 
     /// Clears the terminal title Codex most recently wrote, if any.
@@ -852,11 +846,11 @@ impl ChatWidget {
         }
     }
 
-    fn status_line_pull_request_url(&self) -> Option<String> {
+    fn status_line_pull_request_url(&self) -> Option<&str> {
         self.status_line_git_summary
             .as_ref()
             .and_then(|summary| summary.pull_request.as_ref())
-            .map(|pull_request| pull_request.url.clone())
+            .map(|pull_request| pull_request.url.as_str())
     }
 
     pub(super) fn status_surface_preview_value_for_item(

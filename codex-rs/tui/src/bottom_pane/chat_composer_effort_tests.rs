@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq;
 fn effort_composer_baseline_repeat_and_lowering_do_not_replay() {
     let (mut composer, _rx) = new_test_composer();
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("gpt-5.4 high · main")));
+    composer.set_status_line(Some(Line::from("gpt-5.4 high · main").into()));
     assert!(composer.set_active_reasoning_effort(
         Some(&ReasoningEffort::Ultra),
         /*animations_enabled*/ true,
@@ -43,7 +43,7 @@ fn effort_composer_baseline_repeat_and_lowering_do_not_replay() {
 fn effort_transition_does_not_queue_a_missing_outgoing_status_line() {
     let (mut composer, _rx) = new_test_composer();
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("gpt-5.4 high · main")));
+    composer.set_status_line(Some(Line::from("gpt-5.4 high · main").into()));
     composer.set_task_running(/*running*/ true);
     composer.set_text_content("queued draft".to_string(), Vec::new(), Vec::new());
     composer.set_active_reasoning_effort(
@@ -63,7 +63,7 @@ fn effort_transition_does_not_queue_a_missing_outgoing_status_line() {
 fn effort_composer_restored_baseline_and_reduced_motion_do_not_start() {
     let (mut composer, _rx) = new_test_composer();
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("gpt-5.4 high · main")));
+    composer.set_status_line(Some(Line::from("gpt-5.4 high · main").into()));
     composer.set_active_reasoning_effort(
         Some(&ReasoningEffort::High),
         /*animations_enabled*/ false,
@@ -99,7 +99,7 @@ fn effort_composer_restored_baseline_and_reduced_motion_do_not_start() {
 fn effort_transition_never_replaces_a_footer_flash() {
     let (mut composer, _rx) = new_test_composer();
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("gpt-5.4 high · main")));
+    composer.set_status_line(Some(Line::from("gpt-5.4 high · main").into()));
     composer.set_active_reasoning_effort(
         Some(&ReasoningEffort::High),
         /*animations_enabled*/ true,
@@ -108,7 +108,7 @@ fn effort_transition_never_replaces_a_footer_flash() {
         Some(&ReasoningEffort::Ultra),
         /*animations_enabled*/ true,
     );
-    composer.set_status_line(Some(Line::from("gpt-5.4 ultra · main")));
+    composer.set_status_line(Some(Line::from("gpt-5.4 ultra · main").into()));
     composer
         .footer
         .show_flash(Line::from("saved"), Duration::from_secs(/*secs*/ 1));
@@ -132,7 +132,7 @@ fn effort_transition_keeps_the_full_footer_row() {
     composer.set_status_line_enabled(/*enabled*/ true);
     composer.set_collaboration_modes_enabled(/*enabled*/ true);
     composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
-    composer.set_status_line(Some(Line::from("gpt-5.4 high · feature-branch")));
+    composer.set_status_line(Some(Line::from("gpt-5.4 high · feature-branch").into()));
     composer.set_active_reasoning_effort(
         Some(&ReasoningEffort::High),
         /*animations_enabled*/ true,

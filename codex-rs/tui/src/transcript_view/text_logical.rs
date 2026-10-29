@@ -59,7 +59,7 @@ impl LogicalLine {
                 .styled_range(self.origin.range.end..source.range.start)
                 .spans,
         );
-        let column = self.line.width();
+        let column = self.line.source_width();
         let body = slice_line(
             &line.line,
             source.prefix_bytes..source.prefix_bytes + source.range.len(),

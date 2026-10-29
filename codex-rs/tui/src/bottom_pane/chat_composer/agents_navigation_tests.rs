@@ -121,7 +121,7 @@ fn agents_navigation_hint_snapshots() {
                     }
                     "agents_navigation_status" => {
                         composer.set_status_line_enabled(/*enabled*/ true);
-                        composer.set_status_line(Some(Line::from("model · project")));
+                        composer.set_status_line(Some(Line::from("model · project").into()));
                     }
                     _ => {}
                 }

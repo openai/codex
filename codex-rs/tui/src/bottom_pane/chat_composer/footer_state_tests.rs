@@ -18,7 +18,7 @@ fn composer() -> ChatComposer {
         /*disable_paste_burst*/ true,
     );
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("MODEL STATUS")));
+    composer.set_status_line(Some(Line::from("MODEL STATUS").into()));
     composer
 }
 
