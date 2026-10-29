@@ -253,6 +253,8 @@ pub enum Feature {
     WakeOnAgentMessages,
     /// Preempt responses and yield foreground code-mode observations on new user input.
     InstantInterrupt,
+    /// Interrupt upstream inference when a turn is cancelled.
+    InterruptOnCancel,
     /// Enable shared discussion tools for an agent tree.
     AgentMessageBoard,
     /// Removed compatibility flag retained as a no-op.
@@ -1290,6 +1292,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "instant_interrupt",
         stage: Stage::UnderDevelopment,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::InterruptOnCancel,
+        key: "interrupt_on_cancel",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CodeModeOnly,

@@ -31,6 +31,9 @@ pub struct ThreadSampleParams {
     /// Disable MCP servers when the inherited window uses incremental tools on Responses Lite.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disable_mcp: bool,
+    /// Override upstream interruption on cancellation for this sample; otherwise inherit the parent.
+    #[ts(optional = nullable)]
+    pub interrupt_on_cancel: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

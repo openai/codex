@@ -1283,6 +1283,7 @@ pub async fn start_websocket_server_with_headers(
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
     let task = tokio::spawn(async move {
+        let mut handlers = tokio::task::JoinSet::new();
         loop {
             let accept_res = tokio::select! {
                 _ = &mut shutdown_rx => return,
@@ -1355,102 +1356,105 @@ pub async fn start_websocket_server_with_headers(
                 log.push(Vec::new());
                 log.len() - 1
             };
-            let close_after_requests = connection.close_after_requests;
-            let mut response_complete = false;
-            let mut batches = connection.requests.into_iter().peekable();
-            while let Some(request_events) = batches.peek() {
-                let message = tokio::select! {
-                    _ = &mut shutdown_rx => return,
-                    message = ws_stream.next() => message,
-                };
-                let Some(Ok(message)) = message else {
-                    break;
-                };
-                if let Some(body) = parse_ws_request_body(message) {
-                    let late_interrupt = response_complete && body["type"] == "response.interrupt";
-                    let mut log = requests.lock().unwrap();
-                    if let Some(connection_log) = log.get_mut(connection_index) {
-                        connection_log.push(WebSocketRequest { body });
-                        let request_index = connection_log.len() - 1;
-                        let request = &connection_log[request_index];
-                        let request_body = request.body_json();
-                        eprintln!(
-                            "[ws test server +{}ms] connection={} received request={} type={:?} role={:?} text={:?} data={:?}",
-                            start.elapsed().as_millis(),
-                            connection_index,
-                            request_index,
-                            request_body.get("type").and_then(Value::as_str),
-                            request_body
-                                .get("item")
-                                .and_then(|item| item.get("role"))
-                                .and_then(Value::as_str),
-                            request_body
-                                .get("item")
-                                .and_then(|item| item.get("content"))
-                                .and_then(Value::as_array)
-                                .and_then(|content| content.first())
-                                .and_then(|content| content.get("text"))
-                                .and_then(Value::as_str),
-                            request_body
-                                .get("item")
-                                .and_then(|item| item.get("content"))
-                                .and_then(Value::as_array)
-                                .and_then(|content| content.first())
-                                .and_then(|content| content.get("data"))
-                                .and_then(Value::as_str),
-                        );
-                    }
-                    request_log.notify_waiters();
-                    // A late interrupt cannot consume the next response's script.
-                    if late_interrupt {
-                        continue;
-                    }
-                }
-
-                eprintln!(
-                    "[ws test server +{}ms] connection={} sending batch_size={} event_types={:?} audio_data={:?}",
-                    start.elapsed().as_millis(),
-                    connection_index,
-                    request_events.len(),
-                    request_events
-                        .iter()
-                        .map(|event| event.get("type").and_then(Value::as_str))
-                        .collect::<Vec<_>>(),
-                    request_events
-                        .iter()
-                        .find_map(|event| event.get("delta").and_then(Value::as_str)),
-                );
-                for event in request_events {
-                    let Ok(payload) = serde_json::to_string(event) else {
-                        continue;
+            let requests = Arc::clone(&requests);
+            let request_log = Arc::clone(&request_log);
+            let gates = Arc::clone(&gates);
+            let closed_tx = closed_tx.clone();
+            handlers.spawn(async move {
+                let close_after_requests = connection.close_after_requests;
+                let mut response_complete = false;
+                let mut batches = connection.requests.into_iter().peekable();
+                while let Some(request_events) = batches.peek() {
+                    let message = ws_stream.next().await;
+                    let Some(Ok(message)) = message else {
+                        break;
                     };
-                    let gate = gates.lock().unwrap().remove(&payload);
-                    if let Some(gate) = gate {
-                        tokio::select! {
-                            _ = &mut shutdown_rx => return,
-                            _ = gate => {},
+                    if let Some(body) = parse_ws_request_body(message) {
+                        let late_interrupt = response_complete && body["type"] == "response.interrupt";
+                        let mut log = requests.lock().unwrap();
+                        if let Some(connection_log) = log.get_mut(connection_index) {
+                            connection_log.push(WebSocketRequest { body });
+                            let request_index = connection_log.len() - 1;
+                            let request = &connection_log[request_index];
+                            let request_body = request.body_json();
+                            eprintln!(
+                                "[ws test server +{}ms] connection={} received request={} type={:?} role={:?} text={:?} data={:?}",
+                                start.elapsed().as_millis(),
+                                connection_index,
+                                request_index,
+                                request_body.get("type").and_then(Value::as_str),
+                                request_body
+                                    .get("item")
+                                    .and_then(|item| item.get("role"))
+                                    .and_then(Value::as_str),
+                                request_body
+                                    .get("item")
+                                    .and_then(|item| item.get("content"))
+                                    .and_then(Value::as_array)
+                                    .and_then(|content| content.first())
+                                    .and_then(|content| content.get("text"))
+                                    .and_then(Value::as_str),
+                                request_body
+                                    .get("item")
+                                    .and_then(|item| item.get("content"))
+                                    .and_then(Value::as_array)
+                                    .and_then(|content| content.first())
+                                    .and_then(|content| content.get("data"))
+                                    .and_then(Value::as_str),
+                            );
+                        }
+                        request_log.notify_waiters();
+                        // A late interrupt cannot consume the next response's script.
+                        if late_interrupt {
+                            continue;
                         }
                     }
-                    if ws_stream.send(Message::Text(payload.into())).await.is_err() {
-                        break;
-                    }
-                    response_complete = matches!(
-                        event["type"].as_str(),
-                        Some("response.completed" | "response.incomplete" | "response.failed")
-                    );
-                }
-                batches.next();
-            }
 
-            if close_after_requests {
-                let _ = ws_stream.close(None).await;
-                closed_tx.send_modify(|count| *count += 1);
-            } else {
-                let _ = shutdown_rx.await;
-                return;
-            }
+                    eprintln!(
+                        "[ws test server +{}ms] connection={} sending batch_size={} event_types={:?} audio_data={:?}",
+                        start.elapsed().as_millis(),
+                        connection_index,
+                        request_events.len(),
+                        request_events
+                            .iter()
+                            .map(|event| event.get("type").and_then(Value::as_str))
+                            .collect::<Vec<_>>(),
+                        request_events
+                            .iter()
+                            .find_map(|event| event.get("delta").and_then(Value::as_str)),
+                    );
+                    for event in request_events {
+                        let Ok(payload) = serde_json::to_string(event) else {
+                            continue;
+                        };
+                        let gate = gates.lock().unwrap().remove(&payload);
+                        if let Some(gate) = gate {
+                            let _ = gate.await;
+                        }
+                        if ws_stream.send(Message::Text(payload.into())).await.is_err() {
+                            break;
+                        }
+                        response_complete = matches!(
+                            event["type"].as_str(),
+                            Some("response.completed" | "response.incomplete" | "response.failed")
+                        );
+                    }
+                    batches.next();
+                }
+
+                if close_after_requests {
+                    let _ = ws_stream.close(None).await;
+                    closed_tx.send_modify(|count| *count += 1);
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            });
 
             if connections.lock().unwrap().is_empty() {
+                tokio::select! {
+                    _ = &mut shutdown_rx => {},
+                    _ = handlers.join_all() => {},
+                }
                 return;
             }
         }
