@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use anyhow::Result;
+use codex_config::types::PluginsConfigToml;
 use codex_core::StartThreadOptions;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionFuture;
@@ -16,8 +17,11 @@ use codex_features::Feature;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::protocol::EnvironmentConfigState;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::turn_input::TurnInputRequest;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::environment_config_for_selection;
@@ -27,7 +31,7 @@ use pretty_assertions::assert_eq;
 #[derive(Default)]
 struct ExecutorSelectionRecorder {
     observed: Mutex<Vec<Vec<TurnEnvironmentSelection>>>,
-    plugin_contexts: Mutex<Vec<Option<Vec<TurnEnvironmentSelection>>>>,
+    plugin_contexts: Mutex<Vec<(Option<Vec<TurnEnvironmentSelection>>, PluginsConfigToml)>>,
 }
 
 impl McpServerContributor<Config> for ExecutorSelectionRecorder {
@@ -38,13 +42,16 @@ impl McpServerContributor<Config> for ExecutorSelectionRecorder {
     fn selected_plugins<'a>(
         &'a self,
         context: McpServerContributionContext<'a, Config>,
-        _plugins_config: &'a codex_config::types::PluginsConfigToml,
+        plugins_config: &'a codex_config::types::PluginsConfigToml,
     ) -> ExtensionFuture<'a, Vec<SelectedPlugin<'a>>> {
         Box::pin(async move {
             self.plugin_contexts
                 .lock()
                 .expect("plugin context recorder lock")
-                .push(context.selected_environments().map(<[_]>::to_vec));
+                .push((
+                    context.selected_environments().map(<[_]>::to_vec),
+                    plugins_config.clone(),
+                ));
             Vec::new()
         })
     }
@@ -140,6 +147,7 @@ async fn thread_projection_preserves_executor_order_and_unavailable_selections()
     Ok(())
 }
 
+/// An executor becoming ready must use the plugin policy published while it was pending.
 #[tokio::test]
 async fn model_step_plugin_projection_preserves_selected_environments() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -149,9 +157,37 @@ async fn model_step_plugin_projection_preserves_selected_environments() -> Resul
     extensions.mcp_server_contributor(recorder.clone());
     let test = test_codex()
         .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::DeferredExecutor)
+                .expect("enable deferred executor");
+        })
         .build_with_auto_env(&server)
         .await?;
-    let selection = test.codex.environment_selections().await.remove(0);
+    let mut selection = test.codex.environment_selections().await.remove(0);
+    selection.config = EnvironmentConfigState::Pending;
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![selection.clone().into_request()]),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?
+        .thread;
+    let current = thread.config().await;
+    let mut next = (*current).clone();
+    let plugins = toml::from_str("[\"unified-computer-use@openai-bundled\"]\nenabled = false")?;
+    next.config_layer_stack = next.config_layer_stack.with_session_plugins(plugins)?;
+    assert_eq!(
+        thread.refresh_mcp_config(current, next).await,
+        codex_core::ConfigRefreshOutcome::Published
+    );
+    let expected_plugins = thread.config().await.plugins.clone();
+    assert_eq!(
+        expected_plugins.plugins["unified-computer-use@openai-bundled"].enabled,
+        Some(false)
+    );
     let mut environment_config = environment_config_for_selection(&test.config, &selection);
     // Step-local plugin projection returns early without a ready selected root.
     environment_config.selected_capability_roots = vec![SelectedCapabilityRoot {
@@ -161,10 +197,11 @@ async fn model_step_plugin_projection_preserves_selected_environments() -> Resul
             path: selection.cwd.clone(),
         },
     }];
-    test.codex
+    thread
         .environment_ready(&selection, environment_config)
         .await?;
-    let selections = test.codex.environment_selections().await;
+    thread.current_mcp_config_and_runtime_context().await;
+    let selections = thread.environment_selections().await;
     recorder
         .plugin_contexts
         .lock()
@@ -176,7 +213,14 @@ async fn model_step_plugin_projection_preserves_selected_environments() -> Resul
     )
     .await;
 
-    test.submit_turn("Respond without using tools.").await?;
+    thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Respond without using tools.".to_owned(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    core_test_support::wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_)))
+        .await;
 
     let contexts = recorder
         .plugin_contexts
@@ -189,8 +233,9 @@ async fn model_step_plugin_projection_preserves_selected_environments() -> Resul
     assert!(
         contexts
             .iter()
-            .all(|context| context.as_ref() == Some(&selections)),
-        "every step-local plugin projection must receive its selected environments: {contexts:?}"
+            .all(|(context, plugins)| context.as_ref() == Some(&selections)
+                && plugins == &expected_plugins),
+        "step projection must retain selected environments and the pre-arrival plugin policy: {contexts:?}"
     );
     Ok(())
 }

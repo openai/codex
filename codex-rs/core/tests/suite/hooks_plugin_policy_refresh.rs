@@ -21,6 +21,7 @@ use core_test_support::apps_test_server::recorded_apps_tool_calls;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -41,8 +42,18 @@ use wiremock::matchers::path;
 
 use super::rmcp_client::remote_aware_environment_id;
 
+enum PluginPolicyRefresh {
+    System,
+    ClearSession,
+}
+
+/// Policy refreshes revoke plugin tools and hooks; clearing session overrides restores inheritance.
+#[test_case::test_case(PluginPolicyRefresh::System; "system policy")]
+#[test_case::test_case(PluginPolicyRefresh::ClearSession; "clear session override")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn() -> Result<()> {
+async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn(
+    refresh: PluginPolicyRefresh,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -74,6 +85,16 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn() -> Result<(
                 "server": "hook_observer",
                 "tool": "calendar_list_events",
             }] }] } },
+        }))?,
+    )?;
+    fs::write(
+        plugin_root.join(".mcp.json"),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "plugin_tools": {
+                    "url": format!("{}/api/codex/ps/mcp", observer.chatgpt_base_url),
+                },
+            },
         }))?,
     )?;
     fs::write(
@@ -128,6 +149,15 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn() -> Result<(
     test.submit_text_turn("finish the enabled baseline turn")
         .await?;
     assert_eq!(recorded_apps_tool_calls(&server).await.len(), 1);
+    test.codex
+        .call_mcp_tool(
+            "plugin_tools",
+            "calendar_list_events",
+            /*arguments*/ None,
+            /*meta*/ None,
+        )
+        .await?;
+    assert_eq!(recorded_apps_tool_calls(&server).await.len(), 2);
 
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -142,27 +172,33 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn() -> Result<(
     .await;
     let current_config = test.codex.config().await;
     let mut next_config = (*current_config).clone();
-    let mut layers = current_config
-        .config_layer_stack
-        .all_layers_low_to_high()
-        .cloned()
-        .collect::<Vec<_>>();
-    layers.push(ConfigLayerEntry::new(
-        ConfigLayerSource::System {
-            file: current_config.codex_home.join("system-config.toml"),
-        },
-        toml::from_str("[plugins._default]\nenabled = false")?,
-    ));
-    layers.sort_by_key(|layer| layer.name.precedence());
-    next_config.config_layer_stack = ConfigLayerStack::new(
-        layers,
-        current_config.config_layer_stack.requirements().clone(),
-        current_config
+    if matches!(refresh, PluginPolicyRefresh::ClearSession) {
+        next_config.config_layer_stack = next_config
             .config_layer_stack
-            .requirements_toml()
-            .clone(),
-    )
-    .expect("updated system layer");
+            .with_session_plugins(toml::from_str("[_default]\nenabled = false")?)?;
+    } else {
+        let mut layers = current_config
+            .config_layer_stack
+            .all_layers_low_to_high()
+            .cloned()
+            .collect::<Vec<_>>();
+        layers.push(ConfigLayerEntry::new(
+            ConfigLayerSource::System {
+                file: current_config.codex_home.join("system-config.toml"),
+            },
+            toml::from_str("[plugins._default]\nenabled = false")?,
+        ));
+        layers.sort_by_key(|layer| layer.name.precedence());
+        next_config.config_layer_stack = ConfigLayerStack::new(
+            layers,
+            current_config.config_layer_stack.requirements().clone(),
+            current_config
+                .config_layer_stack
+                .requirements_toml()
+                .clone(),
+        )
+        .expect("updated system layer");
+    }
     assert_eq!(
         test.codex
             .refresh_mcp_config(current_config, next_config)
@@ -187,7 +223,18 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn() -> Result<(
     })
     .await;
     assert_eq!(responses.requests().len(), 3);
-    assert_eq!(recorded_apps_tool_calls(&server).await.len(), 1);
+    assert!(
+        test.codex
+            .call_mcp_tool(
+                "plugin_tools",
+                "calendar_list_events",
+                /*arguments*/ None,
+                /*meta*/ None,
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(recorded_apps_tool_calls(&server).await.len(), 2);
 
     test.codex
         .call_mcp_tool(
@@ -197,6 +244,41 @@ async fn native_stop_hook_uses_plugin_policy_refreshed_during_turn() -> Result<(
             /*meta*/ None,
         )
         .await?;
-    assert_eq!(recorded_apps_tool_calls(&server).await.len(), 2);
+    assert_eq!(recorded_apps_tool_calls(&server).await.len(), 3);
+
+    if matches!(refresh, PluginPolicyRefresh::ClearSession) {
+        let current = test.codex.config().await;
+        let mut next = (*current).clone();
+        next.config_layer_stack = next
+            .config_layer_stack
+            .with_session_plugins(toml::Value::Table(Default::default()))?;
+        assert_eq!(
+            test.codex.refresh_mcp_config(current, next).await,
+            ConfigRefreshOutcome::Published
+        );
+        assert_eq!(test.codex.config().await.plugins, test.config.plugins);
+
+        let restored_response = mount_sse_once(
+            &server,
+            sse(vec![
+                ev_assistant_message("restored-turn", "done"),
+                ev_completed("restored-turn"),
+            ]),
+        )
+        .await;
+        test.submit_text_turn("finish with inherited plugin policy restored")
+            .await?;
+        assert_eq!(restored_response.requests().len(), 1);
+        assert_eq!(recorded_apps_tool_calls(&server).await.len(), 4);
+        test.codex
+            .call_mcp_tool(
+                "plugin_tools",
+                "calendar_list_events",
+                /*arguments*/ None,
+                /*meta*/ None,
+            )
+            .await?;
+        assert_eq!(recorded_apps_tool_calls(&server).await.len(), 5);
+    }
     Ok(())
 }

@@ -290,3 +290,54 @@ async fn mcp_refresh_preserves_apps_until_new_session() {
     assert!(reloaded.features.enabled(Feature::Apps));
     assert!(!next.features.enabled(Feature::Apps));
 }
+
+/// Explicit plugin updates replace only their session override, retaining other thread settings.
+#[tokio::test]
+async fn plugin_override_refresh_preserves_session_and_restores_inheritance() {
+    let (_home, base) = base_config().await;
+    let mut current = layered_config(
+        &base,
+        "[plugins.browser]\nenabled = false",
+        "",
+        "",
+        "[apps.calendar]\nenabled = false\n[plugins.browser]\nenabled = true",
+    )
+    .await;
+    let incoming = layered_config(
+        &base,
+        "[plugins.browser]\nenabled = false",
+        "",
+        "",
+        "[apps.calendar]\nenabled = true",
+    )
+    .await;
+    let original_apps = current.config_layer_stack.effective_config()["apps"].clone();
+    let layer_count = current.config_layer_stack.all_layers_low_to_high().count();
+    let unchanged = current
+        .resolve_runtime_refresh(&incoming, RuntimeConfigRefresh::Mcp)
+        .unwrap();
+    assert_eq!(unchanged.plugins, current.plugins);
+    for (override_text, expected) in [
+        ("[browser]\nenabled = false", false),
+        ("[browser]\nenabled = true", true),
+        ("", false),
+    ] {
+        let mut incoming = incoming.clone();
+        incoming.config_layer_stack = incoming
+            .config_layer_stack
+            .with_session_plugins(toml::from_str(override_text).unwrap())
+            .unwrap();
+        current = current
+            .resolve_runtime_refresh(&incoming, RuntimeConfigRefresh::Mcp)
+            .unwrap();
+        assert_eq!(current.plugins.plugins["browser"].enabled, Some(expected));
+        assert_eq!(
+            current.config_layer_stack.effective_config()["apps"],
+            original_apps
+        );
+        assert_eq!(
+            current.config_layer_stack.all_layers_low_to_high().count(),
+            layer_count
+        );
+    }
+}
