@@ -1075,7 +1075,7 @@ default_tools_approval_mode = "{selected_link_mode}"
             "Link identifier for the calendar resource.".to_string()
         };
         let tool = json!({
-            "name": "calendar_create_event",
+            "name": "calendar.create_event",
             "description": "Create a calendar event.",
             "annotations": { "readOnlyHint": false },
             "inputSchema": {
@@ -1094,7 +1094,7 @@ default_tools_approval_mode = "{selected_link_mode}"
                 "connector_name": "Calendar",
                 "_codex_apps": {
                     "connector_id": "calendar",
-                    "resource_uri": "connector://calendar/tools/calendar_create_event",
+                    "resource_uri": "connector://calendar/tools/create_event",
                     "contains_mcp_source": true,
                     "requires_explicit_link_id": requires_explicit_link_id
                 }
@@ -1188,6 +1188,7 @@ default_tools_approval_mode = "{selected_link_mode}"
         matches!(&event, EventMsg::ElicitationRequest(_)),
         expected_prompt
     );
+    let mut approval_tool_name = None;
     if let EventMsg::ElicitationRequest(request) = event {
         let ElicitationRequest::Form {
             meta: Some(meta), ..
@@ -1195,6 +1196,8 @@ default_tools_approval_mode = "{selected_link_mode}"
         else {
             panic!("expected a native MCP tool approval with metadata");
         };
+        approval_tool_name = Some(meta["tool_name"].clone());
+        assert_eq!(meta["tool_annotations"]["readOnlyHint"], json!(false));
         assert_eq!(
             (
                 meta.get("link_id").and_then(Value::as_str),
@@ -1218,10 +1221,11 @@ default_tools_approval_mode = "{selected_link_mode}"
         .await;
     }
     assert_eq!(mock.requests().len(), 2);
-    assert_eq!(
-        recorded_apps_tool_call_by_call_id(&server, call_id).await["params"]["arguments"],
-        calendar_args
-    );
+    let tool_call = recorded_apps_tool_call_by_call_id(&server, call_id).await;
+    if let Some(tool_name) = approval_tool_name {
+        assert_eq!(tool_name, tool_call["params"]["name"]);
+    }
+    assert_eq!(tool_call["params"]["arguments"], calendar_args);
     assert_eq!(completed_links, vec![expected_link_id.map(str::to_string)]);
     Ok(())
 }

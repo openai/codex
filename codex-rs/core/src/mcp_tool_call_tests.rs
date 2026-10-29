@@ -734,10 +734,24 @@ fn truncates_strings_on_char_boundaries() {
 
 #[test]
 fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_keys() {
+    let mut metadata = approval_metadata(
+        Some("calendar"),
+        Some("Calendar"),
+        Some("Manage events and schedules."),
+        Some("Create Event"),
+        Some("Create a calendar event."),
+    );
+    metadata.annotations = Some(ToolAnnotations::from_raw(
+        /*title*/ Some("Calendar Event".to_string()),
+        /*read_only_hint*/ Some(false),
+        /*destructive_hint*/ Some(false),
+        /*idempotent_hint*/ Some(true),
+        /*open_world_hint*/ Some(true),
+    ));
     let question = build_mcp_tool_approval_question(
         "q".to_string(),
         CODEX_APPS_MCP_SERVER_NAME,
-        "create_event",
+        "calendar.create_event",
         Some("Calendar"),
         prompt_options(
             /*allow_session_remember*/ true, /*allow_persistent_approval*/ true,
@@ -747,13 +761,8 @@ fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_
 
     let request = build_mcp_tool_approval_elicitation_request(McpToolApprovalElicitationRequest {
         server: CODEX_APPS_MCP_SERVER_NAME,
-        metadata: Some(&approval_metadata(
-            Some("calendar"),
-            Some("Calendar"),
-            Some("Manage events and schedules."),
-            Some("Create Event"),
-            Some("Create a calendar event."),
-        )),
+        tool_name: "calendar.create_event",
+        metadata: Some(&metadata),
         tool_params: Some(&serde_json::json!({
             "calendar_id": "primary",
             "title": "Roadmap review",
@@ -790,6 +799,13 @@ fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_
                 MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
                 MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
                 MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: "Manage events and schedules.",
+                "tool_name": "calendar.create_event",
+                "tool_annotations": {
+                    "readOnlyHint": false,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": true,
+                },
                 MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: "Create Event",
                 MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: "Create a calendar event.",
                 MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: {
@@ -1923,6 +1939,7 @@ fn approval_elicitation_meta_marks_tool_approvals() {
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             "custom_server",
+            "run_action",
             /*metadata*/ None,
             /*tool_params*/ None,
             /*tool_params_display*/ None,
@@ -1932,7 +1949,37 @@ fn approval_elicitation_meta_marks_tool_approvals() {
         ),
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
+            MCP_TOOL_APPROVAL_TOOL_NAME_KEY: "run_action",
         }))
+    );
+}
+
+#[test]
+fn approval_elicitation_meta_emits_only_supplied_hints_for_custom_servers() {
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(
+            Some(false),
+            /*destructive*/ None,
+            /*open_world*/ None,
+        )),
+        ..Default::default()
+    };
+    assert_eq!(
+        build_mcp_tool_approval_elicitation_meta(
+            "custom_server",
+            "run_action",
+            Some(&metadata),
+            /*tool_params*/ None,
+            /*tool_params_display*/ None,
+            prompt_options(
+                /*allow_session_remember*/ false, /*allow_persistent_approval*/ false
+            ),
+        ),
+        Some(serde_json::json!({
+            "codex_approval_kind": "mcp_tool_call",
+            "tool_name": "run_action",
+            "tool_annotations": { "readOnlyHint": false },
+        })),
     );
 }
 
@@ -1941,6 +1988,7 @@ fn approval_elicitation_meta_merges_session_and_always_persist_for_custom_server
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             "custom_server",
+            "run_action",
             Some(&approval_metadata(
                 /*connector_id*/ None,
                 /*connector_name*/ None,
@@ -1956,6 +2004,7 @@ fn approval_elicitation_meta_merges_session_and_always_persist_for_custom_server
         ),
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
+            MCP_TOOL_APPROVAL_TOOL_NAME_KEY: "run_action",
             MCP_TOOL_APPROVAL_PERSIST_KEY: [
                 MCP_TOOL_APPROVAL_PERSIST_SESSION,
                 MCP_TOOL_APPROVAL_PERSIST_ALWAYS,
@@ -2095,6 +2144,7 @@ fn approval_elicitation_meta_includes_connector_source_for_codex_apps() {
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             CODEX_APPS_MCP_SERVER_NAME,
+            "calendar.run_action",
             Some(&approval_metadata(
                 Some("calendar"),
                 Some("Calendar"),
@@ -2113,6 +2163,7 @@ fn approval_elicitation_meta_includes_connector_source_for_codex_apps() {
         Some(serde_json::json!({
             MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
             MCP_TOOL_APPROVAL_SOURCE_KEY: MCP_TOOL_APPROVAL_SOURCE_CONNECTOR,
+            MCP_TOOL_APPROVAL_TOOL_NAME_KEY: "calendar.run_action",
             MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
             MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
             MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: "Manage events and schedules.",
@@ -2130,6 +2181,7 @@ fn approval_elicitation_meta_merges_session_and_always_persist_with_connector_so
     assert_eq!(
         build_mcp_tool_approval_elicitation_meta(
             CODEX_APPS_MCP_SERVER_NAME,
+            "calendar.run_action",
             Some(&approval_metadata(
                 Some("calendar"),
                 Some("Calendar"),
@@ -2152,6 +2204,7 @@ fn approval_elicitation_meta_merges_session_and_always_persist_with_connector_so
                 MCP_TOOL_APPROVAL_PERSIST_ALWAYS,
             ],
             MCP_TOOL_APPROVAL_SOURCE_KEY: MCP_TOOL_APPROVAL_SOURCE_CONNECTOR,
+            MCP_TOOL_APPROVAL_TOOL_NAME_KEY: "calendar.run_action",
             MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
             MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
             MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: "Manage events and schedules.",

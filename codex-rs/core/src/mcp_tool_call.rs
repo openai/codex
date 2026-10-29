@@ -71,7 +71,9 @@ use codex_protocol::mcp_approval_meta::PERSIST_KEY as MCP_TOOL_APPROVAL_PERSIST_
 use codex_protocol::mcp_approval_meta::PERSIST_SESSION as MCP_TOOL_APPROVAL_PERSIST_SESSION;
 use codex_protocol::mcp_approval_meta::SOURCE_CONNECTOR as MCP_TOOL_APPROVAL_SOURCE_CONNECTOR;
 use codex_protocol::mcp_approval_meta::SOURCE_KEY as MCP_TOOL_APPROVAL_SOURCE_KEY;
+use codex_protocol::mcp_approval_meta::TOOL_ANNOTATIONS_KEY as MCP_TOOL_APPROVAL_TOOL_ANNOTATIONS_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY;
+use codex_protocol::mcp_approval_meta::TOOL_NAME_KEY as MCP_TOOL_APPROVAL_TOOL_NAME_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_DISPLAY_KEY as MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_TOOL_APPROVAL_TOOL_TITLE_KEY;
@@ -1201,7 +1203,7 @@ impl McpToolApprovalPolicy {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct McpToolApprovalMetadata {
     annotations: Option<ToolAnnotations>,
     pub(crate) connector_id: Option<String>,
@@ -1470,6 +1472,7 @@ struct McpToolApprovalPromptOptions {
 
 struct McpToolApprovalElicitationRequest<'a> {
     server: &'a str,
+    tool_name: &'a str,
     metadata: Option<&'a McpToolApprovalMetadata>,
     tool_params: Option<&'a serde_json::Value>,
     tool_params_display: Option<&'a [RenderedMcpToolApprovalParam]>,
@@ -1695,28 +1698,23 @@ pub(crate) async fn request_mcp_tool_user_approval(
             .map(|rendered_template| rendered_template.question.as_str()),
     );
     let (request_dispatched, decision, cancellation_reason) = if tool_call_mcp_elicitation_enabled {
-        let link_id = sess
+        let metadata = sess
             .mcp_tool_approval_metadata(server, id)
-            .and_then(|context| context.metadata.link_id);
-        let metadata = McpToolApprovalMetadata {
-            annotations: None,
-            connector_id: connector_id.clone(),
-            link_id,
-            connector_name: connector_name.clone(),
-            connector_description: connector_description.clone(),
-            connected_account_email: connected_account_email.clone(),
-            plugin_id: None,
-            tool_title: tool_title.clone(),
-            tool_description: tool_description.clone(),
-            mcp_app_resource_uri: None,
-            mcp_app_ui: None,
-            codex_apps_meta: None,
-            openai_file_input_optional_fields: None,
-        };
+            .map(|context| context.metadata)
+            .unwrap_or_else(|| McpToolApprovalMetadata {
+                connector_id: connector_id.clone(),
+                connector_name: connector_name.clone(),
+                connector_description: connector_description.clone(),
+                connected_account_email: connected_account_email.clone(),
+                tool_title: tool_title.clone(),
+                tool_description: tool_description.clone(),
+                ..Default::default()
+            });
         let request_id = rmcp::model::RequestId::String(question_id.clone().into());
         let request =
             build_mcp_tool_approval_elicitation_request(McpToolApprovalElicitationRequest {
                 server,
+                tool_name,
                 metadata: Some(&metadata),
                 tool_params: rendered_template
                     .as_ref()
@@ -2068,6 +2066,7 @@ fn build_mcp_tool_approval_elicitation_request(
     ElicitationRequest::Form {
         meta: build_mcp_tool_approval_elicitation_meta(
             request.server,
+            request.tool_name,
             request.metadata,
             request.tool_params,
             request.tool_params_display,
@@ -2083,6 +2082,7 @@ fn build_mcp_tool_approval_elicitation_request(
 
 fn build_mcp_tool_approval_elicitation_meta(
     server: &str,
+    tool_name: &str,
     metadata: Option<&McpToolApprovalMetadata>,
     tool_params: Option<&serde_json::Value>,
     tool_params_display: Option<&[RenderedMcpToolApprovalParam]>,
@@ -2120,7 +2120,24 @@ fn build_mcp_tool_approval_elicitation_meta(
         }
         (false, false) => {}
     }
+    meta.insert(
+        MCP_TOOL_APPROVAL_TOOL_NAME_KEY.to_string(),
+        serde_json::Value::String(tool_name.to_owned()),
+    );
     if let Some(metadata) = metadata {
+        if let Some(annotations) = &metadata.annotations {
+            let hints = ToolAnnotations::from_raw(
+                /*title*/ None,
+                annotations.read_only_hint,
+                annotations.destructive_hint,
+                annotations.idempotent_hint,
+                annotations.open_world_hint,
+            );
+            meta.insert(
+                MCP_TOOL_APPROVAL_TOOL_ANNOTATIONS_KEY.to_string(),
+                serde_json::json!(hints),
+            );
+        }
         if let Some(tool_title) = metadata.tool_title.as_ref() {
             meta.insert(
                 MCP_TOOL_APPROVAL_TOOL_TITLE_KEY.to_string(),
