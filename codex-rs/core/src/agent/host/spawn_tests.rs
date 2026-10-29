@@ -112,6 +112,7 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
         payload: ToolPayload::Function {
             arguments: "{}".into(),
         },
+        native_call: None,
         environments: Default::default(),
     };
     let reservation = InvocationReservation::default();
