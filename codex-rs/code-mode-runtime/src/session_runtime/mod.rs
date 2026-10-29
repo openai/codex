@@ -54,6 +54,7 @@ struct Inner {
 }
 
 impl SessionRuntime {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::new_with_task_failure_handler(/*task_failure_handler*/ None)
     }

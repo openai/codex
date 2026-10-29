@@ -68,6 +68,8 @@ pub(crate) enum CellEvent {
     },
     Completed {
         content_items: OutputCollector,
+        /// None is success. Server diagnostics have already been bounded
+        /// independently of the observing request's output budget.
         error_text: Option<String>,
         /// Time the completed result spent waiting for an observer.
         result_buffered_for: Duration,

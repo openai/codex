@@ -6,7 +6,7 @@ use codex_code_mode_protocol::ImageDetail;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail as ProtocolImageDetail;
 use codex_protocol::models::ImageReference;
-use codex_utils_audio::estimate_audio_token_count;
+use codex_utils_audio::estimate_audio_token_count_without_cache;
 use codex_utils_output_truncation::OutputBoundary;
 use codex_utils_output_truncation::formatted_output_at_token_boundaries;
 use codex_utils_output_truncation::mixed_output_at_token_boundaries;
@@ -30,10 +30,6 @@ const MAX_POSITIONED_NOTICES: usize = 4;
 /// budget: Core's warning describes the retained text alone. The shared
 /// formatter moves collector boundaries along with their source content.
 /// If losses are too scattered for individual notices, report their totals once.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "Renderer is wired in the next stack layer")
-)]
 pub(crate) fn render_output(
     output: CollectedOutput,
     max_output_tokens: Option<usize>,
@@ -72,14 +68,14 @@ pub(crate) fn render_output(
         mixed_output_at_token_boundaries(
             content,
             max_tokens,
-            estimate_audio_token_count,
+            estimate_audio_token_count_without_cache,
             &mut boundaries,
         )
     } else {
         formatted_output_at_token_boundaries(
             content,
             max_tokens,
-            estimate_audio_token_count,
+            estimate_audio_token_count_without_cache,
             &mut boundaries,
         )
     };

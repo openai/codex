@@ -144,6 +144,10 @@ pub enum RuntimeResponse {
     Result {
         cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
+        /// None means success; Some (including an empty string) means failure.
+        /// Client mode supplies the original diagnostic to append before truncation.
+        /// Server mode includes the diagnostic in the already-budgeted content and
+        /// supplies an independently bounded copy here for logging; do not append it again.
         error_text: Option<String>,
         /// Time between completion and retrieval when the result was buffered.
         #[serde(default, skip_serializing_if = "Duration::is_zero")]

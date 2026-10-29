@@ -147,17 +147,22 @@ fn canonical_audio_mime(mime: &str) -> Option<&'static str> {
 /// Estimates audio tokens from decoded duration, falling back to the data URL size.
 pub fn estimate_audio_token_count(audio_url: &str) -> usize {
     let key = sha1_digest(audio_url.as_bytes());
-    AUDIO_TOKEN_ESTIMATE_CACHE.get_or_init(key, || {
-        let Some(duration_seconds) = audio_duration_seconds(audio_url) else {
-            return approx_token_count(audio_url);
-        };
-        let token_count = (duration_seconds * AUDIO_TOKENS_PER_SECOND).ceil();
-        if token_count >= usize::MAX as f64 {
-            usize::MAX
-        } else {
-            token_count as usize
-        }
-    })
+    AUDIO_TOKEN_ESTIMATE_CACHE
+        .get_or_init(key, || estimate_audio_token_count_without_cache(audio_url))
+}
+
+/// The same duration-based estimate without accessing the Tokio-dependent cache.
+/// Suitable for bounded output rendered on a current-thread runtime.
+pub fn estimate_audio_token_count_without_cache(audio_url: &str) -> usize {
+    let Some(duration_seconds) = audio_duration_seconds(audio_url) else {
+        return approx_token_count(audio_url);
+    };
+    let token_count = (duration_seconds * AUDIO_TOKENS_PER_SECOND).ceil();
+    if token_count >= usize::MAX as f64 {
+        usize::MAX
+    } else {
+        token_count as usize
+    }
 }
 
 fn audio_duration_seconds(audio_url: &str) -> Option<f64> {

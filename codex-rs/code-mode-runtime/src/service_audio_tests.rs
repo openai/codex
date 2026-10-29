@@ -1,4 +1,4 @@
-//! Covers per-item short-WAV omissions without disrupting other Code Mode outputs.
+//! Covers short-WAV handling and Server audio output alongside other Code Mode outputs.
 
 use super::cell_id;
 use super::execute;
@@ -11,6 +11,9 @@ use crate::WaitOutcome;
 use crate::WaitRequest;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_code_mode_protocol::CodeModeOutputTruncation;
+use codex_code_mode_protocol::CodeModeSessionOptions;
+use codex_code_mode_protocol::host::BOUNDED_OUTPUT_MAX_BYTES;
 use pretty_assertions::assert_eq;
 
 const SHORT_AUDIO_OMISSION_TEXT: &str =
@@ -166,5 +169,47 @@ async fn audio_helper_bounds_wav_data_and_preserves_outputs_after_yield() {
             result_buffered_for: actual.result_buffered_for().unwrap(),
             error_text: None,
         })
+    );
+}
+
+#[tokio::test]
+async fn server_omits_audio_above_the_text_allowance_at_zero_tokens() {
+    let session = InProcessCodeModeSession::with_options(
+        CodeModeSessionOptions {
+            output_truncation: CodeModeOutputTruncation::Server,
+            ..CodeModeSessionOptions::default()
+        },
+        /*task_failure_handler*/ None,
+    );
+    // Each clip exceeds the text allowance, but the clips fit the separate
+    // audio allowance and reach the zero-token formatter.
+    let wav = pcm16_wav(/*sample_rate*/ 24_000, BOUNDED_OUTPUT_MAX_BYTES / 2);
+    let payload = BASE64_STANDARD.encode(wav);
+    let source = format!(
+        "const clip = 'data:audio/wav;base64,{payload}'; for (let i = 0; i < 6; i++) {{ audio(clip); text(''); }}"
+    );
+    let response = execute(
+        &session,
+        ExecuteRequest {
+            yield_time_ms: Some(60_000),
+            max_output_tokens: Some(0),
+            ..execute_request(&source)
+        },
+    )
+    .await;
+    let RuntimeResponse::Result {
+        content_items,
+        error_text,
+        ..
+    } = response
+    else {
+        panic!("expected completed cell");
+    };
+    assert_eq!(error_text, None);
+    assert_eq!(
+        content_items,
+        [FunctionCallOutputContentItem::InputText {
+            text: "[omitted 6 audio items ...]".to_owned(),
+        }]
     );
 }

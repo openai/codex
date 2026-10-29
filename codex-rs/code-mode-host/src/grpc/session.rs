@@ -10,7 +10,10 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 
 use codex_code_mode_protocol::CellId;
-use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
+use codex_code_mode_protocol::CodeModeOutputTruncation;
+use codex_code_mode_protocol::CodeModeSession;
+use codex_code_mode_protocol::CodeModeSessionOptions;
+use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::grpc as proto;
 use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
@@ -107,7 +110,7 @@ impl GrpcHostState {
 
     pub(super) fn open_session(
         self: &Arc<Self>,
-        limits: CodeModeSessionCellExecutionLimits,
+        options: CodeModeSessionOptions,
     ) -> Result<GrpcStream<proto::SessionEvent>, Status> {
         let id = Uuid::new_v4();
         let (events, receiver) = mpsc::channel(OUTGOING_CHANNEL_CAPACITY);
@@ -118,13 +121,18 @@ impl GrpcHostState {
             event_sender,
             closed,
             Arc::clone(&self.delegate_permits),
-            limits,
+            options,
         );
         events
             .try_send(Ok(proto::SessionEvent {
                 event: Some(proto::session_event::Event::Opened(proto::SessionOpened {
                     session_id: id.to_string(),
-                    output_truncation: None,
+                    output_truncation: match session.runtime.output_truncation() {
+                        CodeModeOutputTruncation::Server => {
+                            Some(proto::OutputTruncation::Server.into())
+                        }
+                        CodeModeOutputTruncation::Client => None,
+                    },
                 })),
             }))
             .map_err(|_| Status::internal("failed to publish the opened code-mode session"))?;
@@ -213,7 +221,7 @@ impl GrpcSession {
         events: EventSender,
         closed: CancellationToken,
         delegate_permits: Arc<Semaphore>,
-        limits: CodeModeSessionCellExecutionLimits,
+        options: CodeModeSessionOptions,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak: &Weak<Self>| {
             let failure_session = weak.clone();
@@ -225,9 +233,9 @@ impl GrpcSession {
             });
             Self {
                 id,
-                runtime: Arc::new(InProcessCodeModeSession::with_task_failure_handler(
-                    failure_handler,
-                    limits,
+                runtime: Arc::new(InProcessCodeModeSession::with_options(
+                    options,
+                    Some(failure_handler),
                 )),
                 closed,
                 state: Mutex::new(SessionState::default()),
@@ -258,13 +266,13 @@ impl GrpcSession {
         result
     }
 
-    pub(super) async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, Status> {
+    pub(super) async fn terminate(&self, request: TerminateRequest) -> Result<WaitOutcome, Status> {
         tokio::select! {
             biased;
             _ = self.closed.cancelled() => {
                 Err(Status::cancelled("code-mode session is closed"))
             }
-            result = self.runtime.terminate(cell_id.into()) => {
+            result = self.runtime.terminate(request) => {
                 result.map_err(Status::failed_precondition)
             }
         }
@@ -347,7 +355,7 @@ impl GrpcSession {
         if let Some(cell_id) = cell_id {
             let session = Arc::clone(self);
             tokio::spawn(async move {
-                let _ = session.terminate(CellId::new(cell_id)).await;
+                let _ = session.terminate(CellId::new(cell_id).into()).await;
             });
         }
     }

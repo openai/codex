@@ -1,3 +1,4 @@
+use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::ExecuteRequest;
@@ -27,6 +28,21 @@ pub(super) fn session_limits(
             .transpose()
             .map_err(|_| Status::invalid_argument("maximum heap size exceeds this platform"))?,
     })
+}
+
+pub(super) fn observation_budget(
+    max_output_tokens: Option<u64>,
+    output_truncation: CodeModeOutputTruncation,
+) -> Result<Option<usize>, Status> {
+    if output_truncation == CodeModeOutputTruncation::Client {
+        return Ok(None);
+    }
+    max_output_tokens
+        .map(|value| {
+            usize::try_from(value)
+                .map_err(|_| Status::invalid_argument("output budget is too large"))
+        })
+        .transpose()
 }
 
 pub(super) fn execute_request(request: proto::ExecuteRequest) -> Result<ExecuteRequest, Status> {

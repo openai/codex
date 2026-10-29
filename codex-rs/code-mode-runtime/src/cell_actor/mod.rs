@@ -474,8 +474,11 @@ async fn run_cell<H: CellHost>(
     host.closed().await;
 }
 
-/// Construct completion only after it has won the terminal decision.
-fn take_completed_event(output: &mut OutputCollector, error_text: Option<String>) -> CellEvent {
+/// Construct completion only after the terminal outcome is settled.
+pub(crate) fn take_completed_event(
+    output: &mut OutputCollector,
+    error_text: Option<String>,
+) -> CellEvent {
     let error_text = error_text.map(|error_text| output.collect_error(error_text));
     CellEvent::Completed {
         content_items: output.take(),

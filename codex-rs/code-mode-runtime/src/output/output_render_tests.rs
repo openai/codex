@@ -31,8 +31,8 @@ fn missing_budget_uses_the_protocol_default() {
     }
 }
 
-#[test]
-fn typed_media_round_trips_with_the_audio_estimate() {
+#[tokio::test]
+async fn typed_media_round_trips_with_the_audio_estimate() {
     let mut images: Vec<_> = [
         None,
         Some(ImageDetail::Auto),

@@ -6,13 +6,18 @@
 use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::FunctionCallOutputContentItem as OutputItem;
 use codex_utils_output_truncation::OutputBoundary;
+use codex_utils_string::truncate_middle_with_marker;
 
 mod output_collection;
 mod output_render;
 
 pub(crate) use output_collection::BoundedOutput;
-#[allow(unused_imports, reason = "Renderer is wired in the next stack layer")]
+#[cfg(test)]
+pub(crate) use output_collection::MAX_OUTPUT_ITEMS;
 pub(crate) use output_render::render_output;
+
+/// Bound the buffered server diagnostic independently of model-visible output.
+pub(crate) const MAX_SERVER_DIAGNOSTIC_BYTES: usize = 64 * 1024;
 
 /// The actor transfers the whole collector at each observation, so a failed
 /// synchronous send can restore the original state, including any omissions.
@@ -39,8 +44,8 @@ impl OutputCollector {
         }
     }
 
-    /// Server errors share the observation's budget; preserve their presence
-    /// for completion status. Client errors retain their original formatting.
+    /// Server errors share the observation's output budget; their diagnostic
+    /// has an independent bound. Client errors retain their original formatting.
     pub(crate) fn collect_error(&mut self, error_text: String) -> String {
         match self {
             Self::Client(_) => error_text,
@@ -48,7 +53,12 @@ impl OutputCollector {
                 output
                     .get_or_insert_with(Box::default)
                     .push_error(&error_text);
-                String::new()
+                // Reuse small errors without retaining oversized backing storage.
+                if error_text.capacity() <= MAX_SERVER_DIAGNOSTIC_BYTES {
+                    error_text
+                } else {
+                    truncate_middle_with_marker(&error_text, MAX_SERVER_DIAGNOSTIC_BYTES, "…")
+                }
             }
         }
     }

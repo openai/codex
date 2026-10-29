@@ -179,6 +179,66 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
 }
 
 #[tokio::test]
+async fn termination_drains_a_send_already_blocked_by_backpressure() {
+    let harness = spawn_cell_actor_harness_with_host_and_failure_handler(
+        ObserveMode::YieldAfter(Duration::from_secs(60)),
+        Arc::new(TestHost::default()),
+        CodeModeOutputTruncation::Server,
+        /*task_failure_handler*/ None,
+    );
+    let (termination, capacity) = {
+        let RuntimeEventSender::Bounded(tx) = &harness.event_tx else {
+            panic!("server runtime must use a bounded sender");
+        };
+        // This test owns the V8-side events. The current-thread actor cannot run
+        // before our first await; fill its actual FIFO and register a sender.
+        for _ in 0..tx.max_capacity() {
+            tx.try_send(RuntimeEvent::ContentItem(OutputItem::InputText {
+                text: "queued".to_string(),
+            }))
+            .unwrap();
+        }
+        let mut send = std::pin::pin!(tx.send(RuntimeEvent::ContentItem(OutputItem::InputText {
+            text: "blocked".to_string(),
+        })));
+        assert!(futures::poll!(send.as_mut()).is_pending());
+        // terminate() synchronously cancels. No event was consumed between the
+        // Pending poll and cancellation; run_cell must drain while terminating.
+        let termination = harness.handle.terminate();
+        tokio::time::timeout(Duration::from_secs(1), send)
+            .await
+            .expect("termination must release the registered sender")
+            .expect("actor must drain the blocked item");
+        (termination, tx.max_capacity())
+    };
+    drop(harness.event_tx);
+    let event = tokio::time::timeout(Duration::from_secs(1), termination)
+        .await
+        .expect("termination must finish after draining")
+        .expect("termination event");
+    let mut expected = OutputCollector::new(CodeModeOutputTruncation::Server);
+    for _ in 0..capacity {
+        expected.push(OutputItem::InputText {
+            text: "queued".to_string(),
+        });
+    }
+    expected.push(OutputItem::InputText {
+        text: "blocked".to_string(),
+    });
+    assert_eq!(
+        event,
+        CellEvent::Terminated {
+            content_items: expected,
+        }
+    );
+    assert_eq!(harness.initial_event_rx.await.unwrap(), Ok(event));
+    tokio::time::timeout(Duration::from_secs(1), harness.task)
+        .await
+        .expect("actor must close")
+        .unwrap();
+}
+
+#[tokio::test]
 async fn unexpected_runtime_thread_exit_is_reported_to_the_session_owner() {
     let (failure_tx, mut failure_rx) = mpsc::unbounded_channel();
     let harness = spawn_cell_actor_harness_with_host_and_failure_handler(
