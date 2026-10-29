@@ -308,6 +308,39 @@ struct ThreadEnvironmentsState {
     environments: Vec<SelectedTurnEnvironment>,
 }
 
+#[derive(Clone, Copy)]
+enum StartupRetry<'a> {
+    AfterSelectionUpdate,
+    OnNewTurn(&'a [TurnEnvironmentSelection]),
+}
+
+impl StartupRetry<'_> {
+    fn should_restart(self, environment: &SelectedTurnEnvironment) -> bool {
+        if matches!(
+            environment.selection.config,
+            EnvironmentConfigState::Failed(_)
+        ) {
+            return matches!(self, Self::AfterSelectionUpdate);
+        }
+        // Avoid cloning a resolved environment on every healthy turn.
+        if environment.resolution.peek().is_some_and(Result::is_ok) {
+            return false;
+        }
+        match environment.resolution.clone().now_or_never() {
+            Some(Err(error)) => match self {
+                Self::AfterSelectionUpdate => true,
+                Self::OnNewTurn(selected) => {
+                    error.is_retryable_preparation_error()
+                        && selected
+                            .iter()
+                            .any(|s| s.has_same_workspace(&environment.selection))
+                }
+            },
+            Some(Ok(_)) | None => false,
+        }
+    }
+}
+
 impl ThreadEnvironments {
     pub(crate) fn new(
         environment_manager: Arc<EnvironmentManager>,
@@ -449,6 +482,27 @@ impl ThreadEnvironments {
 
     /// Updates the selected list before waking work that was waiting on the previous selection.
     pub(crate) fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
+        self.apply_selections(environments, StartupRetry::AfterSelectionUpdate);
+    }
+
+    /// A new turn can retry a failed connection even when it keeps the same workspace.
+    pub(crate) fn activate_selections(&self, environments: &[TurnEnvironmentSelection]) {
+        let retry = StartupRetry::OnNewTurn(environments);
+        if environments != self.selections() {
+            self.update_selections(environments);
+        } else if self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .environments
+            .iter()
+            .any(|environment| retry.should_restart(environment))
+        {
+            self.apply_selections(environments, retry);
+        }
+    }
+
+    fn apply_selections(&self, environments: &[TurnEnvironmentSelection], retry: StartupRetry<'_>) {
         let bindings = self
             .configured
             .lock()
@@ -460,9 +514,16 @@ impl ThreadEnvironments {
             environments,
             &bindings,
             self.connection_event_tx.get(),
+            retry,
         );
         // Retry configured bindings with their own settings, keeping turn-only changes temporary.
-        self.update_configured_selections(&self.configured_snapshot_now().all_selections());
+        self.update_selections_with_bindings(
+            &self.configured,
+            &self.configured_snapshot_now().all_selections(),
+            &[],
+            /*tx_event*/ None,
+            retry,
+        );
     }
 
     /// Retains configured bindings without changing the active turn's attachments.
@@ -472,6 +533,7 @@ impl ThreadEnvironments {
             environments,
             &[],
             /*tx_event*/ None,
+            StartupRetry::AfterSelectionUpdate,
         );
     }
 
@@ -481,6 +543,7 @@ impl ThreadEnvironments {
         environments: &[TurnEnvironmentSelection],
         bindings: &[SelectedTurnEnvironment],
         tx_event: Option<&Sender<Event>>,
+        retry: StartupRetry<'_>,
     ) {
         let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
         let ThreadEnvironmentsState {
@@ -526,11 +589,7 @@ impl ThreadEnvironments {
             let (selected_environment, config_origin) =
                 resolve_selection_config(selected_environment.clone(), thread_defaults);
             if let Some(environment) = previous {
-                let failed =
-                    matches!(
-                        environment.selection.config,
-                        EnvironmentConfigState::Failed(_)
-                    ) || matches!(environment.resolution.clone().now_or_never(), Some(Err(_)));
+                let failed = retry.should_restart(environment);
                 let mut environment = if current_environment.is_some() {
                     environment.clone()
                 } else {

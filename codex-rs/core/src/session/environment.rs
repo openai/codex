@@ -214,11 +214,9 @@ impl Session {
                 self.services
                     .turn_environments
                     .set_active_thread_defaults(configuration.inferred_environment_config());
-                if environments != self.services.turn_environments.selections() {
-                    self.services
-                        .turn_environments
-                        .update_selections(&environments);
-                }
+                self.services
+                    .turn_environments
+                    .activate_selections(&environments);
             }
             self.services.turn_environments.snapshot()
         };
