@@ -9,15 +9,9 @@ def _schema_bundle_impl(ctx):
         ctx.actions.run(
             executable = ctx.executable.generator,
             tools = [ctx.attr.generator[DefaultInfo].files_to_run],
-            arguments = [
-                "--exact",
-                "--ignored",
-                "schema_fixtures_tests::write_schema_fixtures_from_env",
-            ],
             env = {
                 "CODEX_APP_SERVER_SCHEMA_ROOT": schema.path,
                 "CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL": "1" if mode == "experimental" else "0",
-                "RUST_MIN_STACK": "8388608",
             },
             outputs = [schema],
             mnemonic = "PublicSchema",
@@ -54,13 +48,13 @@ def _schema_sources_impl(ctx):
         output = ctx.actions.declare_file(ctx.label.name + "/" + relative)
         ctx.actions.symlink(output = output, target_file = source)
         sources.append(output)
-        if relative == "src/lib.rs":
+        if relative == ctx.attr.crate_root:
             crate_root = output
     if crate_root == None:
-        fail("Schema generator sources must include src/lib.rs")
+        fail("Schema generator sources must include " + ctx.attr.crate_root)
 
     # Runtime builds embed generated bundles. The generator needs only empty
-    # placeholders because its selected test derives the bundles from Rust.
+    # placeholders because it derives the bundles from Rust.
     precomputed = [
         ctx.actions.declare_file(ctx.label.name + "/schema/precomputed/app-server-exports-" + mode + ".json.zst")
         for mode in ["stable", "experimental"]
@@ -80,6 +74,7 @@ schema_sources = rule(
     implementation = _schema_sources_impl,
     attrs = {
         "srcs": attr.label_list(allow_files = [".rs"]),
+        "crate_root": attr.string(default = "src/lib.rs"),
         "schema": attr.label(providers = [OutputGroupInfo]),
     },
     toolchains = COPY_FILE_TOOLCHAINS,
