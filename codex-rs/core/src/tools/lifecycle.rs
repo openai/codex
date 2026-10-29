@@ -41,6 +41,11 @@ pub(crate) async fn notify_tool_start(
     for contributor in contributors {
         contributor
             .on_tool_start(ToolStartInput {
+                serving_assessment: invocation
+                    .step_context
+                    .serving_assessment
+                    .as_ref()
+                    .map(|value| value.requires_review),
                 session_store: &invocation.session.services.session_extension_data,
                 thread_store,
                 turn_store: invocation.turn.extension_data.as_ref(),

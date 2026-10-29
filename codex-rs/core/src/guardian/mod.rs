@@ -27,6 +27,9 @@ mod routing;
 pub(crate) use routing::ParentResponse;
 pub(crate) use routing::PendingReviewRouting;
 mod runtime;
+mod score_authorization;
+pub use score_authorization::ScoreAuthorization;
+pub(crate) use score_authorization::ServingAssessment;
 #[cfg(test)]
 pub(crate) mod test_host;
 
@@ -89,6 +92,7 @@ pub(crate) use codex_guardian_reviewer::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKEN
 /// MCP elicitations use their live invocation's issuing step when available, otherwise turn inputs.
 #[derive(Clone)]
 pub(crate) struct GuardianReviewContext {
+    pub(crate) serving_assessment: Option<Arc<ServingAssessment>>,
     /// The latest response ID and its connection affinity when review was requested.
     pub(crate) parent_response: Option<Arc<ParentResponse>>,
     turn: Arc<TurnContext>,
@@ -132,6 +136,7 @@ impl GuardianReviewContext {
         environments: &TurnEnvironmentSnapshot,
     ) -> Self {
         Self {
+            serving_assessment: None,
             parent_response: turn.extension_data.get::<ParentResponse>(),
             environments: environments.clone(),
             project_instructions: None,
@@ -157,6 +162,7 @@ impl GuardianReviewContext {
 impl From<&Arc<StepContext>> for GuardianReviewContext {
     fn from(step: &Arc<StepContext>) -> Self {
         Self {
+            serving_assessment: step.serving_assessment.clone(),
             parent_response: step.turn.extension_data.get::<ParentResponse>(),
             turn: Arc::clone(&step.turn),
             environments: step.environments.clone(),
@@ -174,6 +180,7 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
 impl From<Arc<TurnContext>> for GuardianReviewContext {
     fn from(turn: Arc<TurnContext>) -> Self {
         Self {
+            serving_assessment: None,
             parent_response: turn.extension_data.get::<ParentResponse>(),
             environments: turn.initial_environments.clone(),
             project_instructions: None,

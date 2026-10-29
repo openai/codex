@@ -113,9 +113,23 @@ pub(crate) fn decide_approval(
             context.approval_policy,
             &turn.config.permissions.effective_permission_profile(),
         );
-        let require_synchronous_review = options.require_synchronous_review;
+        let mut require_synchronous_review = options.require_synchronous_review;
+        if let Some(assessment) = &context.serving_assessment {
+            let permissions = request.request.as_ref().ok().and_then(|request| {
+                super::permissions::for_environment(&context, request.target_environment_id()).ok()
+            });
+            require_synchronous_review |= !assessment.authorization.local.retained_context_complete
+                || permissions.as_ref() != Some(&assessment.authorization.permissions)
+                || assessment.authorization
+                    != super::ScoreAuthorization::for_session(
+                        &session,
+                        &assessment.authorization.permissions,
+                    )
+                    .await;
+        }
         let retried = reasons.retry.is_some();
         let decision = codex_guardian_reviewer::ReviewRequest {
+            serving_assessment: context.serving_assessment.as_ref().map(|value| value.requires_review),
             host: ReviewRuntime {
                 session: Arc::clone(&session),
                 history_reset: history_reset.clone(),

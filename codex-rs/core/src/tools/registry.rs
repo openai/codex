@@ -887,7 +887,11 @@ impl ToolRegistry {
                 PreToolUseHookResult::Continue {
                     updated_input: Some(updated_input),
                 } => match tool.with_updated_hook_input(invocation.clone(), updated_input) {
-                    Ok(updated_invocation) => {
+                    Ok(mut updated_invocation) => {
+                        if updated_invocation.payload != invocation.payload {
+                            Arc::make_mut(&mut updated_invocation.step_context)
+                                .serving_assessment = None;
+                        }
                         invocation = updated_invocation;
                     }
                     Err(err) => return Err(fail_before_execution(&invocation, err).await),
@@ -896,6 +900,16 @@ impl ToolRegistry {
                     updated_input: None,
                 } => {}
             }
+        }
+
+        if let Some(assessment) = &invocation.step_context.serving_assessment {
+            let mut assessment = assessment.as_ref().clone();
+            match crate::guardian::tool_permission_context(&invocation) {
+                Ok(permissions) => assessment.authorization.permissions = permissions,
+                Err(_) => assessment.requires_review = true,
+            }
+            Arc::make_mut(&mut invocation.step_context).serving_assessment =
+                Some(Arc::new(assessment));
         }
 
         if registered_tool.native_review == NativeReview::Required

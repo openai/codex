@@ -160,6 +160,7 @@ async fn async_approval_revalidates_without_waiting_for_tracked_cleanup(state: A
     let analytics = AnalyticsEventsClient::disabled();
     let action = json!({});
     let request = ReviewRequest {
+        serving_assessment: None,
         host: host.clone(),
         approval_id: "approval",
         tool_call_id: Some("call"),

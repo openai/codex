@@ -659,6 +659,7 @@ async fn delayed_classification_skips_after_newer_score_and_history_complete() -
     let history = fixture.test.codex.conversation_history_snapshot().await;
     let observe = |call_id, permissions| {
         fixture.registry.tool_lifecycle_contributors()[0].on_tool_start(ToolStartInput {
+            serving_assessment: None,
             permissions,
             session_store: &fixture.session_store,
             thread_store: store,

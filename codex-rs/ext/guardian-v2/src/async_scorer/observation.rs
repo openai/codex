@@ -65,6 +65,30 @@ impl GuardianV2Extension {
         let Some(score_progress) = input.thread_store.get::<GuardianV2ScoreProgress>() else {
             return;
         };
+        let is_js_execution = input.mcp_tool.is_some_and(|tool| {
+            let info = tool.tool_info();
+            is_node_repl_backed_connector(&info.server_name, info.connector_id.as_deref())
+                && if info.server_name == "codex_apps" {
+                    info.tool
+                        .meta
+                        .as_ref()
+                        .and_then(|meta| meta.get("_codex_apps"))
+                        .and_then(|meta| meta.get("resource_uri"))
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|uri| uri.trim_matches('/').rsplit('/').next())
+                        == Some("js")
+                } else {
+                    info.tool.name == "js"
+                }
+        });
+        if input.serving_assessment.is_some() {
+            if is_js_execution {
+                score_progress.observe_js_execution();
+            }
+            let index = score_progress.observe(&input);
+            score_progress.invalidate(index);
+            return;
+        }
         let parent_model = input.thread_store.get::<ModelInfo>();
         let policy = guardian_config.policy_for_model(parent_model.as_deref());
         if !policy.scoring_enabled() {
@@ -123,22 +147,7 @@ impl GuardianV2Extension {
             }
             return;
         }
-        if input.mcp_tool.is_some_and(|tool| {
-            let info = tool.tool_info();
-            is_node_repl_backed_connector(&info.server_name, info.connector_id.as_deref())
-                && if info.server_name == "codex_apps" {
-                    info.tool
-                        .meta
-                        .as_ref()
-                        .and_then(|meta| meta.get("_codex_apps"))
-                        .and_then(|meta| meta.get("resource_uri"))
-                        .and_then(serde_json::Value::as_str)
-                        .and_then(|uri| uri.trim_matches('/').rsplit('/').next())
-                        == Some("js")
-                } else {
-                    info.tool.name == "js"
-                }
-        }) {
+        if is_js_execution {
             score_progress.observe_js_execution();
         }
         let metrics = score_progress.metrics.clone();

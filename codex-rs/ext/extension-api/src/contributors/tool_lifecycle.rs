@@ -116,6 +116,9 @@ impl McpToolContext {
 
 /// Input supplied when the host starts executing one tool call.
 pub struct ToolStartInput<'a> {
+    /// Final serving assessment for the unchanged action, including its code cell's value.
+    /// When present, replaces asynchronous scoring; it does not grant execution permission.
+    pub serving_assessment: Option<bool>,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.

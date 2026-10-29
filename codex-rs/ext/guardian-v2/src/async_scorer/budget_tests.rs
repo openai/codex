@@ -227,6 +227,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
         };
         fixture.registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                serving_assessment: None,
                 permissions: Box::pin(async { Some(Default::default()) }),
                 session_store: &fixture.session_store,
                 thread_store,

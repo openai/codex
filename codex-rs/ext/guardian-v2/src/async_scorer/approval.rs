@@ -104,7 +104,16 @@ impl GuardianApprovalReviewer {
         if adaptive && let Some(metrics) = input.metrics.as_deref() {
             metrics.counter("codex.guardian_v2.adaptive_review", /*inc*/ 1, &[]);
         }
-        let reason = if adaptive {
+        let reason = if input.require_fresh_review {
+            GuardianReviewReason::FreshRequired
+        } else if !adaptive {
+            GuardianReviewReason::Policy
+        } else if let Some(requires_review) = input.serving_assessment {
+            if !requires_review {
+                return ApprovalDecision::Allow;
+            }
+            GuardianReviewReason::ElevatedRisk
+        } else {
             match guardian_config.as_ref() {
                 Some(config) => {
                     match cached_evidence(thread, input, config, &policy, input.metrics.as_deref())
@@ -119,10 +128,6 @@ impl GuardianApprovalReviewer {
                     GuardianReviewReason::ScoringFailure
                 }
             }
-        } else if input.require_fresh_review {
-            GuardianReviewReason::FreshRequired
-        } else {
-            GuardianReviewReason::Policy
         };
         tracing::debug!(
             decision_source = "synchronous_assessment",
@@ -157,7 +162,9 @@ impl GuardianApprovalReviewer {
                 &[
                     (
                         "route",
-                        if adaptive {
+                        if input.serving_assessment.is_some() {
+                            "serving_assessment"
+                        } else if adaptive {
                             "async_fallback"
                         } else {
                             "required_sync"
@@ -169,7 +176,14 @@ impl GuardianApprovalReviewer {
         }
         match input
             .synchronous_reviewer
-            .review(reason, Some(Box::pin(async_approval)))
+            .review(
+                reason,
+                if input.serving_assessment.is_some() {
+                    None
+                } else {
+                    Some(Box::pin(async_approval))
+                },
+            )
             .await
         {
             Some(decision) => ApprovalDecision::Reviewed(decision),
