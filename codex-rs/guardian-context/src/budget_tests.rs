@@ -175,3 +175,22 @@ fn section_estimate_bounds_the_delivered_message() {
         }
     }
 }
+
+#[test]
+fn elastic_section_config_validates_entry_limits() {
+    let cap = crate::composition::MAX_TEXT_PART_ESTIMATED_TOKENS;
+    let config = serde_json::json!({
+        "sections": {"transcript_tools": {
+            "min_total_section_tokens": cap,
+            "max_section_entry_tokens": cap,
+        }},
+    });
+    let parsed = serde_json::from_value::<ElasticBudgetConfig>(config.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), config);
+    for (minimum, entry_cap) in [(0, cap), (cap, 0), (cap - 1, cap), (cap + 1, cap + 1)] {
+        let mut invalid = config.clone();
+        invalid["sections"]["transcript_tools"]["min_total_section_tokens"] = minimum.into();
+        invalid["sections"]["transcript_tools"]["max_section_entry_tokens"] = entry_cap.into();
+        assert!(serde_json::from_value::<ElasticBudgetConfig>(invalid).is_err());
+    }
+}

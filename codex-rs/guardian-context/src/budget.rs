@@ -1,4 +1,5 @@
 //! Payload-free accounting for composed sections and complete Guardian requests.
+//! Elastic section policies are validated without changing fixed request preparation.
 //! Text and image bytes stay separate. Hosts provide existing-context estimates;
 //! the shared wire estimate reserves image tokens without counting base64 as text.
 
@@ -111,6 +112,133 @@ pub struct RequestBudget {
     pub max_input_tokens: usize,
     pub existing_context_tokens: usize,
 }
+
+/// Named optional allocation groups, independent of prompt placement.
+/// The transcript has separate message and tool groups despite sharing one section.
+/// Required evidence, including the action and manual approvals, bypasses these limits.
+#[derive(
+    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ElasticSection {
+    TranscriptMessages,
+    TranscriptTools,
+    RootMessages,
+    RetainedInstructions,
+    UserAnswers,
+    SenderMessages,
+    ToolDescriptions,
+    PreviousReviews,
+    TrustedTools,
+    TrustedSkills,
+    Images,
+    ReplEvidence,
+    PermissionContext,
+}
+
+/// Per-group elastic limits, validated when decoded; not an activation switch.
+/// Entries configure only optional evidence in the named group. They cannot
+/// downgrade required evidence. Omitted groups have no override; the allocator
+/// must supply its defaults when it is introduced.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElasticBudgetConfig {
+    #[serde(default)]
+    pub sections: std::collections::BTreeMap<ElasticSection, ElasticSectionLimits>,
+}
+
+/// Demand-capped minimum allocation and per-entry text allowance for optional evidence.
+/// The minimum is a reservation, not a maximum: a section may receive spare capacity.
+/// Preparation must cap optional entries once, including framing and omission markers,
+/// before measuring demand. Entries that fit keep their original representation.
+/// Entry caps cannot exceed the existing text-part delivery allowance.
+/// Opaque text messages must be kept or omitted whole, never shortened.
+/// Images stay whole and use section/global space rather than the text entry cap.
+/// Request-level feasibility depends on the active groups and remaining global budget.
+/// These settings do not change storage bounds or activate elastic allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct ElasticSectionLimits {
+    min_total_section_tokens: usize,
+    max_section_entry_tokens: usize,
+}
+
+impl ElasticSectionLimits {
+    /// Reject empty quotas, oversized entries and minimums that cannot hold one capped entry.
+    pub fn new(
+        min_total_section_tokens: usize,
+        max_section_entry_tokens: usize,
+    ) -> Result<Self, ElasticSectionLimitsError> {
+        if min_total_section_tokens == 0 || max_section_entry_tokens == 0 {
+            return Err(ElasticSectionLimitsError::ZeroTokens);
+        }
+        if max_section_entry_tokens > min_total_section_tokens {
+            return Err(ElasticSectionLimitsError::EntryExceedsMinimum);
+        }
+        if max_section_entry_tokens > crate::composition::MAX_TEXT_PART_ESTIMATED_TOKENS {
+            return Err(ElasticSectionLimitsError::EntryExceedsDeliveryLimit);
+        }
+        Ok(Self {
+            min_total_section_tokens,
+            max_section_entry_tokens,
+        })
+    }
+
+    pub fn min_total_section_tokens(self) -> usize {
+        self.min_total_section_tokens
+    }
+
+    pub fn max_section_entry_tokens(self) -> usize {
+        self.max_section_entry_tokens
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ElasticSectionLimits {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            min_total_section_tokens: usize,
+            max_section_entry_tokens: usize,
+        }
+
+        let fields = Fields::deserialize(deserializer)?;
+        Self::new(
+            fields.min_total_section_tokens,
+            fields.max_section_entry_tokens,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Invalid elastic limits cannot enter preparation through construction or decoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElasticSectionLimitsError {
+    ZeroTokens,
+    EntryExceedsMinimum,
+    EntryExceedsDeliveryLimit,
+}
+
+impl std::fmt::Display for ElasticSectionLimitsError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroTokens => {
+                formatter.write_str("elastic section token limits must be greater than zero")
+            }
+            Self::EntryExceedsMinimum => formatter
+                .write_str("min_total_section_tokens must be at least max_section_entry_tokens"),
+            Self::EntryExceedsDeliveryLimit => write!(
+                formatter,
+                "max_section_entry_tokens must not exceed {}",
+                crate::composition::MAX_TEXT_PART_ESTIMATED_TOKENS
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ElasticSectionLimitsError {}
 
 /// Size of section evidence, excluding enclosing message serialization overhead.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
