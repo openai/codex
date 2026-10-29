@@ -28,6 +28,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio::time::timeout;
 
 use crate::client_telemetry::record_client_request;
@@ -740,6 +741,7 @@ impl RpcClient {
         response_rx: oneshot::Receiver<RpcCompletion>,
         call_timeout: RpcCallTimeout,
     ) -> Result<Value, RpcCallError> {
+        let enqueue_started = Instant::now();
         if self
             .write_tx
             .send(JSONRPCMessage::Request(JSONRPCRequest {
@@ -759,6 +761,9 @@ impl RpcClient {
             tracing::Level::INFO,
             event.name = "codex.exec_server.request_enqueued",
             rpc.method = method,
+            enqueue_wait_ms = enqueue_started.elapsed().as_millis() as u64,
+            outgoing_queue_depth = self.write_tx.max_capacity() - self.write_tx.capacity(),
+            outgoing_queue_capacity = self.write_tx.max_capacity(),
         );
         // Do not race in-flight requests directly against the transport-close
         // watch value. The connection reader receives JSON-RPC messages and
