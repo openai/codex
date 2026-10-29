@@ -634,24 +634,23 @@ impl LocalAgentControl {
         Some(parent_thread.session.inherited_environment_snapshot().await)
     }
 
+    /// Returns true after publication, or false when the source or configuration skips it.
     async fn persist_thread_spawn_edge_for_source(
         &self,
-        child_thread: &crate::CodexThread,
+        ephemeral: bool,
         child_thread_id: ThreadId,
         session_source: Option<&SessionSource>,
-    ) {
+    ) -> CodexResult<bool> {
         let Some(parent_thread_id) = session_source.and_then(SessionSource::parent_thread_id)
         else {
-            return;
+            return Ok(false);
         };
-        if child_thread.config_snapshot().await.ephemeral {
-            return;
+        if ephemeral {
+            return Ok(false);
         }
-        let Ok(state) = self.runtime.upgrade() else {
-            return;
-        };
+        let state = self.runtime.upgrade()?;
         let Some(agent_graph_store) = state.agent_graph_store() else {
-            return;
+            return Ok(false);
         };
         if let Err(err) = agent_graph_store
             .upsert_thread_spawn_edge(
@@ -662,7 +661,11 @@ impl LocalAgentControl {
             .await
         {
             warn!("failed to persist thread-spawn edge: {err}");
+            return Err(CodexErr::Fatal(
+                "failed to persist spawned agent relationship".to_string(),
+            ));
         }
+        Ok(true)
     }
 }
 

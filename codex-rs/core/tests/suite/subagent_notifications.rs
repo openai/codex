@@ -1,4 +1,9 @@
 use anyhow::Result;
+use assert_matches::assert_matches;
+use codex_agent_graph_store::AgentGraphStore;
+use codex_agent_graph_store::AgentGraphStoreError;
+use codex_agent_graph_store::AgentGraphStoreFuture;
+use codex_agent_graph_store::ThreadSpawnEdgeStatus;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
@@ -35,7 +40,11 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::SkillsExtensionConfig;
+use codex_thread_store::DeleteThreadsParams;
 use codex_thread_store::LoadThreadHistoryParams;
+use codex_thread_store::LocalThreadStore;
+use codex_thread_store::LocalThreadStoreConfig;
+use codex_thread_store::ThreadStoreError;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::assert_parent_turn;
@@ -3448,6 +3457,188 @@ async fn spawn_agent_preserves_configured_defaults_through_unrelated_role() -> R
             REQUESTED_MODEL.to_string(),
             Some(REQUESTED_REASONING_EFFORT)
         )
+    );
+    Ok(())
+}
+
+#[derive(Default)]
+struct FailingSpawnEdgeStore {
+    child: Mutex<Option<ThreadId>>,
+}
+
+impl AgentGraphStore for FailingSpawnEdgeStore {
+    fn upsert_thread_spawn_edge(
+        &self,
+        _parent: ThreadId,
+        child: ThreadId,
+        _status: ThreadSpawnEdgeStatus,
+    ) -> AgentGraphStoreFuture<'_, ()> {
+        *self.child.lock().expect("lock attempted child ID") = Some(child);
+        Box::pin(async {
+            Err(AgentGraphStoreError::Internal {
+                message: "injected edge publication failure".to_string(),
+            })
+        })
+    }
+
+    fn set_thread_spawn_edge_status(
+        &self,
+        _child: ThreadId,
+        _status: ThreadSpawnEdgeStatus,
+    ) -> AgentGraphStoreFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn list_thread_spawn_children(
+        &self,
+        _parent: ThreadId,
+        _status: Option<ThreadSpawnEdgeStatus>,
+    ) -> AgentGraphStoreFuture<'_, Vec<ThreadId>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn list_thread_spawn_descendants(
+        &self,
+        _root: ThreadId,
+        _status: Option<ThreadSpawnEdgeStatus>,
+    ) -> AgentGraphStoreFuture<'_, Vec<ThreadId>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+#[test_case(false; "fresh child")]
+#[test_case(true; "full-history fork")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_spawn_edge_leaves_no_child_history(fork_context: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = json!({ "message": CHILD_PROMPT, "fork_context": fork_context }).to_string();
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("spawn"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("spawn"),
+        ]),
+    )
+    .await;
+    let tool_output = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("parent-done"),
+            ev_completed("parent-done"),
+        ]),
+    )
+    .await;
+    let child_requests = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, CHILD_PROMPT) && !body_contains(request, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("child-done"),
+            ev_completed("child-done"),
+        ]),
+    )
+    .await;
+
+    let home = Arc::new(tempfile::tempdir()?);
+    // Keep history independent of topology; SQLite metadata can repair missing edges.
+    let store = Arc::new(LocalThreadStore::new(
+        LocalThreadStoreConfig {
+            codex_home: home.path().to_path_buf(),
+            sqlite: codex_state::SqliteConfig::new_for_testing(home.path().try_into()?),
+            default_model_provider_id: "openai".to_string(),
+        },
+        /*state_db*/ None,
+    ));
+    let graph = Arc::new(FailingSpawnEdgeStore::default());
+    let test = test_codex()
+        .with_home(home)
+        .with_thread_store(store)
+        .with_agent_graph_store(graph.clone())
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("enable native spawn");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let unrelated = test
+        .thread_manager
+        .start_thread(test.start_thread_options().await)
+        .await?;
+    unrelated.thread.ensure_rollout_materialized().await;
+    unrelated.thread.flush_rollout().await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let child_id = graph
+        .child
+        .lock()
+        .expect("lock attempted child ID")
+        .expect("edge was attempted");
+    test.thread_manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+
+    let child_before_delete = test
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: child_id,
+            include_archived: true,
+        })
+        .await;
+    let parent_id = test.session_configured.thread_id;
+    let deletion_ids = test
+        .thread_manager
+        .list_agent_subtree_thread_ids(parent_id)
+        .await?;
+    assert_eq!(deletion_ids, vec![parent_id]);
+    test.thread_store
+        .delete_threads(DeleteThreadsParams {
+            thread_ids: deletion_ids,
+        })
+        .await?;
+    test.thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: unrelated.thread_id,
+            include_archived: true,
+        })
+        .await
+        .expect("unrelated history survives parent deletion");
+    for thread_id in [parent_id, child_id] {
+        assert_matches!(test.thread_store.load_latest_model_context(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: true,
+        }).await, Err(ThreadStoreError::InvalidRequest { message })
+            if message == format!("no rollout found for thread id {thread_id}"));
+    }
+    assert_matches!(child_before_delete, Err(ThreadStoreError::InvalidRequest { message })
+        if message == format!("no rollout found for thread id {child_id}"),
+        "rejected child must not leave durable history");
+    assert_eq!(
+        tool_output
+            .function_call_output_text(SPAWN_CALL_ID)
+            .as_deref(),
+        Some("collab spawn failed: Fatal error: failed to persist spawned agent relationship")
+    );
+    assert!(
+        child_requests.requests().is_empty(),
+        "rejected child must not execute"
+    );
+    assert!(
+        created.try_recv().is_err(),
+        "rejected child must not be published"
     );
     Ok(())
 }

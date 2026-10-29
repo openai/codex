@@ -19,6 +19,8 @@ pub trait AgentGraphStore: Send + Sync {
     ///
     /// `child_thread_id` has at most one persisted parent. Re-inserting the same child should
     /// update both the parent and status to match the supplied values.
+    /// The edge may be published before the child's metadata or history exists. A successful
+    /// write must make the child discoverable through the list methods.
     fn upsert_thread_spawn_edge(
         &self,
         parent_thread_id: ThreadId,

@@ -124,6 +124,9 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 
+#[path = "control/spawn_publication_tests.rs"]
+mod spawn_publication;
+
 impl LocalAgentControl {
     /// Create a child fixture through the production spawn entry point.
     pub(crate) async fn spawn_agent_with_metadata(
@@ -784,11 +787,12 @@ async fn spawn_failure_context_survives_manager_and_fork_errors() {
 async fn spawn_failure_context_preserves_shutdown_during_child_startup() {
     let harness = AgentControlHarness::new().await;
     let state = harness.control.runtime.upgrade().expect("live manager");
+    let parent_id = ThreadId::new();
     let spawn = harness.control.spawn_agent(
         harness.config.clone(),
         text_input("hello"),
         Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id: ThreadId::new(),
+            parent_thread_id: parent_id,
             depth: 1,
             agent_path: None,
             agent_nickname: None,
@@ -827,6 +831,22 @@ async fn spawn_failure_context_preserves_shutdown_during_child_startup() {
         .wait()
         .await
         .expect("spawn releases its membership");
+    let closed_children = harness
+        .state_db
+        .as_ref()
+        .expect("manager should retain state db")
+        .list_thread_spawn_children_with_status(
+            parent_id,
+            codex_state::DirectionalThreadSpawnEdgeStatus::Closed,
+        )
+        .await
+        .expect("closed child edges should load");
+    assert_eq!(
+        closed_children.len(),
+        1,
+        "failed startup closes its published edge"
+    );
+    assert_thread_not_loaded(&harness.manager, closed_children[0]).await;
 }
 
 #[tokio::test]
@@ -890,6 +910,20 @@ async fn cancelled_spawn_after_input_admission_discards_child() {
         .wait()
         .await
         .expect("provisional cleanup releases tree membership");
+    assert_eq!(
+        harness
+            .state_db
+            .as_ref()
+            .expect("manager should retain state db")
+            .list_thread_spawn_children_with_status(
+                parent_id,
+                codex_state::DirectionalThreadSpawnEdgeStatus::Closed,
+            )
+            .await
+            .expect("closed child edge should load"),
+        vec![child_id],
+        "cancelled startup must close its published edge"
+    );
 }
 
 #[tokio::test]

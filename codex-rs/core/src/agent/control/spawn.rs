@@ -753,6 +753,33 @@ impl LocalAgentControl {
             }
             (None, _) => None,
         };
+        // Fork startup can persist copied history before returning a live child.
+        // Publish its deletion relationship before any child storage is created.
+        let child_thread_id = self.runtime.generate_thread_id();
+        if state.threads.read().await.contains_key(&child_thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread {child_thread_id} is already running",
+            ))
+            .with_agent_context(AgentErrorContext::ChildStartup));
+        }
+        start_options.reserved_thread_id = Some(child_thread_id);
+        let mut pending_spawn = PendingSpawn::new(
+            Arc::clone(&state),
+            child_thread_id,
+            membership,
+            SpawnOwner::Local,
+        );
+        let edge_write_started_at = Instant::now();
+        let control = self.clone();
+        let source = notification_source.clone();
+        let ephemeral = config.ephemeral;
+        pending_spawn.set_edge_write(tokio::spawn(async move {
+            control
+                .persist_thread_spawn_edge_for_source(ephemeral, child_thread_id, source.as_ref())
+                .await
+        }));
+        pending_spawn.wait_for_edge().await?;
+        let edge_write = edge_write_started_at.elapsed();
         let child_create_started_at = Instant::now();
         let new_thread = state
             .spawn_child_thread(
@@ -765,13 +792,6 @@ impl LocalAgentControl {
             .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
         let child_create = child_create_started_at.elapsed();
         agent_metadata.agent_id = Some(new_thread.thread_id);
-        let mut pending_spawn = PendingSpawn::new(
-            Arc::clone(&state),
-            new_thread.thread_id,
-            membership,
-            SpawnOwner::Local,
-        );
-
         if let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         })) = notification_source.as_ref()
@@ -796,29 +816,11 @@ impl LocalAgentControl {
                 .await;
         }
 
-        let control = self.clone();
-        let child = Arc::clone(&new_thread.thread);
-        let child_thread_id = new_thread.thread_id;
-        let source = notification_source.clone();
-        pending_spawn.set_edge_write(tokio::spawn(async move {
-            control
-                .persist_thread_spawn_edge_for_source(
-                    child.as_ref(),
-                    child_thread_id,
-                    source.as_ref(),
-                )
-                .await;
-        }));
         let durability_wait_started_at = Instant::now();
         if options.fork_mode.is_some() {
-            tokio::join!(
-                new_thread.thread.ensure_rollout_materialized(),
-                pending_spawn.wait_for_edge(),
-            );
-        } else {
-            pending_spawn.wait_for_edge().await;
+            new_thread.thread.ensure_rollout_materialized().await;
         }
-        let durability_wait = durability_wait_started_at.elapsed();
+        let durability_wait = edge_write + durability_wait_started_at.elapsed();
 
         // Capture startup settings before the child can publish metadata for a later turn.
         let spawn_config = if multi_agent_version == MultiAgentVersion::V2 {
@@ -1093,12 +1095,13 @@ impl LocalAgentControl {
                 agent_metadata.agent_path.clone(),
             );
         }
-        self.persist_thread_spawn_edge_for_source(
-            resumed_thread.thread.as_ref(),
-            resumed_thread.thread_id,
-            Some(&notification_source),
-        )
-        .await;
+        let _ = self
+            .persist_thread_spawn_edge_for_source(
+                resumed_thread.thread.config_snapshot().await.ephemeral,
+                resumed_thread.thread_id,
+                Some(&notification_source),
+            )
+            .await;
 
         Ok((resumed_thread.thread_id, multi_agent_version))
     }
