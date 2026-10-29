@@ -1,5 +1,6 @@
 //! Translate canonical permissions into MXC path grants.
 //! Denies and read-only carveouts remain separate kernel policy lists.
+//! Missing deny parents are created before deny globs and volume grants are expanded.
 //! Alias limitations are documented in the crate README.
 
 use std::collections::HashMap;
@@ -129,6 +130,19 @@ pub(super) fn build_request(
         return Err(PolicyError::RelativeCommandCwd);
     }
     let policy = materialize_temporary_paths(permissions.file_system_sandbox_policy(), &env)?;
+    #[cfg(windows)]
+    for denied in policy.get_unreadable_roots_with_cwd(cwd) {
+        if let Some(parent) = denied.as_path().parent()
+            && matches!(parent.try_exists(), Ok(false))
+        {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                PolicyError::PolicyResolution(format!(
+                    "MXC currently requires deny paths to have existing parent directories. Could not create {}: {error}. Create this directory manually or correct the path/permissions, then retry.",
+                    parent.display()
+                ))
+            })?;
+        }
+    }
     let full_disk_write = policy.has_full_disk_write_access();
     let volumes = volume_roots
         .iter()
