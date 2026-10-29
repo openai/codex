@@ -1122,6 +1122,9 @@
             "in_app_voice": {
               "type": "boolean"
             },
+            "incremental_exec_tools": {
+              "type": "boolean"
+            },
             "incremental_tools": {
               "type": "boolean"
             },
@@ -7782,6 +7785,9 @@
           "type": "boolean"
         },
         "in_app_voice": {
+          "type": "boolean"
+        },
+        "incremental_exec_tools": {
           "type": "boolean"
         },
         "incremental_tools": {

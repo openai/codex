@@ -293,6 +293,8 @@ pub enum Feature {
     IncrementalTools,
     /// Preserve inherited tool declarations in MCP-disabled prediction forks.
     PredictionPreserveParentTools,
+    /// Diff CodeModeOnly exec definitions within the incremental tool catalog.
+    IncrementalExecTools,
     /// Expose MCP model-visible namespaces without the legacy `mcp__` prefix.
     NonPrefixedMcpToolNames,
     /// Enable discoverable tool suggestions for apps.
@@ -1726,6 +1728,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "prediction_preserve_parent_tools",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::IncrementalExecTools,
+        key: "incremental_exec_tools",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::NonPrefixedMcpToolNames,
