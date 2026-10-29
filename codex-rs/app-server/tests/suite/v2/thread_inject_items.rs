@@ -759,3 +759,43 @@ async fn turn_tool_output_retention_preserves_sender_metadata() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn guardian_review_returns_the_injected_call_id_when_policy_skips_review() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let rules = codex_home.path().join("rules");
+    std::fs::create_dir_all(&rules)?;
+    std::fs::write(
+        rules.join("default.rules"),
+        r#"prefix_rule(pattern=["git", "init", "guardian-skipped"], decision="allow")"#,
+    )?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let start = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.read_response(start).await?;
+    let inject = app
+        .send_thread_inject_items_request(ThreadInjectItemsParams {
+            thread_id: thread.id.clone(),
+            items: vec![json!({
+                "type": "function_call", "name": "exec_command", "call_id": "recorded",
+                "arguments": r#"{"cmd":"git init guardian-skipped"}"#,
+            })],
+        })
+        .await?;
+    let _: ThreadInjectItemsResponse = app.read_response(inject).await?;
+    let review = app
+        .send_raw_request(
+            "thread/guardianReview",
+            Some(json!({"threadId": thread.id})),
+        )
+        .await?;
+    let response: Value = app.read_response(review).await?;
+    assert_eq!(response, json!({"callId":"recorded", "assessment":null}));
+    Ok(())
+}

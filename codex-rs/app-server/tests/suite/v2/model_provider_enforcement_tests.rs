@@ -162,6 +162,10 @@ base_url = "{}/v1"
     for (method, params) in [
         ("thread/resume", json!({"threadId": started.thread.id})),
         (
+            "thread/guardianReview",
+            json!({ "threadId": started.thread.id }),
+        ),
+        (
             "thread/goal/set",
             json!({"threadId": started.thread.id, "objective": "Blocked objective"}),
         ),

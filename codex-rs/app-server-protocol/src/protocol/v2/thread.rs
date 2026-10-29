@@ -1740,6 +1740,35 @@ pub struct ThreadReadResponse {
     pub read_state: Option<ThreadReadState>,
 }
 
+/// Calling `thread/guardianReview` subscribes the connection to the thread.
+/// The subscription remains after the review completes, keeping the thread loaded
+/// until the client calls `thread/unsubscribe` or disconnects.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGuardianReviewParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGuardianReviewResponse {
+    pub call_id: String,
+    /// Null when exec policy skips approval.
+    pub assessment: Option<ThreadGuardianAssessment>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadGuardianAssessment {
+    pub outcome: codex_protocol::protocol::GuardianAssessmentOutcome,
+    pub risk_level: super::GuardianRiskLevel,
+    pub user_authorization: super::GuardianUserAuthorization,
+    pub rationale: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

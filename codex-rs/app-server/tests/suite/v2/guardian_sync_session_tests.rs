@@ -698,3 +698,42 @@ async fn inline_review_delegate_runs_strict_guardian_assessment() -> Result<()> 
     mcp_server.abort();
     Ok(())
 }
+
+#[tokio::test]
+async fn guardian_review_returns_assessment_for_injected_exec() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let verdict = r#"{"outcome":"allow","risk_level":"medium","user_authorization":"high","rationale":"User requested this command."}"#;
+    let requests = responses::mount_sse_once(&server, assistant_response(verdict)?).await;
+    let codex_home = TempDir::new()?;
+    sync_config(&server.uri()).write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let inject = app.send_raw_request("thread/inject_items", Some(json!({
+        "threadId": thread.id,
+        "items": [
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"Create guardian-direct.txt."}]},
+            {"type":"function_call","name":"exec_command","call_id":"exec-review",
+             "arguments":r#"{"cmd":"echo reviewed > guardian-direct.txt","sandbox_permissions":"require_escalated","justification":"Create the requested file."}"#}
+        ]
+    }))).await?;
+    let _: Value = app.read_response(inject).await?;
+    let review = app
+        .send_raw_request("thread/guardianReview", Some(json!({"threadId":thread.id})))
+        .await?;
+    let result: Value = app.read_response(review).await?;
+    assert_eq!(
+        result,
+        json!({
+            "callId":"exec-review",
+            "assessment":{"outcome":"allow","riskLevel":"medium","userAuthorization":"high","rationale":"User requested this command."}
+        })
+    );
+    assert_eq!(
+        requests.single_request().body_json()["client_metadata"]["x-openai-subagent"],
+        "guardian"
+    );
+    Ok(())
+}
