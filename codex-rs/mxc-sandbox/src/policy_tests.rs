@@ -364,7 +364,7 @@ fn volume_expansion_skips_broken_links_and_preserves_other_grants() -> Result<()
 }
 
 #[test]
-fn full_access_enumerates_children_of_every_volume() -> Result<()> {
+fn only_write_access_expands_volume_children() -> Result<()> {
     let first = tempfile::tempdir()?;
     let second = tempfile::tempdir()?;
     let unmapped = tempfile::tempdir()?;
@@ -372,19 +372,16 @@ fn full_access_enumerates_children_of_every_volume() -> Result<()> {
     let volumes = [canonical_root(&first)?, canonical_root(&second)?];
     std::fs::create_dir(volumes[0].join("one"))?;
     std::fs::create_dir(volumes[1].join("two"))?;
-    let mut expected = [
-        volumes[0].clone(),
-        volumes[0].join("one"),
-        volumes[1].clone(),
-        volumes[1].join("two"),
-        explicit.clone(),
-    ];
-    expected.sort();
     let mut fs = FileSystemSandboxPolicy::read_only();
     // Like an unmapped UNC share, this grant is outside the supplied volumes.
     fs.entries
         .push(entry(&explicit, FileSystemAccessMode::Read)?);
     for access in [FileSystemAccessMode::Read, FileSystemAccessMode::Write] {
+        let mut expected = vec![volumes[0].clone(), volumes[1].clone(), explicit.clone()];
+        if access == FileSystemAccessMode::Write {
+            expected.extend([volumes[0].join("one"), volumes[1].join("two")]);
+        }
+        expected.sort();
         fs.entries[0].access = access;
         fs.entries[1].access = access;
         let profile =
@@ -798,13 +795,11 @@ fn narrowing_one_volume_keeps_the_other_volume_root_grant() -> Result<()> {
             .into_iter()
             .filter(|path| Path::new(path).starts_with(&volumes[1]))
             .collect();
-        assert_eq!(
-            second_grants,
-            vec![
-                volumes[1].to_str().unwrap().to_owned(),
-                volumes[1].join("child").to_str().unwrap().to_owned(),
-            ]
-        );
+        let mut expected = vec![volumes[1].to_str().unwrap().to_owned()];
+        if root_access == FileSystemAccessMode::Write {
+            expected.push(volumes[1].join("child").to_str().unwrap().to_owned());
+        }
+        assert_eq!(second_grants, expected);
     }
     Ok(())
 }

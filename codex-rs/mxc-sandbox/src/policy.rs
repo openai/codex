@@ -205,9 +205,9 @@ pub(super) fn build_request(
     // MXC's object normalizer: its metadata preflight rejects usable SMB grants
     // and inaccessible deny paths before the native API can evaluate them.
     // The hard-link and volume-root alias tradeoffs are intentional; see README.
+    // Read-only roots already grant recursive access; only expand writable roots.
     let mut write = expand_volume_roots(write, &volume_roots)?;
     write.retain(|key, _| !carveouts.contains_key(key) && !deny.contains_key(key));
-    let mut read = expand_volume_roots(read, &volume_roots)?;
     // Resolve equal-path write overrides before reaching MXC so the native
     // API receives one effective access mode for each path identity.
     read.retain(|key, _| !write.contains_key(key) && !deny.contains_key(key));
@@ -353,7 +353,7 @@ pub(super) fn materialize_volume_roots(
     Ok(fs)
 }
 
-// MXC volume-root grants are nonrecursive, so snapshot each root's current
+// MXC writable volume-root grants are nonrecursive, so snapshot each root's current
 // immediate children as recursive grants. A child created directly under the
 // root after policy construction is not granted. MXC/PSEC still enforces
 // restrictions on junction-resolved targets at access time.
