@@ -943,6 +943,10 @@ async fn code_mode_session_provider_is_shared_across_threads() {
     config.codex_home = temp_dir.path().join("codex-home").abs();
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    config
+        .features
+        .enable(Feature::CodeModeHostOutputTruncation)
+        .expect("enable the built-in provider's server truncation feature");
 
     let provider: Arc<dyn CodeModeSessionProvider> = Arc::new(DisabledCodeModeSessionProvider);
     let manager = ThreadManager::with_models_provider_and_home_for_tests(
@@ -951,6 +955,9 @@ async fn code_mode_session_provider_is_shared_across_threads() {
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     )
+    // Exercise the production factory with the startup flag before overriding
+    // its lazy built-in provider. No host is started by this test.
+    .with_code_mode_host_program_for_tests(temp_dir.path().join("unused-code-mode-host"), &config)
     .with_code_mode_session_provider(Arc::clone(&provider));
     let first = manager
         .start_thread(StartThreadOptions::new(config.clone()))

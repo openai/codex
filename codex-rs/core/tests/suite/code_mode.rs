@@ -4718,6 +4718,49 @@ Error:\ boom\n
     Ok(())
 }
 
+// An overflow notice is outside the observation budget. This distinguishes
+// actual server formatting from Core silently repeating client truncation.
+#[test_case(false; "stdio")]
+#[test_case(true; "grpc")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_collector_notice_survives_the_observation_budget(
+    grpc_stdio: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, follow_up) = run_code_mode_turn_with_config(
+        &server,
+        "emit enough text to overflow the collector",
+        r#"// @exec: {"max_output_tokens": 0}
+text("begin");
+text("x".repeat(2 * 1024 * 1024));
+text("end");
+"#,
+        move |config| {
+            let _ = config.features.enable(Feature::CodeModeHost);
+            let _ = config
+                .features
+                .enable(Feature::CodeModeHostOutputTruncation);
+            if grpc_stdio {
+                let _ = config.features.enable(Feature::CodeModeHostGrpc);
+            } else {
+                let _ = config.features.disable(Feature::CodeModeHostGrpc);
+            }
+        },
+    )
+    .await?;
+    let (output, success) =
+        custom_tool_output_body_and_success(&follow_up.single_request(), "call-1");
+    assert_ne!(success, Some(false), "{output}");
+    assert!(
+        output.contains("Code Mode session output limit reached")
+            && output.contains("text segments, 0 images, 0 audio items"),
+        "host omission notice must survive Core's zero-token exec budget: {output}"
+    );
+    Ok(())
+}
+
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_surfaces_handler_errors_as_exceptions() -> Result<()> {

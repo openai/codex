@@ -1,4 +1,4 @@
-//! Owns the local gRPC code-mode client and host process. Sessions share a lazy
+//! Owns Core's local code-mode output rollout and gRPC host. Sessions share a lazy
 //! HTTP/2 connection. Only session admission can replace a dead host; metrics
 //! use the current generation and cannot reconnect. Dropping its I/O reaps the child.
 
@@ -17,6 +17,7 @@ use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
 
+use codex_code_mode::CodeModeOutputTruncation;
 use codex_code_mode::CodeModeProcessMetricsSample;
 use codex_code_mode::CodeModeSessionCellExecutionLimits;
 use codex_code_mode::CodeModeSessionOptions;
@@ -43,6 +44,45 @@ use tonic::transport::Channel;
 use tonic::transport::Endpoint;
 use tower::ServiceExt;
 use tower::service_fn;
+
+/// Only wraps Core's built-in providers; injected providers own their session settings.
+pub(crate) struct LocalServerOutputProvider {
+    pub(crate) inner: Arc<dyn CodeModeSessionProvider>,
+}
+
+impl CodeModeSessionProvider for LocalServerOutputProvider {
+    fn availability(&self) -> Result<(), String> {
+        self.inner.availability()
+    }
+
+    fn sample_process_metrics(
+        &self,
+    ) -> CodeModeSessionResultFuture<'_, CodeModeProcessMetricsSample> {
+        self.inner.sample_process_metrics()
+    }
+
+    fn create_session(&self) -> CodeModeSessionProviderFuture<'_> {
+        self.create_session_with_limits(CodeModeSessionCellExecutionLimits::default())
+    }
+
+    fn create_session_with_limits<'a>(
+        &'a self,
+        limits: CodeModeSessionCellExecutionLimits,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        self.inner
+            .create_session_with_options(CodeModeSessionOptions {
+                cell_execution_limits: limits,
+                output_truncation: CodeModeOutputTruncation::Server,
+            })
+    }
+
+    fn create_session_with_options<'a>(
+        &'a self,
+        options: CodeModeSessionOptions,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        self.inner.create_session_with_options(options)
+    }
+}
 
 pub struct ProcessOwnedGrpcCodeModeSessionProvider {
     host_program: PathBuf,

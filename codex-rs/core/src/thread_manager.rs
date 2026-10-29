@@ -756,16 +756,25 @@ impl ThreadManager {
         config: &Config,
         host_program: PathBuf,
     ) -> Arc<dyn CodeModeSessionProvider> {
-        if config.features.enabled(Feature::CodeModeHostGrpc) {
-            Arc::new(
+        let provider: Arc<dyn CodeModeSessionProvider> =
+            if config.features.enabled(Feature::CodeModeHostGrpc) {
+                Arc::new(
                 crate::code_mode_host::ProcessOwnedGrpcCodeModeSessionProvider::with_host_program(
                     host_program,
                 ),
             )
+            } else {
+                Arc::new(ProcessOwnedCodeModeSessionProvider::with_host_program(
+                    host_program,
+                ))
+            };
+        if config
+            .features
+            .enabled(Feature::CodeModeHostOutputTruncation)
+        {
+            Arc::new(crate::code_mode_host::LocalServerOutputProvider { inner: provider })
         } else {
-            Arc::new(ProcessOwnedCodeModeSessionProvider::with_host_program(
-                host_program,
-            ))
+            provider
         }
     }
 
