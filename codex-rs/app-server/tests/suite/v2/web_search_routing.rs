@@ -1,4 +1,4 @@
-//! Standalone search uses the discovered workspace origin and credentials.
+//! Standalone search uses the discovered workspace origin and cannot follow redirects.
 
 use std::time::Duration;
 
@@ -14,10 +14,12 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
+use codex_protocol::ThreadId;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::io::copy_bidirectional;
 use tokio::net::TcpStream;
 use tokio::task::JoinSet;
@@ -30,13 +32,20 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::super::https_mock::tls_listener;
+use super::super::memory_reset::init_state_db;
 use super::search_request;
+use super::wait_for_web_search_completed;
+use super::wait_for_web_search_started;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const SEARCH_PATH: &str = "/backend-api/codex/alpha/search";
 
+#[test_case(Some("us_cr"); "us_cr_routes_search")]
+#[test_case(None; "unconstrained_rejects_redirect_and_bounds_error_output")]
 #[tokio::test]
-async fn standalone_web_search_uses_workspace_routing() -> Result<()> {
+async fn standalone_web_search_uses_workspace_routing(
+    routing_override: Option<&str>,
+) -> Result<()> {
     let bootstrap = MockServer::start().await;
     let routed = responses::start_mock_server().await;
     let home = TempDir::new()?;
@@ -70,7 +79,7 @@ async fn standalone_web_search_uses_workspace_routing() -> Result<()> {
             "accounts": [{
                 "id": "selected",
                 "workspace_backend_origin": routed_origin,
-                "account_routing_override": "us_cr",
+                "account_routing_override": routing_override.unwrap_or("NO_CONSTRAINT"),
             }],
         })))
         .expect(1)
@@ -86,12 +95,24 @@ async fn standalone_web_search_uses_workspace_routing() -> Result<()> {
         .mount(&bootstrap)
         .await;
 
+    let response = if routing_override.is_some() {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "output": "Routed search result",
+        }))
+    } else {
+        ResponseTemplate::new(307)
+            .insert_header("location", format!("{routed_origin}/redirected-search"))
+            .set_body_string(format!("Search diagnostic: {}", "λ".repeat(/*n*/ 16_384)))
+    };
     Mock::given(method("POST"))
         .and(path(SEARCH_PATH))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "output": "Routed search result",
-        })))
+        .respond_with(response)
         .expect(1)
+        .mount(&routed)
+        .await;
+    Mock::given(path("/redirected-search"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
         .mount(&routed)
         .await;
 
@@ -116,6 +137,7 @@ async fn standalone_web_search_uses_workspace_routing() -> Result<()> {
             "chatgpt_base_url = \"{}/backend-api\"",
             bootstrap.uri()
         ))
+        .with_root_config("memories.disable_on_external_context = true")
         .with_model_provider("openai-custom")
         .with_provider_name("OpenAI")
         .with_provider_base_url(&format!("{}/backend-api/codex", bootstrap.uri()))
@@ -149,6 +171,13 @@ async fn standalone_web_search_uses_workspace_routing() -> Result<()> {
             .build_initialized_with_timeout(READ_TIMEOUT)
             .await?;
         let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+        let thread_id = ThreadId::from_string(&thread.id)?;
+        let state_db = init_state_db(home.path()).await?;
+        // A new thread can acquire its SQLite row on the first turn.
+        assert!(matches!(
+            state_db.get_thread_memory_mode(thread_id).await?.as_deref(),
+            None | Some("enabled")
+        ));
         let completed = timeout(
             READ_TIMEOUT,
             app.start_turn_and_wait_for_completion(TurnStartParams {
@@ -164,16 +193,41 @@ async fn standalone_web_search_uses_workspace_routing() -> Result<()> {
         assert_eq!(completed.turn.status, TurnStatus::Completed);
         let requests = model_requests.requests();
         assert_eq!(requests.len(), 2);
-        assert_eq!(
-            requests[1].function_call_output(call_id)["output"],
-            json!([{"type": "input_text", "text": "Routed search result"}])
-        );
+        if routing_override.is_some() {
+            assert_eq!(
+                requests[1].function_call_output(call_id)["output"],
+                json!([{"type": "input_text", "text": "Routed search result"}])
+            );
+        } else {
+            let error = requests[1]
+                .function_call_output_text(call_id)
+                .context("redirect rejection should be reported to the model")?;
+            assert!(error.len() <= 1024, "{} bytes", error.len());
+            assert!(error.contains("http 307 Temporary Redirect"), "{error}");
+            assert!(error.contains("Search diagnostic: λ"), "{error}");
+            assert_eq!(
+                state_db.get_thread_memory_mode(thread_id).await?.as_deref(),
+                Some("polluted")
+            );
+            let started = timeout(READ_TIMEOUT, wait_for_web_search_started(&mut app)).await??;
+            let completed =
+                timeout(READ_TIMEOUT, wait_for_web_search_completed(&mut app)).await??;
+            assert_eq!(started.item.id(), call_id);
+            assert_eq!(completed.item.id(), call_id);
+        }
 
         let search = search_request(&routed, SEARCH_PATH).await?;
         assert_eq!(search.headers["authorization"], "Bearer access-chatgpt");
         assert_eq!(search.headers["chatgpt-account-id"], "selected");
         assert_eq!(search.headers["x-openai-internal-codex-residency"], "us");
-        assert_eq!(search.headers["x-openai-account-routing-override"], "us_cr");
+        assert_eq!(
+            search
+                .headers
+                .get("x-openai-account-routing-override")
+                .map(|value| value.to_str())
+                .transpose()?,
+            routing_override
+        );
         bootstrap.verify().await;
         routed.verify().await;
         Ok::<_, anyhow::Error>(app)

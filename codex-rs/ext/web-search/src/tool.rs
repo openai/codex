@@ -51,6 +51,7 @@ pub(crate) const WEB_NAMESPACE: &str = "web";
 pub(crate) const RUN_TOOL_NAME: &str = "run";
 const WEB_RUN_DESCRIPTION: &str = include_str!("../web_run_description.md");
 const RESULTS_PAYLOAD_BYTES_METRIC: &str = "codex.web_search.results.payload_bytes";
+const MAX_SEARCH_ERROR_BYTES: usize = 1024;
 
 pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
@@ -150,7 +151,7 @@ impl WebSearchTool {
             Ok(SearchClient::new(transport, endpoint, api_auth))
         })
         .await
-        .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+        .map_err(|err| FunctionCallError::RespondToModel(search_error_message(err)))?;
         let request = SearchRequest {
             id: self.session_id.clone(),
             model: call.model.clone(),
@@ -179,12 +180,10 @@ impl WebSearchTool {
                 }),
             ))
             .await;
-        let response = client
-            .search(&request, extra_headers)
-            .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
-        let output = response.output;
-        let results = response.results;
+        let (output, results) = match client.search(&request, extra_headers).await {
+            Ok(response) => (Ok(response.output), response.results),
+            Err(err) => (Err(search_error_message(err)), None),
+        };
         if let Some(results) = results.as_ref()
             && let Some(metrics) = codex_otel::global()
             && let Ok(payload) = serde_json::to_vec(results)
@@ -224,6 +223,16 @@ impl WebSearchTool {
 
         Ok(Box::new(SearchOutput::new(output)))
     }
+}
+
+fn search_error_message(error: impl std::fmt::Display) -> String {
+    let mut message = error.to_string();
+    if message.len() > MAX_SEARCH_ERROR_BYTES {
+        const SUFFIX: &str = "… [truncated]";
+        message.truncate(message.floor_char_boundary(MAX_SEARCH_ERROR_BYTES - SUFFIX.len()));
+        message.push_str(SUFFIX);
+    }
+    message
 }
 
 fn search_request_headers(originator: Option<&str>, turn_metadata: Option<&str>) -> HeaderMap {
@@ -326,9 +335,21 @@ mod tests {
 
     use super::command_action;
     use super::parse_commands;
+    use super::search_error_message;
     use super::search_request_headers;
     use codex_core::X_CODEX_TURN_METADATA_HEADER;
     use codex_extension_api::FunctionCallError;
+
+    #[test]
+    fn search_errors_preserve_short_messages_and_bound_utf8_output() {
+        let fits = "x".repeat(/*n*/ 1024);
+        assert_eq!(search_error_message(&fits), fits);
+
+        let oversized = "🦀".repeat(/*n*/ 512);
+        let message = search_error_message(&oversized);
+        assert!(message.len() <= 1024);
+        assert!(oversized.starts_with(message.strip_suffix("… [truncated]").unwrap()));
+    }
 
     #[test]
     fn search_request_headers_forward_thread_originator_and_turn_metadata() {

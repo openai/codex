@@ -103,6 +103,6 @@ async fn config_changes_preserve_the_threads_established_routing() {
     };
     assert!(matches!(
         tools[0].handle(call).await,
-        Err(FunctionCallError::Fatal(message)) if message == thread_bootstrap
+        Err(FunctionCallError::RespondToModel(message)) if message == thread_bootstrap
     ));
 }
