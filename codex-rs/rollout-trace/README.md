@@ -96,10 +96,11 @@ one from `CODEX_ROLLOUT_TRACE_ROOT`; fresh spawned child threads derive their
 own context from the parent's context so the whole rollout tree shares one
 writer. Disabled contexts accept the same calls and record nothing.
 
-Trace startup and writes are best-effort. Rollout tracing must never make a
-Codex session fail just because diagnostic recording failed. Core emits raw
-observations; this crate owns the bundle schema, trace-context APIs, writer, and
-reducer.
+When tracing is enabled, a thread can start or resume only if its recorder
+initializes successfully. A later write failure stops recording. Partial
+bundles remain available for replay. The reducer sets `recording_complete` in
+`state.json` when it reads the closing record written by the last trace handle,
+including when the recorded task was interrupted.
 
 ## Bundle Layout
 

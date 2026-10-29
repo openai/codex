@@ -15,6 +15,9 @@ use codex_protocol::protocol::TokenUsage;
 use http::HeaderMap;
 use http::HeaderValue;
 use serde::Serialize;
+use serde::Serializer;
+use serde::ser::Error;
+use serde::ser::SerializeSeq;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -89,7 +92,7 @@ struct TracedResponseStreamOutput<'a> {
     response_id: Option<&'a str>,
     upstream_request_id: Option<&'a str>,
     token_usage: Option<&'a TokenUsage>,
-    output_items: Vec<JsonValue>,
+    output_items: TraceResponseItems<'a>,
 }
 
 impl InferenceTraceContext {
@@ -324,12 +327,8 @@ impl InferenceTraceAttempt {
 /// The protocol serializer intentionally omits some readable reasoning content
 /// when shaping items for later model requests. Rollout traces need the item as
 /// Codex received it, so this helper restores that content in the raw payload.
-pub(crate) fn trace_response_item_json(item: &ResponseItem) -> JsonValue {
-    let mut value = serde_json::to_value(item).unwrap_or_else(|err| {
-        serde_json::json!({
-            "serialization_error": err.to_string(),
-        })
-    });
+fn trace_response_item_json(item: &ResponseItem) -> serde_json::Result<JsonValue> {
+    let mut value = serde_json::to_value(item)?;
 
     if let ResponseItem::Reasoning {
         content: Some(content),
@@ -337,17 +336,24 @@ pub(crate) fn trace_response_item_json(item: &ResponseItem) -> JsonValue {
     } = item
         && let JsonValue::Object(object) = &mut value
     {
-        object.insert(
-            "content".to_string(),
-            serde_json::to_value(content).unwrap_or_else(|err| {
-                serde_json::json!({
-                    "serialization_error": err.to_string(),
-                })
-            }),
-        );
+        object.insert("content".to_string(), serde_json::to_value(content)?);
     }
 
-    value
+    Ok(value)
+}
+
+/// Serializes response evidence one item at a time, propagating failures to the writer.
+pub(crate) struct TraceResponseItems<'a>(pub &'a [ResponseItem]);
+
+impl Serialize for TraceResponseItems<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for item in self.0 {
+            let value = trace_response_item_json(item).map_err(S::Error::custom)?;
+            sequence.serialize_element(&value)?;
+        }
+        sequence.end()
+    }
 }
 
 fn next_inference_call_id() -> InferenceCallId {
@@ -373,7 +379,7 @@ fn write_response_payload_best_effort(
         response_id,
         upstream_request_id,
         token_usage,
-        output_items: output_items.iter().map(trace_response_item_json).collect(),
+        output_items: TraceResponseItems(output_items),
     };
     write_json_payload_best_effort(
         &attempt.context.writer,
@@ -515,7 +521,7 @@ mod tests {
         };
 
         let normal = serde_json::to_value(&item).expect("response item serializes");
-        let traced = trace_response_item_json(&item);
+        let traced = trace_response_item_json(&item).expect("trace item serializes");
 
         assert_eq!(normal.get("content"), None);
         assert_eq!(

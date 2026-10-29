@@ -1779,13 +1779,18 @@ impl Session {
                 // parent had no trace bundle, do not create an orphan child bundle
                 // that looks like an independent rollout.
                 if matches!(&initial_history, InitialHistory::Resumed(_)) {
-                    parent_rollout_thread_trace
-                        .resume_child_thread_trace_or_disabled(thread_id.to_string())
+                    parent_rollout_thread_trace.resume_child_thread_trace(thread_id.to_string())
                 } else {
-                    parent_rollout_thread_trace.start_child_thread_trace_or_disabled(trace_metadata)
+                    parent_rollout_thread_trace.start_child_thread_trace(trace_metadata)
                 }
             } else {
-                ThreadTraceContext::start_root_or_disabled(trace_metadata)
+                ThreadTraceContext::start_root(trace_metadata)
+            };
+            // Extensions have already started. On error, finish constructing the
+            // session so normal teardown can release everything they registered.
+            let (rollout_thread_trace, trace_error) = match rollout_thread_trace {
+                Ok(trace) => (trace, None),
+                Err(err) => (ThreadTraceContext::disabled(), Some(err)),
             };
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
@@ -1933,6 +1938,14 @@ impl Session {
             });
             if let Some(startup) = &startup {
                 startup.set_session(Arc::clone(&sess));
+            }
+            if let Some(err) = trace_error {
+                if startup.is_none() {
+                    super::handlers::shutdown_session_runtime(&sess).await;
+                }
+                return Err(
+                    CodexErr::Fatal(format!("failed to start rollout recording: {err:#}")).into(),
+                );
             }
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;

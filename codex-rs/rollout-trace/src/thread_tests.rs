@@ -63,6 +63,39 @@ fn create_in_root_writes_replayable_lifecycle_events() -> anyhow::Result<()> {
     assert_eq!(replayed.root_thread_id, thread_id.to_string());
     assert_eq!(replayed.threads[&thread_id.to_string()].agent_path, "/root");
     assert_eq!(replayed.raw_payloads.len(), 1);
+    assert!(!replayed.recording_complete);
+
+    thread_trace.record_protocol_event(&EventMsg::ShutdownComplete);
+    drop(thread_trace);
+    let complete = replay_bundle(&bundle_dir)?;
+    assert_eq!(complete.status, RolloutStatus::Completed);
+    assert!(complete.recording_complete);
+
+    // A syntactically valid prefix is still an incomplete export.
+    let path = bundle_dir.join("trace.jsonl");
+    let events = fs::read_to_string(&path)?;
+    let (prefix, _) = events.trim_end().rsplit_once('\n').unwrap();
+    fs::write(&path, prefix)?;
+    assert!(!replay_bundle(&bundle_dir)?.recording_complete);
+    fs::write(&path, &events)?;
+
+    // Completion closes the log; even a correctly numbered later event is invalid.
+    let mut trailing: serde_json::Value = serde_json::from_str(events.lines().last().unwrap())?;
+    trailing["seq"] = (trailing["seq"].as_u64().unwrap() + 1).into();
+    fs::write(&path, format!("{events}{trailing}\n"))?;
+    assert!(replay_bundle(&bundle_dir).is_err());
+    fs::write(&path, &events)?;
+
+    // Protocol breadcrumbs are opaque to replay, but their payloads are still required.
+    let opaque = complete
+        .raw_payloads
+        .values()
+        .find(|payload| payload.kind == RawPayloadKind::ProtocolEvent)
+        .unwrap();
+    fs::write(bundle_dir.join(&opaque.path), "{\"truncated\":")?;
+    assert!(replay_bundle(&bundle_dir).is_err());
+    fs::remove_file(bundle_dir.join(&opaque.path))?;
+    assert!(replay_bundle(&bundle_dir).is_err());
 
     Ok(())
 }
@@ -77,7 +110,7 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
         minimal_metadata(root_thread_id),
     )?;
 
-    let child_trace = root_trace.start_child_thread_trace_or_disabled(ThreadStartedTraceMetadata {
+    let child_trace = root_trace.start_child_thread_trace(ThreadStartedTraceMetadata {
         thread_id: child_thread_id.to_string(),
         agent_path: "/root/repo_file_counter".to_string(),
         task_name: Some("repo_file_counter".to_string()),
@@ -98,7 +131,7 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
         provider_name: "test-provider".to_string(),
         approval_policy: "never".to_string(),
         sandbox_policy: format!("{:?}", SandboxPolicy::DangerFullAccess),
-    });
+    })?;
     child_trace.record_ended(RolloutStatus::Completed);
     let bundle_dir = single_bundle_dir(temp.path())?;
     let replayed = replay_bundle(&bundle_dir)?;
@@ -118,6 +151,42 @@ fn spawned_thread_start_appends_to_root_bundle() -> anyhow::Result<()> {
     );
     assert_eq!(replayed.raw_payloads.len(), 2);
 
+    root_trace.record_ended(RolloutStatus::Completed);
+    drop(root_trace);
+    // Root shutdown does not close the recording while a child still owns it.
+    assert!(!replay_bundle(&bundle_dir)?.recording_complete);
+    drop(child_trace);
+    assert!(replay_bundle(&bundle_dir)?.recording_complete);
+
+    Ok(())
+}
+
+#[test]
+fn resumed_child_rejects_a_failed_shared_writer() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let root = ThreadTraceContext::start_root_in_root_for_test(
+        temp.path(),
+        minimal_metadata(ThreadId::new()),
+    )?;
+    let child_id = ThreadId::new();
+    let child = root.start_child_thread_trace(minimal_metadata(child_id))?;
+    child.record_ended(RolloutStatus::Completed);
+    drop(child);
+
+    // A parent payload write fails while the child is evicted.
+    let bundle = single_bundle_dir(temp.path())?;
+    let payloads = bundle.join("payloads");
+    let backup = temp.path().join("saved-payloads");
+    fs::rename(&payloads, &backup)?;
+    root.record_protocol_event(&EventMsg::ShutdownComplete);
+    fs::rename(backup, payloads)?;
+
+    assert!(
+        root.resume_child_thread_trace(child_id.to_string())
+            .is_err()
+    );
+    drop(root);
+    assert!(!replay_bundle(&bundle)?.recording_complete);
     Ok(())
 }
 

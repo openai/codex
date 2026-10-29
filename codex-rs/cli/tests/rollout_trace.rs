@@ -6,6 +6,7 @@ use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_sequence;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -26,6 +27,46 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
+
+#[tokio::test]
+async fn enabled_recording_cannot_silently_fail_to_start() -> Result<()> {
+    let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let home = TempDir::new()?;
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    MockResponsesConfig::new(&server.uri()).write(home.path())?;
+    let trace_root = home.path().join("traces");
+    std::fs::write(&trace_root, "file")?;
+    let mut app = TestAppServer::builder()
+        .with_program(&codex)
+        .with_plugin_startup_tasks()
+        .with_args(&["app-server"])
+        .with_codex_home(home.path())
+        .with_env_overrides(&[("CODEX_ROLLOUT_TRACE_ROOT", trace_root.to_str())])
+        .build_initialized()
+        .await?;
+    let request_id = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let error = app
+        .read_stream_until_error_message(RequestId::Integer(request_id))
+        .await?;
+    assert!(
+        error
+            .error
+            .message
+            .contains("failed to start rollout recording")
+    );
+    // The same app-server can start a new recording once storage is available.
+    std::fs::remove_file(&trace_root)?;
+    std::fs::create_dir(&trace_root)?;
+    app.start_thread(ThreadStartParams::default()).await?;
+    assert!(app.shutdown_gracefully().await?.success());
+    let mut bundles = std::fs::read_dir(trace_root)?;
+    let bundle = bundles.next().unwrap()?.path();
+    assert!(bundles.next().is_none());
+    assert!(codex_rollout_trace::replay_bundle(bundle)?.recording_complete);
+    Ok(())
+}
 
 #[tokio::test]
 async fn accepted_output_survives_success_and_stream_failure() -> Result<()> {
@@ -116,6 +157,7 @@ async fn accepted_output_survives_success_and_stream_failure() -> Result<()> {
         );
         let rollout: RolloutTrace =
             serde_json::from_reader(std::fs::File::open(bundle.join("state.json"))?)?;
+        assert!(rollout.recording_complete);
         let call = rollout.inference_calls.values().next().unwrap();
         let output_id = &call.response_item_ids[0];
         let output = &rollout.conversation_items[output_id];
@@ -234,6 +276,7 @@ async fn accepted_output_survives_interruption_and_shutdown() -> Result<()> {
     );
     let rollout: RolloutTrace =
         serde_json::from_reader(std::fs::File::open(bundle.join("state.json"))?)?;
+    assert!(rollout.recording_complete);
     assert_eq!(rollout.inference_calls.len(), 1);
     let call = rollout.inference_calls.values().next().unwrap();
     assert_eq!(call.execution.status, ExecutionStatus::Cancelled);

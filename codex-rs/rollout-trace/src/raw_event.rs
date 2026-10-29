@@ -67,6 +67,8 @@ pub enum RawToolCallRequester {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum RawTraceEventPayload {
+    /// Final record after all producers release a writer with no recorded errors.
+    RecordingCompleted,
     RolloutStarted {
         trace_id: String,
         root_thread_id: AgentThreadId,
@@ -251,7 +253,8 @@ impl RawTraceEventPayload {
     /// Raw payload refs that must exist before this raw event is appended.
     pub(crate) fn raw_payload_refs(&self) -> Vec<&RawPayloadRef> {
         match self {
-            RawTraceEventPayload::RolloutStarted { .. }
+            RawTraceEventPayload::RecordingCompleted
+            | RawTraceEventPayload::RolloutStarted { .. }
             | RawTraceEventPayload::RolloutEnded { .. }
             | RawTraceEventPayload::ThreadEnded { .. }
             | RawTraceEventPayload::ThreadResumed { .. }

@@ -67,6 +67,9 @@ pub struct RolloutTrace {
     /// Wall-clock timestamp for terminal rollout status. `None` means running or partial trace.
     pub ended_at_unix_ms: Option<i64>,
     pub status: RolloutStatus,
+    /// All recorder handles closed without a recorded write failure; not task success.
+    #[serde(default)]
+    pub recording_complete: bool,
     pub root_thread_id: AgentThreadId,
     pub threads: BTreeMap<AgentThreadId, AgentThread>,
     pub codex_turns: BTreeMap<CodexTurnId, CodexTurn>,
@@ -105,6 +108,7 @@ impl RolloutTrace {
             started_at_unix_ms,
             ended_at_unix_ms: None,
             status: RolloutStatus::Running,
+            recording_complete: false,
             root_thread_id,
             threads: BTreeMap::new(),
             codex_turns: BTreeMap::new(),

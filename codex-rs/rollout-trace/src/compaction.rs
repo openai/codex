@@ -12,10 +12,9 @@ use std::sync::atomic::Ordering;
 
 use codex_protocol::models::ResponseItem;
 use serde::Serialize;
-use serde_json::Value as JsonValue;
 use tracing::warn;
 
-use crate::inference::trace_response_item_json;
+use crate::inference::TraceResponseItems;
 use crate::model::AgentThreadId;
 use crate::model::CodexTurnId;
 use crate::model::CompactionId;
@@ -71,8 +70,8 @@ struct EnabledCompactionTraceAttempt {
 }
 
 #[derive(Serialize)]
-struct TracedCompactionCompleted {
-    output_items: Vec<JsonValue>,
+struct TracedCompactionCompleted<'a> {
+    output_items: TraceResponseItems<'a>,
 }
 
 /// History replacement checkpoint persisted when compaction installs new live history.
@@ -215,7 +214,7 @@ impl CompactionTraceAttempt {
             return;
         };
         let response_payload = TracedCompactionCompleted {
-            output_items: output_items.iter().map(trace_response_item_json).collect(),
+            output_items: TraceResponseItems(output_items),
         };
         let Some(response_payload) = write_json_payload_best_effort(
             &attempt.context.writer,
