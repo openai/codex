@@ -82,8 +82,9 @@ async fn config_changes_preserve_the_threads_established_routing() {
     let mut changed = config.clone();
     changed.chatgpt_base_url = "https://changed.example/backend-api".into();
     extension.on_config_changed(&session_store, &thread_store, &config, &changed);
-    let tools =
-        extension.tools_for_step(&session_store, &thread_store, &ExtensionData::new("step"));
+    let step_store = ExtensionData::new("step");
+    step_store.insert(config.web_search_mode.value());
+    let tools = extension.tools_for_step(&session_store, &thread_store, &step_store);
     let call = ToolCall {
         turn_id: "turn".into(),
         call_id: "search".into(),

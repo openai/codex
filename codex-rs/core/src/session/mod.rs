@@ -4147,6 +4147,8 @@ impl Session {
             let extension_data =
                 codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
             extension_data.insert_arc(Arc::clone(&settings.model_info));
+            // Standalone and hosted search must use the same turn-scoped permission mode.
+            extension_data.insert(turn_context.config.web_search_mode.value());
             if let Some(messages) = settings
                 .model_info
                 .model_messages
