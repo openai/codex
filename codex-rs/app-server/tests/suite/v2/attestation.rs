@@ -84,6 +84,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
                 version: "0.1.0".to_string(),
             },
             Some(InitializeCapabilities {
+                required_human_approval: false,
                 explicit_gateway_oauth: false,
                 experimental_api: true,
                 request_attestation: true,

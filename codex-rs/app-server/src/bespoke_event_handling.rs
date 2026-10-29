@@ -751,7 +751,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                         Some(shlex_join(&command)),
                         Some(completion_item.cwd.clone()),
                         Some(command_actions),
-                        Some(completion_item),
+                        (kind != codex_protocol::approvals::ExecApprovalKind::HumanCommand)
+                            .then_some(completion_item),
                     ),
                 };
             if approval_starts_command && let Some(completion_item) = completion_item.as_ref() {

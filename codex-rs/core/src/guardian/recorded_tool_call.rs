@@ -58,6 +58,11 @@ pub(crate) async fn review_tool_call(
         let approval = match &requirement {
             ExecApprovalRequirement::Skip { .. } => return Ok(None),
             ExecApprovalRequirement::NeedsApproval { reason, .. } => reason.clone(),
+            ExecApprovalRequirement::NeedsHumanApproval { .. } => {
+                return Err(CodexErr::InvalidRequest(
+                    "Managed command policy requires human approval.".into(),
+                ));
+            }
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(CodexErr::InvalidRequest(reason.clone()));
             }

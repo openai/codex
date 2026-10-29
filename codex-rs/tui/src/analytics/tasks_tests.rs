@@ -87,6 +87,7 @@ async fn consumer_roots_include_paginated_archived_descendants_and_keep_missing_
             pages
         });
         let remote = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            required_human_approval: true,
             endpoint: RemoteAppServerEndpoint::WebSocket {
                 websocket_url,
                 auth_token: None,

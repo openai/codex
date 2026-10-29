@@ -164,6 +164,10 @@ impl ToolOrchestrator {
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
+        let human_once = matches!(
+            requirement,
+            ExecApprovalRequirement::NeedsHumanApproval { .. }
+        );
         match &requirement {
             ExecApprovalRequirement::Skip { .. } => {
                 if strict_auto_review {
@@ -173,6 +177,7 @@ impl ToolOrchestrator {
                             ToolError::Rejected(format!("could not prepare approval action: {err}"))
                         })?;
                     let approval_ctx = ApprovalContext {
+                        exec_requirement: Some(requirement.clone()),
                         review_context: GuardianReviewContext::from(&tool_ctx.step_context),
                         cancellation_token: Some(tool_ctx.cancellation_token.clone()),
                         call_id: tool_ctx.call_id.clone(),
@@ -200,13 +205,15 @@ impl ToolOrchestrator {
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason.clone()));
             }
-            ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+            ExecApprovalRequirement::NeedsApproval { reason, .. }
+            | ExecApprovalRequirement::NeedsHumanApproval { reason } => {
                 let action = tool
                     .approval_action(req, &tool_ctx.call_id)
                     .map_err(|err| {
                         ToolError::Rejected(format!("could not prepare approval action: {err}"))
                     })?;
                 let approval_ctx = ApprovalContext {
+                    exec_requirement: Some(requirement.clone()),
                     review_context: GuardianReviewContext::from(&tool_ctx.step_context),
                     cancellation_token: Some(tool_ctx.cancellation_token.clone()),
                     call_id: tool_ctx.call_id.clone(),
@@ -483,16 +490,19 @@ impl ToolOrchestrator {
 
                 // Human and policy approvals keep their existing retry scope. A
                 // Guardian verdict only covers the authority of the reviewed action.
-                let retry_preapproved = matches!(
-                    initial_approval_source,
-                    Some(ApprovalResolutionSource::User | ApprovalResolutionSource::Hook)
-                );
-                let bypass_retry_approval = !strict_auto_review
+                let retry_preapproved = !human_once
+                    && matches!(
+                        initial_approval_source,
+                        Some(ApprovalResolutionSource::User | ApprovalResolutionSource::Hook)
+                    );
+                let bypass_retry_approval = !human_once
+                    && !strict_auto_review
                     && tool.should_bypass_approval(approval_policy, retry_preapproved)
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
                     let approval_reason = match &requirement {
-                        ExecApprovalRequirement::NeedsApproval { reason, .. } => reason.clone(),
+                        ExecApprovalRequirement::NeedsApproval { reason, .. }
+                        | ExecApprovalRequirement::NeedsHumanApproval { reason } => reason.clone(),
                         ExecApprovalRequirement::Skip { .. }
                         | ExecApprovalRequirement::Forbidden { .. } => None,
                     };
@@ -516,6 +526,7 @@ impl ToolOrchestrator {
                         *additional_permissions = None;
                     }
                     let approval_ctx = ApprovalContext {
+                        exec_requirement: Some(requirement.clone()),
                         review_context: GuardianReviewContext::from(&tool_ctx.step_context),
                         cancellation_token: Some(tool_ctx.cancellation_token.clone()),
                         call_id: tool_ctx.call_id.clone(),
@@ -526,6 +537,15 @@ impl ToolOrchestrator {
                         network_approval_context: network_approval_context.clone(),
                     };
 
+                    if human_once && network_approval_context.is_some() {
+                        let mut network_ctx = approval_ctx.clone();
+                        network_ctx.exec_requirement = None;
+                        tool_ctx
+                            .session
+                            .request_approval(action.clone(), network_ctx)
+                            .await
+                            .result?;
+                    }
                     tool_ctx
                         .session
                         .request_approval(action, approval_ctx)

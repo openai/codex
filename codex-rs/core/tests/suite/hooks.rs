@@ -720,7 +720,7 @@ elif mode == "exit_2":
     Ok(())
 }
 
-fn install_allow_permission_request_hook(home: &Path) -> Result<()> {
+pub(super) fn install_allow_permission_request_hook(home: &Path) -> Result<()> {
     write_permission_request_hook(
         home,
         Some(PERMISSION_REQUEST_HOOK_MATCHER),
@@ -1183,7 +1183,7 @@ fn read_pre_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> 
     read_hook_inputs_from_log(home.join("pre_tool_use_hook_log.jsonl").as_path())
 }
 
-fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+pub(super) fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
     fs::read_to_string(home.join("permission_request_hook_log.jsonl"))
         .context("read permission request hook log")?
         .lines()

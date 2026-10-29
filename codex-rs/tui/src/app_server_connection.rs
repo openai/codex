@@ -29,6 +29,7 @@ pub(crate) async fn connect(target: &AppServerTarget) -> color_eyre::Result<AppS
                 codex_uds::validate_private_socket_path(socket_path.as_path())?;
             let app_server =
                 RemoteAppServerClient::connect_local_daemon(RemoteAppServerConnectArgs {
+                    required_human_approval: true,
                     endpoint: RemoteAppServerEndpoint::UnixSocket {
                         socket_path: AbsolutePathBuf::from_absolute_path_checked(socket_path)?,
                     },

@@ -44,6 +44,10 @@ pub struct ClientInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeCapabilities {
+    /// Present `humanCommand` approvals to a person and return only a one-time decision.
+    /// Requires `experimentalApi`. Pending requests can be replayed to compatible clients.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required_human_approval: bool,
     /// Use explicit gateway OAuth login instead of automatic browser authorization.
     /// Applies to this app-server's gateway runtime; later connections cannot undo it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

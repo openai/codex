@@ -9,8 +9,11 @@ use crate::error::Result;
 pub enum Decision {
     /// Command may run without further approval.
     Allow,
-    /// Request explicit user approval; rejected outright when running with `approval_policy="never"`.
+    /// Request approval from the configured reviewer; rejected with `approval_policy="never"`.
     Prompt,
+    /// Requires a fresh human decision, independent of the configured reviewer.
+    #[serde(rename = "prompt-user")]
+    PromptUser,
     /// Command is blocked without further consideration.
     Forbidden,
 }

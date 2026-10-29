@@ -65,6 +65,7 @@ async fn experimental_features_rpc_paginates_thread_config_and_bounds_bad_server
             page
         });
         let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            required_human_approval: true,
             endpoint: RemoteAppServerEndpoint::WebSocket {
                 websocket_url: url,
                 auth_token: None,

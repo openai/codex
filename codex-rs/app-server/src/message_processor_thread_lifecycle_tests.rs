@@ -1,4 +1,4 @@
-//! Exercises thread cleanup when startup or child creation outlives the client connection.
+//! Exercises client attachment, approval routing, and cleanup across thread creation.
 
 use codex_app_server_protocol::TurnStartResponse;
 use codex_features::Feature;
@@ -24,8 +24,11 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use codex_app_server_protocol::InitializeResponse;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -503,6 +506,233 @@ async fn disconnected_v2_child_lifecycle(unload_delay_secs: u64, ephemeral: bool
         Ok(())
     }
     .await;
+    drop(outgoing);
+    processor.clear_runtime_references();
+    processor.shutdown_threads().await;
+    server.shutdown().await;
+    result
+}
+
+#[tokio::test]
+async fn child_human_approval_survives_attachment_and_rejects_unrelated_clients() -> Result<()> {
+    let (release_spawn_completion, spawn_completion_gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: responses::sse(vec![
+                    responses::ev_response_created("spawn"),
+                    responses::ev_function_call_with_namespace(
+                        "spawn",
+                        "collaboration",
+                        "spawn_agent",
+                        &json!({"task_name": "child", "message": "Run echo", "fork_turns": "none"})
+                            .to_string(),
+                    ),
+                ]),
+            },
+            StreamingSseChunk {
+                gate: Some(spawn_completion_gate),
+                body: responses::sse(vec![responses::ev_completed("spawn")]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_response_created("command"),
+                responses::ev_function_call(
+                    "child-command",
+                    "exec_command",
+                    &json!({"cmd": "echo human-approved"}).to_string(),
+                ),
+                responses::ev_completed("command"),
+            ]),
+        }],
+    ])
+    .await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("requirements.toml"),
+        r#"
+[features]
+unified_exec = false
+shell_tool = true
+
+[[rules.prefix_rules]]
+pattern = [{ token = "echo" }]
+decision = "prompt-user"
+"#,
+    )?;
+    MockResponsesConfig::new(server.uri())
+        .with_approval_policy("on-request")
+        .with_sandbox_mode("workspace-write")
+        .with_root_config("approvals_reviewer = \"auto_review\"")
+        .enable_feature(Feature::Collab)
+        .enable_feature(Feature::MultiAgentV2)
+        .write(home.path())?;
+    let config = Arc::new(
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?,
+    );
+    let auth =
+        AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false)
+            .await?;
+    let (processor, mut outgoing) = build_test_processor(config, auth).await;
+    let mut created = processor.thread_created_receiver();
+    let incompatible_id = ConnectionId(1);
+    let capable_id = ConnectionId(2);
+    let unrelated_id = ConnectionId(3);
+    let incompatible = Arc::new(ConnectionSessionState::new(ConnectionOrigin::WebSocket));
+    let capable = Arc::new(ConnectionSessionState::new(ConnectionOrigin::WebSocket));
+    let unrelated = Arc::new(ConnectionSessionState::new(ConnectionOrigin::WebSocket));
+    let result: Result<()> = async {
+        for (id, session, required_human_approval) in [
+            (incompatible_id, &incompatible, false),
+            (capable_id, &capable, true),
+        ] {
+            send_request(
+                &processor,
+                id,
+                session,
+                json!({"id": 1, "method": "initialize", "params": {
+                    "clientInfo": {"name": "attachment-test", "version": "1"},
+                    "capabilities": {
+                        "experimentalApi": true,
+                        "requiredHumanApproval": required_human_approval
+                    }
+                }}),
+            )
+            .await;
+            let _: InitializeResponse =
+                read_response_from(&mut outgoing, id, /*request_id*/ 1).await;
+            processor
+                .connection_initialized(id, session.request_attestation())
+                .await;
+        }
+        send_request(
+            &processor,
+            incompatible_id,
+            &incompatible,
+            json!({"id": 2, "method": "thread/start", "params": {}}),
+        )
+        .await;
+        let parent: ThreadStartResponse =
+            read_response_from(&mut outgoing, incompatible_id, /*request_id*/ 2).await;
+        send_request(
+            &processor,
+            incompatible_id,
+            &incompatible,
+            json!({"id": 3, "method": "turn/start", "params": {
+                "threadId": parent.thread.id,
+                "input": [{"type": "text", "text": "Spawn a child to run echo"}]
+            }}),
+        )
+        .await;
+        let _: TurnStartResponse =
+            read_response_from(&mut outgoing, incompatible_id, /*request_id*/ 3).await;
+        let child_id = timeout(Duration::from_secs(/*secs*/ 10), created.recv()).await??;
+
+        while outgoing.try_recv().is_ok() {}
+        // Attach the initial client set before draining the child's queued approval.
+        processor
+            .try_attach_thread_listener(child_id, vec![incompatible_id, capable_id])
+            .await;
+        let request = timeout(Duration::from_secs(/*secs*/ 10), async {
+            loop {
+                if let OutgoingEnvelope::ToConnection {
+                    connection_id,
+                    message: OutgoingMessage::Request(request),
+                    ..
+                } = outgoing.recv().await.context("outgoing channel closed")?
+                {
+                    assert_eq!(connection_id, capable_id);
+                    break anyhow::Ok(request);
+                }
+            }
+        })
+        .await
+        .context("capable client did not receive the child's approval during attachment")??;
+        let ServerRequest::CommandExecutionRequestApproval { request_id, params } = &request else {
+            anyhow::bail!("expected human approval, got {request:?}");
+        };
+        assert_eq!(
+            (&params.thread_id, params.kind),
+            (
+                &child_id.to_string(),
+                codex_app_server_protocol::CommandExecutionApprovalKind::HumanCommand,
+            ),
+        );
+
+        // Initialize a capable client after auto-attachment. Capability alone must not
+        // let it approve or reject this request before it subscribes and receives it.
+        send_request(
+            &processor,
+            unrelated_id,
+            &unrelated,
+            json!({"id": 1, "method": "initialize", "params": {
+                "clientInfo": {"name": "unrelated-client", "version": "1"},
+                "capabilities": {"experimentalApi": true, "requiredHumanApproval": true}
+            }}),
+        )
+        .await;
+        let _: InitializeResponse =
+            read_response_from(&mut outgoing, unrelated_id, /*request_id*/ 1).await;
+        processor
+            .connection_initialized(unrelated_id, unrelated.request_attestation())
+            .await;
+        for connection_id in [incompatible_id, unrelated_id] {
+            processor
+                .process_response(
+                    connection_id,
+                    JSONRPCResponse {
+                        id: request_id.clone(),
+                        result: json!({"decision": "accept"}),
+                    },
+                )
+                .await;
+            processor
+                .process_error(
+                    connection_id,
+                    JSONRPCError {
+                        id: request_id.clone(),
+                        error: crate::error_code::internal_error("unsupported request"),
+                    },
+                )
+                .await;
+            assert_eq!(
+                processor
+                    .outgoing
+                    .pending_requests_for_thread(child_id)
+                    .await,
+                vec![request.clone()],
+                "unrouted responses and errors must leave the request pending",
+            );
+        }
+
+        // Routing ends at the human decision. Command execution and replay have
+        // their own coverage; declining here needs no Linux sandbox executable.
+        processor
+            .process_response(
+                capable_id,
+                JSONRPCResponse {
+                    id: request_id.clone(),
+                    result: json!({"decision": "decline"}),
+                },
+            )
+            .await;
+        assert!(
+            processor
+                .outgoing
+                .pending_requests_for_thread(child_id)
+                .await
+                .is_empty()
+        );
+        Ok(())
+    }
+    .await;
+    drop(release_spawn_completion);
     drop(outgoing);
     processor.clear_runtime_references();
     processor.shutdown_threads().await;

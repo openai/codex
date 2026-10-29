@@ -528,6 +528,7 @@ async fn verifies_name_uniqueness_across_server_pages() -> color_eyre::Result<()
             }
         });
         let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            required_human_approval: true,
             endpoint: RemoteAppServerEndpoint::WebSocket {
                 websocket_url: url,
                 auth_token: None,

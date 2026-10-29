@@ -799,6 +799,7 @@ impl NetworkApprovalService {
             cwd,
         };
         let approval_context = ApprovalContext {
+            exec_requirement: None,
             review_context,
             cancellation_token: None,
             call_id: approval_call_id,

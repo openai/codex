@@ -1,3 +1,20 @@
+# Managed human command checkpoints (experimental)
+
+A matching managed `requirements.toml` prefix rule with `decision = "prompt-user"`
+requires a fresh human decision, including when the thread uses automatic review.
+Prefix matching, exact-path precedence, and executable mappings stay unchanged. Clients
+supporting this workflow must initialize with `experimentalApi: true` and
+`requiredHumanApproval: true`.
+
+The server sends `item/commandExecution/requestApproval` with `kind: "humanCommand"`,
+a unique `approvalId`, and the command to display. Only `accept`, `decline`, and
+`cancel` are valid responses. Session and persistent approvals cannot satisfy the
+checkpoint. Only capable clients receive or answer these requests. Pending prompts
+use the normal approval replay flow when a capable client reconnects. With no capable
+connection when approval is requested, the command is rejected. The prompt itself
+does not start an execution item; normal command execution events report execution
+after approval.
+
 # Thread memory summary (experimental)
 
 `thread/memory/read` takes `{threadId}` for a loaded thread and returns

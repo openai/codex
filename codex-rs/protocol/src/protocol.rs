@@ -1748,7 +1748,9 @@ impl EventMsg {
     pub fn command_approval_start(&self) -> Option<(&str, i64)> {
         match self {
             Self::ExecApprovalRequest(request)
-                if request.approval_id.is_none() && request.network_approval_context.is_none() =>
+                if request.kind == crate::approvals::ExecApprovalKind::Command
+                    && request.approval_id.is_none()
+                    && request.network_approval_context.is_none() =>
             {
                 Some((&request.call_id, request.started_at_ms))
             }

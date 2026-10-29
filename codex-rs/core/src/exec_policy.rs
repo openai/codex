@@ -406,9 +406,9 @@ impl ExecPolicyManager {
                     ),
                 ),
             },
-            Decision::Prompt => {
+            Decision::Prompt | Decision::PromptUser => {
                 let prompt_is_rule = evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt
+                    is_policy_match(rule_match) && rule_match.decision() == evaluation.decision
                 });
                 match prompt_is_rejected_by_policy(approval_policy, prompt_is_rule) {
                     Some(reason) if prompt_is_rule => ExecApprovalRequirement::Forbidden {
@@ -425,6 +425,11 @@ impl ExecPolicyManager {
                             ),
                         ),
                     },
+                    None if evaluation.decision == Decision::PromptUser => {
+                        ExecApprovalRequirement::NeedsHumanApproval {
+                            reason: derive_prompt_reason(command, &evaluation),
+                        }
+                    }
                     None => ExecApprovalRequirement::NeedsApproval {
                         reason: derive_prompt_reason(command, &evaluation),
                         proposed_execpolicy_amendment: requested_amendment.or_else(|| {
@@ -1048,20 +1053,27 @@ fn derive_prompt_reason(command_args: &[String], evaluation: &Evaluation) -> Opt
         .filter_map(|rule_match| match rule_match {
             RuleMatch::PrefixRuleMatch {
                 matched_prefix,
-                decision: Decision::Prompt,
+                decision,
                 justification,
                 ..
-            } => Some((matched_prefix.len(), justification.as_deref())),
+            } if *decision == evaluation.decision => {
+                Some((matched_prefix.len(), justification.as_deref()))
+            }
             _ => None,
         })
         .max_by_key(|(matched_prefix_len, _)| *matched_prefix_len);
 
+    let approval = if evaluation.decision == Decision::PromptUser {
+        "human approval"
+    } else {
+        "approval"
+    };
     match most_specific_prompt {
         Some((_matched_prefix_len, Some(justification))) => {
-            Some(format!("`{command}` requires approval: {justification}"))
+            Some(format!("`{command}` requires {approval}: {justification}"))
         }
         Some((_matched_prefix_len, None)) => {
-            Some(format!("`{command}` requires approval by policy"))
+            Some(format!("`{command}` requires {approval} by policy"))
         }
         None => None,
     }

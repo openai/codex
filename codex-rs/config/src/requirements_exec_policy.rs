@@ -18,7 +18,7 @@ pub struct RequirementsExecPolicyToml {
 
 /// A TOML representation of the `prefix_rule(...)` Starlark builtin.
 ///
-/// This mirrors the builtin defined in `execpolicy/src/parser.rs`.
+/// This shares the builtin's matching semantics and additionally supports managed `prompt-user` decisions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RequirementsExecPolicyPrefixRuleToml {
     pub pattern: Vec<RequirementsExecPolicyPatternTokenToml>,
@@ -42,6 +42,7 @@ pub struct RequirementsExecPolicyPatternTokenToml {
 pub enum RequirementsExecPolicyDecisionToml {
     Allow,
     Prompt,
+    PromptUser,
     Forbidden,
 }
 
@@ -50,6 +51,7 @@ impl RequirementsExecPolicyDecisionToml {
         match self {
             Self::Allow => Decision::Allow,
             Self::Prompt => Decision::Prompt,
+            Self::PromptUser => Decision::PromptUser,
             Self::Forbidden => Decision::Forbidden,
         }
     }
@@ -79,7 +81,7 @@ pub enum RequirementsExecPolicyParseError {
     MissingDecision { rule_index: usize },
 
     #[error(
-        "rules prefix_rule at index {rule_index} has decision 'allow', which is not permitted in requirements.toml: Codex merges these rules with other config and uses the most restrictive result (use 'prompt' or 'forbidden')"
+        "rules prefix_rule at index {rule_index} has decision 'allow', which is not permitted in requirements.toml: Codex merges these rules with other config and uses the most restrictive result (use 'prompt', 'prompt-user', or 'forbidden')"
     )]
     AllowDecisionNotAllowed { rule_index: usize },
 }

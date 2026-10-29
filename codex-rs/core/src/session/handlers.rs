@@ -177,12 +177,44 @@ pub async fn resolve_elicitation(
 
 /// Propagate a user's exec approval decision to the session.
 /// Also optionally applies an execpolicy amendment.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "bind a human decision to its active turn before resolving it"
+)]
 pub async fn exec_approval(
     sess: &Arc<Session>,
     approval_id: String,
     turn_id: Option<String>,
     decision: ReviewDecision,
 ) {
+    let human_approval = {
+        let active = sess.active_turn.lock().await;
+        let Some(turn) = active.as_ref() else {
+            return;
+        };
+        let mut state = turn.turn_state.lock().await;
+        let Some(pending) = state.pending_approval(&approval_id) else {
+            return;
+        };
+        if pending.kind == codex_protocol::approvals::ExecApprovalKind::HumanCommand {
+            state.remove_pending_approval(&approval_id)
+        } else {
+            None
+        }
+    };
+    if let Some(pending) = human_approval {
+        let decision = pending.validate(decision);
+        if decision == ReviewDecision::Abort {
+            sess.abort_turn_if_active(
+                &pending.turn_id,
+                TurnAbortReason::Interrupted,
+                /*error*/ None,
+            )
+            .await;
+        }
+        pending.sender.send(decision).ok();
+        return;
+    }
     let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
     if let ReviewDecision::ApprovedExecpolicyAmendment {
         proposed_execpolicy_amendment,

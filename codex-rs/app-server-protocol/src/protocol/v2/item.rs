@@ -1644,6 +1644,10 @@ v2_enum_from_core! {
     pub enum CommandExecutionApprovalKind from CoreExecApprovalKind {
         #[default]
         Command,
+        /// A managed checkpoint requiring a fresh human decision. Only `accept`, `decline`, and
+        /// `cancel` are valid. Requires the `requiredHumanApproval` initialize capability.
+        /// This prompt does not itself start a command execution item.
+        HumanCommand,
         WriteStdin,
     }
 }

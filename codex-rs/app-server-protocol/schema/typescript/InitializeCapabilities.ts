@@ -8,6 +8,11 @@ import type { JsonValue } from "./serde_json/JsonValue";
  */
 export type InitializeCapabilities = {
 /**
+ * Present `humanCommand` approvals to a person and return only a one-time decision.
+ * Requires `experimentalApi`. Pending requests can be replayed to compatible clients.
+ */
+requiredHumanApproval?: boolean,
+/**
  * Use explicit gateway OAuth login instead of automatic browser authorization.
  * Applies to this app-server's gateway runtime; later connections cannot undo it.
  */

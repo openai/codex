@@ -128,6 +128,7 @@ async fn non_utf8_cwd_preserves_approval_routing(
     review_context.approval_policy = AskForApproval::OnRequest;
     review_context.approvals_reviewer = reviewer;
     let context = ApprovalContext {
+        exec_requirement: None,
         review_context,
         cancellation_token: None,
         call_id: "non-utf8-cwd".to_string(),
@@ -213,6 +214,7 @@ async fn explicit_mcp_reviewer_override_takes_precedence_over_action_context() {
     review_context.approval_policy = AskForApproval::OnRequest;
     review_context.approvals_reviewer = ApprovalsReviewer::AutoReview;
     let context = ApprovalContext {
+        exec_requirement: None,
         review_context,
         cancellation_token: None,
         call_id: "mcp-override".to_string(),

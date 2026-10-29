@@ -972,6 +972,7 @@ impl UnifiedExecProcessManager {
                 return Err(unreviewable_input_error());
             }
             let approval_context = ApprovalContext {
+                exec_requirement: None,
                 review_context: GuardianReviewContext::from(&context.step_context),
                 cancellation_token: Some(context.cancellation_token.clone()),
                 call_id: context.call_id.clone(),

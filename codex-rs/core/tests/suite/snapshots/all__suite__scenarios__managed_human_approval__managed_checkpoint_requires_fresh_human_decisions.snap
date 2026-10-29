@@ -1,0 +1,46 @@
+---
+source: core/tests/suite/scenarios_managed_human_approval_tests.rs
+expression: snapshot
+---
+Scenario: Managed command checkpoints override saved allow rules and automatic review. Reusable decisions are rejected, and each successful execution requires a fresh human decision.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Run the command.
+-- request 2 (turn) --
+04:function_call/exec_command:{"cmd":"echo checkpoint-ok","login":false,"yield_time_ms":10000}
+05:function_call_output:exec_command failed: CreateProcess { message: "Rejected(\\"Managed command policy requires a one-time human approval.\\")" }
+-- request 3 (turn) --
+06:message/assistant:
+    Done.
+07:message/user:
+    Run the command.
+-- request 4 (turn) --
+08:function_call/exec_command:{"cmd":"echo checkpoint-ok","login":false,"yield_time_ms":10000}
+09:function_call_output:Chunk ID: <CHUNK_ID>
+    Wall time: <DURATION> seconds
+    Process exited with code 0
+    Original token count: <TOKEN_COUNT>
+    Output:
+    checkpoint-ok
+
+-- request 5 (turn) --
+10:message/assistant:
+    Done.
+11:message/user:
+    Run the command.
+-- request 6 (turn) --
+12:function_call/exec_command:{"cmd":"echo checkpoint-ok","login":false,"yield_time_ms":10000}
+13:function_call_output:Chunk ID: <CHUNK_ID>
+    Wall time: <DURATION> seconds
+    Process exited with code 0
+    Original token count: <TOKEN_COUNT>
+    Output:
+    checkpoint-ok

@@ -1604,6 +1604,7 @@ async fn maybe_request_mcp_tool_approval(
         allow_persistent_approval: persistent_approval_key.is_some(),
     };
     let approval_context = ApprovalContext {
+        exec_requirement: None,
         review_context: GuardianReviewContext::from(step_context),
         cancellation_token: Some(cancellation_token.clone()),
         call_id: call_id.to_string(),

@@ -48,6 +48,7 @@ async fn remote() -> (RemoteAppServerClient, tokio::task::JoinHandle<()>) {
         assert!(socket.next().await.unwrap().unwrap().is_close());
     });
     let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        required_human_approval: true,
         endpoint: RemoteAppServerEndpoint::WebSocket {
             websocket_url: format!("ws://{address}"),
             auth_token: None,

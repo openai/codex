@@ -170,6 +170,8 @@ pub(crate) enum ExecApprovalRequirement {
         /// See core/src/exec_policy.rs for more details on how proposed_execpolicy_amendment is determined.
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
+    /// A fresh human decision is required for each execution attempt.
+    NeedsHumanApproval { reason: Option<String> },
     /// Execution forbidden for this tool call.
     Forbidden { reason: String },
 }

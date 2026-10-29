@@ -215,7 +215,7 @@ impl Policy {
                     allowed.retain(|entry| entry != &rule.host);
                     upsert_domain(&mut denied, &rule.host);
                 }
-                Decision::Prompt => {}
+                Decision::Prompt | Decision::PromptUser => {}
             }
         }
 

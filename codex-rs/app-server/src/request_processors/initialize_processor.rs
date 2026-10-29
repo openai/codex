@@ -141,6 +141,11 @@ impl InitializeRequestProcessor {
         {
             return Err(invalid_request("Already initialized"));
         }
+        if experimental_api_enabled && capabilities.required_human_approval {
+            self.outgoing
+                .enable_human_approval_connection(connection_id)
+                .await;
+        }
         if user_verification_enabled {
             self.outgoing
                 .enable_user_verification_connection(connection_id)

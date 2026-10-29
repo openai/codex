@@ -106,6 +106,7 @@ async fn slow_repairing_chat_listing_keeps_estimate_budget_and_ranks_across_page
         pages
     });
     let remote = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        required_human_approval: true,
         endpoint: RemoteAppServerEndpoint::WebSocket {
             websocket_url,
             auth_token: None,

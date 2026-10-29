@@ -2835,6 +2835,7 @@ mod tests {
                     version: "0.1.0".to_string(),
                 },
                 capabilities: Some(v1::InitializeCapabilities {
+                    required_human_approval: false,
                     explicit_gateway_oauth: false,
                     experimental_api: true,
                     request_attestation: true,
@@ -2923,6 +2924,7 @@ mod tests {
                         version: "0.1.0".to_string(),
                     },
                     capabilities: Some(v1::InitializeCapabilities {
+                        required_human_approval: false,
                         explicit_gateway_oauth: false,
                         experimental_api: true,
                         request_attestation: true,

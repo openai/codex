@@ -2554,6 +2554,7 @@ async fn windows_powershell_policy_classifies_only_independent_literal_commands(
                 let actual = match requirement {
                     ExecApprovalRequirement::Skip { .. } => Decision::Allow,
                     ExecApprovalRequirement::NeedsApproval { .. } => Decision::Prompt,
+                    ExecApprovalRequirement::NeedsHumanApproval { .. } => Decision::PromptUser,
                     ExecApprovalRequirement::Forbidden { .. } => Decision::Forbidden,
                 };
                 assert_eq!(

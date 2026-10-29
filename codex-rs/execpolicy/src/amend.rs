@@ -106,6 +106,11 @@ pub fn blocking_append_network_rule(
     let decision = serde_json::to_string(match decision {
         Decision::Allow => "allow",
         Decision::Prompt => "prompt",
+        Decision::PromptUser => {
+            return Err(AmendError::InvalidNetworkRule(
+                "prompt-user is only supported in managed command rules".to_string(),
+            ));
+        }
         Decision::Forbidden => "deny",
     })
     .map_err(|source| AmendError::SerializeNetworkRule { source })?;
