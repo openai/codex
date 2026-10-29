@@ -1526,11 +1526,25 @@ while :; do sleep 1; done"#
     );
     let cancel_token = CancellationToken::new();
     let cancel_tx = cancel_token.clone();
+    let clock_paused = std::cell::Cell::new(false);
     let cancel_when_ready = async {
         while !ready_marker.exists() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+        // Exercise the TERM trap without requiring the OS to schedule the shell
+        // within the production grace period. Keep this future runnable so the
+        // paused clock cannot auto-advance while the real process handles TERM.
+        tokio::time::pause();
+        clock_paused.set(true);
         cancel_tx.cancel();
+        let cleanup_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !matches!(
+            std::fs::read_to_string(&cleanup_marker).as_deref(),
+            Ok("cleaned")
+        ) && std::time::Instant::now() < cleanup_deadline
+        {
+            tokio::task::yield_now().await;
+        }
     };
     let params = ExecParams {
         command,
@@ -1567,6 +1581,9 @@ while :; do sleep 1; done"#
         }
     })
     .await;
+    if clock_paused.get() {
+        tokio::time::resume();
+    }
     if result.is_err() {
         cancel_tx.cancel();
         let _ = execution.await;

@@ -61,8 +61,10 @@ async fn spawned_dispatch_preserves_caller_context(level: LevelFilter) -> anyhow
         tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let _subscriber_guard = tracing::subscriber::set_default(subscriber);
     async {
+        // Retain the fixture until its ambient subscriber is restored.
         // The unknown-tool result still crosses the real spawned dispatch boundary.
         runtime
+            .clone()
             .handle_tool_call(
                 ToolCall {
                     tool_name: codex_tools::ToolName::plain("unknown_tool"),
