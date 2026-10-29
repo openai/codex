@@ -58,6 +58,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use super::footer_content::FooterContent;
 use super::picker_rows;
 use super::picker_style;
 use super::selection_popup_common::ColumnWidthConfig;
@@ -75,7 +76,6 @@ use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
 use crate::keymap::RuntimeKeymap;
-use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::ColumnRenderable;
@@ -110,7 +110,7 @@ pub type CancelCallback = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
 /// Callback to generate an optional preview line based on current item states.
 /// Returns `None` to hide the preview area.
-pub type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync>;
+type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<FooterContent> + Send + Sync>;
 
 /// A single selectable item in the multi-select picker.
 ///
@@ -201,7 +201,7 @@ pub(crate) struct MultiSelectPicker {
     preview_builder: Option<PreviewCallback>,
 
     /// Cached preview line (updated on item changes).
-    preview_line: Option<Line<'static>>,
+    preview_line: Option<FooterContent>,
 
     /// Callback invoked when items change (toggle or reorder).
     on_change: Option<ChangeCallBack>,
@@ -620,16 +620,8 @@ impl Renderable for MultiSelectPicker {
             let [preview_area, hint_area] =
                 Layout::vertical([Constraint::Length(1), Constraint::Length(hint_height)])
                     .areas(footer_area);
-            let preview_area = Rect {
-                x: preview_area.x + 2,
-                y: preview_area.y,
-                width: preview_area.width.saturating_sub(2),
-                height: preview_area.height,
-            };
-            let max_preview_width = preview_area.width.saturating_sub(2) as usize;
-            let preview_line =
-                truncate_line_with_ellipsis_if_overflow(preview_line.clone(), max_preview_width);
-            preview_line.render(preview_area, buf);
+            let preview_area = preview_area.inset(Insets::vh(/*v*/ 0, /*h*/ 2));
+            preview_line.clone().render(preview_area, buf);
             hint_area
         } else {
             footer_area
@@ -715,10 +707,19 @@ impl MultiSelectPickerBuilder {
     ///
     /// The callback receives all items and should return a [`Line`] to display,
     /// or `None` to hide the preview area.
-    pub fn on_preview<F>(mut self, callback: F) -> Self
+    pub fn on_preview<F>(self, callback: F) -> Self
     where
         F: Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync + 'static,
     {
+        self.on_preview_content(move |items| {
+            callback(items).map(|line| FooterContent::HyperlinkLine(line.into()))
+        })
+    }
+
+    pub(crate) fn on_preview_content(
+        mut self,
+        callback: impl Fn(&[MultiSelectItem]) -> Option<FooterContent> + Send + Sync + 'static,
+    ) -> Self {
         self.preview_builder = Some(Box::new(callback));
         self
     }

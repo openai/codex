@@ -90,6 +90,7 @@ pub(crate) use multi_select_picker::MultiSelectPicker;
 mod question_tests;
 mod questions;
 mod request_user_input;
+pub(crate) mod status_line_content;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
@@ -120,6 +121,7 @@ pub(crate) use footer::footer_content;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
+pub(crate) use status_line_style::STATUS_LINE_SEPARATOR;
 pub(crate) use status_line_style::status_line_from_segments;
 pub(crate) use voice_strip::VoiceStripPhase;
 pub(crate) use voice_strip::VoiceStripState;
@@ -1375,8 +1377,8 @@ impl BottomPane {
     }
 
     #[cfg(test)]
-    pub(crate) fn status_line_text(&self) -> Option<String> {
-        self.composer.status_line_text()
+    pub(crate) fn status_line_content(&self) -> Option<&footer_content::FooterContent> {
+        self.composer.status_line_content()
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {

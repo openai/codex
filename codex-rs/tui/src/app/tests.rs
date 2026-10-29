@@ -2174,12 +2174,17 @@ async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
 
 #[tokio::test]
 async fn token_usage_update_refreshes_status_line_with_runtime_context_window() {
+    use crate::bottom_pane::StatusLineItem;
+    use crate::bottom_pane::footer_content::FooterContent;
+
     let mut app = make_test_app().await;
     app.chat_widget.setup_status_line(
-        vec![crate::bottom_pane::StatusLineItem::ContextWindowSize],
+        vec![
+            StatusLineItem::ContextWindowSize,
+            StatusLineItem::UsedTokens,
+        ],
         /*use_theme_colors*/ true,
     );
-
     assert_eq!(
         app.chat_widget.config_panel_tui.status_line,
         app.chat_widget.local_settings.tui.status_line
@@ -2187,14 +2192,31 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
     assert!(app.chat_widget.config_panel_tui.status_line_use_colors);
     assert_eq!(app.chat_widget.status_line_text(), None);
 
-    app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
-        token_usage_notification(ThreadId::new(), "turn-1", Some(950_000)),
-    )));
-
-    assert_eq!(
-        app.chat_widget.status_line_text(),
-        Some("950K window".into())
-    );
+    let thread_id = ThreadId::new();
+    for (extensions, window, expected) in [
+        (false, 950_000, "950K window · 8 used"),
+        (true, 800_000, "800K window · 8 used"),
+        (false, 900_000, "900K window · 8 used"),
+    ] {
+        let before = render_bottom_popup(&app.chat_widget, /*width*/ 60);
+        app.chat_widget
+            .set_feature_enabled(Feature::TuiExtensionsStatusLine, extensions);
+        app.refresh_status_line();
+        assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 60), before);
+        app.handle_thread_event_now(ThreadBufferedEvent::Notification(Box::new(
+            token_usage_notification(thread_id, "turn-1", Some(window)),
+        )));
+        assert!(matches!(
+            (extensions, app.chat_widget.status_line_content()),
+            (false, Some(FooterContent::HyperlinkLine(_)))
+                | (true, Some(FooterContent::Extension { .. }))
+        ));
+        let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 60);
+        assert!(
+            rendered.lines().any(|row| row.trim() == expected),
+            "{rendered}"
+        );
+    }
 }
 
 #[tokio::test]

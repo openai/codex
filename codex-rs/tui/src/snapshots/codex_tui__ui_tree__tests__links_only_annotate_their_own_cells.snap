@@ -1,0 +1,16 @@
+---
+source: tui/src/ui_tree_tests.rs
+assertion_line: 42
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 16, height: 1 },
+    content: [
+        "界 ]8;;https://example.com/pr/42P]8;;]8;;https://example.com/pr/42R]8;;]8;;https://example.com/pr/42 ]8;;]8;;https://example.com/pr/42#]8;;]8;;https://example.com/pr/424]8;;]8;;https://example.com/pr/422]8;;       ", // hidden by multi-width symbols: [(1, " ")]
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: UNDERLINED,
+        x: 9, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

@@ -5,6 +5,7 @@
 //! history-facing `/status` surface.
 
 use super::*;
+use crate::bottom_pane::footer_content::FooterContent;
 use crate::status::thread_cost_micros;
 
 impl ChatWidget {
@@ -83,9 +84,8 @@ impl ChatWidget {
     }
 
     /// Sets the currently rendered footer status-line value.
-    pub(crate) fn set_status_line(&mut self, status_line: Option<HyperlinkLine>) {
-        self.bottom_pane
-            .set_status_line(status_line.map(Into::into));
+    pub(crate) fn set_status_line(&mut self, status_line: Option<FooterContent>) {
+        self.bottom_pane.set_status_line(status_line);
     }
 
     /// Forwards the contextual active-agent label into the bottom-pane footer pipeline.
@@ -368,6 +368,8 @@ impl ChatWidget {
             }),
         );
         preview_data.thread_id = self.thread_id;
+        preview_data.renderer = self.status_line_renderer();
+        preview_data.pull_request_url = self.status_line_pull_request_url().map(str::to_owned);
 
         if self.rate_limit_snapshots_by_limit_id.contains_key("codex") {
             for item in [

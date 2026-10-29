@@ -4,7 +4,7 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
-use crate::bottom_pane::status_line_from_segments;
+use crate::bottom_pane::status_line_content::StatusLineRenderer;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
@@ -216,12 +216,25 @@ impl ChatWidget {
             }
         }
 
-        self.set_status_line(status_line_from_segments(
+        let content = self.status_line_renderer().content(
             segments,
             self.local_settings.tui.status_line_use_colors,
             self.thread_id,
             self.status_line_pull_request_url(),
-        ));
+        );
+        self.set_status_line(content);
+    }
+
+    pub(super) fn status_line_renderer(&self) -> StatusLineRenderer {
+        if self
+            .config
+            .features
+            .enabled(Feature::TuiExtensionsStatusLine)
+        {
+            StatusLineRenderer::Extension
+        } else {
+            StatusLineRenderer::Native
+        }
     }
 
     /// Clears the terminal title Codex most recently wrote, if any.
@@ -846,7 +859,7 @@ impl ChatWidget {
         }
     }
 
-    fn status_line_pull_request_url(&self) -> Option<&str> {
+    pub(super) fn status_line_pull_request_url(&self) -> Option<&str> {
         self.status_line_git_summary
             .as_ref()
             .and_then(|summary| summary.pull_request.as_ref())

@@ -123,6 +123,8 @@ pub enum Feature {
     DaemonAutoStart,
     /// Allow the TUI to discover and select among multiple conversation backends.
     TuiMultiBackend,
+    /// Render the configured status line through the experimental TUI Extensions renderer.
+    TuiExtensionsStatusLine,
     /// Enable negotiated zstd compression for app-server WebSocket and UDS connections.
     AppServerWebSocketCompression,
 
@@ -1095,6 +1097,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiMultiBackend,
         key: "tui_multi_backend",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TuiExtensionsStatusLine,
+        key: "tui_extensions_statusline",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

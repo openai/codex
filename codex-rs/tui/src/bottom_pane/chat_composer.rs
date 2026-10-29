@@ -1843,8 +1843,8 @@ impl ChatComposer {
     }
 
     #[cfg(test)]
-    pub(crate) fn status_line_text(&self) -> Option<String> {
-        self.footer.status_line_text()
+    pub(crate) fn status_line_content(&self) -> Option<&FooterContent> {
+        self.footer.status_line_value.as_ref()
     }
 
     pub(crate) fn local_images(&self) -> Vec<LocalImageAttachment> {

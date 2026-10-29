@@ -398,16 +398,6 @@ impl FooterState {
             .unwrap_or_else(Instant::now);
         self.flash = Some(FooterFlash { line, expires_at });
     }
-
-    #[cfg(test)]
-    pub(super) fn status_line_text(&self) -> Option<String> {
-        self.status_line_value
-            .as_ref()
-            .map(|content| match content {
-                FooterContent::Line(line) => line.to_string(),
-                FooterContent::HyperlinkLine(line) => line.line.to_string(),
-            })
-    }
 }
 
 #[cfg(test)]

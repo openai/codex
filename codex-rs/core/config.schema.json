@@ -1395,6 +1395,9 @@
             "tui_app_server": {
               "type": "boolean"
             },
+            "tui_extensions_statusline": {
+              "type": "boolean"
+            },
             "tui_multi_backend": {
               "type": "boolean"
             },
@@ -8048,6 +8051,9 @@
           "type": "boolean"
         },
         "tui_app_server": {
+          "type": "boolean"
+        },
+        "tui_extensions_statusline": {
           "type": "boolean"
         },
         "tui_multi_backend": {

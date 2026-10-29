@@ -818,15 +818,16 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<FooterCo
         .status_line_value
         .as_ref()
         .filter(|_| props.status_line_enabled);
+    let mut line = match status {
+        Some(FooterContent::Line(line)) => HyperlinkLine::from(line.clone()),
+        Some(FooterContent::HyperlinkLine(line)) => line.clone(),
+        Some(content @ FooterContent::Extension { .. }) => return Some(content.clone()),
+        None => HyperlinkLine::default(),
+    };
     let suffix = passive_footer_suffix(props, status.is_some());
     if status.is_none() && suffix.spans.is_empty() {
         return None;
     }
-    let mut line = match status {
-        Some(FooterContent::Line(line)) => HyperlinkLine::from(line.clone()),
-        Some(FooterContent::HyperlinkLine(line)) => line.clone(),
-        None => HyperlinkLine::default(),
-    };
     if line.width() > 0 && suffix.width() > 0 {
         line.line
             .push_span(STATUS_LINE_SEPARATOR.set_style(secondary_text_style()));

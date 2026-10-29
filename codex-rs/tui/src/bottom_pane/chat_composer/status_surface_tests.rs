@@ -22,6 +22,54 @@ fn composer() -> ChatComposer {
     composer
 }
 
+#[test]
+fn extension_status_line_clips_links_to_footer_layout() {
+    let mut composer = composer();
+    let tree = serde_json::from_value(serde_json::json!({
+        "type": "row", "props": {}, "children": [
+            { "type": "text", "props": { "text": "plain" } },
+            { "type": "row", "props": {}, "children": [
+                { "type": "text", "props": { "text": " · " } },
+                { "type": "link", "props": { "href": "https://example.com/pr/42" }, "children": [
+                    { "type": "text", "props": { "text": "PR #42" } }
+                ] }
+            ] }
+        ]
+    }))
+    .unwrap();
+    composer.set_status_line(Some(FooterContent::Extension { content: tree }));
+
+    for separate_status_line in [false, true] {
+        for width in [12, 40] {
+            let options = composer.resolve_render_options(ComposerRenderOptions {
+                separate_status_line,
+                ..ComposerRenderOptions::default()
+            });
+            let area = Rect::new(
+                /*x*/ 0,
+                /*y*/ 0,
+                width,
+                composer.desired_height_with_options(width, options),
+            );
+            let mut buffer = Buffer::empty(area);
+            composer.render_with_options(area, &mut buffer, /*mask_char*/ None, options);
+            let linked = buffer
+                .content
+                .iter()
+                .filter(|cell| cell.symbol().contains("https://example.com/pr/42"))
+                .collect::<Vec<_>>();
+            assert_eq!(linked.len(), if width == 12 { 1 } else { 6 }, "{buffer:?}");
+            assert!(linked.iter().all(|cell| !cell.symbol().contains('…')));
+            assert!(buffer.content.iter().any(|cell| cell.symbol() == "p"));
+        }
+    }
+
+    composer.set_active_agent_label(Some("bot".to_string()));
+    let (output, _) = render(&composer, /*width*/ 40, /*footer*/ None);
+    assert!(output.contains("plain"), "{output}");
+    assert!(!output.contains("bot"), "{output}");
+}
+
 fn render(
     composer: &ChatComposer,
     width: u16,

@@ -8,12 +8,14 @@ use ratatui::widgets::Widget;
 
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::ui_tree::UiNode;
 
 /// Owned content for the footer's negotiated left-hand area.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FooterContent {
     Line(Line<'static>),
     HyperlinkLine(HyperlinkLine),
+    Extension { content: UiNode },
 }
 
 impl FooterContent {
@@ -22,6 +24,7 @@ impl FooterContent {
         let width = match self {
             Self::Line(line) => line.width(),
             Self::HyperlinkLine(line) => line.width(),
+            Self::Extension { content } => content.render_line(u16::MAX).width(),
         };
         u16::try_from(width).unwrap_or(u16::MAX)
     }
@@ -30,6 +33,7 @@ impl FooterContent {
     pub(crate) fn render(self, area: Rect, buf: &mut Buffer) {
         match self {
             Self::Line(line) => Widget::render(line, area, buf),
+            Self::Extension { content } => content.render_line(area.width).render_fitted(area, buf),
             Self::HyperlinkLine(mut line) => {
                 let area = Rect {
                     height: area.height.min(1),
@@ -51,6 +55,7 @@ impl FooterContent {
         match self {
             Self::Line(line) => line.into(),
             Self::HyperlinkLine(line) => line,
+            Self::Extension { content } => content.render_line(u16::MAX),
         }
     }
 }
