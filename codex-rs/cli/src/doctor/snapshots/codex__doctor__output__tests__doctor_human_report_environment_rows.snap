@@ -8,6 +8,7 @@ Notes
    ↑ desktop      build 123 available (ready to install)
    ⚠ terminal     narrow terminal
    ✗ auth         token expired - Run `codex login`.
+   ✗ network      provider is unreachable - A macOS system proxy is configured but unused. If your organization requires it, ask your administrator whether to enable the experimental System proxy setting in `/experimental` or with `codex features enable respect_system_proxy`. Restart Codex after changing this setting.
    ⚠ git          this worktree is not on a Windows Dev Drive - create a trusted Windows Dev Drive: https://learn.microsoft.com/en-us/windows/dev-drive/
    ⚠ security     Microsoft Defender can interfere with Codex. Verify Codex exclusions.
 ─────────────────────────────────────────────────────────────
@@ -65,6 +66,7 @@ Updates
 
 Connectivity
   ✓ network      network environment readable
+  ✗ network      provider is unreachable — A macOS system proxy is configured but unused. If your organization requires it, ask your administrator whether to enable the experimental System proxy setting in `/experimental` or with `codex features enable respect_system_proxy`. Restart Codex after changing this setting.
   ✓ websocket    Responses WebSocket handshake succeeded
   ✓ reachability active provider endpoints are reachable over HTTP
 
@@ -72,7 +74,7 @@ Background Server
   ✓ app-server   background server is not running
 
 ─────────────────────────────────────────────────────────────
-16 ok · 5 notes · 3 warn · 1 fail failed
+16 ok · 6 notes · 3 warn · 2 fail failed
 
 --summary compact output           --all expand truncated lists
 --json redacted report

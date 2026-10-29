@@ -1416,6 +1416,15 @@ Background Server
     fn render_human_report_snapshot_covers_environment_rows() {
         let mut report = sample_report();
         report.checks.push(
+            DoctorCheck::new(
+                "network.reachability",
+                "network",
+                CheckStatus::Fail,
+                "provider is unreachable",
+            )
+            .remediation(super::super::network::SYSTEM_PROXY_REMEDIATION),
+        );
+        report.checks.push(
             DoctorCheck::new("config.load", "config", CheckStatus::Ok, "config loaded")
                 .detail("configured TUI mode: fullscreen"),
         );
