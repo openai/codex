@@ -1051,6 +1051,68 @@ async fn file_system_full_disk_read_skips_sandbox_only_for_reads() -> Result<()>
     Ok(())
 }
 
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_disk_reads_reject_foreign_permission_paths(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let tmp = TempDir::new()?;
+    let file = tmp.path().join("note.txt");
+    std::fs::write(&file, b"note")?;
+    let file = PathUri::from_host_native_path(file)?;
+    let root = PathUri::from_host_native_path(tmp.path())?;
+    let foreign = PathUri::parse(if cfg!(windows) {
+        "file:///private"
+    } else {
+        "file:///C:/private"
+    })?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(foreign.clone().into(), FileSystemAccessMode::Write),
+    ]);
+    let sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        root.clone(),
+    );
+    let fs = context.file_system;
+    for result in [
+        fs.canonicalize(&file, Some(&sandbox)).await.map(|_| ()),
+        fs.read_file(&file, Default::default(), Some(&sandbox))
+            .await
+            .map(|_| ()),
+        fs.read_file_stream(&file, Some(&sandbox)).await.map(|_| ()),
+        fs.get_metadata(&file, Default::default(), Some(&sandbox))
+            .await
+            .map(|_| ()),
+        fs.read_directory(&root, Some(&sandbox)).await.map(|_| ()),
+        fs.walk(
+            &root,
+            WalkOptions {
+                max_depth: 1,
+                max_directories: 1,
+                max_entries: 1,
+                follow_directory_symlinks: false,
+                prune_hidden_directories: false,
+            },
+            Some(&sandbox),
+        )
+        .await
+        .map(|_| ()),
+    ] {
+        let error = result.expect_err("foreign permission paths must not bypass validation");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains(&foreign.to_string()));
+    }
+    Ok(())
+}
+
 /// A stream already opened under one environment remains usable after its accessor is dropped;
 /// cache keys still distinguish a new filesystem or changed captured permissions.
 #[test_case(FileSystemImplementation::Local ; "local")]

@@ -825,11 +825,7 @@ async fn check_acquisition(enabled: bool, version: &'static str) -> Result<()> {
             "explicit mentions must read through the captured executor"
         );
         for read in reads {
-            assert!(read["params"]["sandbox"].is_object());
-            assert_eq!(
-                read["params"]["sandbox"]["policyContext"]["cwd"],
-                json!(cwd)
-            );
+            assert!(read["params"]["sandbox"].is_null());
         }
     }
     let discovery = requests

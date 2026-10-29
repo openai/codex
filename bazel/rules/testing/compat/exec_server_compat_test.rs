@@ -10,6 +10,7 @@ use codex_exec_server::CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR;
 use codex_exec_server::CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR;
 use codex_exec_server::CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server_test_support::relay::TEST_TIMEOUT as VERSION_SKEW_TIMEOUT;
 use codex_exec_server_test_support::relay::accept_websocket;
 use codex_exec_server_test_support::relay::assert_relay_data_is_encrypted;
@@ -83,7 +84,28 @@ fn version_skew_binaries() -> Result<Option<(PathBuf, PathBuf)>> {
 
 async fn assert_noise_version_skew(app_binary: &Path, executor_binary: &Path) -> Result<()> {
     let codex_home = TempDir::new()?;
-    let model = mock_model(codex_home.path()).await?;
+    let workspace = TempDir::new()?;
+    let skill_dir = workspace.path().join(".agents/skills/version-skew");
+    std::fs::create_dir_all(&skill_dir)?;
+    let skill_path = skill_dir.join("SKILL.md");
+    let skill_body = "Repository instructions loaded across executor versions.";
+    std::fs::write(
+        &skill_path,
+        format!(
+            "---\nname: version-skew\ndescription: Check executor compatibility.\n---\n{skill_body}\n"
+        ),
+    )?;
+    let selected_root = workspace.path().join("selected-skills");
+    let selected_skill_dir = selected_root.join("selected-version-skew");
+    std::fs::create_dir_all(&selected_skill_dir)?;
+    let selected_skill_body = "Selected instructions loaded across executor versions.";
+    std::fs::write(
+        selected_skill_dir.join("SKILL.md"),
+        format!(
+            "---\nname: selected-version-skew\ndescription: Check selected skill compatibility.\n---\n{selected_skill_body}\n"
+        ),
+    )?;
+    let model = mock_model(workspace.path()).await?;
     let model_url = model.uri();
     std::fs::write(
         codex_home.path().join("config.toml"),
@@ -91,8 +113,12 @@ async fn assert_noise_version_skew(app_binary: &Path, executor_binary: &Path) ->
             r#"
 model = "mock-model"
 approval_policy = "never"
-sandbox_mode = "danger-full-access"
+sandbox_mode = "workspace-write"
 model_provider = "mock_provider"
+
+[features]
+executor_capability_discovery = false
+executor_capability_discovery_v2 = false
 
 [model_providers.mock_provider]
 name = "Mock provider"
@@ -228,7 +254,17 @@ stream_max_retries = 0
         &mut notifications,
         /*id*/ 2,
         "thread/start",
-        json!({"cwd": codex_home.path()}),
+        json!({
+            "cwd": workspace.path(),
+            "selectedCapabilityRoots": [{
+                "id": "version-skew-selected",
+                "location": {
+                    "type": "environment",
+                    "environmentId": REMOTE_ENVIRONMENT_ID,
+                    "path": selected_root,
+                },
+            }],
+        }),
     )
     .await?;
     let thread_id = thread["thread"]["id"]
@@ -244,8 +280,12 @@ stream_max_retries = 0
             "threadId": thread_id,
             "input": [{
                 "type": "text",
-                "text": "run the Noise compatibility command",
+                "text": "Use $selected-version-skew and run the Noise compatibility command.",
                 "textElements": [],
+            }, {
+                "type": "skill",
+                "name": "version-skew",
+                "path": skill_path,
             }],
         }),
     )
@@ -263,9 +303,29 @@ stream_max_retries = 0
     }
 
     assert_eq!(
-        std::fs::read_to_string(codex_home.path().join("version-skew-output.txt"))?,
+        std::fs::read_to_string(workspace.path().join("version-skew-output.txt"))?,
         EXPECTED_OUTPUT
     );
+    let requests = model.received_requests().await.context("model requests")?;
+    let first_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/v1/responses")
+        .context("model response request")?;
+    let first_request: Value = serde_json::from_slice(&first_request.body)?;
+    let input = first_request["input"].as_array().context("model input")?;
+    assert!(input.iter().any(|item| {
+        item["role"] == "developer"
+            && item["content"]
+                .to_string()
+                .contains("selected-version-skew")
+    }));
+    for body in [skill_body, selected_skill_body] {
+        assert!(
+            input
+                .iter()
+                .any(|item| item["role"] == "user" && item["content"].to_string().contains(body))
+        );
+    }
     assert_relay_data_is_encrypted(&captured_frames)?;
     registry.verify().await;
     model.verify().await;

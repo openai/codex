@@ -44,6 +44,12 @@ impl Environment {
                         .to_string(),
                 ));
             }
+            if params.sandbox.as_ref().is_some_and(|sandbox| {
+                sandbox.windows_sandbox_selection == crate::WindowsSandboxSelection::Mxc
+            }) {
+                crate::sandbox_selection::validate_remote_mxc(&info)
+                    .map_err(|error| ExecServerError::Protocol(error.to_string()))?;
+            }
             client.discover_capabilities_v2(params.clone()).await
         };
         self.discover_with_recovery(connection_state, discover)

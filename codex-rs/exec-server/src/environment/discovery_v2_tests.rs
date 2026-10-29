@@ -111,6 +111,23 @@ async fn discovery_checks_version_and_retries_disconnect(
         return Ok(());
     }
     assert_eq!(response?, DiscoverV2CapabilitiesResponse::default());
+    let mut sandbox = crate::FileSystemSandboxContext::from_permission_profile(
+        codex_protocol::models::PermissionProfile::read_only(),
+        params.cwd.clone(),
+    );
+    sandbox.windows_sandbox_selection = crate::WindowsSandboxSelection::Mxc;
+    let error = environment
+        .discover_capabilities_v2(DiscoverV2CapabilitiesRequest {
+            sandbox: Some(sandbox),
+            ..params.clone()
+        })
+        .await
+        .expect_err("MXC must not be sent to an executor that cannot enforce it");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support the requested MXC Windows sandbox")
+    );
     assert_eq!(
         *attempts.lock().await,
         vec![

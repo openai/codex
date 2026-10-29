@@ -135,7 +135,7 @@ async fn capability_discovery_without_sandbox_support_only_sends_full_disk_reads
                     if let Message::Text(text) = &message {
                         let request: serde_json::Value = serde_json::from_str(text.as_ref())?;
                         if request.get("method").and_then(serde_json::Value::as_str)
-                            == Some(CAPABILITY_ROOTS_DISCOVER_METHOD)
+                            .is_some_and(|method| method == CAPABILITY_ROOTS_DISCOVER_METHOD || method.starts_with("fs/"))
                         {
                             requests_tx.send(request)?;
                         }
@@ -149,6 +149,8 @@ async fn capability_discovery_without_sandbox_support_only_sends_full_disk_reads
                         for pointer in [
                             "/result/environmentInfo/capabilities/capabilityDiscoverySandbox",
                             "/result/capabilities/capabilityDiscoverySandbox",
+                            "/result/environmentInfo/capabilities/windowsMxc",
+                            "/result/capabilities/windowsMxc",
                         ] {
                             if let Some(capability) = response.pointer_mut(pointer) {
                                 *capability = false.into();
@@ -228,8 +230,8 @@ async fn capability_discovery_without_sandbox_support_only_sends_full_disk_reads
             roots: vec![
                 request.clone(),
                 CapabilityRootDiscoverRequest {
-                    sandbox: Some(restricted),
-                    ..request
+                    sandbox: Some(restricted.clone()),
+                    ..request.clone()
                 },
             ],
         })
@@ -239,6 +241,38 @@ async fn capability_discovery_without_sandbox_support_only_sends_full_disk_reads
         error
             .to_string()
             .contains("exec-server does not support sandboxed capability discovery")
+    );
+    assert_eq!(
+        requests_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    );
+
+    let mut unsupported = restricted;
+    unsupported.windows_sandbox_selection = codex_exec_server::WindowsSandboxSelection::Mxc;
+    let error = environment
+        .discover_capability_roots(CapabilityRootsDiscoverParams {
+            roots: vec![CapabilityRootDiscoverRequest {
+                sandbox: Some(unsupported.clone()),
+                ..request.clone()
+            }],
+        })
+        .await
+        .expect_err("unsupported MXC must not reach an older decoder");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support the requested MXC Windows sandbox")
+    );
+    let error = environment
+        .get_filesystem()
+        .get_metadata(&request.path, Default::default(), Some(&unsupported))
+        .await
+        .expect_err("host discovery must fail closed too");
+    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+    assert!(
+        error
+            .to_string()
+            .contains("does not support the requested MXC Windows sandbox")
     );
     assert_eq!(
         requests_rx.try_recv(),

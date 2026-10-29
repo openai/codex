@@ -45,11 +45,11 @@ use crate::protocol::InitializeResponse;
 use crate::protocol::WireFsGetMetadataParams;
 use crate::protocol::WireFsReadFileParams;
 
-/// Absolute policies preserve foreign selection paths without adding legacy policy directories.
+/// Foreign paths retain read restrictions; unrestricted reads stay compatible with old executors.
 #[tokio::test]
 async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conversion() {
     let (websocket_url, captured_params, server) =
-        record_read_file_params(/*expected_requests*/ 2).await;
+        record_read_file_params(/*expected_requests*/ 4).await;
     let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
         ExecServerTransportParams::websocket_url(
             websocket_url,
@@ -87,15 +87,38 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         );
     }
 
+    for permission_profile in [
+        PermissionProfile::read_only(),
+        PermissionProfile::workspace_write(),
+    ] {
+        let read_access = FileSystemSandboxContext::from_permission_profile(
+            permission_profile,
+            sandbox.cwd.clone(),
+        );
+        file_system
+            .read_file(&paths[0], Default::default(), Some(&read_access))
+            .await
+            .expect("unrestricted reads should succeed");
+    }
+
     let captured_params = captured_params.await.expect("captured params");
-    let expected_params = paths
-        .into_iter()
+    let mut expected_params = paths
+        .iter()
+        .cloned()
         .map(|path| FsReadFileParams {
             path,
             follow_symlinks: None,
             sandbox: Some(sandbox.clone()),
         })
         .collect::<Vec<_>>();
+    expected_params.extend(vec![
+        FsReadFileParams {
+            path: paths[0].clone(),
+            follow_symlinks: None,
+            sandbox: None,
+        };
+        2
+    ]);
     assert_eq!(
         captured_params
             .iter()
@@ -107,7 +130,7 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         "cwd": sandbox.cwd,
         "workspaceRoots": sandbox.workspace_roots,
     });
-    for (_, raw_sandbox) in captured_params {
+    for (_, raw_sandbox) in &captured_params[..2] {
         assert_eq!(
             (
                 raw_sandbox.get("cwd"),
@@ -118,6 +141,70 @@ async fn remote_file_system_sends_path_and_sandbox_cwd_uris_without_native_conve
         );
     }
     server.await.expect("recording server should succeed");
+}
+
+#[tokio::test]
+async fn remote_full_disk_reads_preserve_executor_permission_path_validation() {
+    let cases = [
+        ("file:///workspace", "file:///allowed", false),
+        ("file:///workspace", "file:///C:/allowed", true),
+        ("file:///C:/workspace", "file:///C:/allowed", false),
+        ("file:///C:/workspace", "file://server/share/allowed", false),
+        ("file:///C:/workspace", "file:///allowed", true),
+        ("file:///C:/workspace", "file:///C:/allowed%5Csecret", true),
+        ("file:///workspace", "file:///%00/bad/path/YQ", true),
+    ];
+    let (websocket_url, captured_params, server) = record_read_file_params(cases.len()).await;
+    let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(
+            websocket_url,
+            DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        ),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    ));
+    let mut expected_params = Vec::new();
+    for (cwd, permission_path, retain_sandbox) in cases {
+        let cwd = PathUri::parse(cwd).expect("executor cwd");
+        let path = cwd.join("readable.txt").expect("executor file");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                PathUri::parse(permission_path)
+                    .expect("permission path")
+                    .into(),
+                FileSystemAccessMode::Write,
+            ),
+        ]);
+        let sandbox = FileSystemSandboxContext::from_permission_profile(
+            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+            // Policy cwd is caller-supplied; only the operation path must be native to succeed.
+            PathUri::parse(permission_path).expect("deliberately mismatched policy cwd"),
+        );
+        file_system
+            .read_file(&path, Default::default(), Some(&sandbox))
+            .await
+            .expect("remote read");
+        expected_params.push(FsReadFileParams {
+            path,
+            follow_symlinks: None,
+            sandbox: retain_sandbox.then_some(sandbox),
+        });
+    }
+    assert_eq!(
+        captured_params
+            .await
+            .expect("captured params")
+            .into_iter()
+            .map(|(params, _)| params)
+            .collect::<Vec<_>>(),
+        expected_params,
+    );
+    server.await.expect("recording server");
 }
 
 /// Only dynamic policies retain legacy selection fields; all policies preserve the new context.
@@ -745,8 +832,8 @@ async fn record_read_file_params(
             let raw_params = request.params.expect("fs/readFile params should exist");
             let raw_sandbox = raw_params
                 .get("sandbox")
-                .expect("fs/readFile sandbox should exist")
-                .clone();
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let params = serde_json::from_value::<WireFsReadFileParams>(raw_params)
                 .expect("fs/readFile wire params should deserialize")
                 .try_into_request(|wire| {

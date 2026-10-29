@@ -1072,6 +1072,15 @@ impl Environment {
                 let client = client.get().await?;
                 let discover = || async {
                     if params.roots.iter().any(|root| {
+                        root.sandbox.as_ref().is_some_and(|sandbox| {
+                            sandbox.windows_sandbox_selection == crate::WindowsSandboxSelection::Mxc
+                        })
+                    }) {
+                        let info = client.environment_info().await?;
+                        crate::sandbox_selection::validate_remote_mxc(&info)
+                            .map_err(|error| ExecServerError::Protocol(error.to_string()))?;
+                    }
+                    if params.roots.iter().any(|root| {
                         root.sandbox
                             .as_ref()
                             .is_some_and(crate::FileSystemSandboxContext::should_read_from_sandbox)

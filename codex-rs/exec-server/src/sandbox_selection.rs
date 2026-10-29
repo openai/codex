@@ -1,4 +1,4 @@
-//! Resolves an executor sandbox context to a concrete local sandbox implementation.
+//! Resolves local sandbox implementations and checks support for an explicitly selected remote MXC.
 
 use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::WindowsSandboxSelection;
@@ -7,6 +7,16 @@ use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+
+pub(crate) fn validate_remote_mxc(info: &crate::EnvironmentInfo) -> std::io::Result<()> {
+    if !info.capabilities.windows_mxc {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "exec-server does not support the requested MXC Windows sandbox; update the executor",
+        ));
+    }
+    Ok(())
+}
 
 pub(crate) fn select_sandbox(
     manager: &SandboxManager,
