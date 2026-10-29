@@ -14,6 +14,8 @@ pub(crate) use input_budget::check_pending as check_pending_guardian_input;
 pub(crate) use input_budget::finalize as finalize_guardian_input;
 pub(crate) use input_budget::should_compact as should_compact_guardian_input;
 pub(crate) use permissions::for_tool as tool_permission_context;
+mod recorded_tool_call;
+pub(crate) use recorded_tool_call::review_tool_call;
 mod request_budget;
 pub(crate) use request_budget::ExhaustedReviewBudget;
 pub(crate) use request_budget::prepare_prompt as prepare_guardian_prompt;

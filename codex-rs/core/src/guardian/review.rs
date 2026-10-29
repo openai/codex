@@ -195,10 +195,6 @@ impl ReviewInput {
     }
 
     /// Assess the supplied request in a fresh reviewer without publishing a live approval.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the recorded-call stack layer")
-    )]
     pub(super) async fn assess_isolated(
         self,
         deadline: ReviewDeadline,

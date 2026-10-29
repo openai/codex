@@ -162,8 +162,8 @@ where
 }
 
 #[derive(Deserialize)]
-struct ToolEnvironmentArgs {
-    environment_id: Option<String>,
+pub(crate) struct ToolEnvironmentArgs {
+    pub(crate) environment_id: Option<String>,
 }
 
 fn function_tool_environment<T: serde::de::DeserializeOwned>(
@@ -197,7 +197,7 @@ fn selected_executor<'a>(
     }
 }
 
-fn resolve_tool_environment<'a>(
+pub(crate) fn resolve_tool_environment<'a>(
     environments: &'a TurnEnvironmentSnapshot,
     environment_id: Option<&str>,
 ) -> Result<&'a TurnEnvironment, FunctionCallError> {

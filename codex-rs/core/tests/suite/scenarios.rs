@@ -150,6 +150,9 @@ mod partial_answers;
 #[path = "scenarios_guardian_sender_context.rs"]
 mod guardian_sender_context;
 
+#[path = "scenarios_guardian_direct_review.rs"]
+mod guardian_direct_review;
+
 #[path = "scenarios_guardian_extra_policy.rs"]
 mod guardian_extra_policy;
 
