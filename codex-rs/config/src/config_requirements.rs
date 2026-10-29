@@ -1115,6 +1115,7 @@ pub struct ConfigRequirementsToml {
 #[serde(deny_unknown_fields)]
 pub struct OtelRequirementsToml {
     pub tool_result: Option<ToolResultLogConfig>,
+    pub log_sse_deltas: Option<bool>,
     pub log_user_prompt: Option<bool>,
     pub log_agent_responses: Option<bool>,
     pub log_guardian_assessments: Option<bool>,
@@ -1129,6 +1130,7 @@ pub struct OtelRequirementsToml {
 impl OtelRequirementsToml {
     pub(crate) fn is_empty(&self) -> bool {
         self.tool_result.is_none()
+            && self.log_sse_deltas.is_none()
             && self.log_user_prompt.is_none()
             && self.log_agent_responses.is_none()
             && self.log_guardian_assessments.is_none()
@@ -1772,7 +1774,7 @@ impl ConfigRequirementsToml {
             return Some("model_providers");
         }
         let otel = self.otel.as_ref();
-        let managed_fields: [(bool, &[&str], &'static str); 17] = [
+        let managed_fields: [(bool, &[&str], &'static str); 18] = [
             (
                 self.model_provider.is_some(),
                 &["model_provider"],
@@ -1822,6 +1824,11 @@ impl ConfigRequirementsToml {
                 otel.is_some_and(|otel| otel.log_user_prompt.is_some()),
                 &["otel", "log_user_prompt"],
                 "otel.log_user_prompt",
+            ),
+            (
+                otel.is_some_and(|otel| otel.log_sse_deltas.is_some()),
+                &["otel", "log_sse_deltas"],
+                "otel.log_sse_deltas",
             ),
             (
                 otel.is_some_and(|otel| otel.log_agent_responses.is_some()),
@@ -1914,6 +1921,7 @@ macro_rules! otel_merge_functions {
 
 otel_merge_functions!(
     tool_result,
+    log_sse_deltas,
     log_user_prompt,
     log_agent_responses,
     log_guardian_assessments,
@@ -2563,6 +2571,7 @@ mod tests {
     #[test_case::test_case(&["otel", "tool_result"], Some("otel.tool_result"); "tool_result")]
     #[test_case::test_case(&["otel", "tool_result", "max_bytes"], Some("otel.tool_result"); "tool_result_max_bytes")]
     #[test_case::test_case(&["otel", "log_user_prompt"], Some("otel.log_user_prompt"); "log_user_prompt")]
+    #[test_case::test_case(&["otel", "log_sse_deltas"], Some("otel.log_sse_deltas"); "log_sse_deltas")]
     #[test_case::test_case(&["otel", "environment"], Some("otel.environment"); "environment")]
     #[test_case::test_case(&["otel", "exporter", "otlp-http", "endpoint"], Some("otel.exporter"); "exporter_endpoint")]
     #[test_case::test_case(&["otel", "trace_exporter"], Some("otel.trace_exporter"); "trace_exporter")]
@@ -2586,6 +2595,7 @@ mod tests {
 tool_result = { max_bytes = 1024 }
 log_user_prompt = false
 environment = "managed"
+log_sse_deltas = false
 exporter = "none"
 trace_exporter = "none"
 metrics_exporter = "none"
@@ -2599,6 +2609,7 @@ tracestate = { managed = { tenant = "enterprise" }, empty = {} }
 tool_result = { max_bytes = 4096 }
 log_user_prompt = true
 environment = "user"
+log_sse_deltas = true
 exporter = "statsig"
 trace_exporter = { otlp-grpc = { endpoint = "https://user.example" } }
 metrics_exporter = "statsig"
@@ -2616,6 +2627,7 @@ tracestate = { managed = { tenant = "user", region = "us" }, other = { keep = "y
 tool_result = { max_bytes = 1024 }
 log_user_prompt = false
 environment = "managed"
+log_sse_deltas = false
 exporter = "none"
 trace_exporter = "none"
 metrics_exporter = "none"

@@ -9257,6 +9257,7 @@ class OtelRequirements(BaseModel):
     exporter: OtelExporter | None = None
     log_agent_responses: bool | None = None
     log_guardian_assessments: bool | None = None
+    log_sse_deltas: bool | None = None
     log_user_prompt: bool | None = None
     metrics_exporter: OtelExporter | None = None
     span_attributes: dict[str, Any] | None = None

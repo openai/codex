@@ -4,4 +4,4 @@
 import type { OtelExporter } from "./OtelExporter";
 import type { OtelToolResultLogConfig } from "./OtelToolResultLogConfig";
 
-export type OtelRequirements = { tool_result: OtelToolResultLogConfig | null, log_user_prompt: boolean | null, log_agent_responses: boolean | null, log_guardian_assessments: boolean | null, environment: string | null, exporter: OtelExporter | null, trace_exporter: OtelExporter | null, metrics_exporter: OtelExporter | null, span_attributes: { [key in string]?: string } | null, tracestate: { [key in string]?: { [key in string]?: string } } | null, };
+export type OtelRequirements = { tool_result: OtelToolResultLogConfig | null, log_sse_deltas: boolean | null, log_user_prompt: boolean | null, log_agent_responses: boolean | null, log_guardian_assessments: boolean | null, environment: string | null, exporter: OtelExporter | null, trace_exporter: OtelExporter | null, metrics_exporter: OtelExporter | null, span_attributes: { [key in string]?: string } | null, tracestate: { [key in string]?: { [key in string]?: string } } | null, };

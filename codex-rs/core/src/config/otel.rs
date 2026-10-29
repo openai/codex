@@ -28,6 +28,7 @@ pub(crate) fn resolve_config(
 
     OtelConfig {
         tool_result: config.tool_result.unwrap_or_default(),
+        log_sse_deltas: config.log_sse_deltas.unwrap_or(true),
         log_user_prompt,
         log_agent_responses: config.log_agent_responses.unwrap_or(false),
         log_guardian_assessments: config.log_guardian_assessments.unwrap_or(false),

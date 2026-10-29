@@ -1381,6 +1381,9 @@ impl Session {
             .with_auth_env(auth_env_telemetry.to_otel_metadata())
             .with_user_id(telemetry_auth.and_then(CodexAuth::get_chatgpt_user_id))
             .with_tool_result_log_config(config.otel.tool_result);
+            if !config.otel.log_sse_deltas {
+                session_telemetry = session_telemetry.without_sse_delta_logs();
+            }
             if let Some(metrics) = thread_extension_data.get::<codex_otel::MetricsClient>() {
                 session_telemetry = session_telemetry.with_metrics(metrics.as_ref().clone());
             }

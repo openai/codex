@@ -10327,6 +10327,7 @@ async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<
     .await?;
 
     assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
+    assert!(config.otel.log_sse_deltas);
     assert!(!config.otel.agent_response_logging_enabled());
     assert!(!config.otel.guardian_assessment_logging_enabled());
     Ok(())
@@ -10338,6 +10339,7 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
     let mut cfg = fixture.cfg.clone();
     cfg.otel = Some(OtelConfigToml {
         tool_result: Some(toml::from_str("max_bytes = 8192").expect("tool-result logging config")),
+        log_sse_deltas: Some(false),
         log_agent_responses: Some(true),
         log_guardian_assessments: Some(true),
         exporter: Some(OtelExporterKind::OtlpHttp {
@@ -10361,6 +10363,7 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
     .await?;
 
     assert_eq!(config.otel.tool_result.max_bytes, 8192);
+    assert!(!config.otel.log_sse_deltas);
     assert!(config.otel.agent_response_logging_enabled());
     assert!(config.otel.guardian_assessment_logging_enabled());
     assert!(matches!(
@@ -13974,6 +13977,10 @@ tracestate = { vendor = { tenant = "managed", region = "us" }, other = { keep = 
     "[otel]\nlog_agent_responses = false\nlog_guardian_assessments = true",
     "[otel]\nlog_agent_responses = true\nlog_guardian_assessments = false",
     "[otel]\nlog_agent_responses = true\nlog_guardian_assessments = false", true; "managed_logging_flags"
+)]
+#[test_case::test_case(
+    "[otel]\nlog_sse_deltas = true", "[otel]\nlog_sse_deltas = false",
+    "[otel]\nlog_sse_deltas = false", true; "managed_sse_delta_logs"
 )]
 #[tokio::test]
 async fn otel_requirements_resolve_config(

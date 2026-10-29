@@ -518,13 +518,14 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
 
 #[tokio::test]
 #[traced_test]
-async fn process_sse_emits_completed_telemetry() {
+async fn process_sse_emits_completed_telemetry_with_delta_logs_disabled() {
     let server = start_mock_server().await;
 
-    mount_sse_once(
+    let mock = mount_sse_once(
         &server,
         sse(vec![
             ev_reasoning_item_added("reasoning-1", &[]),
+            ev_reasoning_summary_text_delta("Thinking"),
             serde_json::json!({
                 "type": "response.completed",
                 "response": {
@@ -545,7 +546,13 @@ async fn process_sse_emits_completed_telemetry() {
     )
     .await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.otel.log_sse_deltas = false;
+        })
+        .build_with_auto_env(&server)
+        .await
+        .unwrap();
 
     codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -556,6 +563,19 @@ async fn process_sse_emits_completed_telemetry() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let _request = mock.single_request();
+    logs_assert(|lines: &[&str]| {
+        let delta_logged = lines.iter().any(|line| {
+            line.contains("codex.sse_event")
+                && line.contains("event.kind=response.reasoning_summary_text.delta")
+        });
+        if delta_logged {
+            Err("unexpected successful SSE delta log".to_string())
+        } else {
+            Ok(())
+        }
+    });
 
     logs_assert(|lines: &[&str]| {
         lines

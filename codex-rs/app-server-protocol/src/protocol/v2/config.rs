@@ -506,6 +506,7 @@ pub struct FeedbackRequirements {
 #[ts(export_to = "v2/")]
 pub struct OtelRequirements {
     pub tool_result: Option<OtelToolResultLogConfig>,
+    pub log_sse_deltas: Option<bool>,
     pub log_user_prompt: Option<bool>,
     pub log_agent_responses: Option<bool>,
     pub log_guardian_assessments: Option<bool>,

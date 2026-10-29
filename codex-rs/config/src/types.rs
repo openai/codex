@@ -639,6 +639,9 @@ pub enum OtelExporterKind {
 pub struct OtelConfigToml {
     /// Byte limit for tool-result log output; independent of model-visible output.
     pub tool_result: Option<codex_protocol::config_types::ToolResultLogConfig>,
+    /// Log successful SSE events whose kind ends in `.delta`. Defaults to true.
+    /// Disabling this preserves errors, completion events, and metrics.
+    pub log_sse_deltas: Option<bool>,
     /// Log user prompt in traces
     pub log_user_prompt: Option<bool>,
     /// Opt in to logging final main-agent and spawned-subagent responses to an OTLP log exporter.
@@ -672,6 +675,7 @@ pub struct OtelConfigToml {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OtelConfig {
     pub tool_result: codex_protocol::config_types::ToolResultLogConfig,
+    pub log_sse_deltas: bool,
     pub log_user_prompt: bool,
     pub log_agent_responses: bool,
     pub log_guardian_assessments: bool,
@@ -687,6 +691,7 @@ impl Default for OtelConfig {
     fn default() -> Self {
         OtelConfig {
             tool_result: Default::default(),
+            log_sse_deltas: true,
             log_user_prompt: false,
             log_agent_responses: false,
             log_guardian_assessments: false,

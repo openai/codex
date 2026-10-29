@@ -1,6 +1,12 @@
+use crate::harness::attributes_to_map;
+use crate::harness::build_metrics_with_defaults;
+use crate::harness::find_metric;
+use crate::harness::latest_metrics;
 use codex_api::AgentIdentityTelemetry;
 use codex_otel::AuthEnvTelemetryMetadata;
 use codex_otel::OtelProvider;
+use codex_otel::SSE_EVENT_COUNT_METRIC;
+use codex_otel::SSE_EVENT_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use opentelemetry::KeyValue;
@@ -9,12 +15,15 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::logs::InMemoryLogExporter;
 use opentelemetry_sdk::logs::SdkLogRecord;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt;
@@ -32,7 +41,9 @@ use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+use eventsource_stream::Event as StreamEvent;
 
 fn log_attributes(record: &SdkLogRecord) -> BTreeMap<String, String> {
     record
@@ -98,6 +109,154 @@ fn auth_env_metadata() -> AuthEnvTelemetryMetadata {
         provider_env_key_present: Some(true),
         refresh_token_url_override_present: true,
     }
+}
+
+#[test]
+fn suppressing_sse_delta_logs_preserves_errors_completions_and_metrics() -> codex_otel::Result<()> {
+    for log_sse_deltas in [true, false] {
+        let log_exporter = InMemoryLogExporter::default();
+        let logger_provider = SdkLoggerProvider::builder()
+            .with_simple_exporter(log_exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry().with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        );
+        let (metrics, metric_exporter) = build_metrics_with_defaults(&[])?;
+        let mut manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            /*account_id*/ None,
+            /*account_email*/ None,
+            /*auth_mode*/ None,
+            "test_originator".to_string(),
+            /*log_user_prompts*/ false,
+            "tty".to_string(),
+            SessionSource::Cli,
+        )
+        .with_metrics_without_metadata_tags(metrics);
+        if !log_sse_deltas {
+            manager = manager.without_sse_delta_logs();
+        }
+        let events = [
+            ("response.output_text.delta", "{}", true),
+            ("response.reasoning_summary_text.delta", "{}", true),
+            ("response.custom_tool_call_input.delta", "{}", true),
+            ("response.output_text.done", "{}", true),
+            ("response.completed", "{}", true),
+            ("response.output_text.delta", "{", false),
+            ("response.failed", r#"{"error":"failed"}"#, false),
+        ];
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            for (kind, data, _) in events {
+                manager.log_sse_event::<&str>(
+                    &Ok(Some(Ok(StreamEvent {
+                        event: kind.to_string(),
+                        data: data.to_string(),
+                        id: String::new(),
+                        retry: None,
+                    }))),
+                    Duration::from_millis(10),
+                );
+            }
+            manager.sse_event_completed(
+                &TokenUsage {
+                    input_tokens: 7,
+                    ..Default::default()
+                },
+                /*ttft_ms*/ Some(10),
+            );
+        });
+        logger_provider.force_flush().expect("flush logs");
+        let logs = log_exporter.get_emitted_logs().expect("exported logs");
+        let exported_events = logs
+            .iter()
+            .map(|log| {
+                let attributes = log_attributes(&log.record);
+                (
+                    attributes["event.kind"].clone(),
+                    attributes.contains_key("error.message"),
+                    attributes.get("input_token_count").cloned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut expected_events = Vec::new();
+        if log_sse_deltas {
+            expected_events.extend([
+                ("response.output_text.delta".to_string(), false, None),
+                (
+                    "response.reasoning_summary_text.delta".to_string(),
+                    false,
+                    None,
+                ),
+                (
+                    "response.custom_tool_call_input.delta".to_string(),
+                    false,
+                    None,
+                ),
+            ]);
+        }
+        expected_events.extend([
+            ("response.output_text.done".to_string(), false, None),
+            ("response.completed".to_string(), false, None),
+            ("response.output_text.delta".to_string(), true, None),
+            ("response.failed".to_string(), true, None),
+            (
+                "response.completed".to_string(),
+                false,
+                Some("7".to_string()),
+            ),
+        ]);
+        assert_eq!(exported_events, expected_events);
+
+        manager.shutdown_metrics()?;
+        let resource_metrics = latest_metrics(&metric_exporter);
+        let expected_counts = events
+            .iter()
+            .map(|(kind, _, success)| {
+                (
+                    BTreeMap::from([
+                        ("kind".to_string(), kind.to_string()),
+                        ("success".to_string(), success.to_string()),
+                    ]),
+                    1,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let counter = find_metric(&resource_metrics, SSE_EVENT_COUNT_METRIC).expect("SSE counter");
+        let AggregatedMetrics::U64(MetricData::Sum(sum)) = counter.data() else {
+            panic!("expected SSE counter");
+        };
+        assert_eq!(
+            sum.data_points()
+                .map(|point| (attributes_to_map(point.attributes()), point.value()))
+                .collect::<BTreeMap<_, _>>(),
+            expected_counts,
+        );
+        let duration =
+            find_metric(&resource_metrics, SSE_EVENT_DURATION_METRIC).expect("SSE duration");
+        let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = duration.data() else {
+            panic!("expected SSE duration histogram");
+        };
+        assert_eq!(
+            histogram
+                .data_points()
+                .map(|point| (
+                    attributes_to_map(point.attributes()),
+                    (point.count(), point.sum())
+                ))
+                .collect::<BTreeMap<_, _>>(),
+            expected_counts
+                .into_keys()
+                .map(|tags| (tags, (1, 10.0)))
+                .collect(),
+        );
+    }
+    Ok(())
 }
 
 #[test]

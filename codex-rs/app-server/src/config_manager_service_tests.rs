@@ -1870,6 +1870,7 @@ tracestate = { managed = { tenant = "enterprise" }, empty = {} }"#,
         otel,
         &serde_json::json!({
             "tool_result": { "max_bytes": 1234 },
+            "log_sse_deltas": null,
             "log_user_prompt": false,
             "log_agent_responses": null,
             "log_guardian_assessments": null,

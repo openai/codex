@@ -717,6 +717,7 @@ async fn config_requirements_read_redacts_otel_exporter_headers(
         r#"[otel]
 tool_result = { max_bytes = 1024 }
 log_user_prompt = false
+log_sse_deltas = false
 log_agent_responses = true
 log_guardian_assessments = false
 environment = "managed"
@@ -736,6 +737,7 @@ tracestate = { managed = { tenant = "enterprise" } }"#
         json!({
             "tool_result": { "max_bytes": 1024 },
             "log_user_prompt": false,
+            "log_sse_deltas": false,
             "log_agent_responses": true,
             "log_guardian_assessments": false,
             "environment": "managed",

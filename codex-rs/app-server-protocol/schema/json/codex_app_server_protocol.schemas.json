@@ -16737,6 +16737,12 @@
               "null"
             ]
           },
+          "log_sse_deltas": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "log_user_prompt": {
             "type": [
               "boolean",
