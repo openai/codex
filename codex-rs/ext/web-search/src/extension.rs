@@ -19,6 +19,7 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
+use codex_model_provider::WorkspaceRoutingContext;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::config_types::WebSearchContextSize;
@@ -130,7 +131,10 @@ impl ToolContributor for WebSearchExtension {
     ) -> Vec<
         Arc<dyn for<'call> codex_extension_api::ToolExecutor<codex_extension_api::ToolCall<'call>>>,
     > {
-        let Some(config) = thread_store.get::<WebSearchExtensionConfig>() else {
+        let (Some(config), Some(workspace_routing)) = (
+            thread_store.get::<WebSearchExtensionConfig>(),
+            thread_store.get::<WorkspaceRoutingContext>(),
+        ) else {
             return Vec::new();
         };
         if !config.available {
@@ -144,6 +148,7 @@ impl ToolContributor for WebSearchExtension {
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
             ),
+            workspace_routing,
             settings: config.settings.clone(),
             supports_literature_search: step_store.get::<ModelInfo>().is_some_and(|model| {
                 model
@@ -166,6 +171,10 @@ pub fn install(registry: &mut ExtensionRegistryBuilder<Config>, auth_manager: Ar
 }
 
 #[cfg(test)]
+#[path = "routing_tests.rs"]
+mod routing_tests;
+
+#[cfg(test)]
 mod tests {
     use codex_extension_api::ExtensionData;
     use codex_extension_api::ExtensionRegistryBuilder;
@@ -173,6 +182,7 @@ mod tests {
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
     use codex_login::CodexAuth;
+    use codex_model_provider::WorkspaceRoutingContext;
     use codex_model_provider_info::ModelProviderInfo;
     use pretty_assertions::assert_eq;
 
@@ -217,6 +227,9 @@ mod tests {
         let session_store = ExtensionData::new("session");
         let thread_store = ExtensionData::new("11111111-1111-4111-8111-111111111111");
         let step_store = ExtensionData::new("step");
+        thread_store.insert(WorkspaceRoutingContext::new(
+            "https://chatgpt.com/backend-api".to_string(),
+        ));
         thread_store.insert(WebSearchExtensionConfig {
             available: true,
             http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),

@@ -1,5 +1,6 @@
 //! Exercises required HTTPS policy through real app-server startup and session RPCs.
 
+use super::https_mock::tls_listener;
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::LoginAccountResponse;
@@ -16,13 +17,9 @@ use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tempfile::TempDir;
 use tempfile::tempdir;
-use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls;
 use tokio_util::task::AbortOnDropHandle;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -210,20 +207,7 @@ async fn https_mock_server(
     home: &Path,
     policy: &MockServer,
 ) -> Result<(String, PathBuf, AbortOnDropHandle<()>)> {
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()])?;
-    let ca_path = home.join("policy-ca.pem");
-    std::fs::write(&ca_path, cert.cert.pem())?;
-    let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()?
-    .with_no_client_auth()
-    .with_single_cert(
-        vec![cert.cert.der().clone()],
-        rustls::pki_types::PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()).into(),
-    )?;
-    let acceptor = TlsAcceptor::from(Arc::new(tls));
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let (listener, acceptor, ca_path) = tls_listener(home).await?;
     let origin_url = format!("https://{}", listener.local_addr()?);
     let origin = *policy.address();
     let tls = AbortOnDropHandle::new(tokio::spawn(async move {
