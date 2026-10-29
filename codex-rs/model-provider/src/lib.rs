@@ -8,6 +8,7 @@ mod gcp;
 mod models_endpoint;
 mod models_identity;
 mod provider;
+mod request_preparation;
 mod runtime_auth;
 mod shared_state;
 pub mod test_support;
@@ -50,6 +51,7 @@ pub use provider::create_model_provider;
 pub use provider::provider_uses_first_party_auth_path;
 pub use provider::resolve_api_provider;
 
+pub use request_preparation::prepare_provider_request;
 pub use runtime_auth::select_runtime_auth;
 pub use runtime_auth::validate_runtime_destination;
 pub use runtime_auth::validate_runtime_provider;

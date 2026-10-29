@@ -19,6 +19,27 @@ pub struct AuthChangeState {
     pub login_generation: u64,
 }
 
+/// Whether request preparation can use the credentials it selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestAuthChange {
+    Unchanged,
+    CredentialsChanged,
+    OwnerChanged,
+}
+
+impl AuthChangeState {
+    /// Compare a completed attempt with its original owner and starting credential revision.
+    pub fn compare_for_request(&self, expected_owner: u64, prepared: Self) -> RequestAuthChange {
+        if self.owner_generation != expected_owner {
+            RequestAuthChange::OwnerChanged
+        } else if self.generation != prepared.generation {
+            RequestAuthChange::CredentialsChanged
+        } else {
+            RequestAuthChange::Unchanged
+        }
+    }
+}
+
 pub(super) fn same_owner(previous: Option<&CodexAuth>, current: Option<&CodexAuth>) -> bool {
     let (Some(previous), Some(current)) = (previous, current) else {
         return false;

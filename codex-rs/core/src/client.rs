@@ -1278,63 +1278,48 @@ impl ModelClient {
         routing: ClientRouting,
         provider: &SharedModelProvider,
     ) -> Result<CurrentClientSetup> {
-        // Capture before resolving credentials so an account switch during setup cannot label
-        // an old connection with the new owner's revision.
-        let auth_owner_generation = self.auth_owner_generation();
-        let auth_changes = provider
-            .auth_manager()
-            .map(|manager| manager.auth_change_receiver());
-        loop {
-            let revision = auth_changes.as_ref().map(|changes| *changes.borrow());
-            let auth = provider.auth().await;
-            let (api_provider, redirect_policy) = match routing {
-                ClientRouting::Workspace => {
-                    let resolved = provider
-                        .responses_api_provider(&self.state.workspace_routing)
-                        .await?;
-                    (resolved.provider, resolved.redirect_policy)
-                }
-                ClientRouting::ConfiguredProvider => (
-                    provider.api_provider().await?,
-                    ClientRedirectPolicy::Default,
-                ),
-            };
-            let resolved_auth = provider
-                .api_auth_for_scope(ProviderAuthScope {
-                    agent_identity_policy: self.agent_identity_policy,
-                    session_source: self.state.session_source.clone(),
-                    agent_identity_session_fallback: self
-                        .state
-                        .agent_identity_session_fallback
-                        .clone(),
+        let routing = &routing;
+        codex_model_provider::prepare_provider_request(
+            provider.as_ref(),
+            provider.info().auth.is_none(),
+            |state| async move {
+                let auth = provider.auth().await;
+                let (api_provider, redirect_policy) = match routing {
+                    ClientRouting::Workspace => {
+                        let resolved = provider
+                            .responses_api_provider(&self.state.workspace_routing)
+                            .await?;
+                        (resolved.provider, resolved.redirect_policy)
+                    }
+                    ClientRouting::ConfiguredProvider => (
+                        provider.api_provider().await?,
+                        ClientRedirectPolicy::Default,
+                    ),
+                };
+                let resolved_auth = provider
+                    .api_auth_for_scope(ProviderAuthScope {
+                        agent_identity_policy: self.agent_identity_policy,
+                        session_source: self.state.session_source.clone(),
+                        agent_identity_session_fallback: self
+                            .state
+                            .agent_identity_session_fallback
+                            .clone(),
+                    })
+                    .await?;
+                Ok(CurrentClientSetup {
+                    auth,
+                    auth_owner_generation: state.map(|state| state.owner_generation),
+                    auth_revision: state.map(|state| state.generation),
+                    api_provider,
+                    http_client_factory: self.http_client_factory.clone(),
+                    redirect_policy,
+                    api_auth: resolved_auth.auth,
+                    agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
+                    runtime_id: None,
                 })
-                .await?;
-            // Command-backed bearer refreshes cannot change workspace routing. Keep the captured
-            // revisions so a refresh during setup still invalidates cached WebSocket state.
-            if provider.info().auth.is_none() {
-                if self.auth_owner_generation() != auth_owner_generation {
-                    return Err(std::io::Error::other(
-                        "account changed while preparing model request",
-                    )
-                    .into());
-                }
-                // Rebuild the entire bundle after a credential-only refresh, including routing.
-                if auth_changes.as_ref().map(|changes| *changes.borrow()) != revision {
-                    continue;
-                }
-            }
-            return Ok(CurrentClientSetup {
-                auth,
-                auth_owner_generation,
-                auth_revision: revision,
-                api_provider,
-                http_client_factory: self.http_client_factory.clone(),
-                redirect_policy,
-                api_auth: resolved_auth.auth,
-                agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
-                runtime_id: None,
-            });
-        }
+            },
+        )
+        .await
     }
 
     fn responses_headers(&self, auth: Option<&CodexAuth>, model: &str) -> ApiHeaderMap {
