@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
+use codex_code_mode::CodeModeOutputTruncation;
 use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
@@ -126,6 +127,13 @@ impl CodeModeService {
         Arc::clone(&self.session_provider)
     }
 
+    fn output_truncation(&self) -> CodeModeOutputTruncation {
+        self.session
+            .get()
+            .map(|session| session.output_truncation())
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn execute(
         &self,
         mut request: codex_code_mode::ExecuteRequest,
@@ -155,9 +163,9 @@ impl CodeModeService {
 
     pub(crate) async fn terminate(
         &self,
-        cell_id: CellId,
+        request: codex_code_mode::TerminateRequest,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session().await?.terminate(cell_id.into()).await
+        self.session().await?.terminate(request).await
     }
 
     pub(crate) async fn interrupt_active_cells(&self) {
@@ -263,6 +271,7 @@ fn handle_runtime_response(
     model_info: &codex_protocol::openai_models::ModelInfo,
     response: RuntimeResponse,
     max_output_tokens: Option<usize>,
+    output_truncation: CodeModeOutputTruncation,
     wall_time: Duration,
     experimental_show_cell_overhead: bool,
 ) -> CodeModeToolOutput {
@@ -284,12 +293,14 @@ fn handle_runtime_response(
     let mut content_items = into_function_call_output_content_items(content_items);
     sanitize_image_detail_items(supports_original, &mut content_items);
     let success = error_text.is_none();
-    if let Some(error_text) = error_text {
-        content_items.push(FunctionCallOutputContentItem::InputText {
-            text: format!("Script error:\n{error_text}"),
-        });
+    if output_truncation == CodeModeOutputTruncation::Client {
+        if let Some(error_text) = error_text {
+            content_items.push(FunctionCallOutputContentItem::InputText {
+                text: format!("Script error:\n{error_text}"),
+            });
+        }
+        content_items = truncate_code_mode_result(content_items, max_output_tokens);
     }
-    content_items = truncate_code_mode_result(content_items, max_output_tokens);
     CodeModeToolOutput::new(
         FunctionToolOutput::from_content(content_items, Some(success)),
         script_status,

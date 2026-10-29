@@ -2198,7 +2198,8 @@ text(`MCP: ${ping.structuredContent?.echo ?? "missing"}`);"#,
 async fn astra_reads_code_mode_call_timing() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
-    let test = test_codex()
+    let test = super::code_mode::OutputHost::ServerGrpc
+        .test_codex()
         .with_model("gpt-6-astra")
         .with_config(|config| {
             configure_scenario_catalog(config);
@@ -2207,16 +2208,8 @@ async fn astra_reads_code_mode_call_timing() -> Result<()> {
             config.code_mode.experimental_show_cell_overhead = true;
             config
                 .features
-                .enable(Feature::CodeMode)
-                .expect("enable code mode");
-            config
-                .features
                 .enable(Feature::CodeModeOnly)
                 .expect("enable code-mode-only tools");
-            config
-                .features
-                .enable(Feature::CodeModeHost)
-                .expect("enable the code-mode host");
         })
         .build_with_auto_env(&server)
         .await?;
@@ -2225,7 +2218,13 @@ async fn astra_reads_code_mode_call_timing() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("exec-response"),
-                ev_custom_tool_call("exec-call", "exec", "text('ready');"),
+                ev_custom_tool_call(
+                    "exec-call",
+                    "exec",
+                    r#"// @exec: {"max_output_tokens": 0}
+text('ready');
+text('x'.repeat(2 * 1024 * 1024));"#,
+                ),
                 ev_completed("exec-response"),
             ]),
             sse(vec![
@@ -2239,18 +2238,35 @@ async fn astra_reads_code_mode_call_timing() -> Result<()> {
                 ev_completed("wait-response"),
             ]),
             sse(vec![
-                ev_assistant_message("final", "The call completed; the missing-cell wait failed."),
+                ev_response_created("overflow-response"),
+                ev_custom_tool_call(
+                    "overflow-call",
+                    "exec",
+                    r#"// @exec: {"max_output_tokens": 32}
+text('before');
+text('x'.repeat(2 * 1024 * 1024));
+throw 'boom';"#,
+                ),
+                ev_completed("overflow-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message(
+                    "final",
+                    "The first call completed. The wait and overflow script failed.",
+                ),
                 ev_completed("final-response"),
             ]),
         ],
     )
     .await;
-    test.submit_turn("Run a code cell, then inspect its timing and a failed wait.")
-        .await?;
+    test.submit_turn(
+        "Run a code cell, inspect its timing and a failed wait, then check the diagnostic script.",
+    )
+    .await?;
     insta::assert_snapshot!(
         "astra_code_mode_call_timing",
         context_snapshot::format_request_history_snapshot(
-            "Astra receives host and handler timings on completed and failed code-mode calls.",
+            "Astra reads code-mode timings and the collector notice even at zero tokens, then a failed wait and a truncated script error.",
             &mock.requests(),
             &ContextSnapshotOptions::default(),
         )

@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Astra receives host and handler timings on completed and failed code-mode calls.\",\n&mock.requests(), &ContextSnapshotOptions::default(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"Astra reads code-mode timings and the collector notice even at zero tokens, then a failed wait and a truncated script error.\",\n&mock.requests(), &ContextSnapshotOptions::default(),)"
 ---
-Scenario: Astra receives host and handler timings on completed and failed code-mode calls.
+Scenario: Astra reads code-mode timings and the collector notice even at zero tokens, then a failed wait and a truncated script error.
 
 ## Window 1
 -- request 1 (turn) --
@@ -89,14 +89,19 @@ Scenario: Astra receives host and handler timings on completed and failed code-m
       <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
     </environment_context>
 06:message/user:
-    Run a code cell, then inspect its timing and a failed wait.
+    Run a code cell, inspect its timing and a failed wait, then check the diagnostic script.
 07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:custom_tool_call/exec:text('ready');
+08:custom_tool_call/exec:// @exec: {"max_output_tokens": 0}
+    text('ready');
+    text('x'.repeat(2 * 1024 * 1024));
 09:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds (code-mode <DURATION> seconds; overhead <DURATION> seconds)
     Output:
-     | ready
+     | Warning: truncated output (original token count: 262145)
+    Total output lines: 2
+
+    …262145 tokens truncated… | [Code Mode session output limit reached: omitted 1048581 text bytes; discarded 0 text segments, 0 images, 0 audio items]
 -- request 3 (turn) --
 10:function_call/functions.wait:{"cell_id":"missing"}
 11:function_call_output:Script failed
@@ -104,3 +109,18 @@ Scenario: Astra receives host and handler timings on completed and failed code-m
     Output:
      | Script error:
     exec cell missing not found
+-- request 4 (turn) --
+12:custom_tool_call/exec:// @exec: {"max_output_tokens": 32}
+    text('before');
+    text('x'.repeat(2 * 1024 * 1024));
+    throw 'boom';
+13:custom_tool_call_output:Script failed
+    Wall time <DURATION> seconds (code-mode <DURATION> seconds; overhead <DURATION> seconds)
+    Output:
+     | Warning: truncated output (original token count: 262145)
+    Total output lines: 4
+
+    before
+    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…262113 tokens truncated… | [Code Mode session output limit reached: omitted 1048600 text bytes; discarded 0 text segments, 0 images, 0 audio items] | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    Script error:
+    boom

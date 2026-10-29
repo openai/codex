@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use codex_code_mode::CodeModeProcessMetricsSample;
 use codex_code_mode::CodeModeSessionCellExecutionLimits;
+use codex_code_mode::CodeModeSessionOptions;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeSessionProviderFuture;
 use codex_code_mode::CodeModeSessionResultFuture;
@@ -43,14 +44,14 @@ use tonic::transport::Endpoint;
 use tower::ServiceExt;
 use tower::service_fn;
 
-pub(crate) struct ProcessOwnedGrpcCodeModeSessionProvider {
+pub struct ProcessOwnedGrpcCodeModeSessionProvider {
     host_program: PathBuf,
     provider: OnceLock<GrpcCodeModeSessionProvider>,
     current: Arc<Mutex<Option<HostChannel>>>,
 }
 
 impl ProcessOwnedGrpcCodeModeSessionProvider {
-    pub(crate) fn with_host_program(host_program: PathBuf) -> Self {
+    pub fn with_host_program(host_program: PathBuf) -> Self {
         Self {
             host_program,
             provider: OnceLock::new(),
@@ -86,12 +87,22 @@ impl CodeModeSessionProvider for ProcessOwnedGrpcCodeModeSessionProvider {
     }
 
     fn create_session(&self) -> CodeModeSessionProviderFuture<'_> {
-        self.create_session_with_limits(CodeModeSessionCellExecutionLimits::default())
+        self.create_session_with_options(CodeModeSessionOptions::default())
     }
 
     fn create_session_with_limits<'a>(
         &'a self,
         limits: CodeModeSessionCellExecutionLimits,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        self.create_session_with_options(CodeModeSessionOptions {
+            cell_execution_limits: limits,
+            ..CodeModeSessionOptions::default()
+        })
+    }
+
+    fn create_session_with_options<'a>(
+        &'a self,
+        options: CodeModeSessionOptions,
     ) -> CodeModeSessionProviderFuture<'a> {
         Box::pin(async move {
             self.availability()?;
@@ -105,7 +116,7 @@ impl CodeModeSessionProvider for ProcessOwnedGrpcCodeModeSessionProvider {
                     async move { transport.send(request).await }
                 }))
             });
-            provider.create_session_with_limits(limits).await
+            provider.create_session_with_options(options).await
         })
     }
 }

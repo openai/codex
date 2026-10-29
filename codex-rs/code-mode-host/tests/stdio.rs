@@ -10,9 +10,11 @@ use std::os::unix::fs::PermissionsExt;
 
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
+use codex_code_mode::CodeModeOutputTruncation;
 use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionCellExecutionLimits;
 use codex_code_mode::CodeModeSessionDelegate;
+use codex_code_mode::CodeModeSessionOptions;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::ExecuteRequest;
@@ -908,9 +910,14 @@ async fn oversized_initial_response_does_not_close_the_shared_host() {
         "unexpected error: {error}"
     );
 
+    // The default session still returns raw output after the oversized frame failed.
     let actual = execute(
         &session,
-        execute_request(r#"text("still alive");"#),
+        ExecuteRequest {
+            max_output_tokens: Some(5),
+            yield_time_ms: Some(60_000),
+            ..execute_request("text('x'.repeat(2 * 1024 * 1024));")
+        },
         Arc::new(RecordingDelegate::default()),
     )
     .await;
@@ -920,11 +927,38 @@ async fn oversized_initial_response_does_not_close_the_shared_host() {
             code_mode_host_duration: actual.code_mode_host_duration(),
             cell_id: cell_id("2"),
             content_items: vec![FunctionCallOutputContentItem::InputText {
-                text: "still alive".to_string(),
+                text: "x".repeat(2 * 1024 * 1024),
             }],
             result_buffered_for: Duration::ZERO,
             error_text: None,
         }
+    );
+    session.shutdown().await.expect("shutdown remote session");
+
+    // With Server truncation negotiated, a script error larger than the frame limit still returns.
+    let session = provider
+        .create_session_with_options(CodeModeSessionOptions {
+            output_truncation: CodeModeOutputTruncation::Server,
+            ..Default::default()
+        })
+        .await
+        .expect("open server-truncated session");
+    let mut request = execute_request("throw 'begin:' + 'X'.repeat(65 * 1024 * 1024) + ':end';");
+    request.max_output_tokens = Some(5);
+    request.yield_time_ms = Some(60_000);
+    let response = execute(&session, request, Arc::new(RecordingDelegate::default())).await;
+    let RuntimeResponse::Result {
+        content_items,
+        error_text: Some(error),
+        ..
+    } = response
+    else {
+        panic!("expected completed error within the frame limit");
+    };
+    assert!(error.starts_with("begin:") && error.ends_with(":end"));
+    assert!(error.len() > 20 && error.len() <= 64 * 1024);
+    assert!(
+        matches!(content_items.last(), Some(FunctionCallOutputContentItem::InputText { text }) if text.ends_with(":end"))
     );
     session.shutdown().await.expect("shutdown remote session");
 }

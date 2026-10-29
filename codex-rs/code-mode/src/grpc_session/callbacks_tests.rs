@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use codex_code_mode_protocol::CodeModeOutputTruncation;
 use http_body_util::Full;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
@@ -48,6 +49,7 @@ async fn missing_invocation_completion_racing_cancellation_preserves_session() {
 fn session(client: GrpcClient) -> Arc<SessionInner> {
     Arc::new(SessionInner {
         id: "session".to_string(),
+        output_truncation: CodeModeOutputTruncation::Client,
         client: client.clone(),
         route: None,
         runtime: tokio::runtime::Handle::current(),

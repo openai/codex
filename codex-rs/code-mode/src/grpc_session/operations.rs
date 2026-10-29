@@ -10,6 +10,7 @@ use codex_code_mode_protocol::DEFAULT_EXEC_YIELD_TIME_MS;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::RuntimeResponse;
 use codex_code_mode_protocol::StartedCell;
+use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::grpc;
@@ -58,7 +59,7 @@ impl Drop for ExecutionOwnership {
         }
         let session = Arc::clone(&self.session);
         self.session.runtime.spawn(async move {
-            if let Err(error) = session.terminate(cell_id).await
+            if let Err(error) = session.terminate(cell_id.into()).await
                 && !session.stopped.is_cancelled()
             {
                 debug!("abandoned code-mode execution termination raced closure: {error}");
@@ -313,7 +314,10 @@ impl SessionInner {
             cell_id: expected_cell_id.as_str().to_string(),
             wait_id: wait_id.clone(),
             yield_time_ms: request.yield_time_ms,
-            max_output_tokens: None,
+            max_output_tokens: conversion::output_budget(
+                self.output_truncation,
+                request.max_output_tokens,
+            )?,
         };
         let mut client = self.client();
         let watcher = preempt.map(|signal| {
@@ -359,7 +363,7 @@ impl SessionInner {
         }))
     }
 
-    pub(super) async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
+    pub(super) async fn terminate(&self, request: TerminateRequest) -> Result<WaitOutcome, String> {
         self.require_open()?;
         let mut client = self.client();
         let response = deadline::session_request(
@@ -368,13 +372,16 @@ impl SessionInner {
             Duration::ZERO,
             client.terminate(self.request(grpc::TerminateRequest {
                 session_id: self.id.clone(),
-                cell_id: cell_id.as_str().to_string(),
-                max_output_tokens: None,
+                cell_id: request.cell_id.as_str().to_string(),
+                max_output_tokens: conversion::output_budget(
+                    self.output_truncation,
+                    request.max_output_tokens,
+                )?,
             })),
         )
         .await?;
         let outcome = conversion::wait_outcome(response)?;
-        self.validate_wait_cell(&cell_id, outcome).await
+        self.validate_wait_cell(&request.cell_id, outcome).await
     }
 
     async fn validate_wait_cell(

@@ -7,12 +7,18 @@ use std::time::Duration;
 
 use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeOutputTruncation;
+use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
+use codex_code_mode_protocol::CodeModeSessionOptions;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::NotificationFuture;
+use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::ToolInvocationFuture;
 use codex_code_mode_protocol::WaitRequest;
+use codex_code_mode_protocol::host::BOUNDED_OUTPUT_CAPABILITY;
+use codex_code_mode_protocol::host::Capability;
 use codex_code_mode_protocol::host::CapabilitySet;
 use codex_code_mode_protocol::host::ClientToHost;
 use codex_code_mode_protocol::host::DelegateRequest;
@@ -31,6 +37,7 @@ use codex_code_mode_protocol::host::WireSessionCellExecutionLimits;
 use codex_code_mode_protocol::host::WireWaitOutcome;
 use codex_protocol::ToolName;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -43,6 +50,8 @@ use super::DriverEvent;
 use super::DriverLifecycle;
 use super::RemoteSession;
 use super::SessionCleanup;
+use crate::remote_session::OwnedCodeModeHost;
+use crate::remote_session::ProcessOwnedCodeModeSession;
 
 struct DriverHarness {
     command_tx: mpsc::Sender<DriverCommand>,
@@ -93,31 +102,44 @@ impl DriverHarness {
         self.command_tx
             .send(DriverCommand::OpenSession {
                 session: session.clone(),
-
-                limits: Default::default(),
+                options: CodeModeSessionOptions::default(),
                 cleanup: cleanup.clone(),
                 caller_cancellation: CancellationToken::new(),
                 response_tx,
             })
             .await
             .expect("open command");
-        self.outgoing_rx.recv().await.expect("open frame");
-        self.event_tx
-            .send(DriverEvent::HostMessage(HostToClient::Response {
-                id: RequestId::new(/*value*/ 1),
-                result: WireResult::Ok {
-                    value: HostResponse::SessionReady {
-                        session_id: session.id,
-                    },
-                },
-            }))
-            .await
-            .expect("open response");
+        self.accept_open(session.id, CodeModeOutputTruncation::Client)
+            .await;
         response_rx
             .await
             .expect("open reply")
             .expect("open session");
         cleanup
+    }
+
+    async fn accept_open(&mut self, session_id: SessionId, mode: CodeModeOutputTruncation) {
+        let mut expected = json!({ "method": "session/open", "sessionId": session_id });
+        if mode == CodeModeOutputTruncation::Server {
+            expected["outputTruncation"] = json!("server");
+        }
+        assert_eq!(self.next_request().await, expected);
+        self.event_tx
+            .send(DriverEvent::HostMessage(HostToClient::Response {
+                id: RequestId::new(/*value*/ 1),
+                result: WireResult::Ok {
+                    value: HostResponse::SessionReady { session_id },
+                },
+            }))
+            .await
+            .expect("open response");
+    }
+
+    async fn next_request(&mut self) -> serde_json::Value {
+        let frame = self.outgoing_rx.recv().await.expect("request");
+        let mut message =
+            EncodedFrame::decode_framed::<serde_json::Value>(&frame.into_framed_bytes()).unwrap();
+        message["request"].take()
     }
 
     async fn start_cell(
@@ -165,6 +187,17 @@ impl DriverHarness {
             .send(delivered.request_id)
             .expect("claim execute");
         delivered.started
+    }
+
+    fn connection(&self, capabilities: CapabilitySet) -> Connection {
+        Connection {
+            command_tx: self.command_tx.clone(),
+            execute_claim_tx: self.execute_claim_tx.clone(),
+            alive: Arc::clone(&self.alive),
+            failure: Arc::clone(&self.failure),
+            cancellation: self.cancellation.clone(),
+            capabilities,
+        }
     }
 
     async fn start_tool_delegate(&self, session: &RemoteSession, id: DelegateRequestId) {
@@ -220,14 +253,7 @@ async fn old_host_does_not_receive_yield_frames() {
         }))
         .await
         .unwrap();
-    let connection = Connection {
-        command_tx: harness.command_tx.clone(),
-        execute_claim_tx: harness.execute_claim_tx.clone(),
-        alive: Arc::clone(&harness.alive),
-        failure: Arc::clone(&harness.failure),
-        cancellation: harness.cancellation.clone(),
-        capabilities: CapabilitySet::empty(),
-    };
+    let connection = harness.connection(CapabilitySet::empty());
     let signal = CancellationToken::new();
     signal.cancel();
     let wait = tokio::spawn(async move {
@@ -287,8 +313,10 @@ async fn open_session_includes_nondefault_cell_execution_limits() {
         .command_tx
         .send(DriverCommand::OpenSession {
             session: session.clone(),
-
-            limits,
+            options: CodeModeSessionOptions {
+                cell_execution_limits: limits,
+                ..CodeModeSessionOptions::default()
+            },
             cleanup: SessionCleanup::new(),
             caller_cancellation: CancellationToken::new(),
             response_tx,
@@ -316,6 +344,80 @@ async fn open_session_includes_nondefault_cell_execution_limits() {
             },
         }
     );
+}
+
+#[tokio::test]
+async fn stdio_logical_session_pins_output_mode_across_reconnect() {
+    use CodeModeOutputTruncation::Client;
+    use CodeModeOutputTruncation::Server;
+
+    let legacy = CapabilitySet::empty();
+    let bounded =
+        CapabilitySet::try_new([Capability::new(BOUNDED_OUTPUT_CAPABILITY).unwrap()]).unwrap();
+    for (requested, hosts, expected_mode) in [
+        (Client, [&bounded, &bounded].as_slice(), Client),
+        (Server, [&legacy, &bounded].as_slice(), Client),
+        (Server, [&bounded, &bounded, &legacy].as_slice(), Server),
+    ] {
+        let host = Arc::new(OwnedCodeModeHost::new("unused".into()));
+        let session = ProcessOwnedCodeModeSession::with_host(
+            Arc::clone(&host),
+            CodeModeSessionOptions {
+                output_truncation: requested,
+                ..CodeModeSessionOptions::default()
+            },
+        );
+
+        for (index, &capabilities) in hosts.iter().enumerate() {
+            let mut harness = DriverHarness::start();
+            *host.connection.lock().unwrap() =
+                Some(Arc::new(harness.connection(capabilities.clone())));
+            if expected_mode == Server && capabilities == &legacy {
+                tokio::select! {
+                    result = session.connection() => assert!(matches!(result, Err(error) if error.contains("cannot preserve"))),
+                    _ = harness.outgoing_rx.recv() => panic!("opened a server session on an incompatible host"),
+                }
+                assert_eq!(session.output_truncation(), Server);
+                break;
+            }
+
+            let session_id = SessionId::new(format!("session-{}", index + 1)).unwrap();
+            tokio::try_join!(session.connection(), async {
+                harness.accept_open(session_id, expected_mode).await;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(session.output_truncation(), expected_mode);
+
+            if capabilities == &legacy {
+                let cell_id = CellId::new("1".into());
+                let wait = WaitRequest {
+                    cell_id: cell_id.clone(),
+                    yield_time_ms: 1,
+                    max_output_tokens: Some(5),
+                };
+                let terminate = TerminateRequest {
+                    cell_id,
+                    max_output_tokens: Some(5),
+                };
+                let legacy_host = async {
+                    for method in ["session/wait", "session/terminate"] {
+                        let request = harness.next_request().await;
+                        assert_eq!(request["method"], method);
+                        // A null value would also be rejected by a legacy host.
+                        assert!(request.get("maxOutputTokens").is_none());
+                    }
+                    harness.cancellation.cancel();
+                };
+                let (wait, terminate, ()) = tokio::join!(biased;
+                    session.wait(wait, /*preempt*/ None), session.terminate(terminate), legacy_host
+                );
+                assert!(wait.is_err() && terminate.is_err());
+            }
+            harness.cancellation.cancel();
+            (&mut harness.driver_task).await.unwrap();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -626,8 +728,7 @@ async fn dropped_open_waiter_shuts_down_committed_session() {
         .command_tx
         .send(DriverCommand::OpenSession {
             session: session.clone(),
-
-            limits: Default::default(),
+            options: CodeModeSessionOptions::default(),
             cleanup,
             caller_cancellation: CancellationToken::new(),
             response_tx: open_tx,
@@ -857,7 +958,7 @@ async fn terminate_closes_cell_without_waiting_for_delegate_cleanup() {
         .command_tx
         .send(DriverCommand::Terminate {
             session: session.clone(),
-            cell_id: CellId::new("1".to_string()),
+            request: CellId::new("1".to_string()).into(),
             response_tx,
         })
         .await
@@ -1330,7 +1431,7 @@ async fn mismatched_terminate_response_fails_connection() {
         .command_tx
         .send(DriverCommand::Terminate {
             session,
-            cell_id: CellId::new("1".to_string()),
+            request: CellId::new("1".to_string()).into(),
             response_tx,
         })
         .await
@@ -1498,7 +1599,7 @@ async fn queued_remote_termination_times_out_and_invalidates_the_connection() {
     };
     let response = tokio::spawn(async move {
         let result = connection
-            .terminate(session, CellId::new("1".to_string()))
+            .terminate(session, CellId::new("1".to_string()).into())
             .await;
         (connection, result)
     });
@@ -1539,7 +1640,7 @@ async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
             request: WaitRequest {
                 cell_id: CellId::new("1".to_string()),
                 yield_time_ms: 60_000,
-                max_output_tokens: None,
+                max_output_tokens: Some(19),
             },
             caller_cancellation: first_cancellation.clone(),
             yield_signal: None,
@@ -1559,7 +1660,7 @@ async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
             request: WaitRequest {
                 cell_id: CellId::new("1".to_string()),
                 yield_time_ms: 1,
-                max_output_tokens: None,
+                max_output_tokens: Some(37),
             },
             caller_cancellation: CancellationToken::new(),
             yield_signal: None,
@@ -1587,7 +1688,7 @@ async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
         }))
         .await
         .expect("cancelled wait response");
-    harness.outgoing_rx.recv().await.expect("second wait frame");
+    assert_eq!(harness.next_request().await["maxOutputTokens"], 37);
     harness
         .event_tx
         .send(DriverEvent::HostMessage(HostToClient::Response {

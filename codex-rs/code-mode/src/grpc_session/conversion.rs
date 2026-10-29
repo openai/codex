@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use codex_code_mode_protocol::CellId;
 use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
@@ -11,6 +12,19 @@ use codex_code_mode_protocol::ToolDefinition;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::grpc;
 use codex_protocol::ToolName;
+
+pub(super) fn output_budget(
+    mode: CodeModeOutputTruncation,
+    max_output_tokens: Option<usize>,
+) -> Result<Option<u64>, String> {
+    match mode {
+        CodeModeOutputTruncation::Client => Ok(None),
+        CodeModeOutputTruncation::Server => max_output_tokens
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|error| format!("invalid code-mode output token limit: {error}")),
+    }
+}
 
 pub(super) fn execute_request(
     session_id: &str,

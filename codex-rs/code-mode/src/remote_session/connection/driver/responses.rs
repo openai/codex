@@ -41,6 +41,7 @@ impl ConnectionDriver {
             if !self.start_wait(
                 wait.session,
                 wait.request,
+                wait.max_output_tokens,
                 wait.caller_cancellation,
                 wait.yield_signal,
                 wait.response_tx,

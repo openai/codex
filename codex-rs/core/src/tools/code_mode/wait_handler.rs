@@ -130,7 +130,10 @@ impl CodeModeWaitHandler {
                     exec.session
                         .services
                         .code_mode_service
-                        .terminate(cell_id.clone())
+                        .terminate(codex_code_mode::TerminateRequest {
+                            cell_id: cell_id.clone(),
+                            max_output_tokens: args.max_tokens,
+                        })
                         .await
                 } else {
                     exec.session
@@ -140,7 +143,7 @@ impl CodeModeWaitHandler {
                             codex_code_mode::WaitRequest {
                                 cell_id: cell_id.clone(),
                                 yield_time_ms: args.yield_time_ms,
-                                max_output_tokens: None,
+                                max_output_tokens: args.max_tokens,
                             },
                             step_context.preempt.clone(),
                         )
@@ -208,6 +211,7 @@ impl CodeModeWaitHandler {
                     &step_context.settings.model_info,
                     wait_response.into(),
                     args.max_tokens,
+                    exec.session.services.code_mode_service.output_truncation(),
                     wall_time,
                     exec.turn.config.code_mode.experimental_show_cell_overhead,
                 )))
