@@ -213,7 +213,7 @@ pub(crate) fn new_session_info(
     ));
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
-    if is_first_event {
+    if is_first_event && local_settings.tui.show_tooltips {
         // Help lines below the header (new copy and list)
         let help_lines: Vec<Line<'static>> = vec![
             "  To get started, describe a task or try one of these commands:"
@@ -248,7 +248,7 @@ pub(crate) fn new_session_info(
         ];
 
         parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
-    } else {
+    } else if !is_first_event {
         if local_settings.tui.show_tooltips
             && let Some(tooltips) = tooltip_override
                 .or_else(|| tooltips::get_tooltip(auth_plan, &local_settings.tui.keymap))
