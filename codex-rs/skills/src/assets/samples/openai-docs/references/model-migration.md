@@ -5,7 +5,7 @@ Use this route for model upgrades, migration planning, model-specific prompting,
 ## Choose the target before loading more context
 
 - **Explicit model target:** Preserve the user's exact requested target, including an explicitly requested GPT-5.5 or GPT-5.6 migration. Do not run the latest-model resolver and do not substitute a newer model. Search for and fetch current guidance for that exact model. A GPT-5.6 migration must not load GPT-6 guidance or references.
-- **Unspecified, latest, current, or default target:** Search for and fetch `https://developers.openai.com/api/docs/guides/latest-model` first. Use the corresponding `latest-model.md` metadata only when dynamic migration resolution is needed, then run the platform-specific resolver below and preserve its returned model and exact guide URLs.
+- **Unspecified, latest, current, or default target:** For deprecation-driven migrations, use the retiring model's documented replacement from the [API deprecations page](https://developers.openai.com/api/docs/deprecations) instead of running the latest-model resolver. If no replacement is documented, or the migration is not prompted by a deprecation, search for and fetch `https://developers.openai.com/api/docs/guides/latest-model` first. Use the corresponding `latest-model.md` metadata only when dynamic migration resolution is needed, then run the platform-specific resolver below and preserve its returned model and exact guide URLs.
 - **Latest/current/default prompting:** Follow the dynamic-target route, then use the returned prompting guide. Do not run the resolver for explicitly named-model prompting.
 - **Pure model selection:** Use `references/model-selection.md` instead. Do not run the resolver.
 
