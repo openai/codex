@@ -1183,6 +1183,7 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
     let server = MockServer::start().await;
     let bundle_url =
         mount_remote_plugin_bundle(&server, /*status_code*/ 503, vec![b'x'; 8 * 1024 + 1]).await;
+    let bundle_url = format!("{bundle_url}?sig=signed-token");
     configure_remote_plugin_test(codex_home.path(), &server)?;
     mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
     mount_empty_remote_installed_plugins(&server).await;
@@ -1218,6 +1219,7 @@ async fn plugin_install_preserves_status_when_remote_bundle_error_body_is_too_la
         8192
     );
     assert!(!err.error.message.contains("exceeded maximum size"));
+    assert!(!err.error.message.contains("signed-token"));
     wait_for_remote_plugin_request_count(
         &server,
         "GET",
