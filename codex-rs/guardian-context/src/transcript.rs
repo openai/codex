@@ -24,6 +24,7 @@ use codex_protocol::protocol::InterAgentCommunication;
 use crate::ContextSection;
 use crate::ConversationTranscriptEntry;
 use crate::ConversationTranscriptEntryKind;
+use crate::MAX_TEXT_PART_ESTIMATED_TOKENS;
 use crate::PlannedAction;
 use crate::PlannedActionKind;
 use crate::SectionContributor;
@@ -322,7 +323,10 @@ fn collect_transcript_for_review(
                     entries.push(ConversationTranscriptEntry {
                         kind,
                         content: if crate::estimate_input_tokens(item)
-                            <= config.entry_limits.tool_tokens.min(9_000)
+                            <= config
+                                .entry_limits
+                                .tool_tokens
+                                .min(MAX_TEXT_PART_ESTIMATED_TOKENS)
                         {
                             TranscriptContent::NativeMessage(Box::new(item.clone()))
                         } else {

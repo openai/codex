@@ -103,9 +103,8 @@ fn long_text_and_file_image_delivery_is_lossless_bounded_and_fully_budgeted() {
         .collect::<Vec<_>>();
     assert_eq!(parts.concat(), text);
     assert!(
-        parts
-            .iter()
-            .all(|part| part.len() <= TruncationPolicy::Tokens(9_000).byte_budget())
+        parts.iter().all(|part| part.len()
+            <= TruncationPolicy::Tokens(MAX_TEXT_PART_ESTIMATED_TOKENS).byte_budget())
     );
     assert!(estimated >= crate::estimate_input_tokens(&messages[0]));
     let mut expected_inputs = parts

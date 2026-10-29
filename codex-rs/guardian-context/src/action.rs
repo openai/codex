@@ -4,6 +4,7 @@
 
 use crate::ContextSection;
 use crate::GuardianToolDescriptions;
+use crate::MAX_TEXT_PART_ESTIMATED_TOKENS;
 use crate::SectionContributor;
 use crate::SectionError;
 use crate::SectionInput;
@@ -181,7 +182,7 @@ impl SectionContributor for PlannedActionSection {
             });
         }
         if let PlannedActionKind::ToolCall(call) = &action.kind
-            && crate::native_tool_call::estimate_tokens(call) > 9_000
+            && crate::native_tool_call::estimate_tokens(call) > MAX_TEXT_PART_ESTIMATED_TOKENS
         {
             return Err(SectionError::EvidenceLimitExceeded {
                 section: "native_tool_call",

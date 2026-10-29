@@ -648,9 +648,9 @@ fn delivered_message(
     }
 }
 
-// Preserve the delivery cap below the 10K-token context-item guidance. The
-// estimate uses four bytes per token, so each UTF-8-safe part is at most 36KB.
-const MAX_TEXT_PART_ESTIMATED_TOKENS: usize = 9_000;
+/// Delivery cap below the 10K-token context-item guidance, also applied to native calls.
+/// The estimate uses four bytes per token, so each UTF-8-safe text part is at most 36KB.
+pub const MAX_TEXT_PART_ESTIMATED_TOKENS: usize = 9_000;
 
 /// Bounds individual text parts without changing source text or entry identity.
 /// Budget estimates include the extra wire framing before transport conversion.

@@ -10,6 +10,7 @@ use codex_core::config::RolloutBudgetConfig;
 use codex_core::context::GuardianContextMode;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
+use codex_guardian_context::MAX_TEXT_PART_ESTIMATED_TOKENS;
 use codex_history::RolloutItem;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
@@ -19,6 +20,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::ThreadIdle;
 use core_test_support::responses;
@@ -817,7 +819,8 @@ async fn oversized_action_preserves_review_policy_and_next_review(
         let parts = reviews[0].message_input_texts("user");
         let context = parts.concat();
         assert!(context.contains(&oversized_command));
-        assert!(parts.iter().all(|part| part.len() <= 36_000));
+        assert!(parts.iter().all(|part| part.len()
+            <= TruncationPolicy::Tokens(MAX_TEXT_PART_ESTIMATED_TOKENS).byte_budget()));
         let transcript = context
             .split_once(">>> TRANSCRIPT START\n")
             .expect("full transcript")
