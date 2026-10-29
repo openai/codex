@@ -652,7 +652,7 @@ impl RuntimeKeymap {
 
         DEFAULTS
             .get_or_init(|| {
-                Self::from_config(&TuiKeymap::default()).unwrap_or_else(|error| {
+                Self::resolve(&TuiKeymap::default()).unwrap_or_else(|error| {
                     panic!("built-in keymap defaults must be valid: {error}")
                 })
             })
@@ -670,6 +670,13 @@ impl RuntimeKeymap {
     /// Calling code should not merge bindings across unrelated contexts before
     /// dispatch, or conflict guarantees from this resolver no longer hold.
     pub(crate) fn from_config(keymap: &TuiKeymap) -> Result<Self, String> {
+        if keymap == &TuiKeymap::default() {
+            return Ok(Self::defaults());
+        }
+        Self::resolve(keymap)
+    }
+
+    fn resolve(keymap: &TuiKeymap) -> Result<Self, String> {
         let defaults = Self::built_in_defaults();
         let chords = Arc::new(RuntimeChordKeymap::from_config(keymap)?);
         let side_toggle_default_is_shadowed = keymap.global.toggle_side_conversation.is_none()
