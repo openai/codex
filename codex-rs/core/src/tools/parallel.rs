@@ -682,6 +682,7 @@ mod tests {
                     arguments: "{}".to_string(),
                 },
                 encrypted_function_args: None,
+                native_call: None,
             };
             let direct_guard = ToolCallTimingGuard::capture(
                 Instant::now(),
@@ -734,6 +735,7 @@ mod tests {
                     input: "text('ready')".to_string(),
                 },
                 encrypted_function_args: None,
+                native_call: None,
             };
             let started_at = Instant::now() - Duration::from_secs(/*secs*/ 5);
             let mut timing = ToolCallTimingGuard::capture(
@@ -847,6 +849,7 @@ mod tests {
                 arguments: "{}".to_string(),
             },
             encrypted_function_args: None,
+            native_call: None,
         };
         let response_task =
             tokio::spawn(runtime.handle_tool_call(call, cancellation_token.clone()));
@@ -1020,6 +1023,7 @@ mod tests {
                 arguments: "{}".to_string(),
             },
             encrypted_function_args: None,
+            native_call: None,
         };
 
         let response_task =

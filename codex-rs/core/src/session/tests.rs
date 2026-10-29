@@ -7986,6 +7986,7 @@ async fn request_permissions_tool_resolves_legacy_paths_against_selected_environ
                 call_id,
                 tool_name: codex_tools::ToolName::plain("request_permissions"),
                 source: ToolCallSource::Direct,
+                native_call: None,
                 environments: Default::default(),
                 payload: ToolPayload::Function { arguments },
             };
@@ -8071,6 +8072,7 @@ async fn request_permissions_tool_rejects_invalid_requests(
         call_id: "call-1".to_string(),
         tool_name: codex_tools::ToolName::plain("request_permissions"),
         source: ToolCallSource::Direct,
+        native_call: None,
         environments: Default::default(),
         payload: ToolPayload::Function {
             arguments: json!({
@@ -13432,7 +13434,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         internal_chat_message_metadata_passthrough: None,
     };
 
-    let call = ToolRouter::build_tool_call(item.clone())
+    let call = router
+        .build_tool_call(item.clone())
         .expect("build tool call")
         .expect("tool call present");
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -13593,6 +13596,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: crate::tools::context::ToolCallSource::Direct,
+            native_call: None,
             environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({

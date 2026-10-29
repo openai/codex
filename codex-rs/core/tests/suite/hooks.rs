@@ -531,7 +531,7 @@ elif mode == "exit_2":
     Ok(())
 }
 
-fn write_updating_pre_tool_use_hook(
+pub(super) fn write_updating_pre_tool_use_hook(
     home: &Path,
     matcher: &str,
     updated_input: &Value,

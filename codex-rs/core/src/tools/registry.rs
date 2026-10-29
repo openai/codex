@@ -62,11 +62,6 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
-    /// Opts this invocation into synchronous native-call review before the handler runs.
-    fn requires_guardian_review(&self, _invocation: &ToolInvocation) -> bool {
-        false
-    }
-
     /// The handler observes its cancellation token and must finish before dispatch is aborted.
     fn finishes_on_cancellation(&self) -> bool {
         false
@@ -395,10 +390,19 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-/// A tool runtime together with its effective exposure for the current step.
+/// Captured with the tool plan; review runs after hooks using the rewritten arguments.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum NativeReview {
+    #[default]
+    Disabled,
+    Required,
+}
+
+/// A tool runtime together with its effective exposure and review policy for the current step.
 pub(crate) struct RegisteredTool {
     pub(crate) runtime: Arc<dyn CoreToolRuntime>,
     pub(crate) exposure: ToolExposure,
+    pub(crate) native_review: NativeReview,
     /// Per-step description override; never written back to a shared runtime.
     pub(crate) model_spec: Option<Arc<ToolSpec>>,
 }
@@ -472,6 +476,7 @@ impl ToolRegistry {
         RegisteredTool {
             runtime,
             exposure,
+            native_review: NativeReview::Disabled,
             model_spec,
         }
     }
@@ -518,11 +523,21 @@ impl ToolRegistry {
         runtime: Arc<dyn CoreToolRuntime>,
         exposure: ToolExposure,
     ) {
+        self.register_trusted_with_native_review(runtime, exposure, NativeReview::Disabled);
+    }
+
+    pub(crate) fn register_trusted_with_native_review(
+        &mut self,
+        runtime: Arc<dyn CoreToolRuntime>,
+        exposure: ToolExposure,
+        native_review: NativeReview,
+    ) {
         let tool_name = runtime.tool_name().with_default_namespace();
         if !self.tool_policy.allows(&tool_name) {
             return;
         }
-        let tool = self.prepare_tool(runtime, exposure);
+        let mut tool = self.prepare_tool(runtime, exposure);
+        tool.native_review = native_review;
         match self.tools.entry(tool_name) {
             Entry::Vacant(entry) => {
                 entry.insert(tool);
@@ -750,7 +765,7 @@ impl ToolRegistry {
         }
 
         let dispatch_trace = ToolDispatchTrace::start(&invocation);
-        let tool = match self.tool(&tool_name) {
+        let registered_tool = match self.registered_tool(&tool_name) {
             Some(tool) => tool,
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
@@ -772,6 +787,7 @@ impl ToolRegistry {
                 return Err(err);
             }
         };
+        let tool = Arc::clone(&registered_tool.runtime);
         let telemetry_tags = tool.telemetry_tags(&invocation);
         let mut tool_result_tags = Vec::with_capacity(2 + telemetry_tags.len() + 1);
         let mut extra_trace_fields = Vec::new();
@@ -882,7 +898,7 @@ impl ToolRegistry {
             }
         }
 
-        if tool.requires_guardian_review(&invocation)
+        if registered_tool.native_review == NativeReview::Required
             && let Err(err) = super::review_native_tool_call(&invocation).await
         {
             return Err(fail_before_execution(&invocation, err).await);

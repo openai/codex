@@ -26,6 +26,7 @@ fn cancelled_dispatch_reports_zero_handler_work_even_without_tracing() {
             arguments: "{}".into(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
     extensions.tool_lifecycle_contributor(observer.clone());

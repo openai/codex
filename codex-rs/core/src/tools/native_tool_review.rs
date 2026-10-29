@@ -21,17 +21,8 @@ pub(crate) async fn review(invocation: &ToolInvocation) -> Result<(), FunctionCa
         ));
     };
     let mut item = invocation
-        .session
-        .clone_history()
-        .await
-        .raw_items()
-        .rev()
-        .find(|item| {
-            matches!(
-                item,
-                ResponseItem::FunctionCall { call_id, .. } if call_id == &invocation.call_id
-            )
-        })
+        .native_call
+        .as_deref()
         .cloned()
         .unwrap_or_else(|| ResponseItem::FunctionCall {
             id: None,

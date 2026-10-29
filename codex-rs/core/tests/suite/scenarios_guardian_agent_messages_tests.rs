@@ -12,6 +12,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -20,7 +21,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 
-#[test_case(None; "agent_reply")]
+#[cfg_attr(not(target_os = "windows"), test_case(None; "agent_reply"))]
 #[test_case(Some("functions"); "native_default_namespace")]
 #[test_case(Some("team"); "native_custom_namespace")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -35,8 +36,9 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
                 id,
                 "team",
                 "send_message",
-                r#"{"target":"/root","message":"opaque-message"}"#,
+                r#"{"target":"/root/original","message":"opaque-message"}"#,
             );
+            call["item"]["id"] = json!("fc_native_hook_rewrite");
             call["item"]["encrypted_function_args"] = serde_json::json!(["message"]);
             call["item"]["encrypted_content"] = serde_json::json!("opaque-replay");
             return responses::sse(vec![call, responses::ev_completed(id)]);
@@ -124,9 +126,30 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
                 .permissions
                 .set_permission_profile(PermissionProfile::read_only())
                 .expect("set read-only permission profile");
+            if native_call_namespace.is_none() {
+                trust_discovered_hooks(config);
+            }
+        });
+    #[cfg(not(target_os = "windows"))]
+    let test = if native_call_namespace.is_none() {
+        test.with_pre_build_hook(|home| {
+            super::super::hooks::write_updating_pre_tool_use_hook(
+                home,
+                "^teamsend_message$",
+                &json!({"target": "/root", "message": "opaque-message"}),
+            )
+            .expect("write MAv2 hook rewrite");
         })
-        .build_with_auto_env(&server)
-        .await?;
+    } else {
+        test
+    };
+    let mut test_builder = test;
+    let test = if native_call_namespace.is_none() {
+        // Command hooks run on the host and require a local working directory.
+        test_builder.build(&server).await?
+    } else {
+        test_builder.build_with_auto_env(&server).await?
+    };
     let prompt = "Check the change after the parent confirms the exact action.";
     if historical_call.is_some() {
         // Full Access records the historical call before any reviewer sees it.
@@ -174,6 +197,33 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
         reviews[1].body_json()["client_metadata"]["thread_id"]
     );
     assert!(reviews[1].input().starts_with(&reviews[0].input()));
+    if native_call_namespace.is_none() {
+        let reviewed_calls = reviews[1]
+            .inputs_of_type("function_call")
+            .into_iter()
+            .map(|mut item| {
+                item.as_object_mut()
+                    .expect("function call should be an object")
+                    .remove("internal_chat_message_metadata_passthrough");
+                item
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reviewed_calls,
+            vec![json!({
+                "type": "function_call",
+                "id": "fc_native_hook_rewrite",
+                "call_id": "second-check",
+                "namespace": "team",
+                "name": "send_message",
+                "arguments": serde_json::to_string(&json!({
+                    "target": "/root",
+                    "message": "opaque-message",
+                }))?,
+                "encrypted_function_args": ["message"],
+            })],
+        );
+    }
     for request in reviews.iter().copied().chain(requests.last()) {
         let messages = request
             .input()

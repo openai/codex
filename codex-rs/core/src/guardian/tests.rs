@@ -3267,13 +3267,8 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
         "arguments": r#"{"target":"worker","message":"opaque-message"}"#,
         "encrypted_content": "opaque-replay", "encrypted_function_args": ["message"],
     });
-    session
-        .record_conversation_items(
-            &turn,
-            turn.model_info(),
-            &[serde_json::from_value(original.clone())?],
-        )
-        .await;
+    // Dispatch owns the original call even when it is no longer in live history.
+    let native_call = Arc::new(serde_json::from_value(original.clone())?);
     let mut expected = original;
     expected
         .as_object_mut()
@@ -3291,6 +3286,7 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
         call_id: "action".to_owned(),
         tool_name: codex_tools::ToolName::namespaced("team", "send_message"),
         source: crate::tools::context::ToolCallSource::Direct,
+        native_call: Some(native_call),
         environments: Default::default(),
         payload: crate::tools::context::ToolPayload::Function {
             arguments: expected["arguments"].as_str().unwrap().to_owned(),

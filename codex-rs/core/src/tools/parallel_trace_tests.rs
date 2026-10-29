@@ -71,6 +71,7 @@ async fn spawned_dispatch_preserves_caller_context(level: LevelFilter) -> anyhow
                         arguments: "{}".into(),
                     },
                     encrypted_function_args: None,
+                    native_call: None,
                 },
                 CancellationToken::new(),
             )

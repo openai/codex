@@ -16,7 +16,6 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::call_trace;
 use crate::tools::parallel::ToolCallRuntime;
-use crate::tools::router::ToolRouter;
 use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
@@ -322,7 +321,7 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.step_context.turn.mode() == ModeKind::Plan;
 
-    match ToolRouter::build_tool_call(item.clone()) {
+    match ctx.step_context.tool_router.build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             call_trace::received(

@@ -615,6 +615,7 @@ async fn guardian_allows_exec_command_additional_permissions_requests_past_polic
             call_id: "test-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: crate::tools::context::ToolCallSource::Direct,
+            native_call: None,
             environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
@@ -740,6 +741,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_exec_command_policy_s
             call_id: "strict-shell-command-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: ToolCallSource::Direct,
+            native_call: None,
             environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
@@ -893,6 +895,7 @@ async fn delayed_exec_command_uses_its_captured_authority_after_next_turn_starts
         call_id: call_id.to_string(),
         tool_name: codex_tools::ToolName::plain("exec_command"),
         source: ToolCallSource::Direct,
+        native_call: None,
         environments: Default::default(),
         payload: ToolPayload::Function {
             arguments: serde_json::json!({
@@ -1071,6 +1074,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: crate::tools::context::ToolCallSource::Direct,
+            native_call: None,
             environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
@@ -1196,6 +1200,7 @@ async fn exec_command_allows_sticky_turn_permissions_without_inline_request_perm
             call_id: "sticky-turn-grant".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: crate::tools::context::ToolCallSource::Direct,
+            native_call: None,
             environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({

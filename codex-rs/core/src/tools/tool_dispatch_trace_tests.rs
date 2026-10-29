@@ -367,6 +367,7 @@ fn test_invocation_with_payload(
         tool_name,
         source,
         payload,
+        native_call: None,
         environments: Default::default(),
     }
 }

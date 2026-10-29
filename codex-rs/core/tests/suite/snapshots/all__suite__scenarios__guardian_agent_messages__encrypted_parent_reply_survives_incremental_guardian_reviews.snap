@@ -282,7 +282,7 @@ Scenario: An encrypted parent reply is delivered as a native agent message. Both
 07:agent_message
 08:function_call/exec_command:{"cmd":"exit 0","justification":"Check the requested change.","sandbox_permissions":"require_escalated"}
 09:function_call_output:exec_command failed: CreateProcess { message: "Rejected(\\"This action was rejected due to unacceptable r...e risk. Otherwise, stop and request user input.\\")" } [hash=ae05158f838e6b05]
-10:function_call/team.send_message:{"message":"opaque-message","target":"/root"}
+10:function_call/team.send_message:{"message":"opaque-message","target":"/root/original"}
 11:function_call_output:This action was rejected due to unacceptable risk.
     Reason: Mock assessment; no command is executed.
     The agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy cir... of the risk. Otherwise, stop and request user input. [hash=316a6640caee3870]

@@ -188,6 +188,7 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
             arguments: json!({ "argument": "kept" }).to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
     let prepare = |recorder: &ExecutedToolCalls| {
         recorder.prepare_direct_call(&call, &ToolCallSource::Direct, &step)
@@ -261,6 +262,7 @@ async fn direct_recording_preserves_encoded_arguments_in_history() {
             arguments: invalid_json.clone(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
     let mut item = output("direct");
     let ordinary_output = serde_json::to_value(&item).unwrap()["output"].clone();

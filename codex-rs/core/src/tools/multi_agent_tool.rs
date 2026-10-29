@@ -4,7 +4,6 @@
 use crate::session::session::Session;
 use crate::tools::context::ToolInvocation;
 use crate::tools::registry::CoreToolRuntime;
-use codex_protocol::openai_models::GuardianScope;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -118,16 +117,6 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
 }
 
 impl CoreToolRuntime for MultiAgentV2ToolOverrides {
-    fn requires_guardian_review(&self, invocation: &ToolInvocation) -> bool {
-        invocation
-            .turn
-            .config
-            .features
-            .enabled(codex_features::Feature::GuardianNativeMultiAgentHistory)
-            && GuardianScope::for_multi_agent_tool(&self.tool_name(), self.namespace.as_deref())
-                .is_some()
-    }
-
     fn wait_until_ready<'a>(&'a self, session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
         self.handler.wait_until_ready(session)
     }

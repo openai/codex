@@ -432,6 +432,7 @@ mod tests {
             call_id: "call-extension".to_string(),
             tool_name: codex_tools::ToolName::plain("extension_echo"),
             source: ToolCallSource::Direct,
+            native_call: None,
             environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: json!({ "message": "hello" }).to_string(),
@@ -533,6 +534,7 @@ mod tests {
                 cell_id: "cell-1".to_string(),
                 runtime_tool_call_id: "nested-call-1".to_string(),
             },
+            native_call: None,
             environments: Default::default(),
             payload: ToolPayload::Function {
                 arguments: json!({ "message": "hello" }).to_string(),

@@ -103,6 +103,7 @@ async fn local_compaction_retries_preserve_instructions_and_tool_metadata(
                 arguments: "{}".to_string(),
             },
             encrypted_function_args: None,
+            native_call: None,
         },
         &ToolCallSource::CodeMode {
             cell_id: cell.as_str().to_string(),

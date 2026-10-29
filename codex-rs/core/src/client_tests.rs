@@ -554,6 +554,7 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
                 arguments: json!({"query": id}).to_string(),
             },
             encrypted_function_args: None,
+            native_call: None,
         };
         let (mut recorded, permit) = recorder
             .prepare_direct_call(&call, &ToolCallSource::Direct, &step)

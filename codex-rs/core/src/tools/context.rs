@@ -118,6 +118,8 @@ pub struct ToolInvocation {
     pub tool_name: ToolName,
     pub source: ToolCallSource,
     pub payload: ToolPayload,
+    /// Original function-call evidence owned by this invocation, independent of live history.
+    pub native_call: Option<Arc<ResponseItem>>,
     /// Captured before PreToolUse and retained across input rewrites.
     pub(crate) environments: ToolEnvironments,
 }

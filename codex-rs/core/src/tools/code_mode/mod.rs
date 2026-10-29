@@ -386,6 +386,7 @@ fn submit_nested_tool(
         call_id,
         payload,
         encrypted_function_args: None,
+        native_call: None,
     };
     session
         .services
