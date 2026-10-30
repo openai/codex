@@ -35,6 +35,7 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ProfileWorkspaceRoot;
+use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::EnvironmentConfig;
@@ -829,7 +830,7 @@ impl Session {
         auth_manager: Arc<AuthManager>,
         models_manager: SharedModelsManager,
         git_root_discovery: Arc<GitRootDiscovery>,
-        model_info: ModelInfo,
+        model_info: CatalogModel,
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
@@ -1057,7 +1058,7 @@ impl Session {
         ));
         // Publish the already resolved model before extensions make startup decisions.
         // Turn construction refreshes this attachment when the selected model changes.
-        thread_extension_init.insert(model_info);
+        thread_extension_init.insert(Arc::unwrap_or_clone(model_info.model));
         let tool_policy = thread_extension_init
             .get::<codex_extension_api::ToolPolicy>()
             .unwrap_or_else(|| {

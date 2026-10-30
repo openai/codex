@@ -3,6 +3,8 @@
 //! Text and image bytes stay separate. Hosts provide existing-context estimates;
 //! the shared wire estimate reserves image tokens without counting base64 as text.
 
+use codex_protocol::openai_models::CatalogModel;
+use codex_protocol::openai_models::ModelOrigin;
 use std::io::Write;
 
 use codex_protocol::models::ContentItem;
@@ -86,14 +88,11 @@ pub const DEFAULT_MAX_INPUT_TOKENS: usize = 128_000;
 
 /// Applies the same configured-window cap and effective percentage as sync review.
 /// Async callers supply no parent-model override.
-pub fn effective_input_token_limit(
-    model: &codex_protocol::openai_models::ModelInfo,
-    configured_window: Option<i64>,
-) -> usize {
+pub fn effective_input_token_limit(model: &CatalogModel, configured_window: Option<i64>) -> usize {
     let supported = model
         .resolved_context_window()
         .unwrap_or(DEFAULT_MAX_INPUT_TOKENS as i64);
-    let supported = if model.used_fallback_model_metadata {
+    let supported = if model.origin == ModelOrigin::Synthetic {
         supported.min(DEFAULT_MAX_INPUT_TOKENS as i64)
     } else {
         supported

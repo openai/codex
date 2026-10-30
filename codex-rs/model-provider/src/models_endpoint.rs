@@ -905,10 +905,7 @@ mod tests {
         ))))
         .await
         .unwrap();
-        let model = codex_protocol::openai_models::ModelInfo {
-            used_fallback_model_metadata: false,
-            ..model_info_from_slug("command-auth-model")
-        };
+        let model = model_info_from_slug("command-auth-model");
         Mock::given(method("GET"))
             .and(path("/models"))
             .respond_with(ResponseTemplate::new(200).set_body_json(ModelsResponse {
@@ -959,7 +956,10 @@ mod tests {
             manager
                 .get_model_info(&model.slug, &Default::default())
                 .await,
-            model_info_from_slug(&model.slug)
+            codex_models_manager::CatalogModel {
+                model: model_info_from_slug(&model.slug).into(),
+                origin: codex_models_manager::ModelOrigin::Synthetic,
+            }
         );
         assert_eq!(
             manager
@@ -1001,7 +1001,7 @@ mod tests {
             let mut model = model_info_from_slug("provider-model");
             model.visibility = ModelVisibility::List;
             model.supported_in_api = true;
-            model.used_fallback_model_metadata = false;
+
             let expected = ModelsResponse {
                 models: vec![model],
             };

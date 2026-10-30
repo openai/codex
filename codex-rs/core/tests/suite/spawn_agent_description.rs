@@ -90,7 +90,6 @@ fn test_model_info(
         visibility,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-        used_fallback_model_metadata: false,
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,

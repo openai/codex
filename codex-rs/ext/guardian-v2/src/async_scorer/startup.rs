@@ -101,7 +101,7 @@ pub(super) async fn sampler_config(
                     model, /*configured_window*/ None,
                 )
             });
-    let luna_compaction_hash = luna_model.and_then(|model| model.comp_hash);
+    let luna_compaction_hash = luna_model.and_then(|model| model.comp_hash.clone());
     LunaSamplerConfig {
         api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::from_config(input.config),
         workspace_routing: input

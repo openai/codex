@@ -3,6 +3,7 @@
 //! A missing default reviewer gets one shared catalog refresh per parent session.
 //! Refresh work survives cancelled waiters and precedes checkpoint compatibility decisions.
 
+use codex_protocol::openai_models::CatalogModel;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -82,10 +83,7 @@ pub fn build_guardian_review_session_config(
 pub(crate) async fn resolve_review_model(
     session: &crate::session::session::Session,
     context: &super::GuardianReviewContext,
-) -> (
-    codex_guardian_reviewer::ReviewModel,
-    Arc<codex_protocol::openai_models::ModelInfo>,
-) {
+) -> (codex_guardian_reviewer::ReviewModel, Arc<CatalogModel>) {
     let turn = context.turn();
     // Check before resolving: a refresh that finishes during the lookup still
     // requires a reread, but later calls only need one catalog resolution.
@@ -131,10 +129,7 @@ pub(crate) async fn resolve_review_model(
 async fn resolve_review_model_from_catalog(
     session: &crate::session::session::Session,
     context: &super::GuardianReviewContext,
-) -> (
-    codex_guardian_reviewer::ReviewModel,
-    Arc<codex_protocol::openai_models::ModelInfo>,
-) {
+) -> (codex_guardian_reviewer::ReviewModel, Arc<CatalogModel>) {
     let turn = context.turn();
     // Keep a successful refresh even if writing it to the disk cache failed.
     let models_manager = &session.services.models_manager;
@@ -146,9 +141,13 @@ async fn resolve_review_model_from_catalog(
             .into_iter()
             .filter(|entry| {
                 context.model_info.auto_review_model_override.is_some()
-                    || entry.origin != codex_models_manager::ModelOrigin::Bundled
+                    || matches!(
+                        entry.origin,
+                        codex_models_manager::ModelOrigin::Provider
+                            | codex_models_manager::ModelOrigin::ExplicitConfig
+                    )
             })
-            .map(|entry| entry.model)
+            .map(|entry| Arc::unwrap_or_clone(entry.model))
             .collect(),
     );
     let default_review_model_id = turn.provider.approval_review_preferred_model();

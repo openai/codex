@@ -3,6 +3,7 @@
 //! Requests outside every active action's lag allowance stop as superseded, not failed.
 //! Expiry also cancels metadata waits before transcript preparation, releasing reservations.
 
+use codex_protocol::openai_models::ModelOrigin;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -302,10 +303,10 @@ impl Classification {
                     .get_models_manager()
                     .get_model_info(review_model_id, &config.to_models_manager_config())
                     .await;
-                if review_model.used_fallback_model_metadata && review_model_override.is_none() {
+                if review_model.origin == ModelOrigin::Synthetic && review_model_override.is_none() {
                     parent_model.clone()
                 } else {
-                    Some(Arc::new(review_model))
+                    Some(review_model.model)
                 }
             } else {
                 None

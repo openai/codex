@@ -132,7 +132,6 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
-        used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,

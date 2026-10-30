@@ -359,14 +359,9 @@ async fn guardian_custom_gateway_selects_reviewer_by_catalog_origin(
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config.model = Some("gateway-main".to_string());
-            config.model_catalog = match origin {
-                ModelOrigin::ExplicitConfig => Some(catalog),
-                ModelOrigin::Bundled | ModelOrigin::Provider => None,
-            };
-            config.model_provider.model_catalog_url = match origin {
-                ModelOrigin::Provider => Some(catalog_url.into()),
-                ModelOrigin::Bundled | ModelOrigin::ExplicitConfig => None,
-            };
+            config.model_catalog = (origin == ModelOrigin::ExplicitConfig).then_some(catalog);
+            config.model_provider.model_catalog_url =
+                (origin == ModelOrigin::Provider).then(|| catalog_url.into());
             config.model_provider.name = "Gateway".to_string();
             config.model_provider.supports_websockets = false;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);

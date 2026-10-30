@@ -26,8 +26,9 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
-use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -538,13 +539,13 @@ impl TurnContext {
     }
 
     /// Captures current model metadata without preparing a step.
-    pub(crate) fn capture_current_model_info(&self) -> Arc<ModelInfo> {
+    pub(crate) fn capture_current_model_info(&self) -> Arc<CatalogModel> {
         Arc::clone(&self.next_step_settings.load().model_info)
     }
 
     /// Legacy: returns the frozen initial-turn model metadata.
     /// Step-scoped consumers should use their captured `StepContext::settings`.
-    pub(crate) fn model_info(&self) -> &Arc<ModelInfo> {
+    pub(crate) fn model_info(&self) -> &Arc<CatalogModel> {
         &self.initial_settings.model_info
     }
 
@@ -1295,7 +1296,7 @@ impl Session {
                 // Only execution and initial context creation publish model metadata.
                 self.services
                     .thread_extension_data
-                    .insert(model_info.clone());
+                    .insert_arc(Arc::clone(&model_info.model));
                 self.resolve_multi_agent_version_for_model(&model_info, &per_turn_config)
             }
             TurnContextBuildMode::StartupPrewarm | TurnContextBuildMode::InjectItems => {
@@ -1407,7 +1408,7 @@ impl Session {
     }
 
     pub(crate) async fn maybe_emit_model_warnings_for_turn(&self, tc: &TurnContext) {
-        if tc.model_info().used_fallback_model_metadata {
+        if tc.model_info().origin == ModelOrigin::Synthetic {
             self.send_event(
                 tc,
                 EventMsg::Warning(WarningEvent {

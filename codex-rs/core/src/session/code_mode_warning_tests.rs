@@ -2,16 +2,17 @@ use super::unsupported_code_mode_warning;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_models_manager::model_info::model_info_from_slug;
-use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::CatalogModel;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::openai_models::ToolMode;
 use pretty_assertions::assert_eq;
 
 const MODEL_SLUG: &str = "test-model";
 
-fn known_model_info() -> ModelInfo {
-    ModelInfo {
-        used_fallback_model_metadata: false,
-        ..model_info_from_slug(MODEL_SLUG)
+fn known_model_info() -> CatalogModel {
+    CatalogModel {
+        model: model_info_from_slug(MODEL_SLUG).into(),
+        origin: ModelOrigin::Provider,
     }
 }
 
@@ -50,10 +51,8 @@ fn does_not_warn_when_model_has_tool_mode_selector() {
     features.enable(Feature::CodeModeOnly);
 
     for tool_mode in [ToolMode::Direct, ToolMode::CodeMode, ToolMode::CodeModeOnly] {
-        let model_info = ModelInfo {
-            tool_mode: Some(tool_mode),
-            ..known_model_info()
-        };
+        let mut model_info = known_model_info();
+        model_info.tool_mode = Some(tool_mode);
         assert_eq!(unsupported_code_mode_warning(&model_info, &features), None);
     }
 }
@@ -64,7 +63,13 @@ fn fallback_metadata_only_uses_existing_warning() {
     features.enable(Feature::CodeMode);
 
     assert_eq!(
-        unsupported_code_mode_warning(&model_info_from_slug(MODEL_SLUG), &features),
+        unsupported_code_mode_warning(
+            &CatalogModel {
+                model: model_info_from_slug(MODEL_SLUG).into(),
+                origin: ModelOrigin::Synthetic
+            },
+            &features
+        ),
         None
     );
 }

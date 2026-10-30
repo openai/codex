@@ -5,6 +5,7 @@
 
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -478,11 +479,6 @@ pub struct ModelInfo {
     /// Input modalities accepted by the backend for this model.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
-    /// Internal-only marker set by core when a model slug resolved to fallback metadata.
-    #[serde(default, skip_serializing, skip_deserializing)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    pub used_fallback_model_metadata: bool,
     #[serde(default)]
     pub supports_search_tool: bool,
     /// Whether experimental context management may be activated at session startup.
@@ -517,6 +513,39 @@ pub struct ModelInfo {
     /// Reasoning effort used for multi-agent work when the user selects Ultra.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// Where model metadata was obtained during local catalog resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelOrigin {
+    Bundled,
+    Provider,
+    ExplicitConfig,
+    /// Generic metadata synthesized when no catalog entry matches the requested model.
+    Synthetic,
+}
+
+/// Model metadata and its locally determined source, retained together through resolution.
+/// Metadata is shared with runtime snapshots and extension stores; mutation uses copy-on-write.
+/// This runtime wrapper is not serialized; managers assign its source from local catalog state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogModel {
+    pub model: Arc<ModelInfo>,
+    pub origin: ModelOrigin,
+}
+
+impl std::ops::Deref for CatalogModel {
+    type Target = ModelInfo;
+
+    fn deref(&self) -> &Self::Target {
+        &self.model
+    }
+}
+
+impl std::ops::DerefMut for CatalogModel {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.model)
+    }
 }
 
 impl ModelInfo {
@@ -1173,7 +1202,6 @@ mod tests {
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
-            used_fallback_model_metadata: false,
             supports_search_tool: false,
             supports_experimental_context: false,
             use_responses_lite: false,

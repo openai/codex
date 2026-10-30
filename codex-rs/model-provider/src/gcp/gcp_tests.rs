@@ -1,6 +1,7 @@
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::openai_models::ApplyPatchToolType;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::protocol::MultiAgentVersion;
 use pretty_assertions::assert_eq;
 
@@ -329,7 +330,7 @@ async fn unknown_vertex_models_use_static_catalog_fallback() {
         .await;
 
     assert_eq!(
-        (model.slug, model.used_fallback_model_metadata),
-        ("vertex-test-model".to_string(), true)
+        (model.slug.as_str(), model.origin),
+        ("vertex-test-model", ModelOrigin::Synthetic)
     );
 }

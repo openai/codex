@@ -1999,7 +1999,7 @@ async fn guardian_request_model_for_auto_review(
             crate::guardian::test_host::install(&session, &turn.config);
         }
         GuardianTestCatalog::ParentOnly => {
-            let parent_model = turn.model_info().as_ref().clone();
+            let parent_model = turn.model_info().model.as_ref().clone();
             let auth_manager = Arc::clone(&session.services.auth_manager);
             let models_manager = StaticModelsManager::new(
                 Some(auth_manager),
@@ -2510,7 +2510,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         .models_manager = Arc::new(StaticModelsManager::new(
         Some(auth_manager),
         ModelsResponse {
-            models: vec![reviewer_model],
+            models: vec![Arc::unwrap_or_clone(reviewer_model.model)],
         },
         codex_models_manager::ModelOrigin::ExplicitConfig,
     ));
@@ -3992,7 +3992,7 @@ async fn guardian_review_session_config_clears_context_overrides_for_distinct_ef
 async fn guardian_review_session_config_preserves_context_overrides_for_same_effective_model() {
     let server = start_mock_server().await;
     let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
-    let parent_model = turn.model_info().as_ref().clone();
+    let parent_model = turn.model_info().model.as_ref().clone();
     let auth_manager = Arc::clone(&session.services.auth_manager);
     Arc::get_mut(&mut session)
         .expect("session should be unique")

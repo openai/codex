@@ -1,16 +1,17 @@
 use codex_features::Feature;
 use codex_features::Features;
-use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::CatalogModel;
+use codex_protocol::openai_models::ModelOrigin;
 
 pub(super) fn unsupported_code_mode_warning(
-    model_info: &ModelInfo,
+    model_info: &CatalogModel,
     features: &Features,
 ) -> Option<String> {
     let code_mode_enabled =
         features.enabled(Feature::CodeMode) || features.enabled(Feature::CodeModeOnly);
     if !code_mode_enabled
         || model_info.tool_mode.is_some()
-        || model_info.used_fallback_model_metadata
+        || model_info.origin == ModelOrigin::Synthetic
     {
         return None;
     }

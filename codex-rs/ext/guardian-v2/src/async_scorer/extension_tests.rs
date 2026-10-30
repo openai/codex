@@ -310,7 +310,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
         .get_model_info("gpt-5.5", &config.to_models_manager_config())
         .await;
     model.node_repl_auto_review_required = true;
-    thread_store.insert(model);
+    thread_store.insert_arc(model.model);
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -801,7 +801,7 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         computer_use: Some(codex_protocol::openai_models::GuardianReviewMode::Adaptive),
         ..Default::default()
     });
-    thread_store.insert(changed_model);
+    thread_store.insert_arc(changed_model.model);
     assert_eq!(
         cached_approval(
             &fixture.registry,
@@ -1049,7 +1049,7 @@ async fn sample_configured_conversation_history_with_delivery(
             .get_models_manager()
             .get_model_info("gpt-5.5", &config.to_models_manager_config())
             .await;
-        thread_store.insert(parent_model);
+        thread_store.insert_arc(parent_model.model);
     }
     assert_eq!(
         cached_approval(
@@ -1316,7 +1316,7 @@ async fn contributor_fails_closed_when_model_configuration_is_invalid() -> Resul
         .test
         .codex
         .thread_extension_data()
-        .insert(parent_model);
+        .insert_arc(parent_model.model);
 
     fixture.score_tool(ToolName::plain("read_file")).await;
     fixture.assert_fails_closed("elevated_risk").await
@@ -2472,7 +2472,7 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         .get_model_info("gpt-5.5", &config.to_models_manager_config())
         .await;
     model_info.slug = "protected-model".to_owned();
-    thread_store.insert(model_info);
+    thread_store.insert_arc(model_info.model);
     // A late prewarm preview must leave the active model's review requirements intact.
     let _ = codex_core::guardian_review::prepare_review_prewarm(&test.codex).await?;
     let authorization = ScoreAuthorization::current(&test.codex, &Default::default()).await;
@@ -3348,7 +3348,7 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
         retained_context: parent_context_for_review.then(codex_history::RetainedContext::default),
         review_context_revision,
     };
-    thread_store.insert(parent_model);
+    thread_store.insert_arc(parent_model.model);
 
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {

@@ -28,7 +28,7 @@ async fn originator_managers_share_api_key_discovery_policy() {
     )]));
     let mut model = model_info_from_slug("gpt-5.5");
     model.visibility = codex_protocol::openai_models::ModelVisibility::List;
-    model.used_fallback_model_metadata = false;
+
     let catalog = ModelsResponse {
         models: vec![model],
     };
@@ -118,7 +118,7 @@ async fn originator_catalogs_are_isolated_and_reused_from_disk() {
     ] {
         let mut model = model_info_from_slug("gpt-5.5");
         model.visibility = codex_protocol::openai_models::ModelVisibility::List;
-        model.used_fallback_model_metadata = false;
+
         model.description = Some(originator.to_string());
         let catalog = ModelsResponse {
             models: vec![model],

@@ -645,7 +645,6 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-        used_fallback_model_metadata: false,
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,

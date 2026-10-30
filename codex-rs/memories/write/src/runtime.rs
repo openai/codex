@@ -300,7 +300,7 @@ impl MemoryStartupContext {
 
         StageOneRequestContext {
             version: self.version,
-            model_info,
+            model_info: Arc::unwrap_or_clone(model_info.model),
             session_telemetry: build_session_telemetry(
                 &self.auth_manager,
                 self.thread_id,

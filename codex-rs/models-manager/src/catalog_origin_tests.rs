@@ -26,7 +26,7 @@ async fn catalog_origins_survive_reload_and_auth_change() {
             .model_catalog_with_origins(RefreshStrategy::Online, DEFAULT_HTTP_CLIENT_FACTORY)
             .await;
         assert!(catalog.contains(&CatalogModel {
-            model,
+            model: model.into(),
             origin: ModelOrigin::Provider
         }));
         assert_eq!(
@@ -45,6 +45,16 @@ async fn catalog_origins_survive_reload_and_auth_change() {
             catalog
         );
         assert_eq!(endpoint.fetch_count(), 1);
+        assert_eq!(
+            restarted
+                .get_model_info(
+                    &format!("gateway/{slug}-variant"),
+                    &ModelsManagerConfig::default()
+                )
+                .await
+                .origin,
+            ModelOrigin::Provider
+        );
 
         // An empty subsequent response restores bundled origins instead of retaining old IDs.
         assert_eq!(
@@ -65,6 +75,13 @@ async fn catalog_origins_survive_reload_and_auth_change() {
             bundled
         );
         assert_eq!(endpoint.fetch_count(), 2);
+        assert_eq!(
+            manager
+                .get_model_info("codex-auto-review", &ModelsManagerConfig::default())
+                .await
+                .origin,
+            ModelOrigin::Bundled
+        );
     }
 }
 
@@ -85,10 +102,26 @@ async fn static_catalog_records_its_supplied_origin() {
         );
         assert_eq!(
             manager
+                .get_model_info(
+                    "namespace/reviewer-variant",
+                    &ModelsManagerConfig::default()
+                )
+                .await,
+            CatalogModel {
+                model: ModelInfo {
+                    slug: "namespace/reviewer-variant".to_string(),
+                    ..model.clone()
+                }
+                .into(),
+                origin
+            }
+        );
+        assert_eq!(
+            manager
                 .model_catalog_with_origins(RefreshStrategy::Offline, DEFAULT_HTTP_CLIENT_FACTORY)
                 .await,
             vec![CatalogModel {
-                model: model.clone(),
+                model: model.clone().into(),
                 origin
             }]
         );

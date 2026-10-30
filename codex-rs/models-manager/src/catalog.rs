@@ -7,20 +7,8 @@ use codex_protocol::openai_models::ModelInfo;
 
 use crate::cache::ModelsCacheEntry;
 
-/// Where an effective catalog entry was obtained.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelOrigin {
-    Bundled,
-    Provider,
-    ExplicitConfig,
-}
-
-/// Model metadata and its source captured from the same catalog snapshot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CatalogModel {
-    pub model: ModelInfo,
-    pub origin: ModelOrigin,
-}
+pub use codex_protocol::openai_models::CatalogModel;
+pub use codex_protocol::openai_models::ModelOrigin;
 
 /// Catalog authority is independent of whether its model metadata is borrowed or owned.
 pub(crate) enum SelectedCatalog<'a> {
@@ -64,19 +52,25 @@ impl CatalogState {
         }
     }
 
+    pub fn model_origin(&self, selected: &SelectedCatalog<'_>, slug: &str) -> ModelOrigin {
+        if matches!(selected, SelectedCatalog::CurrentSnapshot(_))
+            && self.provider_model_ids.contains(slug)
+        {
+            ModelOrigin::Provider
+        } else {
+            ModelOrigin::Bundled
+        }
+    }
+
     pub fn model_catalog(&self, selected: SelectedCatalog<'_>) -> Vec<CatalogModel> {
-        let uses_snapshot_ids = matches!(selected, SelectedCatalog::CurrentSnapshot(_));
-        selected
-            .into_models()
-            .into_owned()
-            .into_iter()
-            .map(|model| {
-                let origin = if uses_snapshot_ids && self.provider_model_ids.contains(&model.slug) {
-                    ModelOrigin::Provider
-                } else {
-                    ModelOrigin::Bundled
-                };
-                CatalogModel { model, origin }
+        let models = match &selected {
+            SelectedCatalog::CurrentSnapshot(models) | SelectedCatalog::Fallback(models) => models,
+        };
+        models
+            .iter()
+            .map(|model| CatalogModel {
+                origin: self.model_origin(&selected, &model.slug),
+                model: model.clone().into(),
             })
             .collect()
     }

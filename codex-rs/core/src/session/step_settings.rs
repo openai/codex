@@ -14,7 +14,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ pub(crate) struct ResolvedStepSettings {
     /// Inputs for later sparse patches. Unset defaults and unsupported requested
     /// tiers must not be reconstructed from the effective values below.
     selected: Arc<StepSettings>,
-    pub(crate) model_info: Arc<ModelInfo>,
+    pub(crate) model_info: Arc<CatalogModel>,
     /// Effective request summary: the configured value or the pinned model's default.
     pub(crate) reasoning_summary: ReasoningSummary,
     /// Tier sent on requests, filtered by feature and model support.
@@ -56,7 +56,7 @@ impl ResolvedStepSettings {
     /// Derives request values from selected settings and pinned metadata.
     pub(super) fn new(
         selected: Arc<StepSettings>,
-        model_info: Arc<ModelInfo>,
+        model_info: Arc<CatalogModel>,
         features: &Features,
     ) -> Self {
         let reasoning_summary = selected
@@ -241,7 +241,7 @@ impl StepSettings {
         &self,
         models_manager: &dyn ModelsManager,
         overrides: &ModelInfoOverrides,
-    ) -> ModelInfo {
+    ) -> CatalogModel {
         let config = overrides.models_manager_config(self.personality);
         models_manager
             .get_model_info(self.collaboration_mode.model(), &config)

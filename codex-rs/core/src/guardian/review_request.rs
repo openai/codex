@@ -113,7 +113,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
     ) -> Option<(String, Arc<codex_protocol::openai_models::ModelInfo>)> {
         let active = self.session.active_turn.lock().await;
         let turn = &active.as_ref()?.task.as_ref()?.turn_context;
-        Some((turn.sub_id.clone(), Arc::clone(turn.model_info())))
+        Some((turn.sub_id.clone(), Arc::clone(&turn.model_info().model)))
     }
 
     async fn prepare(

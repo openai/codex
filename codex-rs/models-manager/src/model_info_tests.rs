@@ -244,7 +244,6 @@ fn unknown_model_uses_builtin_instruction_template() {
     let model = model_info_from_slug("unknown-model");
 
     assert_eq!(render_model_instructions(&model), BASE_INSTRUCTIONS);
-    assert!(model.used_fallback_model_metadata);
 }
 
 #[test]
