@@ -4164,18 +4164,34 @@ dependencies = [
  "caseless",
  "chrono",
  "codex-attachment-store",
+ "codex-message-board-mcp",
  "codex-protocol",
  "codex-state",
  "codex-tools",
  "codex-utils-output-truncation",
  "futures",
  "pretty_assertions",
+ "rmcp",
  "serde",
  "serde_json",
  "sqlx",
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "codex-message-board-mcp"
+version = "0.0.0"
+dependencies = [
+ "codex-attachment-store",
+ "codex-message-board",
+ "codex-protocol",
+ "codex-tools",
+ "codex-utils-output-truncation",
+ "rmcp",
+ "serde_json",
  "uuid",
 ]
 

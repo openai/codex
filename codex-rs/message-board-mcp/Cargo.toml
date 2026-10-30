@@ -1,0 +1,24 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-message-board-mcp"
+version.workspace = true
+
+[lib]
+name = "codex_message_board_mcp"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-attachment-store = { workspace = true }
+codex-message-board = { workspace = true }
+codex-protocol = { workspace = true }
+codex-tools = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
+rmcp = { workspace = true, features = ["server"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }

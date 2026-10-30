@@ -92,6 +92,7 @@ members = [
     "memories/write",
     "mermaid",
     "message-board",
+    "message-board-mcp",
     "model-provider-info",
     "mxc-sandbox",
     "models-manager",
@@ -220,6 +221,7 @@ codex-connectors = { path = "connectors" }
 codex-agent-message-board-client = { path = "agent-message-board-client" }
 codex-agent-message-board-extension = { path = "ext/agent-message-board" }
 codex-message-board = { path = "message-board" }
+codex-message-board-mcp = { path = "message-board-mcp" }
 codex-connectors-extension = { path = "ext/connectors" }
 codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }

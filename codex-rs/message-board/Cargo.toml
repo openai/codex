@@ -29,7 +29,9 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
 codex-attachment-store = { workspace = true }
+codex-message-board-mcp = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 pretty_assertions = { workspace = true }
+rmcp = { workspace = true, features = ["client", "server", "transport-async-rw"] }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }
