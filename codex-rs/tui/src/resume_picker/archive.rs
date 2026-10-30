@@ -107,11 +107,14 @@ impl PickerState {
         // Keep the seen-row key as a tombstone so an older page that is already
         // in flight cannot put the archived session back into the picker.
         self.transcript_previews.remove(&thread_id);
-        self.transcript_cells.remove(&thread_id);
+        self.transcript_cells.retain(|(_, id), _| *id != thread_id);
         if self.expanded_thread_id == Some(thread_id) {
             self.expanded_thread_id = None;
         }
-        if self.pending_transcript_open == Some(thread_id) {
+        if self
+            .pending_transcript_open
+            .is_some_and(|(_, id)| id == thread_id)
+        {
             self.pending_transcript_open = None;
             if let Some(cancellation) = self.pending_transcript_cancellation.take() {
                 let _ = cancellation.send(());

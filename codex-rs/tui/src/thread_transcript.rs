@@ -103,13 +103,19 @@ pub(crate) fn thread_to_transcript_cells(
         .turns
         .into_iter()
         .flat_map(|turn| {
-            thread_items_to_transcript_cells(
+            let mut cells = thread_items_to_transcript_cells(
                 thread_id,
                 &cwd,
                 turn.items.into_iter().map(|entry| entry.payload),
                 raw_reasoning_visibility,
                 config,
-            )
+            );
+            if let Some(error) = turn.error {
+                cells.push(Arc::new(crate::history_cell::new_error_event(
+                    error.message,
+                )));
+            }
+            cells
         })
         .collect::<TranscriptCells>();
     if cells.is_empty() {
