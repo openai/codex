@@ -475,6 +475,15 @@ pub fn process_responses_event(
                         .map(Into::into);
                     return Err(ResponsesEventError::Api(ApiError::ResponseIncomplete(
                         Box::new(ResponseIncompleteError {
+                            partial_output: response
+                                .and_then(|r| r.get("output")?.as_array())
+                                .into_iter()
+                                .flatten()
+                                .filter(|item| {
+                                    item.get("status").and_then(Value::as_str) == Some("incomplete")
+                                })
+                                .cloned()
+                                .collect(),
                             reason: reason.to_string(),
                             response_id,
                             token_usage,
@@ -1405,6 +1414,25 @@ mod tests {
                 other => panic!("unexpected event for {code}: {other:?}"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn incomplete_response_retains_partial_output_on_the_error() {
+        let call = json!({
+            "type": "function_call", "status": "incomplete", "id": "fc_attempt",
+            "call_id": "attempt", "name": "unknown", "arguments": "{}",
+        });
+        let terminal = json!({
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_1", "incomplete_details": {"reason": "invalid_recipient"},
+                "output": [{"type": "message", "status": "completed"}, call],
+            }
+        });
+        let sse = format!("event: response.incomplete\ndata: {terminal}\n\n");
+        let events = collect_events(&[sse.as_bytes()]).await;
+        assert_matches!(events.as_slice(), [Err(ApiError::ResponseIncomplete(error))]
+            if error.reason == "invalid_recipient" && error.partial_output == [call]);
     }
 
     #[tokio::test]

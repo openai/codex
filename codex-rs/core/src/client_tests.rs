@@ -1687,6 +1687,65 @@ async fn untraced_http_stream_releases_completed_output_before_response_ends() {
 }
 
 #[tokio::test]
+async fn incomplete_response_traces_attempted_call_without_streaming_it() -> anyhow::Result<()> {
+    let item = json!({
+        "type": "function_call",
+        "status": "incomplete",
+        "id": "fc_attempt",
+        "call_id": "attempt",
+        "name": "unknown_tool",
+        "arguments": "{}",
+    });
+    let unknown = json!({"type": "future_response_item", "status": "incomplete"});
+    for (partial_output, expected_call_ids) in [
+        (vec![item.clone()], vec![Some("attempt")]),
+        (vec![unknown.clone(), item], vec![Some("attempt")]),
+        (vec![unknown], vec![]),
+    ] {
+        let temp = TempDir::new()?;
+        let attempt = started_inference_attempt(&temp)?;
+        let api_stream = futures::stream::iter([Err(codex_api::ApiError::ResponseIncomplete(
+            Box::new(codex_protocol::error::ResponseIncompleteError {
+                reason: "invalid_recipient".to_string(),
+                response_id: Some("response".to_string()),
+                token_usage: None,
+                partial_output,
+            }),
+        ))]);
+        let mut stream = super::map_response_events(
+            /*upstream_request_id*/ None,
+            api_stream,
+            test_session_telemetry(),
+            attempt,
+            test_model_provider(),
+            /*last_response_tx*/ None,
+        );
+        assert!(matches!(stream.next().await, Some(Err(_))));
+        assert!(stream.next().await.is_none());
+
+        let rollout = replay_bundle(temp.path())?;
+        let inference = rollout.inference_calls.values().next().unwrap();
+        assert_eq!(inference.execution.status, ExecutionStatus::Failed);
+        let call_ids: Vec<_> = inference
+            .response_item_ids
+            .iter()
+            .map(|id| rollout.conversation_items[id].call_id.as_deref())
+            .collect();
+        assert_eq!(call_ids, expected_call_ids);
+        assert_eq!(
+            inference.raw_response_payload_id.is_some(),
+            !expected_call_ids.is_empty()
+        );
+        assert_eq!(
+            rollout.threads["thread-root"].conversation_item_ids,
+            inference.request_item_ids
+        );
+        assert!(rollout.tool_calls.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let attempt = started_inference_attempt(&temp)?;

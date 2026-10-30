@@ -83,9 +83,12 @@ pub struct CodexErr {
 
 /// A terminal response that stopped before the model finished, with any reported usage.
 /// Content-filter retries and explicit interruptions have separate handling.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(derive_more::Debug, Error, PartialEq, Eq)]
 #[error("Incomplete response returned, reason: {reason}")]
 pub struct ResponseIncompleteError {
+    /// Provider output items explicitly marked incomplete, retained for failed inference traces.
+    #[debug(skip)]
+    pub partial_output: Vec<serde_json::Value>,
     pub reason: String,
     pub response_id: Option<String>,
     pub token_usage: Option<TokenUsage>,
