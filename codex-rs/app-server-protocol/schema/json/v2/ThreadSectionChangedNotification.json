@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Broadcast after a successful move into, within, or out of a section.",
+  "properties": {
+    "sectionId": {
+      "description": "Destination section, or `null` when the thread was removed from its section.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "sectionId",
+    "threadId"
+  ],
+  "title": "ThreadSectionChangedNotification",
+  "type": "object"
+}

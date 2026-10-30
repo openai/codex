@@ -4886,6 +4886,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/section/changed"
+              ],
+              "title": "Thread/section/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadSectionChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/section/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/attachment/updated"
               ],
               "title": "Thread/attachment/updatedNotificationMethod",
@@ -25243,6 +25263,28 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ThreadSectionChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Broadcast after a successful move into, within, or out of a section.",
+        "properties": {
+          "sectionId": {
+            "description": "Destination section, or `null` when the thread was removed from its section.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sectionId",
+          "threadId"
+        ],
+        "title": "ThreadSectionChangedNotification",
         "type": "object"
       },
       "ThreadSectionCreateParams": {

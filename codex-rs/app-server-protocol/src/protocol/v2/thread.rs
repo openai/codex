@@ -1130,6 +1130,20 @@ pub struct ThreadSectionMoveParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadSectionMoveResponse {}
 
+/// Broadcast after a successful move into, within, or out of a section.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSectionChangedNotification {
+    pub thread_id: String,
+    /// Destination section, or `null` when the thread was removed from its section.
+    #[schemars(
+        required,
+        schema_with = "crate::protocol::serde_helpers::nullable_string_schema"
+    )]
+    pub section_id: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]

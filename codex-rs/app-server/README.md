@@ -44,6 +44,13 @@ These errors are not evidence that history is exhausted; callers can retry.
 A successful response with `nextCursor: null` still indicates exhaustion.
 Default scan-and-repair requests retain their filesystem fallback.
 
+# Thread section moves
+
+After a successful `thread/section/move`, the app-server broadcasts
+`thread/section/changed` to its connected clients. The notification carries
+`threadId` and the destination `sectionId`, which is null for a removal.
+Moves within a section also emit this event so clients can refresh its order.
+
 # Shutdown admission errors
 
 When graceful shutdown rejects new work, app-server returns JSON-RPC error

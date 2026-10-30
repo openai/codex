@@ -1,3 +1,11 @@
+use super::connection_handling_websocket::connect_websocket;
+use super::connection_handling_websocket::read_error_for_id;
+use super::connection_handling_websocket::read_notification_for_method;
+use super::connection_handling_websocket::read_response_for_id;
+use super::connection_handling_websocket::send_initialize_request;
+use super::connection_handling_websocket::send_request;
+use super::connection_handling_websocket::spawn_websocket_server;
+use super::connection_handling_websocket::start_thread;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
@@ -37,6 +45,58 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tokio::test]
+async fn thread_section_moves_notify_other_clients() -> Result<()> {
+    let responses = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses.uri())
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
+    let (mut server, address) = spawn_websocket_server(codex_home.path()).await?;
+    let mut writer = connect_websocket(address).await?;
+    let mut observer = connect_websocket(address).await?;
+    for client in [&mut writer, &mut observer] {
+        send_initialize_request(client, /*id*/ 1, "section-test").await?;
+        read_response_for_id(client, /*id*/ 1).await?;
+    }
+    let first = start_thread(&mut writer, /*id*/ 2).await?;
+    let second = start_thread(&mut writer, /*id*/ 3).await?;
+
+    // A failed write must not invalidate the observer's last known section.
+    send_request(
+        &mut writer,
+        "thread/section/move",
+        /*id*/ 4,
+        Some(json!({"threadId": first, "sectionId": Uuid::new_v4().to_string()})),
+    )
+    .await?;
+    read_error_for_id(&mut writer, /*id*/ 4).await?;
+
+    let pinned = Some(PINNED_THREAD_SECTION_ID);
+    for (thread, destination, before) in [
+        (&first, pinned, None),
+        (&second, pinned, None),
+        (&second, pinned, Some(&first)),
+        (&second, None, None),
+    ] {
+        send_request(
+            &mut writer,
+            "thread/section/move",
+            /*id*/ 5,
+            Some(json!({"threadId": thread, "sectionId": destination, "beforeThreadId": before})),
+        )
+        .await?;
+        read_response_for_id(&mut writer, /*id*/ 5).await?;
+        let changed = read_notification_for_method(&mut observer, "thread/section/changed").await?;
+        assert_eq!(
+            changed.params,
+            Some(json!({"threadId": thread, "sectionId": destination}))
+        );
+    }
+    server.kill().await?;
+    Ok(())
+}
 
 async fn section_request_error(
     server: &mut TestAppServer,

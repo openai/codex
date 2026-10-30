@@ -1470,7 +1470,9 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::ThreadSectionMove { params, .. } => {
-                self.thread_processor.thread_section_move(params).await
+                self.thread_processor
+                    .thread_section_move(request_id.clone(), params)
+                    .await
             }
             ClientRequest::ThreadSectionList { params, .. } => {
                 self.thread_processor.thread_section_list(params).await

@@ -791,7 +791,7 @@ pub(super) async fn send_initialize_request(
     .await
 }
 
-async fn start_thread(stream: &mut WsClient, id: i64) -> Result<String> {
+pub(super) async fn start_thread(stream: &mut WsClient, id: i64) -> Result<String> {
     send_request(
         stream,
         "thread/start",
