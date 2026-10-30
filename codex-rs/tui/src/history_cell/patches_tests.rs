@@ -71,11 +71,24 @@ fn viewed_image_retains_original_path_in_details() {
 
 #[test]
 fn viewed_image_narrow_summary() {
-    let cell = new_view_image_tool_call(
-        "view".to_string(),
-        LegacyAppPathString::from_string("/workspace/very-long-screenshot-name.png"),
-    );
-    insta::assert_snapshot!(cell.display_lines(/*width*/ 32)[0].to_string());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("very-long-screenshot #5.png");
+    image::RgbaImage::new(1, 1).save(&path).unwrap();
+    let url = Url::from_file_path(path.canonicalize().unwrap()).unwrap();
+    let mut cell = new_view_image_tool_call("view".into(), LegacyAppPathString::from_path(&path));
+    cell.link_local_image();
+    let compact = cell.compact_hyperlink_lines(/*width*/ 32);
+    let expanded = cell.expanded_hyperlink_lines(u16::MAX);
+    for row in [&compact[0], &expanded[0]] {
+        let [link] = row.hyperlinks.as_slice() else {
+            panic!("expected one image link")
+        };
+        assert_eq!(
+            (link.columns.clone(), link.terminal_destination()),
+            (15..row.width(), Some(url.to_string()))
+        );
+    }
+    insta::assert_snapshot!(compact[0].line.to_string());
 }
 
 #[test]

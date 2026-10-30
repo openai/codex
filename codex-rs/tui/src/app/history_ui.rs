@@ -22,7 +22,24 @@ pub(super) struct ThreadUsageStatusHistory {
 }
 
 impl App {
-    pub(super) fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Box<dyn HistoryCell>) {
+    pub(super) fn link_viewed_image(&self, cell: &mut dyn HistoryCell) {
+        if let Some(image) = cell
+            .as_any_mut()
+            .downcast_mut::<history_cell::ViewImageHistoryCell>()
+            && !self.app_server_target.uses_remote_workspace()
+            && crate::projectless::has_only_local_environments(&self.environment_manager)
+            && !crate::clipboard_copy::is_ssh_session()
+        {
+            image.link_local_image();
+        }
+    }
+
+    pub(super) fn insert_history_cell(
+        &mut self,
+        tui: &mut tui::Tui,
+        mut cell: Box<dyn HistoryCell>,
+    ) {
+        self.link_viewed_image(cell.as_mut());
         // Global deprecations can be delivered again by hidden threads. Scope deduplication to
         // retained history so clearing or rebuilding a transcript can show the notice again.
         if let Some(notice) = cell

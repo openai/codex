@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use crate::terminal_hyperlinks::TerminalHyperlink;
+use crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines;
 use codex_ansi_escape::ansi_escape;
 use codex_utils_path_uri::LegacyAppPathString;
 
@@ -162,6 +164,17 @@ pub(crate) struct ViewImageHistoryCell {
     activity_id: String,
     filename: String,
     path_label: String,
+    link: Option<TerminalHyperlink>,
+}
+
+impl ViewImageHistoryCell {
+    pub(crate) fn link_local_image(&mut self) {
+        let start = "Viewed image ".len();
+        let end = start + crate::width::display_width(&self.path_label);
+        self.link = self
+            .image_path()
+            .and_then(|path| TerminalHyperlink::viewed_image(start..end, path.as_path()));
+    }
 }
 
 impl HistoryCell for ViewImageHistoryCell {
@@ -186,13 +199,36 @@ impl HistoryCell for ViewImageHistoryCell {
         )]
     }
 
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines = plain_hyperlink_lines(self.display_lines(width));
+        if let ([line], Some(link)) = (lines.as_mut_slice(), &self.link) {
+            let start = crate::width::display_width("• Viewed image ");
+            if start < line.width() {
+                line.hyperlinks.push(link.with_columns(start..line.width()));
+            }
+        }
+        lines
+    }
+
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        PrefixedWrappedHistoryCell::new(
-            Line::from(vec!["Viewed image ".bold(), self.path_label.clone().dim()]),
-            vec!["• ".dim()],
-            "  ",
+        visible_lines(self.transcript_hyperlink_lines(width))
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        if width == 0 {
+            return Vec::new();
+        }
+        let mut line = HyperlinkLine::new(Line::from(vec![
+            "Viewed image ".bold(),
+            self.path_label.clone().dim(),
+        ]));
+        line.hyperlinks.extend(self.link.iter().cloned());
+        adaptive_wrap_hyperlink_lines(
+            &[line],
+            RtOptions::new(usize::from(width))
+                .initial_indent("• ".dim().into())
+                .subsequent_indent("  ".into()),
         )
-        .display_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -212,6 +248,7 @@ pub(crate) fn new_view_image_tool_call(
         activity_id: format!("image-view:{id}"),
         filename,
         path_label: path.into_string(),
+        link: None,
     }
 }
 

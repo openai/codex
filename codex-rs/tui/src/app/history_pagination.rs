@@ -244,6 +244,9 @@ impl App {
                 cells.push(Arc::new(completion));
             }
         }
+        for cell in cells.iter_mut().filter_map(Arc::get_mut) {
+            self.link_viewed_image(cell);
+        }
         cells
     }
 

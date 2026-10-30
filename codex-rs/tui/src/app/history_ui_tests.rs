@@ -34,6 +34,42 @@ fn render_cell(cell: &impl HistoryCell) -> String {
 }
 
 #[tokio::test]
+async fn viewed_image_links_follow_workspace_locality() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("frame.png");
+    image::RgbaImage::new(1, 1).save(&path)?;
+    let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
+    let (mut app, _, _) = make_test_app_with_channels().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let local_links = !crate::clipboard_copy::is_ssh_session();
+    for (target, linked) in [
+        (AppServerTarget::Embedded, local_links),
+        (
+            AppServerTarget::LocalDaemon {
+                endpoint: endpoint.clone(),
+                allow_embedded_fallback: false,
+            },
+            local_links,
+        ),
+        (AppServerTarget::Remote { endpoint }, false),
+    ] {
+        app.app_server_target = target;
+        let cell = history_cell::new_view_image_tool_call(
+            "view".into(),
+            codex_utils_path_uri::LegacyAppPathString::from_path(&path),
+        );
+        app.insert_history_cell(&mut tui, Box::new(cell));
+        let rows = app
+            .transcript_cells
+            .last()
+            .unwrap()
+            .compact_hyperlink_lines(/*width*/ 80);
+        assert_eq!(!rows[0].hyperlinks.is_empty(), linked);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn owned_clear_resets_navigation_and_retains_one_fresh_header() -> Result<()> {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;
