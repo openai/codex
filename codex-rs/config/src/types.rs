@@ -510,7 +510,7 @@ pub struct AppToolsConfig {
 }
 
 /// Approval settings for a connected account within an app.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppLinkConfig {
     /// Reviewer for approval prompts from this account, overriding the app default.
@@ -523,7 +523,7 @@ pub struct AppLinkConfig {
 }
 
 /// Account settings for a single app.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppLinksConfig {
     /// Per-account approval settings keyed by link ID.
@@ -532,7 +532,7 @@ pub struct AppLinksConfig {
 }
 
 /// Config values for a single app/connector.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppConfig {
     /// When `false`, Codex does not surface this app.
@@ -1159,6 +1159,11 @@ pub struct PluginConfig {
     /// Per-MCP-server policy overlays for MCP servers contributed by this plugin.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub mcp_servers: HashMap<String, PluginMcpServerConfig>,
+
+    /// Connector-wide app settings keyed by connector ID. Ignored when this
+    /// plugin is disabled by configuration. Explicit top-level app fields win.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub apps: HashMap<String, AppConfig>,
 }
 
 /// Policy settings for a plugin-provided MCP server.

@@ -32,6 +32,7 @@ pub use app_tool_policy::AppToolPolicyEvaluator;
 pub use app_tool_policy::AppToolPolicyInput;
 pub use app_tool_policy::app_is_enabled;
 pub use app_tool_policy::apps_config_from_layer_stack;
+pub use app_tool_policy::apps_config_origins_from_layer_stack;
 pub use connector_runtime::ConnectorRuntimeContext;
 pub use connector_runtime::ConnectorRuntimeContextKey;
 pub use connector_runtime::ConnectorRuntimeFetchSource;

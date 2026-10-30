@@ -1394,6 +1394,11 @@ enabled = true
 omit_tools_from = []
 
 [apps.app_with_empty_links.links]
+
+[plugins."sample@test".apps.app1]
+enabled = true
+[plugins."sample@test".apps.app1.tools.list]
+enabled = false
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -1448,7 +1453,7 @@ omit_tools_from = []
                         open_world_enabled: None,
                         default_tools_approval_mode: Some(AppToolApproval::Prompt),
                         default_tools_enabled: None,
-                        tools: None,
+                        tools: Some(serde_json::from_value(json!({"list": {"enabled": false}}))?),
                         links: Some(AppLinksConfig {
                             links: std::collections::HashMap::from([
                                 (
@@ -1561,6 +1566,10 @@ omit_tools_from = []
     );
 
     let layers = layers.expect("layers present");
+    assert_eq!(
+        origins["apps.app1.tools.list.enabled"],
+        origins["plugins.sample@test.apps.app1.tools.list.enabled"],
+    );
     assert_layers_user_then_optional_system(&layers, user_file)?;
 
     Ok(())

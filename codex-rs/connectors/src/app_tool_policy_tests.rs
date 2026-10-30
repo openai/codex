@@ -7,6 +7,8 @@ use codex_config::AppToolRequirementToml;
 use codex_config::AppToolsRequirementsToml;
 use codex_config::AppsRequirementsToml;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
@@ -20,6 +22,91 @@ use codex_config::types::AppsDefaultConfig;
 use pretty_assertions::assert_eq;
 
 use super::*;
+
+#[test]
+fn nested_apps_respect_plugin_enablement_and_top_level_overrides() -> anyhow::Result<()> {
+    let user_source = ConfigLayerSource::User {
+        file: AbsolutePathBuf::try_from(std::env::temp_dir().join(CONFIG_TOML_FILE))?,
+        profile: None,
+    };
+    for defaults in ["", "[plugins._default]\nenabled = false"] {
+        let stack = ConfigLayerStack::new(
+            vec![
+                ConfigLayerEntry::new(
+                    user_source.clone(),
+                    TomlValue::Table(
+                        format!(
+                            r#"
+{defaults}
+[plugins.inherited.apps.inherited]
+enabled = false
+[plugins.disabled]
+enabled = false
+[plugins.disabled.apps.mail]
+enabled = false
+[plugins.z]
+enabled = true
+[plugins.z.apps.calendar]
+enabled = true
+default_tools_enabled = false
+[plugins.a]
+enabled = true
+[plugins.a.apps._default]
+enabled = false
+[plugins.a.apps.calendar]
+enabled = false
+omit_tools_from = ["deferred"]
+tools.list = {{ enabled = false, approval_mode = "approve" }}
+"#
+                        )
+                        .parse()?,
+                    ),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionFlags,
+                    TomlValue::Table(
+                        r#"
+[apps.calendar]
+omit_tools_from = []
+tools.list.enabled = true
+"#
+                        .parse()?,
+                    ),
+                ),
+            ],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )?;
+        let mut expected: AppsConfigToml = TomlValue::Table(
+            r#"
+[calendar]
+enabled = false
+omit_tools_from = []
+default_tools_enabled = false
+tools.list = { enabled = true, approval_mode = "approve" }
+"#
+            .parse()?,
+        )
+        .try_into()?;
+        if defaults.is_empty() {
+            expected.apps.insert(
+                "inherited".into(),
+                AppConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(apps_config_from_layer_stack(&stack), Some(expected));
+        let origins = apps_config_origins_from_layer_stack(&stack);
+        assert_eq!(origins["apps.calendar.enabled"].name, user_source);
+        assert_eq!(
+            origins["apps.calendar.tools.list.enabled"].name,
+            ConfigLayerSource::SessionFlags
+        );
+    }
+    Ok(())
+}
 
 #[test]
 fn evaluator_reuses_one_snapshot_across_tools() {

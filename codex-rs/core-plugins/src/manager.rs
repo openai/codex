@@ -662,12 +662,19 @@ impl PluginLoadCacheKey {
         remote_global_catalog_active: bool,
         auth_identity: RemoteInstalledPluginsAuthIdentity,
     ) -> Self {
+        let mut configured_plugins =
+            configured_plugins_from_stack(&config.config_layer_stack, codex_home);
+        let mut plugin_policy = config.plugins.clone();
+        // Apps policy is resolved separately and does not affect loaded plugin contents.
+        for plugin in configured_plugins
+            .values_mut()
+            .chain(plugin_policy.plugins.values_mut())
+        {
+            plugin.apps.clear();
+        }
         Self {
-            configured_plugins: configured_plugins_from_stack(
-                &config.config_layer_stack,
-                codex_home,
-            ),
-            plugin_policy: config.plugins.clone(),
+            configured_plugins,
+            plugin_policy,
             skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
             remote_global_catalog_active,
             // Local curated loads are auth-independent; only remote snapshots vary by account.

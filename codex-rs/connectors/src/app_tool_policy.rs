@@ -1,8 +1,13 @@
 use codex_config::AppsRequirementsToml;
+use codex_config::ConfigLayerMetadata;
 use codex_config::ConfigLayerStack;
+use codex_config::TomlValue;
+use codex_config::merge_toml_values;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AppsConfigToml;
+use codex_config::types::PluginsConfigToml;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use crate::AppInfo;
 
@@ -93,15 +98,77 @@ impl<'a> AppToolPolicyEvaluator<'a> {
 }
 
 /// Reads the merged, unmanaged Apps configuration from a config-layer stack.
+///
+/// App settings from plugins enabled by configuration apply connector-wide.
+/// Tables use the standard config merge, with earlier plugin names taking
+/// precedence and explicit top-level app fields applied last.
 pub fn apps_config_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> Option<AppsConfigToml> {
-    config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|table| table.get("apps"))
-        .cloned()
-        .and_then(|value| AppsConfigToml::deserialize(value).ok())
+    let overlays = apps_config_overlays(&config_layer_stack.effective_config());
+    if overlays.is_empty() {
+        return None;
+    }
+    let mut apps = TomlValue::Table(Default::default());
+    for (_, overlay) in overlays {
+        // Merge before decoding so omitted fields do not acquire serde defaults.
+        merge_toml_values(&mut apps, &overlay);
+    }
+    AppsConfigToml::deserialize(apps).ok()
+}
+
+/// Projects field origins onto the effective `apps.*` paths using Apps precedence.
+pub fn apps_config_origins_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+) -> HashMap<String, ConfigLayerMetadata> {
+    let source_origins = config_layer_stack.origins();
+    let mut origins = HashMap::new();
+    for (prefix, _) in apps_config_overlays(&config_layer_stack.effective_config()) {
+        let prefix = format!("{prefix}.");
+        for (path, origin) in &source_origins {
+            if let Some(field) = path.strip_prefix(&prefix)
+                && (prefix == "apps." || !field.starts_with("_default."))
+            {
+                origins.insert(format!("apps.{field}"), origin.clone());
+            }
+        }
+    }
+    origins
+}
+
+fn apps_config_overlays(config: &TomlValue) -> Vec<(String, TomlValue)> {
+    let mut overlays = Vec::new();
+    if let Some(plugins) = config.get("plugins")
+        && let Ok(policy) = PluginsConfigToml::deserialize(plugins.clone())
+        && let Some(plugins) = plugins.as_table()
+    {
+        let mut plugins: Vec<_> = plugins.iter().collect();
+        plugins.sort_unstable_by_key(|(name, _)| *name);
+        for (name, plugin) in plugins.into_iter().rev() {
+            let Some(plugin_config) = policy.plugins.get(name) else {
+                continue;
+            };
+            if !plugin_config.enabled.unwrap_or(true) || !policy.allows_plugin(name) {
+                continue;
+            }
+            if let Some(plugin_apps) = plugin.get("apps").and_then(TomlValue::as_table) {
+                let mut plugin_apps = plugin_apps.clone();
+                // Nested tables address connector IDs, not global Apps defaults.
+                plugin_apps.remove("_default");
+                if !plugin_apps.is_empty() {
+                    overlays.push((
+                        format!("plugins.{name}.apps"),
+                        TomlValue::Table(plugin_apps),
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(top_level_apps) = config.get("apps") {
+        overlays.push(("apps".to_string(), top_level_apps.clone()));
+    }
+    overlays
 }
 
 pub fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> bool {

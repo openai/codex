@@ -4031,6 +4031,13 @@
     "PluginConfig": {
       "additionalProperties": false,
       "properties": {
+        "apps": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AppConfig"
+          },
+          "description": "Connector-wide app settings keyed by connector ID. Ignored when this plugin is disabled by configuration. Explicit top-level app fields win.",
+          "type": "object"
+        },
         "auto_provision": {
           "description": "Provisioning metadata. Omission does not request provisioning. Only applies with `remote_plugin_id` and Plugin Service availability to the requesting user at provisioning time. Effective enablement, trusted provisioning policy, and authentication and authorization restrictions still apply. This value is not trusted authorization and does not trigger provisioning.",
           "type": "boolean"

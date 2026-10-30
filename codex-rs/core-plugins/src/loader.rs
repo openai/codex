@@ -398,6 +398,7 @@ pub fn remote_installed_plugins_to_config(
                     release_id: None,
                     auto_provision: None,
                     mcp_servers: HashMap::new(),
+                    apps: HashMap::new(),
                 },
             ))
         })

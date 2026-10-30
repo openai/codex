@@ -25,6 +25,8 @@ use codex_config::is_structured_feature_path;
 use codex_config::merge_toml_values;
 use codex_config::shell_environment_filter_entry;
 use codex_config::validate_shell_environment_policy_filter_config;
+use codex_connectors::apps_config_from_layer_stack;
+use codex_connectors::apps_config_origins_from_layer_stack;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -147,6 +149,7 @@ impl ConfigManager {
 
         let mut effective_config_toml = ConfigToml::try_from(layers.effective_config())
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
+        effective_config_toml.apps = apps_config_from_layer_stack(&layers);
         layers
             .requirements_toml()
             .apply_exact_to_config(&mut effective_config_toml);
@@ -163,6 +166,8 @@ impl ConfigManager {
                 .exact_requirement_for_config_path(segments)
                 .is_none()
         });
+        origins.retain(|path, _| !path.starts_with("apps."));
+        origins.extend(apps_config_origins_from_layer_stack(&layers));
         origins.retain(|_, metadata| {
             !matches!(&metadata.name, ConfigLayerSource::PackagedDefaults { .. })
         });
