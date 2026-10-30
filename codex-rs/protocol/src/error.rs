@@ -152,6 +152,8 @@ pub enum CodexErrorDetails {
     #[error("{0}")]
     InvalidRequest(String),
     #[error("{message}")]
+    InvalidAudioInput { message: String },
+    #[error("{message}")]
     ModelNotFound {
         message: String,
         status: Option<StatusCode>,
@@ -429,6 +431,7 @@ impl CodexErr {
             | CodexErrorDetails::QuotaExceeded
             | CodexErrorDetails::InvalidImageRequest()
             | CodexErrorDetails::InvalidRequest(_)
+            | CodexErrorDetails::InvalidAudioInput { .. }
             | CodexErrorDetails::ResponseIncomplete(_)
             | CodexErrorDetails::ModelNotFound { .. }
             | CodexErrorDetails::InvalidPrompt { .. }
@@ -534,7 +537,8 @@ impl CodexErr {
             CodexErrorDetails::SessionConfiguredNotFirstEvent
             | CodexErrorDetails::InternalServerError
             | CodexErrorDetails::InternalAgentDied => CodexErrorInfo::InternalServerError,
-            CodexErrorDetails::UnsupportedOperation(_)
+            CodexErrorDetails::InvalidAudioInput { .. }
+            | CodexErrorDetails::UnsupportedOperation(_)
             | CodexErrorDetails::ThreadNotFound(_)
             | CodexErrorDetails::AgentLimitReached { .. } => CodexErrorInfo::BadRequest,
             CodexErrorDetails::Sandbox(_) => CodexErrorInfo::SandboxError,

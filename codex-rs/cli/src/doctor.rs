@@ -2481,6 +2481,9 @@ fn websocket_error_detail(err: &ApiError) -> String {
         ApiError::InvalidRequest { .. } => {
             "handshake error: invalid request: [redacted]".to_string()
         }
+        ApiError::InvalidAudioInput { .. } => {
+            "handshake error: invalid audio input: [redacted]".to_string()
+        }
         ApiError::ModelNotFound { .. } => {
             "handshake error: model not found: [redacted]".to_string()
         }
@@ -3317,6 +3320,7 @@ mod tests {
             },
             ApiError::RateLimit(message()),
             ApiError::InvalidRequest { message: message() },
+            ApiError::InvalidAudioInput { message: message() },
             ApiError::ModelNotFound {
                 message: message(),
                 status: Some(http::StatusCode::NOT_FOUND),
@@ -3344,6 +3348,7 @@ mod tests {
                 "handshake error: rate limit exceeded: [redacted]",
                 "handshake error: rate limit: [redacted]",
                 "handshake error: invalid request: [redacted]",
+                "handshake error: invalid audio input: [redacted]",
                 "handshake error: model not found: [redacted]",
                 "handshake error: invalid prompt: [redacted]",
                 "handshake error: cyber policy: [redacted]",

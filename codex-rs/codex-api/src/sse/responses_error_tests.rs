@@ -16,6 +16,47 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
 
+#[test]
+fn audio_validation_codes_map_to_non_retryable_audio_input_errors_on_all_transports() {
+    for code in [
+        "audio_too_large",
+        "audio_too_short",
+        "invalid_audio",
+        "invalid_audio_data",
+        "invalid_audio_format",
+        "missing_audio_sample_rate",
+    ] {
+        let detail = json!({"code": code, "message": "Invalid recording."});
+        let http_error = map_api_error(crate::error::ApiError::Transport(
+            crate::TransportError::Http {
+                status: StatusCode::BAD_REQUEST,
+                url: None,
+                headers: None,
+                body: Some(json!({"error": detail}).to_string()),
+                retry_after: None,
+            },
+        ));
+        let mut errors = vec![http_error];
+        for failure in [
+            json!({"type": "error", "error": detail}),
+            json!({"type": "response.failed", "response": {"error": detail}}),
+        ] {
+            let event = serde_json::from_value(failure).unwrap();
+            errors.push(map_api_error(
+                process_responses_event(event).unwrap_err().into_api_error(),
+            ));
+        }
+        for error in errors {
+            assert_eq!(error.retry_delay(/*retry_count*/ 1), None);
+            assert!(matches!(
+                error.details(),
+                codex_protocol::error::CodexErrorDetails::InvalidAudioInput { .. }
+            ));
+            assert_eq!(error.to_string(), "Invalid recording.");
+        }
+    }
+}
+
 /// Only the explicit policy capacity code changes overload attribution.
 #[tokio::test(start_paused = true)]
 async fn policy_capacity_classification_preserves_overload_retry_behavior() {
