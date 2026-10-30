@@ -33,7 +33,10 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_model_provider::create_model_provider;
+use codex_network_proxy::EnvironmentNetworkPolicy;
 use codex_network_proxy::NetworkDecision;
+use codex_network_proxy::NetworkDecisionSource;
+use codex_network_proxy::NetworkPolicyDecision;
 use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::NetworkProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -43,6 +46,7 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::network_policy::NetworkPolicyDecisionPayload;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -984,7 +988,14 @@ async fn sandbox_denied_retry_uses_the_action_policy_and_reviewer() {
                         exit_code: 1,
                         ..Default::default()
                     }),
-                    network_policy_decision: None,
+                    network_policy_decision: Some(NetworkPolicyDecisionPayload {
+                        decision: NetworkPolicyDecision::Ask,
+                        source: NetworkDecisionSource::Decider,
+                        protocol: Some(NetworkApprovalProtocol::Https),
+                        host: Some("example.com".to_string()),
+                        port: Some(443),
+                        reason: None,
+                    }),
                 })));
             }
             Ok("sandbox-retry-succeeded".to_string())
@@ -1009,11 +1020,19 @@ async fn sandbox_denied_retry_uses_the_action_policy_and_reviewer() {
         call_id: call_id.to_string(),
         tool_name: codex_tools::ToolName::plain("exec_command"),
     };
-    let environment = context
+    let mut environment = context
         .step_context
         .environments
         .primary()
-        .expect("primary environment");
+        .expect("primary environment")
+        .clone();
+    environment.config_mut().network_policy = Some(EnvironmentNetworkPolicy::from_config(
+        &NetworkProxyConfig {
+            enabled: true,
+            ..Default::default()
+        },
+        /*managed_allowed_domains_only*/ false,
+    ));
     let mut orchestrator = ToolOrchestrator::new();
     let mut runtime = DeniedOnceRuntime::default();
     let approve = async {
@@ -1021,16 +1040,30 @@ async fn sandbox_denied_retry_uses_the_action_policy_and_reviewer() {
         assert_eq!(approval.call_id, call_id);
         assert_eq!(approval.turn_id, action_turn.sub_id);
         assert_eq!(
-            approval.reason.as_deref(),
-            Some("command failed; retry without sandbox?")
+            approval.network_approval_context,
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            })
         );
         session
-            .notify_approval(call_id, ReviewDecision::Approved)
+            .resolve_exec_approval(
+                approval.call_id.clone(),
+                Some(current_turn.sub_id.clone()),
+                ReviewDecision::Abort,
+            )
+            .await;
+        session
+            .resolve_exec_approval(
+                approval.call_id,
+                Some(approval.turn_id),
+                ReviewDecision::Approved,
+            )
             .await;
     };
 
     let (output, ()) = tokio::join!(
-        orchestrator.run(&mut runtime, environment, &context),
+        orchestrator.run(&mut runtime, &environment, &context),
         approve
     );
     assert_eq!(

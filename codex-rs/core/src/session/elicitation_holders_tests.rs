@@ -100,7 +100,7 @@ async fn command_approval_holds_an_elicitation_until_response(capture: bool, pro
                     vec!["echo".to_string()],
                     cwd.into(),
                     /*reason*/ None,
-                    /*network_approval_context*/ None,
+                    /*network_approval*/ None,
                     /*proposed_execpolicy_amendment*/ None,
                     /*additional_permissions*/ None,
                     /*available_decisions*/ None,

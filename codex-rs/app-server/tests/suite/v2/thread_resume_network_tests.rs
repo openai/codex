@@ -17,6 +17,7 @@ use codex_app_server_protocol::NetworkPolicyRuleAction;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -32,6 +33,7 @@ use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -150,6 +152,8 @@ allow_local_binding = true
         .to_str()
         .context("test executable must be UTF-8")?;
     let probe_timeout = Duration::from_secs(/* secs */ 30);
+    let disconnect_signal = NamedTempFile::new()?;
+    disconnect_signal.as_file().lock()?;
     for (call_id, host, expected_approvals) in [
         ("remembered-domain", "127.0.0.2", 0),
         ("new-domain", "127.0.0.3", 1),
@@ -177,17 +181,34 @@ allow_local_binding = true
             "--nocapture",
             "--test-threads=1",
         ])?;
-        responses::mount_sse_once(
-            &server,
-            responses::sse(vec![
-                responses::ev_exec_command_call_with_args(
-                    call_id,
-                    &json!({"cmd": command, "shell": "/bin/sh", "login": false, "yield_time_ms": probe_timeout.as_millis()}),
-                ),
-                responses::ev_completed(call_id),
-            ]),
-        )
-        .await;
+        let mut probes = Vec::new();
+        if call_id == "new-domain" {
+            let signal = format!(
+                "CODEX_TEST_DISCONNECT_NETWORK_PROBE={}",
+                disconnect_signal.path().display()
+            );
+            probes.push((
+                "withdrawn-probe",
+                format!("env {} {command}", shlex::try_quote(&signal)?),
+            ));
+        }
+        probes.push((call_id, command));
+        for (probe_id, command) in probes {
+            let args = json!({
+                "cmd": command,
+                "shell": "/bin/sh",
+                "login": false,
+                "yield_time_ms": probe_timeout.as_millis(),
+            });
+            responses::mount_sse_once(
+                &server,
+                responses::sse(vec![
+                    responses::ev_exec_command_call_with_args(probe_id, &args),
+                    responses::ev_completed(probe_id),
+                ]),
+            )
+            .await;
+        }
         let final_response = responses::mount_sse_once(
             &server,
             create_final_assistant_message_sse_response("Network probe complete")?,
@@ -205,6 +226,8 @@ allow_local_binding = true
             .await?;
         let started: TurnStartResponse = app.read_response(turn_id).await?;
         let mut approvals = 0;
+        let mut withdrawn_request = None;
+        let mut sent_late_cancel = false;
         loop {
             match timeout(probe_timeout, app.read_next_message()).await?? {
                 JSONRPCMessage::Request(request) => {
@@ -214,17 +237,25 @@ allow_local_binding = true
                     else {
                         anyhow::bail!("unexpected approval request: {request:?}");
                     };
-                    approvals += 1;
-                    assert_eq!(
-                        approvals, expected_approvals,
-                        "unexpected approval for {call_id}"
-                    );
                     assert_eq!(
                         params.network_approval_context,
                         Some(NetworkApprovalContext {
                             host: host.to_string(),
                             protocol: NetworkApprovalProtocol::Http
                         }),
+                    );
+                    if call_id == "new-domain" {
+                        if withdrawn_request.is_none() {
+                            withdrawn_request = Some(request_id);
+                            disconnect_signal.as_file().unlock()?;
+                            continue;
+                        }
+                        assert!(sent_late_cancel, "old approval still visible");
+                    }
+                    approvals += 1;
+                    assert_eq!(
+                        approvals, expected_approvals,
+                        "unexpected approval for {call_id}"
                     );
                     app.send_response(
                         request_id,
@@ -239,6 +270,26 @@ allow_local_binding = true
                         })?,
                     )
                     .await?;
+                }
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == "serverRequest/resolved" =>
+                {
+                    let resolved: ServerRequestResolvedNotification = serde_json::from_value(
+                        notification
+                            .params
+                            .context("serverRequest/resolved params")?,
+                    )?;
+                    if withdrawn_request.as_ref() == Some(&resolved.request_id) {
+                        assert_eq!(resolved.thread_id, thread_id);
+                        app.send_response(
+                            resolved.request_id,
+                            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                                decision: CommandExecutionApprovalDecision::Cancel,
+                            })?,
+                        )
+                        .await?;
+                        sent_late_cancel = true;
+                    }
                 }
                 JSONRPCMessage::Notification(notification)
                     if notification.method == "turn/completed" =>

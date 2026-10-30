@@ -1317,7 +1317,6 @@ pub(super) async fn resolve_pending_server_request(
     outgoing: &Arc<OutgoingMessageSender>,
     request_id: RequestId,
 ) {
-    let thread_id = conversation_id.to_string();
     let subscribed_connection_ids = thread_state_manager
         .subscribed_connection_ids(conversation_id)
         .await;
@@ -1326,14 +1325,7 @@ pub(super) async fn resolve_pending_server_request(
         subscribed_connection_ids,
         conversation_id,
     );
-    outgoing
-        .send_server_notification(ServerNotification::ServerRequestResolved(
-            ServerRequestResolvedNotification {
-                thread_id,
-                request_id,
-            },
-        ))
-        .await;
+    outgoing.resolve_server_request(request_id).await;
 }
 
 pub(super) fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {

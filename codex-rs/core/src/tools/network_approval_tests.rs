@@ -17,10 +17,12 @@ use tokio_util::sync::CancellationToken;
 enum ExecutionCancellationTiming {
     PendingReview,
     AcceptedReview,
+    TurnFinished,
 }
 
 #[test_case(ExecutionCancellationTiming::PendingReview; "pending_review")]
 #[test_case(ExecutionCancellationTiming::AcceptedReview; "accepted_review")]
+#[test_case(ExecutionCancellationTiming::TurnFinished; "turn_finishes_during_review")]
 #[tokio::test]
 #[allow(
     clippy::await_holding_invalid_type,
@@ -32,7 +34,7 @@ async fn execution_cancellation_respects_network_approval_boundary(
     use crate::session::tests::make_session_and_context_with_rx;
     use crate::tasks::SessionTask;
 
-    struct PendingTask;
+    struct PendingTask(CancellationToken);
     impl SessionTask for PendingTask {
         fn kind(&self) -> crate::state::TaskKind {
             crate::state::TaskKind::Regular
@@ -49,7 +51,10 @@ async fn execution_cancellation_respects_network_approval_boundary(
             _input: Vec<crate::session::TurnInput>,
             cancellation_token: CancellationToken,
         ) -> crate::tasks::SessionTaskResult {
-            cancellation_token.cancelled().await;
+            tokio::select! {
+                () = self.0.cancelled() => {}
+                () = cancellation_token.cancelled() => {}
+            }
             Ok(None)
         }
     }
@@ -70,7 +75,10 @@ async fn execution_cancellation_respects_network_approval_boundary(
         )
         .await
         .unwrap();
-    session.start_task(turn, Vec::new(), PendingTask).await;
+    let finish_turn = CancellationToken::new();
+    session
+        .start_task(turn, Vec::new(), PendingTask(finish_turn.clone()))
+        .await;
     let service = &session.services.network_approval;
     register_call_with_default_shell_trigger(service, "execution-1").await;
     let request = NetworkPolicyRequest {
@@ -103,6 +111,17 @@ async fn execution_cancellation_respects_network_approval_boundary(
     .await
     .unwrap();
     let expected_decision = match timing {
+        ExecutionCancellationTiming::TurnFinished => {
+            finish_turn.cancel();
+            assert_eq!(
+                timeout(Duration::from_secs(5), decision)
+                    .await
+                    .expect("turn completion should release the waiting process"),
+                NetworkDecision::deny("not_allowed"),
+            );
+            assert!(!*session.subscribe_elicitation_pause_state().borrow());
+            return;
+        }
         ExecutionCancellationTiming::PendingReview => {
             service.record_call_outcome("execution-1", "original execution denial".to_string());
             NetworkDecision::deny("not_allowed")
@@ -148,12 +167,26 @@ async fn execution_cancellation_respects_network_approval_boundary(
         Some("original execution denial".to_string())
     );
     assert!(service.pending_host_approvals.lock().unwrap().is_empty());
+    let mut resolved = Vec::new();
     while let Ok(event) = events.try_recv() {
-        assert!(!matches!(
-            event.msg,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::GuardianAssessment(_)
-        ));
+        match event.msg {
+            EventMsg::NetworkApprovalResolved { approval_id } => resolved.push(approval_id),
+            EventMsg::ExecApprovalRequest(_) | EventMsg::GuardianAssessment(_) => {
+                panic!("unexpected review after cancellation")
+            }
+            _ => {}
+        }
     }
+    assert_eq!(resolved, [approval.effective_approval_id()]);
+    // The app-server may already have received Cancel when it learns this prompt was withdrawn.
+    session
+        .resolve_exec_approval(
+            approval.effective_approval_id(),
+            Some(approval.turn_id),
+            ReviewDecision::Abort,
+        )
+        .await;
+    assert!(session.active_turn.lock().await.is_some());
     session
         .abort_all_tasks(codex_protocol::protocol::TurnAbortReason::Interrupted)
         .await;

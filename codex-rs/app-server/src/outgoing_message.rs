@@ -16,6 +16,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerNotificationEnvelope;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ServerResponse;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
@@ -226,6 +227,17 @@ impl ThreadScopedOutgoingMessageSender {
 
     pub(crate) async fn send_global_server_notification(&self, notification: ServerNotification) {
         self.outgoing.send_server_notification(notification).await;
+    }
+
+    pub(crate) async fn resolve_server_request(&self, request_id: RequestId) {
+        self.outgoing.cancel_request(&request_id).await;
+        self.send_server_notification(ServerNotification::ServerRequestResolved(
+            ServerRequestResolvedNotification {
+                thread_id: self.thread_id.to_string(),
+                request_id,
+            },
+        ))
+        .await;
     }
 
     pub(crate) async fn abort_pending_server_requests(&self) {

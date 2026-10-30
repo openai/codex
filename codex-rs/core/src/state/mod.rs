@@ -16,6 +16,7 @@ pub(crate) use session::SessionState;
 pub(crate) use turn::AcceptedUserInputResponse;
 pub(crate) use turn::ActiveTurn;
 pub(crate) use turn::MailboxDeliveryPhase;
+pub(crate) use turn::PendingApproval;
 pub(crate) use turn::PendingRequestPermissions;
 pub(crate) use turn::RunningTask;
 pub(crate) use turn::TaskKind;

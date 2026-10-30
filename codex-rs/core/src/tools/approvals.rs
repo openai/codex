@@ -12,6 +12,7 @@ use crate::guardian::spawn_approval_decision;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_tool_call::request_mcp_tool_user_approval;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::NetworkApprovalTurn;
 use crate::session::session::Session;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::runtimes::apply_patch::ApplyPatchApprovalKey;
@@ -793,7 +794,9 @@ impl Session {
                         if human_once {
                             None
                         } else {
-                            ctx.network_approval_context.clone()
+                            ctx.network_approval_context
+                                .clone()
+                                .map(|context| (context, NetworkApprovalTurn::AnyActive))
                         },
                         if human_once {
                             None
@@ -857,7 +860,7 @@ impl Session {
                     ],
                     cwd.clone(),
                     ctx.approval_reason.clone(),
-                    /*network_approval_context*/ None,
+                    /*network_approval*/ None,
                     /*proposed_execpolicy_amendment*/ None,
                     additional_permissions.clone(),
                     Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
@@ -931,7 +934,9 @@ impl Session {
                     command.clone(),
                     cwd.clone().into(),
                     ctx.approval_reason.clone(),
-                    ctx.network_approval_context.clone(),
+                    ctx.network_approval_context
+                        .clone()
+                        .map(|context| (context, NetworkApprovalTurn::Originating)),
                     /*proposed_execpolicy_amendment*/ None,
                     /*additional_permissions*/ None,
                     /*available_decisions*/ None,

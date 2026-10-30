@@ -94,6 +94,12 @@ pub(crate) enum ThreadListenerCommand {
     },
 }
 
+/// Retained until core resolves or withdraws the prompt, even if the client replies first.
+pub(crate) struct PendingNetworkApproval {
+    pub(crate) request_id: RequestId,
+    pub(crate) permission_guard: crate::thread_status::ThreadWatchActiveGuard,
+}
+
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
@@ -120,6 +126,7 @@ impl TurnSummary {
 pub(crate) struct ThreadState {
     goal_resume_lock: Arc<Mutex<()>>,
     pub(crate) pending_interrupts: PendingInterruptQueue,
+    pub(crate) network_approvals: HashMap<String, PendingNetworkApproval>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) last_terminal_turn_id: Option<String>,
     /// Lets an internal runtime replacement wait until the old listener has processed Core's

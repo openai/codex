@@ -2432,6 +2432,11 @@ fn managed_network_sandbox_probe() -> Result<()> {
         connection,
         "GET http://{target}/sandbox HTTP/1.0\r\nHost: {target}\r\nConnection: close\r\n\r\n"
     )?;
+    if let Some(signal) = std::env::var_os("CODEX_TEST_DISCONNECT_NETWORK_PROBE") {
+        // The parent releases its lock after receiving the approval, or when the test exits.
+        std::fs::File::open(signal)?.lock_shared()?;
+        return Ok(());
+    }
     let mut response = String::new();
     connection
         .take(/*limit*/ 4096)

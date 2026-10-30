@@ -3,6 +3,7 @@ use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::request_processors::thread_settings_from_config_snapshot;
 use crate::server_request_error::is_turn_transition_server_request_error;
+use crate::thread_state::PendingNetworkApproval;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_state::resolve_server_request_on_thread_listener;
@@ -779,6 +780,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let additional_permissions =
                 additional_permissions.map(V2AdditionalPermissionProfile::from);
 
+            let is_network_approval = network_approval_context.is_some();
             let params = CommandExecutionRequestApprovalParams {
                 kind: kind.into(),
                 thread_id: conversation_id.to_string(),
@@ -802,6 +804,18 @@ pub(crate) async fn apply_bespoke_event_handling(
                     params,
                 ))
                 .await;
+            let permission_guard = if is_network_approval {
+                thread_state.lock().await.network_approvals.insert(
+                    approval_id.as_ref().unwrap_or(&call_id).clone(),
+                    PendingNetworkApproval {
+                        request_id: pending_request_id.clone(),
+                        permission_guard,
+                    },
+                );
+                None
+            } else {
+                Some(permission_guard)
+            };
             tokio::spawn(async move {
                 on_command_execution_request_approval_response(
                     event_turn_id,
@@ -813,11 +827,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                     rx,
                     conversation,
                     outgoing,
-                    thread_state.clone(),
+                    thread_state,
                     permission_guard,
                 )
                 .await;
             });
+        }
+        EventMsg::NetworkApprovalResolved { approval_id } => {
+            let pending = thread_state
+                .lock()
+                .await
+                .network_approvals
+                .remove(&approval_id);
+            if let Some(pending) = pending {
+                outgoing.resolve_server_request(pending.request_id).await;
+                drop(pending.permission_guard);
+            }
         }
         EventMsg::RequestUserInput(request) => {
             let user_input_guard = thread_watch_manager
@@ -1305,6 +1330,12 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::ShutdownComplete => {
+            // The proxy waiter may send its resolution after this last core event.
+            let approvals = std::mem::take(&mut thread_state.lock().await.network_approvals);
+            for pending in approvals.into_values() {
+                outgoing.resolve_server_request(pending.request_id).await;
+                drop(pending.permission_guard);
+            }
             thread_watch_manager
                 .note_thread_shutdown(&conversation_id.to_string())
                 .await;
@@ -2034,11 +2065,22 @@ async fn on_command_execution_request_approval_response(
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<Mutex<ThreadState>>,
-    permission_guard: ThreadWatchActiveGuard,
+    permission_guard: Option<ThreadWatchActiveGuard>,
 ) {
     let response = receiver.await;
-    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
-    drop(permission_guard);
+    // Core resolves network prompts in event order, including when the execution disappears.
+    if let Some(permission_guard) = permission_guard {
+        resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+        drop(permission_guard);
+    } else if response.is_err()
+        && !thread_state
+            .lock()
+            .await
+            .network_approvals
+            .contains_key(approval_id.as_ref().unwrap_or(&item_id))
+    {
+        return;
+    }
     let (decision, completion_status) = match response {
         Ok(Ok(value)) => {
             match serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value) {
