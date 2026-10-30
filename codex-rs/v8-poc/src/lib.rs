@@ -30,6 +30,10 @@ mod tests {
 
     use super::bazel_target;
 
+    fn uses_inline_typed_array_storage(length: usize, max_inline_size: usize) -> bool {
+        max_inline_size != 0 && length <= max_inline_size
+    }
+
     fn initialize_v8() {
         static INIT: Once = Once::new();
 
@@ -142,6 +146,20 @@ mod tests {
     }
 
     #[test]
+    fn inline_typed_array_storage_respects_disabled_and_bounded_limits() {
+        assert_eq!(
+            [
+                uses_inline_typed_array_storage(/*length*/ 0, /*max_inline_size*/ 0),
+                uses_inline_typed_array_storage(/*length*/ 1, /*max_inline_size*/ 0),
+                uses_inline_typed_array_storage(/*length*/ 0, /*max_inline_size*/ 64),
+                uses_inline_typed_array_storage(/*length*/ 64, /*max_inline_size*/ 64),
+                uses_inline_typed_array_storage(/*length*/ 65, /*max_inline_size*/ 64),
+            ],
+            [false, false, true, true, false]
+        );
+    }
+
+    #[test]
     fn reads_typed_array_contents_with_the_compiled_binding_size() {
         initialize_v8();
         let isolate = &mut v8::Isolate::new(Default::default());
@@ -153,8 +171,7 @@ mod tests {
             let expression = format!("new Uint8Array({length}).fill(90)");
             let value = evaluate_script(scope, &expression);
             let view = v8::Local::<v8::ArrayBufferView>::try_from(value).unwrap();
-            let on_heap =
-                v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP != 0 && length <= v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP;
+            let on_heap = uses_inline_typed_array_storage(length, v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP);
             // Check native placement before asking C++ to copy into storage:
             // stale size-zero bindings must fail here rather than abort in FFI.
             assert_eq!(view.has_buffer(), !on_heap, "byte length {length}");
