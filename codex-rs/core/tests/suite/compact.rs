@@ -5591,6 +5591,76 @@ async fn auto_compact_accounts_for_encrypted_reasoning(continuation: ContinueThr
     );
 }
 
+#[test_case::test_case("response.incomplete", true, true; "incomplete_with_usage")]
+#[test_case::test_case("response.incomplete", false, true; "incomplete_without_usage")]
+#[test_case::test_case("response.completed", false, true; "completed_without_usage")]
+#[test_case::test_case("response.incomplete", false, false; "non_lite_incomplete_without_usage")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_accounts_for_unreported_reasoning(
+    event_type: &str,
+    with_usage: bool,
+    use_responses_lite: bool,
+) {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let mut responses = vec![sse(vec![
+        ev_assistant_message("initial", "Initial reply."),
+        ev_completed_with_tokens("initial", /*total_tokens*/ 80),
+    ])];
+    for id in ["partial-1", "partial-2"] {
+        let usage = with_usage.then(|| {
+            ev_completed_with_tokens(id, /*total_tokens*/ 15)["response"]["usage"].clone()
+        });
+        responses.push(sse(vec![
+            ev_reasoning_item(id, &["partial"], &[&"r".repeat(12_000)]),
+            json!({
+                "type": event_type,
+                "response": {
+                    "id": id,
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "usage": usage
+                }
+            }),
+        ]));
+    }
+    responses.push(remote_v2_compaction_response());
+    responses.push(sse(vec![
+        ev_assistant_message("final", FINAL_REPLY),
+        ev_completed_with_tokens("final", /*total_tokens*/ 1),
+    ]));
+    let request_log = mount_sse_sequence(&server, responses).await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("gpt-5.5", move |model| {
+            model.use_responses_lite = use_responses_lite;
+        })
+        .with_config(|config| {
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(5_000);
+            config.model_provider.stream_max_retries = Some(0);
+        })
+        .build_with_auto_env(&server)
+        .await
+        .expect("build codex");
+
+    for user in ["INITIAL", "PARTIAL_ONE", "PARTIAL_TWO", "CONTINUE"] {
+        test.submit_text_turn(user).await.expect("submit user turn");
+    }
+
+    // The saved count is 80. Each partial response retains about 3,000 tokens:
+    // one stays below the 5,000-token limit, but two must compact before CONTINUE.
+    assert_eq!(
+        request_log
+            .requests()
+            .iter()
+            .map(|request| request.inputs_of_type("compaction_trigger").len())
+            .collect::<Vec<_>>(),
+        vec![0, 0, 0, 1, 0],
+        "retained reasoning must trigger compaction before the continuation request",
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Update once pre-turn compaction includes incoming user input.
 async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_message() {

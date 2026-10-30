@@ -79,6 +79,7 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(
             },
             Some(32_000),
             /*includes_reasoning*/ true,
+            /*input_item_count*/ 0,
         );
     }
     let expected = session.clone_history().await;

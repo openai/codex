@@ -118,9 +118,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 );
             }
             if estimated_deleted_tokens > 0 {
-                let max_local_deleted_tokens = sess
-                    .estimated_tokens_after_last_model_generated_item()
-                    .await;
+                let max_local_deleted_tokens = sess.estimated_tokens_since_last_usage().await;
                 analytics_details.active_context_tokens_before = analytics_details
                     .active_context_tokens_before
                     .map(|active_context_tokens_before| {
