@@ -113,9 +113,9 @@ pub struct RequestBudget {
     pub existing_context_tokens: usize,
 }
 
-/// Optional allocation groups named for the source section that owns the evidence.
+/// Section policies named for the source section that owns the evidence.
 /// The transcript has separate message and tool groups despite sharing one section.
-/// Required evidence, including the action and manual approvals, bypasses these limits.
+/// Entry caps apply to section text; minimum allocations reserve optional evidence.
 #[derive(
     Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
 )]
@@ -147,8 +147,8 @@ pub enum ElasticSection {
 }
 
 /// Per-group elastic limits, validated when decoded; not an activation switch.
-/// Entries configure only optional evidence in the named group. They cannot
-/// downgrade required evidence. Omitted groups use the synchronous entry caps,
+/// Entry caps apply to required and optional supporting text; exact actions stay whole.
+/// Omitted groups use the synchronous entry caps,
 /// reserving one capped entry as their minimum.
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -176,12 +176,12 @@ impl ElasticBudgetConfig {
     }
 }
 
-/// Demand-capped minimum allocation and per-entry text allowance for optional evidence.
+/// Demand-capped optional minimum allocation and per-entry text allowance for all evidence.
 /// The minimum is a reservation, not a maximum: a section may receive spare capacity.
-/// Preparation must cap optional entries once, including framing and omission markers,
+/// Preparation must cap text entries once, including framing and omission markers,
 /// before measuring demand. Entries that fit keep their original representation.
 /// Entry caps cannot exceed the existing text-part delivery allowance.
-/// Opaque text messages must be kept or omitted whole, never shortened.
+/// Exact actions and opaque native payloads stay whole and use global allocation space.
 /// Images stay whole and use section/global space rather than the text entry cap.
 /// Minimum reservations scale down together to fit the available optional budget.
 /// These settings do not change storage bounds or activate elastic allocation.
@@ -347,7 +347,9 @@ impl ComposedContext {
                                 cost.text_bytes.saturating_add(text.rendered().text_bytes);
                             cost
                         }
-                        SectionContent::Other(item) => cost.add_content(item),
+                        SectionContent::Other(item) | SectionContent::Exact(item) => {
+                            cost.add_content(item)
+                        }
                     }),
                 SectionDelivery::Message(message) => match &message.content.item {
                     ResponseItem::Message { content, .. } => content
@@ -426,7 +428,7 @@ fn compaction_ciphertext(item: &ResponseItem) -> Option<&str> {
 pub(super) fn section_content_tokens(item: &SectionContent) -> usize {
     match item {
         SectionContent::Transcript(record) => record.rendered().tokens,
-        SectionContent::Other(item) => content_tokens(item),
+        SectionContent::Other(item) | SectionContent::Exact(item) => content_tokens(item),
     }
 }
 

@@ -18,6 +18,7 @@ use crate::budget::section_content_tokens;
 use crate::budget::section_tokens;
 use crate::composition::SectionDelivery;
 use crate::composition::SectionOutput;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ContentItem;
 
 #[derive(Clone, Copy)]
@@ -84,6 +85,20 @@ pub struct PreparedElasticContext<'a> {
 }
 
 impl PreparedElasticContext<'_> {
+    /// Deduplicates using the completeness of the capped representations.
+    pub fn prepare_sync_delivery(
+        mut self,
+        history: &[ResponseItemEnvelope],
+    ) -> Result<Self, SectionError> {
+        crate::prepare_sync_delivery(&mut self.context, history)?;
+        Ok(self)
+    }
+
+    /// Includes capped evidence and section framing before optional selection.
+    pub fn estimated_tokens(&self) -> usize {
+        self.context.estimated_tokens()
+    }
+
     /// Reserves required evidence and history, then selects whole optional entries.
     pub fn enforce_budget(
         self,

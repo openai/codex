@@ -12,6 +12,7 @@
 use codex_context_fragments::ContextualUserFragment;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
@@ -79,6 +80,8 @@ impl SectionDelivery {
 #[derive(Clone, PartialEq)]
 pub(crate) enum SectionContent {
     Transcript(TranscriptRecord),
+    /// Exact action payload; admission accounts for it without shortening its bytes.
+    Exact(ContentItem),
     Other(ContentItem),
 }
 
@@ -104,6 +107,31 @@ impl From<String> for SectionContent {
 }
 
 impl SectionContent {
+    pub(crate) fn evidence_bytes(&self) -> usize {
+        match self {
+            Self::Transcript(record) => record.rendered().text_bytes,
+            Self::Other(item) | Self::Exact(item) => match item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
+                    text.len()
+                }
+                ContentItem::InputImage {
+                    image: ImageReference::Inline { image_url },
+                    ..
+                } => image_url.len(),
+                ContentItem::InputAudio {
+                    audio: AudioReference::Inline { audio_url },
+                } => audio_url.len(),
+                ContentItem::InputImage {
+                    image: ImageReference::File { .. },
+                    ..
+                }
+                | ContentItem::InputAudio {
+                    audio: AudioReference::File { .. },
+                } => 0,
+            },
+        }
+    }
+
     pub(crate) fn replace_text(&mut self, text: String) -> Option<String> {
         match self {
             Self::Transcript(record) => Some(record.replace_text(text)),
@@ -117,7 +145,7 @@ impl SectionContent {
     fn into_content_item(self) -> ContentItem {
         match self {
             Self::Transcript(record) => record.into_content_item(),
-            Self::Other(item) => item,
+            Self::Other(item) | Self::Exact(item) => item,
         }
     }
 }
@@ -481,9 +509,9 @@ impl CollectedContext {
                         continue;
                     }
                     let mut items = planned
-                        .render(action)
+                        .render_content(action)
                         .into_iter()
-                        .map(|text| Budgeted::required(ContentItem::InputText { text }))
+                        .map(Budgeted::required)
                         .collect::<Vec<_>>();
                     if let Some(descriptions) = planned.tool_descriptions {
                         if descriptions.text.is_empty() {
@@ -493,11 +521,11 @@ impl CollectedContext {
                         }
                         let text = descriptions.render().into_text().unwrap_or_default();
                         items.push(Budgeted::optional(
-                            ContentItem::InputText { text },
+                            ContentItem::InputText { text }.into(),
                             BudgetPriority::ToolDescription,
                         ));
                     }
-                    (11, "planned_action", SectionDelivery::user_content(items))
+                    (11, "planned_action", SectionDelivery::UserContent(items))
                 }
             };
             sections.push((position, SectionOutput { id, delivery }));

@@ -2,6 +2,7 @@
 //! Collection keeps captured sources intact. This owner applies text and image policy;
 //! delivery checks repeat against current reviewer history after compaction.
 
+mod elastic;
 pub(crate) mod repl;
 pub(crate) mod root;
 mod transcript;

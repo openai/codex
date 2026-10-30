@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_history::ResponseItemEnvelope;
-use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
@@ -410,26 +409,7 @@ pub(crate) fn retain_content(
         let keep = retain(index, &mut item.content);
         index += 1;
         if !keep {
-            let original_bytes = match &item.content {
-                SectionContent::Transcript(record) => record.rendered().text_bytes,
-                SectionContent::Other(
-                    ContentItem::InputText { text } | ContentItem::OutputText { text, .. },
-                ) => text.len(),
-                SectionContent::Other(ContentItem::InputImage {
-                    image: ImageReference::Inline { image_url },
-                    ..
-                }) => image_url.len(),
-                SectionContent::Other(ContentItem::InputImage {
-                    image: ImageReference::File { .. },
-                    ..
-                }) => 0,
-                SectionContent::Other(ContentItem::InputAudio {
-                    audio: AudioReference::Inline { audio_url },
-                }) => audio_url.len(),
-                SectionContent::Other(ContentItem::InputAudio {
-                    audio: AudioReference::File { .. },
-                }) => 0,
-            };
+            let original_bytes = item.content.evidence_bytes();
             truncations.push(TruncationObservation {
                 component: section.id,
                 original_bytes,
