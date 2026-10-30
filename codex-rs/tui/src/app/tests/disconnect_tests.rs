@@ -475,10 +475,11 @@ async fn lost_initial_thread_reply_keeps_startup_draft_offline() -> Result<()> {
             )
             .await;
         }
+        let backend_id = session.backend_id();
         app.handle_event(
             &mut tui,
             &mut session,
-            AppEvent::StartupThreadStarted { result },
+            AppEvent::StartupThreadStarted { backend_id, result },
         )
         .await?;
         assert!(app.reconnect.offline);

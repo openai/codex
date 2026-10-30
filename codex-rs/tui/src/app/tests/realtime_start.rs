@@ -102,7 +102,7 @@ async fn rejected_voice_stop_clears_the_owned_session() -> Result<()> {
 
 #[tokio::test]
 async fn background_voice_closes_with_its_owner_not_the_visible_thread() -> Result<()> {
-    for owner_closed in [false, true] {
+    for (owner_closed, background_backend) in [(false, false), (true, false), (true, true)] {
         let (mut app, _events, mut ops) = make_test_app_with_channels().await;
         let owner = ThreadId::new();
         let visible = ThreadId::new();
@@ -117,13 +117,26 @@ async fn background_voice_closes_with_its_owner_not_the_visible_thread() -> Resu
             ));
         app.active_thread_id = Some(visible);
         let closed = if owner_closed { owner } else { visible };
-        app.enqueue_thread_notification(
-            closed,
-            ServerNotification::ThreadClosed(codex_app_server_protocol::ThreadClosedNotification {
-                thread_id: closed.to_string(),
-            }),
-        )
-        .await?;
+        let notification = thread_closed_notification(closed);
+        if background_backend {
+            let source = crate::start_embedded_app_server_for_picker(&app.config).await?;
+            app.handle_polled_backend_event(
+                &source,
+                crate::backend_id::BackendId::new(),
+                crate::app_server_session::AppServerSessionEvent {
+                    backend_id: source.backend_id(),
+                    event: codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+                        notification,
+                    )),
+                },
+            )
+            .await;
+            source.shutdown().await?;
+        } else {
+            app.enqueue_thread_notification(closed, notification)
+                .await?;
+        }
+        assert_eq!(app.chat_widget.thread_id(), Some(visible));
         assert_eq!(
             app.voice_owner_thread_id(),
             (!owner_closed).then_some(owner)

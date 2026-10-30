@@ -1126,11 +1126,13 @@ async fn fresh_startup_thread_drains_buffered_approval_before_draft_handoff() ->
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server =
         crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let backend_id = app_server.backend_id();
 
     let control = Box::pin(app.handle_event(
         &mut tui,
         &mut app_server,
         AppEvent::StartupThreadStarted {
+            backend_id,
             result: Ok(AppServerStartedThread {
                 session: test_thread_session(thread_id, test_path_buf("/tmp/project")),
                 turns: Vec::new(),

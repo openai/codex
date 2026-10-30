@@ -43,6 +43,13 @@ async fn foreign_backend_selection_cannot_resume_same_id_or_unarchive() -> Resul
         SessionSelection::Resume(target.clone()),
     )
     .await?;
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::ResumeBackendSession(routed)
+                if routed.backend_id == target.backend_id && routed.thread_id == target.thread_id
+        ))
+    );
     app.resume_target_session(&mut tui, &mut server, target.clone())
         .await?;
     assert_eq!(app.current_displayed_thread_id(), Some(thread_id));
@@ -61,7 +68,6 @@ async fn foreign_backend_selection_cannot_resume_same_id_or_unarchive() -> Resul
         })
         .collect();
     insta::assert_snapshot!(errors.join("\n"), @r###"
-    ■ This session belongs to a different backend. Open the session picker again.
     ■ This session belongs to a different backend. Open the session picker again.
     "###);
     for action in [

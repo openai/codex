@@ -872,23 +872,8 @@ impl App {
             let pending_settings = restored_blank_session
                 .then(|| input_state.pending_thread_settings.take())
                 .flatten();
-            let preserve_in_flight_turn = !read_only
-                && self
-                    .active_turn_id_for_thread(root_thread_id)
-                    .await
-                    .is_some();
-            self.chat_widget.restore_thread_input_state(
-                Some(input_state),
-                ThreadInputStateRestoreMode {
-                    preserve_in_flight_turn,
-                },
-            );
-            if let Some(settings) = pending_settings {
-                self.chat_widget.on_thread_settings_updated(settings);
-            }
-            if !preserve_in_flight_turn {
-                self.chat_widget.maybe_send_next_queued_input();
-            }
+            self.restore_session_draft(root_thread_id, input_state, pending_settings)
+                .await;
         }
         if !read_only && !is_new_session && !self.chat_widget.fork_in_progress {
             self.maybe_prompt_resume_paused_goal_after_resume(app_server, root_thread_id)
@@ -896,6 +881,28 @@ impl App {
         }
 
         Ok(AppRunControl::Continue)
+    }
+
+    pub(super) async fn restore_session_draft(
+        &mut self,
+        thread_id: ThreadId,
+        input: ThreadInputState,
+        pending_settings: Option<codex_app_server_protocol::ThreadSettingsUpdatedNotification>,
+    ) {
+        let preserve_in_flight_turn = !self.chat_widget.is_external_writer_view()
+            && self.active_turn_id_for_thread(thread_id).await.is_some();
+        self.chat_widget.restore_thread_input_state(
+            Some(input),
+            ThreadInputStateRestoreMode {
+                preserve_in_flight_turn,
+            },
+        );
+        if let Some(settings) = pending_settings {
+            self.chat_widget.on_thread_settings_updated(settings);
+        }
+        if !preserve_in_flight_turn {
+            self.chat_widget.maybe_send_next_queued_input();
+        }
     }
 
     pub(super) async fn replay_agents_overview_requests(

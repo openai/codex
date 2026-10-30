@@ -21,7 +21,6 @@ pub(super) struct BackendSettings {
 #[derive(Clone, Copy)]
 pub(super) enum ResumeSource<'a> {
     Active,
-    #[cfg_attr(not(test), allow(dead_code, reason = "Used by backend handoff."))]
     Backend(&'a BackendSettings),
 }
 
@@ -36,7 +35,6 @@ pub(super) struct PreparedResume {
 }
 
 impl App {
-    #[cfg_attr(not(test), allow(dead_code, reason = "Used by backend handoff."))]
     pub(super) fn backend_settings(&self) -> BackendSettings {
         BackendSettings {
             config: self.config.clone(),

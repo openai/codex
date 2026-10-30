@@ -2,10 +2,160 @@
 
 use super::*;
 use crate::app::backend_sessions::BackendSessions;
+use crate::app_server_session::ThreadParamsMode;
+use crate::backend_id::BackendId;
+use codex_app_server_client::AppServerClient;
+use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::CloudClient;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
+
+fn approval_request(thread_id: ThreadId, request_id: i64) -> ServerRequest {
+    ServerRequest::FileChangeRequestApproval {
+        request_id: AppServerRequestId::Integer(request_id),
+        params: FileChangeRequestApprovalParams {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            started_at_ms: 0,
+            reason: None,
+            grant_root: None,
+        },
+    }
+}
+
+#[tokio::test]
+async fn backend_sessions_parked_request_does_not_hide_disconnect() -> Result<()> {
+    let [
+        (displayed, _displayed_events),
+        (background, background_events),
+    ] = std::array::from_fn(|_| {
+        let (client, _, events) = CloudClient::channel(/*capacity*/ 1);
+        (
+            AppServerSession::new(
+                BackendId::new(),
+                AppServerClient::Cloud(client),
+                ThreadParamsMode::Cloud,
+            ),
+            events,
+        )
+    });
+    let background_id = background.backend_id();
+    let mut backends = BackendSessions::from_initial(displayed, vec![background]);
+    let initial = backends.displayed;
+    let thread_id = ThreadId::new();
+
+    background_events
+        .send(AppServerEvent::ServerRequest(Box::new(approval_request(
+            thread_id, /*request_id*/ 1,
+        ))))
+        .unwrap();
+    assert!(
+        backends
+            .next_event(/*paused_backend*/ None)
+            .now_or_never()
+            .is_none()
+    );
+    backends.displayed = backends.slot(background_id).unwrap();
+    let (owner, parked) = backends.next_event(/*paused_backend*/ None).await;
+    assert_eq!(owner, background_id);
+    assert!(matches!(
+        parked.unwrap().event,
+        AppServerEvent::ServerRequest(_)
+    ));
+
+    backends.displayed = initial;
+    background_events
+        .send(AppServerEvent::ServerRequest(Box::new(approval_request(
+            thread_id, /*request_id*/ 2,
+        ))))
+        .unwrap();
+    background_events
+        .send(AppServerEvent::ServerRequest(Box::new(approval_request(
+            thread_id, /*request_id*/ 3,
+        ))))
+        .unwrap();
+    assert!(
+        backends
+            .next_event(/*paused_backend*/ None)
+            .now_or_never()
+            .is_none()
+    );
+    assert!(
+        backends
+            .next_event(/*paused_backend*/ None)
+            .now_or_never()
+            .is_none()
+    );
+    background_events
+        .send(AppServerEvent::ServerNotification(Box::new(
+            ServerNotification::ServerRequestResolved(
+                codex_app_server_protocol::ServerRequestResolvedNotification {
+                    thread_id: thread_id.to_string(),
+                    request_id: AppServerRequestId::Integer(2),
+                },
+            ),
+        )))
+        .unwrap();
+    let (owner, resolved) = backends.next_event(/*paused_backend*/ None).await;
+    assert_eq!(owner, background_id);
+    assert!(matches!(
+        resolved.unwrap().event,
+        AppServerEvent::ServerNotification(notification)
+            if matches!(
+                notification.as_ref(),
+                ServerNotification::ServerRequestResolved(resolved)
+                    if resolved.request_id == AppServerRequestId::Integer(2)
+            )
+    ));
+    backends.displayed = backends.slot(background_id).unwrap();
+    let (owner, unresolved) = backends.next_event(/*paused_backend*/ None).await;
+    assert_eq!(owner, background_id);
+    assert!(matches!(
+        unresolved.unwrap().event,
+        AppServerEvent::ServerRequest(request)
+            if request.id() == &AppServerRequestId::Integer(3)
+    ));
+    assert!(
+        backends
+            .next_event(/*paused_backend*/ None)
+            .now_or_never()
+            .is_none()
+    );
+
+    backends.displayed = initial;
+    background_events
+        .send(AppServerEvent::ServerRequest(Box::new(approval_request(
+            thread_id, /*request_id*/ 4,
+        ))))
+        .unwrap();
+    assert!(
+        backends
+            .next_event(/*paused_backend*/ None)
+            .now_or_never()
+            .is_none()
+    );
+    background_events
+        .send(AppServerEvent::Disconnected {
+            message: "stream ended".to_string(),
+        })
+        .unwrap();
+    drop(background_events);
+    let (owner, disconnected) = backends.next_event(/*paused_backend*/ None).await;
+    assert_eq!(owner, background_id);
+    assert!(matches!(
+        disconnected.unwrap().event,
+        AppServerEvent::Disconnected { .. }
+    ));
+    backends.displayed = backends.slot(background_id).unwrap();
+    let (owner, closed) = backends.next_event(/*paused_backend*/ None).await;
+    assert_eq!(owner, background_id);
+    assert!(closed.is_none());
+    assert!(!backends.is_listening(background_id));
+    Ok(())
+}
 
 #[tokio::test]
 async fn backend_sessions_poll_three_sources_and_isolate_closed_or_paused_streams() -> Result<()> {

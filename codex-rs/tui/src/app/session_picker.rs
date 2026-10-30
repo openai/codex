@@ -4,13 +4,28 @@ use super::*;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 
 impl App {
+    pub(super) async fn capture_session_inputs(&mut self) {
+        for (id, channel) in &self.thread_event_channels {
+            if let Some(input_state) = channel.store.lock().await.input_state.clone() {
+                self.agents_overview.input_states.insert(*id, input_state);
+            }
+        }
+        if let Some(current_thread_id) = self.current_displayed_thread_id()
+            && let Some(input_state) = self.chat_widget.capture_thread_input_state()
+        {
+            self.agents_overview
+                .input_states
+                .insert(current_thread_id, input_state);
+        }
+    }
+
     pub(super) async fn open_resume_picker_for_backends(
         &mut self,
         tui: &mut tui::Tui,
         backends: &mut super::backend_sessions::BackendSessions,
-        displayed_session: super::backend_sessions::SessionSlot,
     ) -> Result<AppRunControl> {
-        let displayed_owner = backends.session_at(displayed_session).backend_id();
+        let displayed_session = backends.displayed;
+        let displayed_owner = backends.displayed_owner();
         let selection =
             crate::resume_picker::run_resume_picker_from_existing_session_with_app_servers(
                 crate::uses_remote_workspace_or_environment(
@@ -23,7 +38,7 @@ impl App {
                 /*show_all*/ false,
                 /*include_non_interactive*/ false,
                 crate::resume_picker::ResumePickerAppServers::new(
-                    backends.picker_views(displayed_owner),
+                    backends.picker_views(),
                     displayed_owner,
                 ),
                 self.primary_thread_id
@@ -55,25 +70,15 @@ impl App {
     ) -> Result<AppRunControl> {
         match selection {
             SessionSelection::Resume(target_session) => {
-                if let Err(error) = target_session.ensure_backend(app_server.backend_id()) {
-                    self.add_session_picker_error(error.to_string());
+                if target_session.backend_id != app_server.backend_id() {
+                    self.app_event_tx
+                        .send(AppEvent::ResumeBackendSession(target_session));
                     return Ok(AppRunControl::Continue);
                 }
                 let thread_id = target_session.thread_id;
                 let switching_threads = self.current_displayed_thread_id() != Some(thread_id);
                 if switching_threads {
-                    for (id, channel) in &self.thread_event_channels {
-                        if let Some(input_state) = channel.store.lock().await.input_state.clone() {
-                            self.agents_overview.input_states.insert(*id, input_state);
-                        }
-                    }
-                    if let Some(current_thread_id) = self.current_displayed_thread_id()
-                        && let Some(input_state) = self.chat_widget.capture_thread_input_state()
-                    {
-                        self.agents_overview
-                            .input_states
-                            .insert(current_thread_id, input_state);
-                    }
+                    self.capture_session_inputs().await;
                 }
                 if let AppRunControl::Exit(reason) = self
                     .resume_target_session(tui, app_server, target_session)

@@ -125,7 +125,16 @@ impl App {
         app_server: &mut AppServerSession,
         destination: Option<ThreadId>,
     ) {
-        let thread_ids: Vec<_> = self.thread_event_channels.keys().copied().collect();
+        let thread_ids: Vec<_> = self
+            .thread_event_channels
+            .iter()
+            .filter(|(_, channel)| {
+                channel
+                    .backend_id
+                    .is_none_or(|owner| owner == app_server.backend_id())
+            })
+            .map(|(id, _)| *id)
+            .collect();
         for thread_id in thread_ids {
             if self.voice_owner_thread_id() == Some(thread_id)
                 || destination == Some(thread_id)

@@ -24,7 +24,7 @@ pub(super) struct ReconnectState {
 }
 
 pub(super) struct Reconnected {
-    session: AppServerSession,
+    pub(super) session: AppServerSession,
     bootstrap: AppServerBootstrap,
     thread: Option<AppServerStartedThread>,
 }
@@ -305,6 +305,32 @@ impl App {
         true
     }
 
+    pub(super) fn bind_backend_workspace(
+        &mut self,
+        app_server: &AppServerSession,
+        search_dir: PathBuf,
+    ) {
+        self.chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
+        self.chat_widget.set_local_worktree_operations(
+            !crate::uses_remote_workspace_or_environment(
+                &self.app_server_target,
+                self.environment_manager.as_ref(),
+            ),
+        );
+        self.chat_widget.windows_sandbox_local_server =
+            !self.app_server_target.uses_remote_workspace()
+                && app_server.app_server_platform_os() == Some("windows");
+        self.chat_widget.remote_connection =
+            crate::status::remote_connection::remote_connection_status_value(
+                &self.app_server_target,
+                app_server.server_version(),
+            );
+        self.workspace_command_runner = Some(Arc::new(AppServerWorkspaceCommandRunner::new(
+            app_server.request_handle(),
+        )));
+        self.file_search = FileSearchManager::new(search_dir, self.app_event_tx.clone());
+    }
+
     pub(super) async fn finish_reconnect(
         &mut self,
         tui: &mut tui::Tui,
@@ -370,16 +396,6 @@ impl App {
                 self.chat_widget.windows_sandbox_elevated_setup_complete = false;
             }
         }
-        self.chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
-        self.chat_widget.set_local_worktree_operations(
-            !crate::uses_remote_workspace_or_environment(
-                &self.app_server_target,
-                self.environment_manager.as_ref(),
-            ),
-        );
-        self.chat_widget.windows_sandbox_local_server =
-            !self.app_server_target.uses_remote_workspace()
-                && app_server.app_server_platform_os() == Some("windows");
         self.chat_widget.windows_sandbox_host = WindowsSandboxHost::Unknown;
         self.chat_widget.requires_openai_auth = bootstrap.requires_openai_auth;
         let managed_daemon = self
@@ -387,19 +403,10 @@ impl App {
             .remote_connection
             .as_ref()
             .is_some_and(|connection| connection.is_managed_daemon);
-        self.chat_widget.remote_connection =
-            crate::status::remote_connection::remote_connection_status_value(
-                &self.app_server_target,
-                app_server.server_version(),
-            );
+        self.bind_backend_workspace(app_server, self.config.cwd.to_path_buf());
         if let Some(connection) = &mut self.chat_widget.remote_connection {
             connection.is_managed_daemon = connection.is_local_daemon && managed_daemon;
         }
-        self.workspace_command_runner = Some(Arc::new(AppServerWorkspaceCommandRunner::new(
-            app_server.request_handle(),
-        )));
-        self.file_search =
-            FileSearchManager::new(self.config.cwd.to_path_buf(), self.app_event_tx.clone());
         self.model_catalog = Arc::new(
             ModelCatalog::new(bootstrap.available_models)
                 .with_collaboration_modes(bootstrap.collaboration_modes),
@@ -444,6 +451,7 @@ impl App {
         // so their late requests cannot leak into recovery. Background threads attach on selection.
         for channel in self.thread_event_channels.values_mut() {
             let mut replacement = ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY);
+            replacement.backend_id = channel.backend_id;
             if channel.attachment() == ThreadEventAttachment::ExternalWriter {
                 replacement.mark_external_writer();
             } else {

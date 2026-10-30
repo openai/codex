@@ -1,6 +1,7 @@
 //! Replacement starts use server defaults and preserve the current task on failure.
 
 use super::*;
+use crate::app::backend_sessions::BackendSessions;
 use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillScope;
 use codex_app_server_protocol::SkillsListEntry;
@@ -457,6 +458,117 @@ async fn replacement_failure_keeps_current_task_and_restores_input() -> Result<(
         server.shutdown().await?;
         proxy.await??;
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backend_handoff_errors_are_snapshotted() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let source = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let (destination, _, destination_proxy) = start_recording_app_server_with_history(
+        &app.config,
+        HistoryCapabilities::ConfigReadFails,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        LoaderOverrides::without_managed_config_for_tests(),
+    )
+    .await?;
+    let destination_id = destination.backend_id();
+    let target = crate::resume_picker::SessionTarget {
+        backend_id: destination_id,
+        path: None,
+        thread_id: ThreadId::new(),
+        cwd: None,
+        history_mode: None,
+    };
+    let mut backends = BackendSessions::from_initial(source, vec![destination]);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.resume_backend_session(&mut tui, &mut backends, target.clone())
+        .await?;
+    insta::assert_snapshot!(next_history_message(&mut events), @"■ This backend has no connection settings. Open the session picker again.");
+
+    backends
+        .settings
+        .insert(destination_id, app.backend_settings());
+    app.resume_backend_session(&mut tui, &mut backends, target)
+        .await?;
+    insta::assert_snapshot!(next_history_message(&mut events), @"■ Unable to check folder trust: config/read failed while checking remote project trust");
+
+    backends.shutdown().await?;
+    destination_proxy.await??;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_backend_handoff_detaches_through_the_source_connection() -> Result<()> {
+    let mut app = make_test_app().await;
+    let (source, source_requests, source_proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    let (mut destination, destination_requests, destination_proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    let destination_id = destination.backend_id();
+    let resumed = destination.start_thread(&app.config).await?;
+    let resumed_id = resumed.session.thread_id;
+    let saved_item = serde_json::from_str(
+        r#"{"type":"message","role":"assistant","content":[{"type":"output_text","text":"saved history"}]}"#,
+    )?;
+    destination
+        .thread_inject_items(resumed.session.thread_id, vec![saved_item])
+        .await?;
+    let current = ThreadId::new();
+    app.ensure_thread_channel(ThreadId::new()).backend_id =
+        Some(crate::backend_id::BackendId::new());
+    app.enqueue_primary_thread_session(
+        test_thread_session(current, app.config.cwd.to_path_buf()),
+        Vec::new(),
+    )
+    .await?;
+    let target = crate::resume_picker::SessionTarget {
+        backend_id: destination_id,
+        path: None,
+        thread_id: resumed_id,
+        cwd: Some(resumed.session.cwd.to_path_buf()),
+        history_mode: None,
+    };
+    let mut backends = BackendSessions::from_initial(source, vec![destination]);
+    backends
+        .settings
+        .insert(destination_id, app.backend_settings());
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut stale_input = app.chat_widget.capture_thread_input_state().unwrap();
+    stale_input.provider_error = Some(
+        codex_app_server_protocol::ModelProviderError::ModelProviderNotConfigured {
+            model_provider: "repaired-provider".into(),
+        },
+    );
+    app.agents_overview
+        .input_states
+        .insert(resumed_id, stale_input);
+
+    app.resume_backend_session(&mut tui, &mut backends, target)
+        .await?;
+
+    assert_eq!(backends.displayed_owner(), destination_id);
+    assert_eq!(app.chat_widget.thread_id(), Some(resumed_id));
+    assert!(!app.chat_widget.has_provider_error());
+    assert_eq!(
+        recorded_params(&source_requests, "thread/unsubscribe"),
+        vec![serde_json::json!({"threadId": current.to_string()})]
+    );
+    assert!(recorded_params(&destination_requests, "thread/unsubscribe").is_empty());
+    backends.shutdown().await?;
+    source_proxy.await??;
+    destination_proxy.await??;
     Ok(())
 }
 

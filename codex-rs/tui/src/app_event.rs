@@ -601,6 +601,7 @@ pub(crate) enum AppEvent {
 
     /// Result of the fresh startup thread that is attached after the input UI is live.
     StartupThreadStarted {
+        backend_id: crate::backend_id::BackendId,
         result: color_eyre::Result<AppServerStartedThread>,
     },
 
@@ -654,6 +655,9 @@ pub(crate) enum AppEvent {
 
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
+
+    /// Attach a conversation through the registered backend that owns it.
+    ResumeBackendSession(crate::resume_picker::SessionTarget),
 
     /// Archive the current active main thread and return to the command center.
     ArchiveCurrentThread,

@@ -362,7 +362,7 @@ impl App {
                     }
                 }
             }
-            AppEvent::StartupThreadStarted { result } => {
+            AppEvent::StartupThreadStarted { result, .. } => {
                 self.handle_startup_thread_started(app_server, result)
                     .await?;
             }
@@ -596,6 +596,9 @@ impl App {
                     }
                     Err(err) => return Err(err),
                 }
+            }
+            AppEvent::ResumeBackendSession(_) => {
+                unreachable!("backend selection is handled by the session manager")
             }
             AppEvent::ArchiveCurrentThread => {
                 return self.archive_current_thread(tui, app_server).await;

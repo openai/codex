@@ -952,18 +952,15 @@ async fn in_app_remote_resume_picker_lists_all_providers_after_provider_switch()
     let remote_cwd = remote_root.path().join("project");
     std::fs::create_dir(&remote_cwd)?;
     let (app_server, requests, proxy) = start_recording_remote_app_server(&app.config).await?;
-    let backend_id = app_server.backend_id();
     let mut app_server = app_server.with_remote_cwd_override(Some(remote_cwd.clone()));
     // Provider A's conversations must remain visible after switching to provider B.
     app_server.model_provider_override = Some("provider-b".to_string());
     let mut backends = crate::app::backend_sessions::BackendSessions::new(app_server);
-    let displayed = backends.slot(backend_id).expect("registered backend");
 
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_alt_screen_enabled(/*enabled*/ false);
     tui.pause_events();
-    let mut picker =
-        Box::pin(app.open_resume_picker_for_backends(&mut tui, &mut backends, displayed));
+    let mut picker = Box::pin(app.open_resume_picker_for_backends(&mut tui, &mut backends));
     let params = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), async {
         loop {
             if let Some(params) = recorded_params(&requests, "thread/list").pop() {
