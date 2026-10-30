@@ -1,0 +1,113 @@
+---
+source: core/tests/suite/scenarios_incremental_tools.rs
+expression: "context_snapshot::format_request_history_snapshot(if\nsuppress_model_change_announcements == Some(true)\n{\n    \"A model switch suppresses the model ID announcement while appending changed tools and replacement instructions. Repeated turns preserve the prefix; compaction starts a new window with the updated base.\"\n} else if use_responses_lite\n{\n    \"Tool definitions precede the initial base instructions. A model switch appends one developer notice, changed tools, and replacement instructions without rewriting the prefix; compaction starts a new window with the updated base.\"\n} else\n{\n    \"Regular Responses requests carry the full current tool catalog without an incremental notice; changed execution instructions replace the catalog on subsequent requests.\"\n}, &requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: A model switch suppresses the model ID announcement while appending changed tools and replacement instructions. Repeated turns preserve the prefix; compaction starts a new window with the updated base.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.4"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=49f981f03ae5c5ce):
+        - namespace/functions; hash=cc6e8cf0e5405f3a
+          - custom/exec
+          - function/wait
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Begin work.
+-- request 2 (turn) --
+05:message/user:
+    Continue with the same tools.
+
+## Window 2 (after request 2)
+Settings: relative to window 1
+  model: "updated-tools-model"
+-- request 3 (turn) --
+00:additional_tools/developer (2; hash=49f981f03ae5c5ce):
+        - namespace/functions; hash=cc6e8cf0e5405f3a
+          - custom/exec
+          - function/wait
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Begin work.
+05:message/user:
+    Continue with the same tools.
+06:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+07:additional_tools/developer (1; hash=26cd263a29587cc7):
+        - namespace/functions; hash=771cad2ff250d2f3
+          - custom/exec
+08:message/developer:
+    <model_instructions>
+    The following instructions replace the previous base instructions:
+
+    Review results before responding.
+    </model_instructions>
+09:message/user:
+    Continue with the updated execution instructions.
+-- request 4 (turn) --
+10:message/user:
+    Continue with the same updated tools.
+-- request 5 (compaction) --
+11:compaction_trigger
+
+## Window 3 (after request 5: input diverged at item 00)
+Settings: same as window 2
+-- request 6 (turn) --
+00:additional_tools/developer (2; hash=1322c3a339378659):
+        - namespace/functions; hash=9d5d7a0adab05fef
+          - custom/exec
+          - function/wait
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/user:
+    Begin work.
+03:message/user:
+    Continue with the same tools.
+04:message/user:
+    Continue with the updated execution instructions.
+05:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+06:message/user:
+    <ENVIRONMENT_CONTEXT>
+07:message/user:
+    Continue with the same updated tools.
+08:compaction:encrypted=true; chars=28; hash=e4a73156e0a498bc
+09:message/user:
+    Continue after compaction.

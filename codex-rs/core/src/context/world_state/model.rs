@@ -32,6 +32,7 @@ pub(crate) struct ModelInstructionsState {
     /// Ordinary-window fallback when the saved model snapshot is unavailable.
     previous_model: Option<String>,
     instructions: String,
+    suppress_model_change_announcements: bool,
 }
 
 impl ModelInstructionsState {
@@ -40,10 +41,15 @@ impl ModelInstructionsState {
             snapshot: ModelInstructionsSnapshot::ModelOnly(model.to_string()),
             previous_model: previous_model.map(str::to_string),
             instructions,
+            suppress_model_change_announcements: false,
         }
     }
 
-    pub(crate) fn for_incremental_tools(model: &str, instructions: String) -> Self {
+    pub(crate) fn for_incremental_tools(
+        model: &str,
+        instructions: String,
+        suppress_model_change_announcements: bool,
+    ) -> Self {
         let instructions = BaseInstructionsFragment(instructions);
         let instructions_hash = WorldStateHash::from_fragment(&instructions);
         Self {
@@ -53,6 +59,7 @@ impl ModelInstructionsState {
             },
             previous_model: None,
             instructions: instructions.0,
+            suppress_model_change_announcements,
         }
     }
 }
@@ -114,12 +121,13 @@ impl WorldStateSection for ModelInstructionsState {
         let instructions_changed = instructions_hash.is_some_and(|current| {
             previous_instructions_hash.map_or(model_changed, |previous| previous != current)
         });
-        if instructions_hash.is_some() && !model_changed && !instructions_changed {
-            return (None, Vec::new());
+        let announce_model = model_changed && !self.suppress_model_change_announcements;
+        if instructions_hash.is_some() && !announce_model && !instructions_changed {
+            return (model_changed.then(|| self.snapshot.clone()), Vec::new());
         }
         let fragment: Option<Box<dyn ContextualUserFragment>> = if instructions_hash.is_some() {
             Some(Box::new(ModelInstructions {
-                model: model_changed.then(|| model.clone()),
+                model: announce_model.then(|| model.clone()),
                 instructions: instructions_changed.then(|| self.instructions.clone()),
             }))
         } else {

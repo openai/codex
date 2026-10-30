@@ -51,12 +51,20 @@ fn unchanged_model_does_not_render() {
 #[test]
 fn legacy_model_snapshot_keeps_its_window_until_model_change_or_compaction() {
     let legacy: ModelInstructionsSnapshot = serde_json::from_str("\"gpt-old\"").unwrap();
-    let same_model = ModelInstructionsState::for_incremental_tools("gpt-old", "new prompt".into());
+    let same_model = ModelInstructionsState::for_incremental_tools(
+        "gpt-old",
+        "new prompt".into(),
+        /*suppress_model_change_announcements*/ false,
+    );
     let (snapshot, updates) = same_model.render_diff(PreviousSectionState::Known(&legacy));
     assert!(snapshot.is_none());
     assert!(updates.is_empty());
 
-    let new_model = ModelInstructionsState::for_incremental_tools("gpt-new", "new prompt".into());
+    let new_model = ModelInstructionsState::for_incremental_tools(
+        "gpt-new",
+        "new prompt".into(),
+        /*suppress_model_change_announcements*/ false,
+    );
     let (snapshot, updates) = new_model.render_diff(PreviousSectionState::Known(&legacy));
     assert!(snapshot.is_some());
     assert_eq!(updates.len(), 1);
@@ -77,4 +85,27 @@ fn legacy_model_snapshot_keeps_its_window_until_model_change_or_compaction() {
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn suppressed_model_changes_advance_snapshot_without_repeated_updates() {
+    let initial = ModelInstructionsState::for_incremental_tools(
+        "gpt-old",
+        "instructions".into(),
+        /*suppress_model_change_announcements*/ true,
+    );
+    let (snapshot, _) = initial.render_diff(PreviousSectionState::Absent);
+    let previous = snapshot.unwrap();
+    let switched = ModelInstructionsState::for_incremental_tools(
+        "gpt-new",
+        "instructions".into(),
+        /*suppress_model_change_announcements*/ true,
+    );
+    let (snapshot, updates) = switched.render_diff(PreviousSectionState::Known(&previous));
+    assert!(updates.is_empty());
+    let snapshot = snapshot.unwrap();
+    assert_eq!(snapshot, switched.snapshot);
+    let (unchanged, updates) = switched.render_diff(PreviousSectionState::Known(&snapshot));
+    assert!(unchanged.is_none());
+    assert!(updates.is_empty());
 }

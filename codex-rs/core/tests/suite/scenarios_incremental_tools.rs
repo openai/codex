@@ -148,11 +148,13 @@ async fn prediction_fork_keeps_inherited_tools() -> Result<()> {
     Ok(())
 }
 
-#[test_case(true; "responses_lite")]
-#[test_case(false; "responses_api")]
+#[test_case(true, None; "responses_lite")]
+#[test_case(true, Some(true); "announcements_suppressed")]
+#[test_case(false, None; "responses_api")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incremental_tools_append_changed_catalog_without_rewriting_history(
     use_responses_lite: bool,
+    suppress_model_change_announcements: Option<bool>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -199,6 +201,12 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
             }
         })
         .with_config(move |config| {
+            if let Some(suppress) = suppress_model_change_announcements {
+                config
+                    .features
+                    .set_enabled(Feature::SuppressModelChangeAnnouncements, suppress)
+                    .expect("configure model announcements");
+            }
             if !use_responses_lite {
                 config.base_instructions =
                     Some("Use the available tools to help the user.".to_string());
@@ -368,13 +376,17 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
         );
     }
     insta::assert_snapshot!(
-        if use_responses_lite {
+        if suppress_model_change_announcements == Some(true) {
+            "incremental_tools_suppressed_announcements"
+        } else if use_responses_lite {
             "incremental_tools"
         } else {
             "incremental_tools_responses_api"
         },
         context_snapshot::format_request_history_snapshot(
-            if use_responses_lite {
+            if suppress_model_change_announcements == Some(true) {
+                "A model switch suppresses the model ID announcement while appending changed tools and replacement instructions. Repeated turns preserve the prefix; compaction starts a new window with the updated base."
+            } else if use_responses_lite {
                 "Tool definitions precede the initial base instructions. A model switch appends one developer notice, changed tools, and replacement instructions without rewriting the prefix; compaction starts a new window with the updated base."
             } else {
                 "Regular Responses requests carry the full current tool catalog without an incremental notice; changed execution instructions replace the catalog on subsequent requests."

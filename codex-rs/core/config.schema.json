@@ -1368,6 +1368,9 @@
             "subagent_thread_environments": {
               "type": "boolean"
             },
+            "suppress_model_change_announcements": {
+              "type": "boolean"
+            },
             "system_proxy_fallback": {
               "type": "boolean"
             },
@@ -8067,6 +8070,9 @@
           "type": "boolean"
         },
         "subagent_thread_environments": {
+          "type": "boolean"
+        },
+        "suppress_model_change_announcements": {
           "type": "boolean"
         },
         "system_proxy_fallback": {
