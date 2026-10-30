@@ -73,14 +73,18 @@ async fn cancelled_refresh_marks_only_started_exchanges_as_unsettled() -> anyhow
     let server = MockServer::start().await;
     let storage = FileAuthStorage::new(home.path().to_path_buf());
     let mut stored = storage.load()?.context("stored credentials")?;
-    stored
-        .tokens
-        .as_mut()
-        .context("stored tokens")?
-        .oauth_provenance = Some(AccountOAuthProvenance {
+    let tokens = stored.tokens.as_mut().context("stored tokens")?;
+    tokens.oauth_provenance = Some(AccountOAuthProvenance {
         issuer: server.uri(),
         client_id: "codex-client".into(),
     });
+    // Workspace switching retains the original ID and refresh tokens.
+    tokens.account_id = Some(WORKSPACE_ID_SECOND_ALLOWED.into());
+    tokens.access_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("business".into()),
+        chatgpt_account_id: Some(WORKSPACE_ID_SECOND_ALLOWED.into()),
+    })?;
     storage.save(&stored)?;
     let manager = Arc::new(
         AuthManager::new_from_auth_config(

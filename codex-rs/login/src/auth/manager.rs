@@ -2587,9 +2587,13 @@ impl AuthManager {
             .unsettled_chatgpt_refresh
             .lock()
             .map_err(|_| std::io::Error::other("Refresh progress is unavailable."))?;
-        Ok(unsettled
-            .as_ref()
-            .is_some_and(|tokens| auth.get_token_data().as_ref().ok() == Some(tokens)))
+        // Match the stored generation; get_token_data() rewrites workspace claims.
+        Ok(unsettled.as_ref().is_some_and(|tokens| {
+            auth.get_current_auth_json()
+                .and_then(|auth| auth.tokens)
+                .as_ref()
+                == Some(tokens)
+        }))
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
