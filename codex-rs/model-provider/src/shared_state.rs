@@ -46,6 +46,7 @@ impl ModelProviderSharedState {
             resource: config.resource.clone(),
             scopes: config.scopes.clone(),
             redirect_port: config.redirect_port,
+            credentials_store: config.credentials_store,
         };
         let mut managers = self
             .gateway_managers

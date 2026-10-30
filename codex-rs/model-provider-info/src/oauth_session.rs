@@ -1,5 +1,6 @@
 //! Public-client OAuth settings shared by managed configuration and service sign-in.
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
@@ -17,6 +18,19 @@ pub struct OAuthSessionConfig {
     #[serde(default)]
     pub scopes: Vec<String>,
     pub redirect_port: Option<u16>,
+    /// Selected by a gateway provider. Managed config-server OAuth uses the default store.
+    #[serde(skip)]
+    pub credentials_store: OAuthCredentialsStore,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum OAuthCredentialsStore {
+    /// Encrypt credentials using a passphrase kept in the OS keyring.
+    #[default]
+    Keyring,
+    /// Store credentials in plaintext in `$CODEX_HOME/secrets/gateway_oauth.json`.
+    File,
 }
 
 impl fmt::Debug for OAuthSessionConfig {

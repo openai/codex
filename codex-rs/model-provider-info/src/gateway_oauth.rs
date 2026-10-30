@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::ModelProviderInfo;
+use crate::OAuthCredentialsStore;
 
 // Reserve authentication, routing/framing, and internal protocol headers.
 const RESERVED_GATEWAY_OAUTH_HEADERS: &[&str] = &[
@@ -36,9 +37,21 @@ pub struct GatewayOAuthConfig {
     #[serde(default)]
     pub scopes: Vec<String>,
     pub redirect_port: Option<u16>,
+    /// Where Codex stores this gateway's OAuth credentials. Defaults to the keyring-backed store.
+    #[serde(default, skip_serializing_if = "is_keyring")]
+    pub credentials_store: OAuthCredentialsStore,
     /// Omit to send the gateway token via the Authorization header
     #[serde(default)]
     pub delivery: GatewayOAuthDelivery,
+}
+
+// Preserve the serialized provider and model cache identity for the default store.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Serde passes a reference to skip_serializing_if predicates"
+)]
+fn is_keyring(store: &OAuthCredentialsStore) -> bool {
+    *store == OAuthCredentialsStore::Keyring
 }
 
 impl fmt::Debug for GatewayOAuthConfig {

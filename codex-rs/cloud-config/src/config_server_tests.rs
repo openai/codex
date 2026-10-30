@@ -44,6 +44,7 @@ fn oauth_config(base_url: &str) -> OAuthSessionConfig {
         resource: None,
         scopes: vec![],
         redirect_port: None,
+        credentials_store: Default::default(),
     }
 }
 

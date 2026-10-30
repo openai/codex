@@ -1991,6 +1991,14 @@
         "client_id": {
           "type": "string"
         },
+        "credentials_store": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OAuthCredentialsStore"
+            }
+          ],
+          "description": "Where Codex stores this gateway's OAuth credentials. Defaults to the keyring-backed store."
+        },
         "delivery": {
           "allOf": [
             {
@@ -3719,6 +3727,24 @@
             "type": "string"
           },
           "type": "array"
+        }
+      ]
+    },
+    "OAuthCredentialsStore": {
+      "oneOf": [
+        {
+          "description": "Encrypt credentials using a passphrase kept in the OS keyring.",
+          "enum": [
+            "keyring"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Store credentials in plaintext in `$CODEX_HOME/secrets/gateway_oauth.json`.",
+          "enum": [
+            "file"
+          ],
+          "type": "string"
         }
       ]
     },

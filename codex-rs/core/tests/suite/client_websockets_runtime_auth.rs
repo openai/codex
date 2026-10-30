@@ -96,6 +96,7 @@ fn gateway_config(server: &MockServer, delivery: GatewayOAuthDelivery) -> Gatewa
         resource: None,
         scopes: vec![],
         redirect_port: None,
+        credentials_store: Default::default(),
         delivery,
     }
 }

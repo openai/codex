@@ -41,6 +41,7 @@ pub use capabilities::ModelProviderCapabilities;
 pub use capabilities::RemoteCompactionSupport;
 pub use gateway_oauth::GatewayOAuthConfig;
 pub use gateway_oauth::GatewayOAuthDelivery;
+pub use oauth_session::OAuthCredentialsStore;
 pub use oauth_session::OAuthSessionConfig;
 
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
