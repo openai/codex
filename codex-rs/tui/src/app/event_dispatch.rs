@@ -3859,7 +3859,7 @@ impl App {
                 if !self.side_threads.is_empty()
                     && tokio::time::timeout(
                         SHUTDOWN_FIRST_EXIT_TIMEOUT,
-                        self.shutdown_side_threads(app_server),
+                        self.shutdown_side_threads(app_server, /*root*/ None),
                     )
                     .await
                     .is_err()
@@ -3917,11 +3917,12 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
-        if self.app_server_target.supports_command_center() {
-            self.shutdown_side_threads(app_server).await;
-            if !self.side_threads.is_empty() {
-                return Ok(AppRunControl::Continue);
-            }
+        if self.app_server_target.supports_command_center()
+            && !self
+                .shutdown_side_threads(app_server, Some(thread_id))
+                .await
+        {
+            return Ok(AppRunControl::Continue);
         }
 
         let result = async {
@@ -3985,11 +3986,12 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
-        if self.app_server_target.supports_command_center() {
-            self.shutdown_side_threads(app_server).await;
-            if !self.side_threads.is_empty() {
-                return Ok(AppRunControl::Continue);
-            }
+        if self.app_server_target.supports_command_center()
+            && !self
+                .shutdown_side_threads(app_server, Some(thread_id))
+                .await
+        {
+            return Ok(AppRunControl::Continue);
         }
 
         let result = async {

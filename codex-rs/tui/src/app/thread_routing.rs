@@ -49,11 +49,30 @@ impl App {
             .await;
     }
 
-    pub(super) async fn shutdown_side_threads(&mut self, app_server: &mut AppServerSession) {
-        let side_thread_ids: Vec<ThreadId> = self.side_threads.keys().copied().collect();
-        for side_thread_id in side_thread_ids {
-            self.discard_side_thread(app_server, side_thread_id).await;
+    pub(super) async fn shutdown_side_threads(
+        &mut self,
+        app_server: &mut AppServerSession,
+        root: Option<ThreadId>,
+    ) -> bool {
+        if self.side_threads.is_empty() {
+            return true;
         }
+        let subtree = root.map(|id| self.known_thread_subtree(id));
+        let ids: Vec<_> = self
+            .side_threads
+            .iter()
+            .filter(|(_, side)| {
+                subtree
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&side.parent_thread_id))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let mut closed = true;
+        for id in ids {
+            closed &= self.discard_side_thread(app_server, id).await;
+        }
+        closed
     }
 
     pub(super) fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {

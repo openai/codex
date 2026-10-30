@@ -1089,6 +1089,9 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
         let side_id = side.session.thread_id;
         app.side_threads
             .insert(side_id, SideThreadState::new(thread_id));
+        let unrelated_side = ThreadId::new();
+        app.side_threads
+            .insert(unrelated_side, SideThreadState::new(ThreadId::new()));
         if !matches!(app.app_server_target, AppServerTarget::Embedded) {
             // The recording proxy rejects the next unsubscribe after a failed fork.
             side_config.cwd = side_config.cwd.join("failure");
@@ -1128,7 +1131,10 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
             assert!(recorded_params(&requests, "thread/unsubscribe").is_empty());
         } else {
             assert_matches!(control, AppRunControl::Continue);
-            assert!(app.side_threads.is_empty());
+            assert_eq!(
+                app.side_threads.keys().copied().collect::<Vec<_>>(),
+                vec![unrelated_side]
+            );
             assert_eq!(
                 recorded_params(&requests, "thread/unsubscribe"),
                 vec![serde_json::json!({"threadId": side_id.to_string()}); 2]

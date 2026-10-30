@@ -237,6 +237,36 @@ impl App {
         });
     }
 
+    pub(super) fn known_thread_subtree(&self, thread_id: ThreadId) -> HashSet<ThreadId> {
+        let mut removed = HashSet::from([thread_id]);
+        loop {
+            let previous_len = removed.len();
+            for (id, thread) in &self.agents_overview.threads {
+                let Some(thread) = thread else { continue };
+                let parent = thread
+                    .parent_thread_id
+                    .as_deref()
+                    .and_then(|id| ThreadId::from_string(id).ok())
+                    .or(match &thread.source {
+                        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                            parent_thread_id,
+                            ..
+                        }) => Some(*parent_thread_id),
+                        _ => None,
+                    });
+                if thread.session_id == thread_id.to_string()
+                    || parent.is_some_and(|parent| removed.contains(&parent))
+                {
+                    removed.insert(*id);
+                }
+            }
+            if removed.len() == previous_len {
+                break;
+            }
+        }
+        removed
+    }
+
     pub(super) async fn run_agents_overview_action(
         &mut self,
         tui: &mut tui::Tui,
@@ -339,32 +369,7 @@ impl App {
         }
         if result.is_ok() {
             // Invalidate cached details for the displayed group, without inferring child outcomes.
-            let mut removed = HashSet::from([thread_id]);
-            loop {
-                let previous_len = removed.len();
-                for (id, thread) in &self.agents_overview.threads {
-                    let Some(thread) = thread else { continue };
-                    let parent = thread
-                        .parent_thread_id
-                        .as_deref()
-                        .and_then(|id| ThreadId::from_string(id).ok())
-                        .or(match &thread.source {
-                            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                                parent_thread_id,
-                                ..
-                            }) => Some(*parent_thread_id),
-                            _ => None,
-                        });
-                    if thread.session_id == thread_id.to_string()
-                        || parent.is_some_and(|parent| removed.contains(&parent))
-                    {
-                        removed.insert(*id);
-                    }
-                }
-                if removed.len() == previous_len {
-                    break;
-                }
-            }
+            let mut removed = self.known_thread_subtree(thread_id);
             if let Some(primary) = self.primary_thread_id
                 && removes_primary
             {
