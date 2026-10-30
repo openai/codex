@@ -235,6 +235,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
         items: repl_items.to_vec(),
     })];
     let repl = super::NodeReplContext {
+        budgeting: crate::ContextBudgeting::Fixed,
         responses: &repl_responses,
         omitted_responses: 0,
         mode: super::NodeReplReviewEvidenceMode::TextOnly,

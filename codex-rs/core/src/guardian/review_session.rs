@@ -555,9 +555,9 @@ async fn run_review_on_session(
         .session
         .services
         .thread_extension_data
-        .insert(super::input_budget::PendingReviewContext(
-            prompt_items.context,
-        ));
+        .insert(super::input_budget::PendingReviewContext {
+            context: prompt_items.context,
+        });
     review_session
         .session
         .services

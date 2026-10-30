@@ -51,6 +51,8 @@ pub struct NodeReplContext<'a> {
     pub responses: &'a [Arc<NodeReplResponse>],
     pub omitted_responses: u64,
     pub mode: NodeReplReviewEvidenceMode,
+    /// Controls request selection only; host storage and delivery cursors stay unchanged.
+    pub budgeting: crate::ContextBudgeting,
 }
 
 /// Request-local snapshot, selected and rendered only during sync preparation.
@@ -153,6 +155,7 @@ impl NodeReplContext<'_> {
             intro.len().saturating_add(closing.len()),
             NodeReplLayout::Multimodal,
             self.omitted_responses,
+            self.budgeting,
         );
         let omitted_responses = selected.omitted_responses;
 
@@ -245,6 +248,7 @@ impl ContextualUserFragment for NodeReplContext<'_> {
                 .saturating_add(body.len()),
             NodeReplLayout::Text,
             self.omitted_responses,
+            self.budgeting,
         );
         let omitted_responses = selected.omitted_responses;
 
@@ -274,7 +278,9 @@ impl ContextualUserFragment for NodeReplContext<'_> {
                 body.push('\n');
             }
         }
-        debug_assert!(body.len() <= max_body_bytes);
+        debug_assert!(
+            self.budgeting == crate::ContextBudgeting::Elastic || body.len() <= max_body_bytes
+        );
         input_text(body)
     }
 }
@@ -298,7 +304,14 @@ fn select_node_repl_responses(
     framing_bytes: usize,
     layout: NodeReplLayout,
     mut omitted_responses: u64,
+    budgeting: crate::ContextBudgeting,
 ) -> NodeReplSelection {
+    if budgeting == crate::ContextBudgeting::Elastic {
+        return NodeReplSelection {
+            first: 0,
+            omitted_responses,
+        };
+    }
     let notice_bytes = match layout {
         NodeReplLayout::Text => 64,
         NodeReplLayout::Multimodal => 160,

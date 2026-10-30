@@ -31,7 +31,9 @@ use crate::session::turn::build_prompt;
 use crate::session::turn_context::TurnContext;
 
 #[derive(Clone)]
-pub(crate) struct PendingReviewContext(pub ComposedContext);
+pub(crate) struct PendingReviewContext {
+    pub context: ComposedContext,
+}
 
 pub(super) use codex_guardian_reviewer::CheckpointRecovery;
 
@@ -76,7 +78,7 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
         codex_protocol::protocol::TruncationPolicy::Bytes(base.text.len()).token_budget();
     let maximum = effective_input_token_limit(turn.model_info(), turn.config.model_context_window)
         .saturating_sub(super::request_budget::INPUT_TOKEN_MARGIN);
-    let mut context = pending.0.clone();
+    let mut context = pending.context.clone();
     let history = session
         .clone_history()
         .await
@@ -129,7 +131,7 @@ pub(crate) async fn finalize(
             "Guardian expects one review input".to_owned(),
         ));
     };
-    let mut context = pending.0.clone();
+    let mut context = pending.context.clone();
     let model = &step.settings.model_info;
     let history = session.clone_history().await;
     let recovery = session
@@ -361,7 +363,7 @@ pub(crate) async fn finalize(
         }
     }
     step.turn.extension_data.insert(RetainedReviewContext {
-        context: pending.0.retained_instructions(),
+        context: pending.context.retained_instructions(),
         history_version,
     });
     session

@@ -104,6 +104,7 @@ pub use composition::ComposedContext;
 pub use composition::ContextPresentation;
 pub use composition::MAX_TEXT_PART_ESTIMATED_TOKENS;
 pub use composition::PreparedTranscript;
+pub use preparation::ContextBudgeting;
 pub use preparation::ContextProfile;
 pub use preparation::SyncImagePreparer;
 pub use preparation::SyncPreparation;
