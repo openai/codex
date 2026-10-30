@@ -182,6 +182,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
             .success(),
         "failed to prepare CLI test executable"
     );
+    let bedrock_onboarding = matches!(command, "bedrock" | "bedrock-running");
     fs::write(
         home.path().join("config.toml"),
         format!(
@@ -195,6 +196,8 @@ async fn daemon_startup(command: &str) -> Result<()> {
          [projects.{}]\ntrust_level = \"{}\"\n",
             if command == "discovered" {
                 "tui.status_line=[\"model\",\"thread-id\",\"thread-name\"]\nfeatures.daemon_auto_start=false"
+            } else if bedrock_onboarding {
+                "features.gcp_setup_wizard=false"
             } else {
                 ""
             },
@@ -210,7 +213,6 @@ async fn daemon_startup(command: &str) -> Result<()> {
     let persisted = command == "mismatch-disable-persisted";
     let disabling = matches!(command, "mismatch-disable" | "mismatch-disable-persisted");
     let restart = command == "mismatch-restart" || disabling;
-    let bedrock_onboarding = matches!(command, "bedrock" | "bedrock-running");
     if !bedrock_onboarding {
         fs::write(
             home.path().join("auth.json"),
@@ -361,7 +363,8 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 if restart { "Server:Localbackgroundserver" } else { "Model:" }
             }
         } else if bedrock_onboarding {
-            "UseAmazonBedrock"
+            // With GCP disabled, only Bedrock makes the sign-in menu advertise another provider.
+            "UseanAPIkeyoranotherprovider"
         } else {
             args.extend([command.into(), "--strict-config".into()]);
             if command == "resume" {

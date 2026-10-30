@@ -173,12 +173,13 @@ impl OnboardingScreen {
                 if auth_config.is_login_method_allowed(ForcedLoginMethod::Chatgpt) {
                     SignInOption::ChatGpt
                 } else {
-                    SignInOption::ApiKey
+                    SignInOption::OtherMethods
                 };
             if let Some(app_server_request_handle) = app_server_request_handle {
                 steps.push(Step::Auth(AuthModeWidget {
                     request_frame: tui.frame_requester(),
                     highlighted_mode,
+                    activation_key_guard: None,
                     error: Arc::new(RwLock::new(None)),
                     sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                     login_status,
@@ -352,7 +353,10 @@ impl KeyboardHandler for OnboardingScreen {
     /// starts, while cloud provider fields suppress them from the first character.
     /// Control/alt quit chords still work as emergency exits.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+        if key_event.kind == KeyEventKind::Release {
+            if let Some(widget) = self.auth_widget_mut() {
+                widget.handle_key_event(key_event);
+            }
             return;
         }
         let text_entry_context = self.text_entry_context();

@@ -43,9 +43,11 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::LoginStatus;
+use crate::activation_key_guard::ActivationKeyGuard;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::motion::MotionMode;
@@ -95,9 +97,16 @@ pub(crate) enum SignInState {
 pub(crate) enum SignInOption {
     ChatGpt,
     DeviceCode,
+    OtherMethods,
     ApiKey,
     Bedrock,
     Gcp,
+}
+
+impl SignInOption {
+    fn is_alternative(self) -> bool {
+        !matches!(self, Self::ChatGpt | Self::DeviceCode | Self::OtherMethods)
+    }
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
@@ -181,6 +190,14 @@ impl ContinueWithDeviceCodeState {
 
 impl KeyboardHandler for AuthModeWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self
+            .activation_key_guard
+            .as_mut()
+            .is_some_and(|guard| guard.consume(KeyBinding::from_event(key_event), key_event.kind))
+            || key_event.kind == KeyEventKind::Release
+        {
+            return;
+        }
         if self.handle_gcp_key_event(&key_event) || self.handle_bedrock_key_event(&key_event) {
             return;
         }
@@ -196,31 +213,26 @@ impl KeyboardHandler for AuthModeWidget {
             self.move_highlight(/*delta*/ 1);
             return;
         }
+        if key_event.kind != KeyEventKind::Press {
+            return;
+        }
         if keys::SELECT_FIRST.is_pressed(key_event) {
-            self.select_option_by_index(/*index*/ 0);
+            self.select_option_by_index(/*index*/ 0, key_event);
             return;
         }
         if keys::SELECT_SECOND.is_pressed(key_event) {
-            self.select_option_by_index(/*index*/ 1);
+            self.select_option_by_index(/*index*/ 1, key_event);
             return;
         }
         if keys::SELECT_THIRD.is_pressed(key_event) {
-            self.select_option_by_index(/*index*/ 2);
-            return;
-        }
-        if keys::SELECT_FOURTH.is_pressed(key_event) {
-            self.select_option_by_index(/*index*/ 3);
-            return;
-        }
-        if keys::SELECT_FIFTH.is_pressed(key_event) {
-            self.select_option_by_index(/*index*/ 4);
+            self.select_option_by_index(/*index*/ 2, key_event);
             return;
         }
         if keys::CONFIRM.is_pressed(key_event) {
             let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
             match sign_in_state {
                 SignInState::PickMode => {
-                    self.handle_sign_in_option(self.highlighted_mode);
+                    self.activate_highlighted_mode(key_event);
                 }
                 SignInState::ChatGptSuccessMessage => {
                     *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
@@ -230,8 +242,14 @@ impl KeyboardHandler for AuthModeWidget {
             return;
         }
         if keys::CANCEL.is_pressed(key_event) {
-            tracing::info!("Cancel onboarding auth step");
-            self.cancel_active_attempt();
+            if matches!(*self.sign_in_state.read().unwrap(), SignInState::PickMode)
+                && self.highlighted_mode.is_alternative()
+            {
+                self.highlighted_mode = SignInOption::OtherMethods;
+                self.set_error(/*message*/ None);
+            } else {
+                self.cancel_active_attempt();
+            }
         }
     }
 
@@ -261,6 +279,7 @@ impl KeyboardHandler for AuthModeWidget {
 pub(crate) struct AuthModeWidget {
     pub request_frame: FrameRequester,
     pub highlighted_mode: SignInOption,
+    pub(super) activation_key_guard: Option<ActivationKeyGuard>,
     pub error: Arc<RwLock<Option<String>>>,
     pub sign_in_state: Arc<RwLock<SignInState>>,
     pub login_status: LoginStatus,
@@ -361,42 +380,34 @@ impl AuthModeWidget {
     }
 
     fn displayed_sign_in_options(&self) -> Vec<SignInOption> {
+        if self.highlighted_mode.is_alternative() {
+            let mut options = vec![SignInOption::ApiKey];
+            if self.bedrock_setup_enabled {
+                options.push(SignInOption::Bedrock);
+            }
+            if self.gcp_setup_enabled {
+                options.push(SignInOption::Gcp);
+            }
+            return options;
+        }
         let mut options = vec![SignInOption::ChatGpt];
         if self.is_chatgpt_login_allowed() {
             options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
-            options.push(SignInOption::ApiKey);
-            if self.bedrock_setup_enabled {
-                options.push(SignInOption::Bedrock);
-            }
-            if self.gcp_setup_enabled {
-                options.push(SignInOption::Gcp);
-            }
-        }
-        options
-    }
-
-    fn selectable_sign_in_options(&self) -> Vec<SignInOption> {
-        let mut options = Vec::new();
-        if self.is_chatgpt_login_allowed() {
-            options.push(SignInOption::ChatGpt);
-            options.push(SignInOption::DeviceCode);
-        }
-        if self.is_api_login_allowed() {
-            options.push(SignInOption::ApiKey);
-            if self.bedrock_setup_enabled {
-                options.push(SignInOption::Bedrock);
-            }
-            if self.gcp_setup_enabled {
-                options.push(SignInOption::Gcp);
-            }
+            options.push(SignInOption::OtherMethods);
         }
         options
     }
 
     fn move_highlight(&mut self, delta: isize) {
-        let options = self.selectable_sign_in_options();
+        if !matches!(*self.sign_in_state.read().unwrap(), SignInState::PickMode) {
+            return;
+        }
+        let mut options = self.displayed_sign_in_options();
+        if !self.is_chatgpt_login_allowed() {
+            options.retain(|option| *option != SignInOption::ChatGpt);
+        }
         if options.is_empty() {
             return;
         }
@@ -410,18 +421,38 @@ impl AuthModeWidget {
         self.highlighted_mode = options[next_index];
     }
 
-    fn select_option_by_index(&mut self, index: usize) {
+    fn select_option_by_index(&mut self, index: usize, key_event: KeyEvent) {
         if !matches!(*self.sign_in_state.read().unwrap(), SignInState::PickMode) {
             return;
         }
         let options = self.displayed_sign_in_options();
-        if let Some(option) = options.get(index).copied() {
-            self.handle_sign_in_option(option);
+        if let Some(option) = options.get(index).copied()
+            && (option != SignInOption::ChatGpt || self.is_chatgpt_login_allowed())
+        {
+            self.highlighted_mode = option;
+            self.activate_highlighted_mode(key_event);
         }
+    }
+
+    fn activate_highlighted_mode(&mut self, key_event: KeyEvent) {
+        let option = self.highlighted_mode;
+        if option == SignInOption::OtherMethods || option.is_alternative() {
+            // Enter and printable shortcuts can repeat as plain presses without a release.
+            self.activation_key_guard = Some(ActivationKeyGuard::new_at(
+                KeyBinding::from_event(key_event),
+                Instant::now(),
+                /*key_releases_reported*/ false,
+            ));
+        }
+        self.handle_sign_in_option(option);
     }
 
     fn handle_sign_in_option(&mut self, option: SignInOption) {
         match option {
+            SignInOption::OtherMethods => {
+                self.highlighted_mode = SignInOption::ApiKey;
+                self.set_error(/*message*/ None);
+            }
             SignInOption::ChatGpt => {
                 if self.is_chatgpt_login_allowed() {
                     self.start_chatgpt_login();
@@ -466,7 +497,9 @@ impl AuthModeWidget {
     }
 
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
-        let mut lines: Vec<Line> = if self.bedrock_setup_enabled || self.gcp_setup_enabled {
+        let mut lines: Vec<Line> = if self.highlighted_mode.is_alternative() {
+            vec!["  Sign in another way".into(), "".into()]
+        } else if self.bedrock_setup_enabled || self.gcp_setup_enabled {
             vec!["  Choose how you want to use Codex.".into(), "".into()]
         } else {
             vec![
@@ -523,6 +556,18 @@ impl AuthModeWidget {
 
         for (idx, option) in self.displayed_sign_in_options().into_iter().enumerate() {
             match option {
+                SignInOption::OtherMethods => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Sign in another way",
+                        if self.bedrock_setup_enabled || self.gcp_setup_enabled {
+                            "Use an API key or another provider"
+                        } else {
+                            "Use an OpenAI API key"
+                        },
+                    ));
+                }
                 SignInOption::ChatGpt => {
                     lines.extend(create_mode_item(
                         idx,
@@ -581,6 +626,13 @@ impl AuthModeWidget {
             self.confirm_binding().into(),
             " to continue".dim(),
         ]));
+        if self.highlighted_mode.is_alternative() {
+            lines.push(Line::from(vec![
+                "  Press ".dim(),
+                self.cancel_binding().into(),
+                " to go back".dim(),
+            ]));
+        }
         if let Some(err) = self.error_message() {
             lines.push("".into());
             lines.push(err.red().into());
@@ -813,7 +865,9 @@ impl AuthModeWidget {
                     *guard = SignInState::PickMode;
                     self.set_error(/*message*/ None);
                     should_request_frame = true;
-                } else if keys::CONFIRM.is_pressed(*key_event) {
+                } else if key_event.kind == KeyEventKind::Press
+                    && keys::CONFIRM.is_pressed(*key_event)
+                {
                     let trimmed = state.value.trim().to_string();
                     if trimmed.is_empty() {
                         self.set_error(Some("API key cannot be empty".to_string()));
@@ -1321,6 +1375,7 @@ mod tests {
         let widget = AuthModeWidget {
             request_frame: FrameRequester::test_dummy(),
             highlighted_mode: SignInOption::ChatGpt,
+            activation_key_guard: None,
             error: Arc::new(RwLock::new(None)),
             sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
             login_status: LoginStatus::NotAuthenticated,
@@ -1383,7 +1438,7 @@ mod tests {
             vec![
                 SignInOption::ChatGpt,
                 SignInOption::DeviceCode,
-                SignInOption::ApiKey,
+                SignInOption::OtherMethods,
             ]
         );
 
@@ -1404,15 +1459,13 @@ mod tests {
             &widget.app_server_target,
             Feature::BedrockSetupWizard,
         );
+        widget.handle_key_event(KeyCode::Char('3').into());
         assert_eq!(
             widget.displayed_sign_in_options(),
-            vec![
-                SignInOption::ChatGpt,
-                SignInOption::DeviceCode,
-                SignInOption::ApiKey,
-                SignInOption::Bedrock,
-            ]
+            vec![SignInOption::ApiKey, SignInOption::Bedrock]
         );
+        widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        widget.move_highlight(/*delta*/ 1);
 
         let area = Rect::new(0, 0, 76, 19);
         let mut buffer = Buffer::empty(area);
@@ -1438,11 +1491,8 @@ mod tests {
           2. Sign in with Device Code
              Sign in from another device with a one-time code
 
-          3. Use an OpenAI API key
-             Pay for what you use
-
-          4. Use Amazon Bedrock
-             Connect using your AWS credentials
+          3. Sign in another way
+             Use an API key or another provider
 
           Press enter to continue
         "###);
@@ -1752,6 +1802,9 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod activation_key_tests;
 
 #[cfg(test)]
 #[path = "gcp_tests.rs"]

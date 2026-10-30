@@ -39,30 +39,29 @@ async fn gcp_menu_gating_and_setup_flow() {
         Rect::new(0, 0, 76, 8),
     );
 
+    let press = |key| KeyEvent::new(key, KeyModifiers::NONE);
     widget.gcp_setup_enabled = true;
+    widget.handle_key_event(press(KeyCode::Char('3')));
     assert_eq!(
         widget.displayed_sign_in_options(),
-        vec![
-            SignInOption::ChatGpt,
-            SignInOption::DeviceCode,
-            SignInOption::ApiKey,
-            SignInOption::Gcp
-        ]
+        vec![SignInOption::ApiKey, SignInOption::Gcp]
     );
     widget.bedrock_setup_enabled = true;
-    assert_eq!(
-        widget.selectable_sign_in_options(),
-        vec![
-            SignInOption::ChatGpt,
-            SignInOption::DeviceCode,
-            SignInOption::ApiKey,
-            SignInOption::Bedrock,
-            SignInOption::Gcp
-        ]
-    );
+    widget.handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Char('3'),
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat,
+    ));
+    assert_eq!(widget.highlighted_mode, SignInOption::ApiKey);
+    assert!(matches!(
+        *widget.sign_in_state.read().unwrap(),
+        SignInState::PickMode
+    ));
     snapshot(&widget, "gcp_sign_in_menu", Rect::new(0, 0, 76, 21));
-    widget.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    snapshot(&widget, "gcp_sign_in_menu_short", Rect::new(0, 0, 76, 14));
+    widget.handle_key_event(press(KeyCode::Up));
+    snapshot(&widget, "gcp_sign_in_menu_short", Rect::new(0, 0, 76, 8));
+    widget.handle_key_event(press(KeyCode::Esc));
+    assert_eq!(widget.highlighted_mode, SignInOption::OtherMethods);
     let area = Rect::new(0, 0, 76, 12);
 
     widget.auth_config.forced_login_method = Some(ForcedLoginMethod::Chatgpt);
@@ -79,16 +78,28 @@ async fn gcp_menu_gating_and_setup_flow() {
 
     *widget.sign_in_state.write().unwrap() =
         SignInState::ChatGptDeviceCode(ContinueWithDeviceCodeState::pending("login".into()));
-    widget.handle_key_event(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
+    widget.handle_key_event(press(KeyCode::Char('3')));
     assert!(matches!(
         &*widget.sign_in_state.read().unwrap(),
         SignInState::ChatGptDeviceCode(_)
     ));
     widget.cancel_active_attempt();
 
-    widget.handle_key_event(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
+    widget.handle_key_event(press(KeyCode::Char('3')));
+    widget.handle_key_event(press(KeyCode::Char('1')));
+    widget.handle_key_event(press(KeyCode::Esc));
+    assert_eq!(widget.highlighted_mode, SignInOption::ApiKey);
+    widget.handle_key_event(press(KeyCode::Char('3')));
+    widget.handle_key_event(press(KeyCode::Esc));
+    assert_eq!(widget.highlighted_mode, SignInOption::Gcp);
+    widget.handle_key_event(press(KeyCode::Enter));
     assert!(widget.is_text_entry_active());
     assert!(widget.should_suppress_printable_quit());
+    widget.handle_key_event(KeyEvent::new_with_kind(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        KeyEventKind::Release,
+    ));
     widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
         widget.error_message().as_deref(),

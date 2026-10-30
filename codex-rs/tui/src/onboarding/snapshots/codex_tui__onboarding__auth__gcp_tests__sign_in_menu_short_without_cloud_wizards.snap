@@ -7,5 +7,5 @@ expression: terminal.backend().to_string()
 
 > 1. Sign in with ChatGPT
   2. Sign in with Device Code
-  3. Use an OpenAI API key
+  3. Sign in another way
   Press enter to continue
