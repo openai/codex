@@ -701,7 +701,7 @@ impl ChatWidget {
                     args,
                     text_elements,
                     pending_pastes: self.bottom_pane.composer_pending_pastes(),
-                    local_images: self.bottom_pane.composer_local_images(),
+                    local_images: self.bottom_pane.composer_local_images().to_vec(),
                     remote_image_urls: self.bottom_pane.remote_image_urls(),
                     mention_bindings: Vec::new(),
                     source: SlashCommandDispatchSource::Live,

@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use super::ChatComposer;
-use super::attachment_state::AttachedImage;
 use super::draft_state::ComposerMentionBinding;
+use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::textarea::register::RegisterEvent;
 use codex_protocol::models::local_image_label_text;
 
@@ -142,7 +142,7 @@ pub(super) fn sync(composer: &mut ChatComposer) {
                             composer
                                 .attachments
                                 .local_images
-                                .push(AttachedImage { placeholder, path });
+                                .push(LocalImageAttachment { placeholder, path });
                         }
                         RegisterPayload::Paste(pasted) => {
                             let placeholder =

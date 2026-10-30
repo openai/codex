@@ -812,12 +812,7 @@ impl McpServerElicitationOverlay {
         ComposerDraft {
             text: self.composer.current_text(),
             text_elements: self.composer.text_elements(),
-            local_image_paths: self
-                .composer
-                .local_images()
-                .into_iter()
-                .map(|img| img.path)
-                .collect(),
+            local_image_paths: self.composer.local_image_paths(),
             pending_pastes: self.composer.pending_pastes(),
         }
     }
@@ -1267,12 +1262,7 @@ impl McpServerElicitationOverlay {
     }
 
     fn apply_submission_to_draft(&mut self, text: String, text_elements: Vec<TextElement>) {
-        let local_image_paths = self
-            .composer
-            .local_images()
-            .into_iter()
-            .map(|img| img.path)
-            .collect::<Vec<_>>();
+        let local_image_paths = self.composer.local_image_paths();
         if let Some(answer) = self.current_answer_mut() {
             answer.draft = ComposerDraft {
                 text: text.clone(),

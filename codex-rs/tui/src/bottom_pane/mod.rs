@@ -1237,7 +1237,7 @@ impl BottomPane {
         self.composer.text_elements()
     }
 
-    pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
+    pub(crate) fn composer_local_images(&self) -> &[LocalImageAttachment] {
         self.composer.local_images()
     }
 

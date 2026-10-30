@@ -23,7 +23,7 @@ impl ChatComposer {
             text: draft.text,
             cursor: draft.cursor,
             text_elements: draft.text_elements,
-            local_images: attachments.local_images(),
+            local_images: attachments.local_images,
             remote_image_urls: draft.remote_image_urls,
             mention_bindings: draft.mention_bindings,
             pending_pastes: draft.pending_pastes,
