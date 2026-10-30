@@ -848,6 +848,8 @@ fn run_update_action(
                 .collect();
             std::process::Command::new(&command_path)
                 .args(&normalized_args)
+                // Package managers search parent directories for project config and hooks.
+                .current_dir("/")
                 .status()?
         }
     };
