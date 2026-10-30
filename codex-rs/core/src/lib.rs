@@ -153,6 +153,7 @@ mod event_mapping;
 pub use codex_prompts as review_prompts;
 mod thread_manager;
 mod thread_spawn;
+pub use agent::host::AgentMcpMetadataRecipient;
 pub use agent::host::HostThreadSpawnReservation;
 pub use agent::host::HostToolInvocationLookup;
 pub use agent::host::PreparedThreadSpawn;

@@ -25,9 +25,11 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_core::AgentMcpMetadataRecipient;
 use codex_core::EnvironmentConfig;
 use codex_core::EnvironmentMcpPolicy;
 use codex_core::TurnInputRequest;
+use codex_core::TurnStartOptions;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_core::config::Config;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -92,6 +94,7 @@ use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::turn_input::TurnInput;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -413,7 +416,8 @@ async fn call_cwd_tool(
     server_name: &str,
     call_id: &str,
 ) -> anyhow::Result<Value> {
-    call_structured_tool(server, fixture, server_name, "cwd", call_id).await
+    let start = TurnStartOptions::default();
+    call_structured_tool(server, fixture, server_name, "cwd", call_id, start).await
 }
 
 async fn call_structured_tool(
@@ -422,6 +426,7 @@ async fn call_structured_tool(
     server_name: &str,
     tool_name: &str,
     call_id: &str,
+    start: TurnStartOptions,
 ) -> anyhow::Result<Value> {
     let namespace = format!("mcp__{server_name}");
     mount_sse_once(
@@ -442,10 +447,8 @@ async fn call_structured_tool(
     )
     .await;
 
-    fixture
-        .codex
-        .start_or_steer_turn(read_only_user_turn(fixture, "call the requested rmcp tool"))
-        .await?;
+    let input = read_only_user_turn(fixture, "call the requested rmcp tool").on_start(start);
+    fixture.codex.start_or_steer_turn(input).await?;
 
     wait_for_event(&fixture.codex, |ev| {
         matches!(ev, EventMsg::McpToolCallBegin(_))
@@ -469,6 +472,85 @@ async fn call_structured_tool(
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     Ok(structured_content)
+}
+
+enum AgentMetadataCase {
+    ApprovedPlugin,
+    NoHostOptIn,
+    UserOverride,
+}
+
+#[test_case(AgentMetadataCase::ApprovedPlugin, Some(CyberAccessProgram::Standard); "approved plugin")]
+#[test_case(AgentMetadataCase::ApprovedPlugin, None; "approved plugin without an explicit program")]
+#[test_case(AgentMetadataCase::UserOverride, Some(CyberAccessProgram::Standard); "same-name user override")]
+#[test_case(AgentMetadataCase::NoHostOptIn, Some(CyberAccessProgram::Standard); "matching plugin without host opt-in")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_metadata_is_only_sent_to_the_selected_plugin(
+    case: AgentMetadataCase,
+    cyber_access_program: Option<CyberAccessProgram>,
+) -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    let server = start_mock_server().await;
+    let home = Arc::new(tempdir()?);
+    let plugin_root = super::plugins::write_sample_plugin_manifest_and_config(&home);
+    let command = stdio_server_bin()?;
+    fs::write(
+        plugin_root.join(".mcp.json"),
+        serde_json::to_vec(&json!({ "mcpServers": { "sample": { "command": command } } }))?,
+    )?;
+    let transport = stdio_transport(command, /*env*/ None, Vec::new());
+    let recipient = AgentMcpMetadataRecipient {
+        plugin_id: "sample@test".into(),
+        plugin_root: PathUri::from_abs_path(&AbsolutePathBuf::try_from(plugin_root)?),
+        server_name: "sample".into(),
+        transport: transport.clone(),
+    };
+    let user_override = matches!(case, AgentMetadataCase::UserOverride);
+    let fixture = test_codex()
+        .with_home(home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            if user_override {
+                insert_mcp_server(config, "sample", transport, TestMcpServerOptions::default());
+            }
+        })
+        .build(&server)
+        .await?;
+    if !matches!(case, AgentMetadataCase::NoHostOptIn) {
+        fixture.codex.thread_extension_data().insert(recipient);
+    }
+    wait_for_mcp_server(&fixture.codex, "sample").await?;
+
+    let call_id = "call-agent-context";
+    let meta = call_structured_tool(
+        &server,
+        &fixture,
+        "sample",
+        "sandbox_meta",
+        call_id,
+        TurnStartOptions {
+            root_turn_id: Some("original-root".into()),
+            turn_trigger: Some("composer".into()),
+            cyber_access_program,
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(meta["callId"], json!(call_id));
+    assert_eq!(meta["x-codex-turn-metadata"]["turn_trigger"], "composer");
+    let expect_private_metadata = matches!(case, AgentMetadataCase::ApprovedPlugin);
+    assert_eq!(
+        meta.get("x-codex-root-turn-id").cloned(),
+        expect_private_metadata.then(|| json!("original-root"))
+    );
+    assert_eq!(
+        meta.get("x-codex-cyber-access-program").cloned(),
+        expect_private_metadata.then(|| json!(cyber_access_program))
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -510,6 +592,7 @@ async fn assert_openai_form_capability_advertisement(expected: bool) -> anyhow::
         server_name,
         "client_capabilities",
         "call-client-capabilities",
+        Default::default(),
     )
     .await?;
     assert_eq!(
