@@ -15,6 +15,11 @@ pub(crate) enum KeyEventAction {
 }
 
 impl ChatWidget {
+    pub(crate) fn current_patch_approval(&self) -> Option<(ThreadId, &str)> {
+        let patch = self.bottom_pane.current_patch_approval()?;
+        Some((patch.thread_id, &patch.id))
+    }
+
     pub(crate) fn clear_composer_selection(&mut self) {
         self.bottom_pane.clear_composer_selection();
     }

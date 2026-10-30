@@ -395,7 +395,7 @@ impl App {
         Ok(bottom_area)
     }
 
-    /// Keep modal input ownership while allowing selection and copying in the visible transcript.
+    /// Keep modal input ownership while allowing selection, copying, and disclosure in the visible transcript.
     pub(super) fn handle_owned_transcript_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -670,9 +670,13 @@ impl App {
             TuiEvent::Key(key) => self
                 .transcript_view
                 .handle_key(*key, &self.transcript_cells),
-            TuiEvent::Mouse(mouse) if modal_transcript_mouse => self
-                .transcript_view
-                .handle_selection_mouse(*mouse, &self.transcript_cells),
+            TuiEvent::Mouse(mouse) if modal_transcript_mouse => {
+                self.transcript_view.handle_selection_mouse(
+                    *mouse,
+                    &self.transcript_cells,
+                    self.chat_widget.current_patch_approval(),
+                )
+            }
             TuiEvent::Mouse(mouse) => self
                 .transcript_view
                 .handle_mouse(*mouse, &self.transcript_cells),

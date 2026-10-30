@@ -458,6 +458,7 @@ impl TranscriptView {
     }
 
     pub(crate) fn jump_to_latest(&mut self) {
+        self.disclosure.resume_after_approval = None;
         self.cancel_search();
         self.cancel_beginning();
         self.position = Position::Latest;
@@ -471,6 +472,7 @@ impl TranscriptView {
 
     pub(crate) fn scroll(&mut self, cells: &[Arc<dyn HistoryCell>], rows: isize) {
         if rows != 0 {
+            self.disclosure.resume_after_approval = None;
             self.last_click = None;
             self.cancel_beginning();
         }

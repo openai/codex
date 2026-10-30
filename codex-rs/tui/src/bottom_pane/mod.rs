@@ -752,6 +752,13 @@ impl BottomPane {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
     }
 
+    pub(crate) fn current_patch_approval(&self) -> Option<&ApplyPatchApprovalRequest> {
+        self.view_stack
+            .iter()
+            .rev()
+            .find_map(|view| view.current_patch_approval())
+    }
+
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.key_chord_reset_requested = true;
         self.view_stack.push(view);

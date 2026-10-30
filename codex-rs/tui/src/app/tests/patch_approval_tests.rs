@@ -2,8 +2,14 @@
 
 use super::*;
 use crate::app::app_server_requests::AppServerRequestResolution;
+use crate::app::owned_transcript::tests::buffer_text;
+use crate::chatwidget::tests::helpers::normalize_snapshot_paths;
+use crate::custom_terminal::test_support::last_rendered_buffer;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::PatchApplyStatus;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEvent;
+use crossterm::event::MouseEventKind;
 use pretty_assertions::assert_eq;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -16,7 +22,7 @@ fn changes() -> Vec<FileUpdateChange> {
         FileUpdateChange {
             path: "a-added.txt".to_string(),
             kind: PatchChangeKind::Add,
-            diff: "alpha\nbeta\n".to_string(),
+            diff: "alpha\nbeta\ngamma\ndelta\n".to_string(),
         },
         FileUpdateChange {
             path: "m-updated.txt".to_string(),
@@ -36,7 +42,7 @@ fn expected_changes() -> HashMap<PathBuf, FileChange> {
         (
             PathBuf::from("a-added.txt"),
             FileChange::Add {
-                content: "alpha\nbeta\n".to_string(),
+                content: "alpha\nbeta\ngamma\ndelta\n".to_string(),
             },
         ),
         (
@@ -170,6 +176,42 @@ async fn active_patch_approval_pager_preserves_changes_and_accepts_once() -> Res
     enqueue_pending_patch(&mut app, thread_id).await?;
     drain_pending_patch(&mut app, &mut tui).await?;
 
+    tui.set_owned_screen(/*owned*/ true)?;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            app.insert_history_cell(&mut tui, cell);
+        }
+    }
+    let size = tui.terminal.size()?;
+    app.render_owned_transcript(&mut tui, size)?;
+    let collapsed = buffer_text(last_rendered_buffer(&tui.terminal));
+    assert!(!collapsed.contains("+delta"));
+    let (column, row) = collapsed
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| line.find("+ Show details").map(|column| (column, row)))
+        .expect("visible patch disclosure");
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Mouse(MouseEvent {
+                kind,
+                column: column as u16,
+                row: row as u16,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .await?;
+    }
+    app.render_owned_transcript(&mut tui, size)?;
+    let expanded = buffer_text(last_rendered_buffer(&tui.terminal));
+    insta::with_settings!({snapshot_path => "../../snapshots"}, {
+        insta::assert_snapshot!("patch_approval_expanded_inline", normalize_snapshot_paths(expanded));
+    });
     let request = open_patch(&mut app, &mut rx);
     assert_eq!(request.changes, expected_changes());
     assert_eq!(request.id, ITEM_ID);
@@ -208,15 +250,34 @@ async fn active_patch_approval_pager_preserves_changes_and_accepts_once() -> Res
         app.pending_app_server_requests
             .contains_server_request(&self::request(thread_id))
     );
-    assert_eq!(open_patch(&mut app, &mut rx).changes, expected_changes());
+    let mut next_patch = open_patch(&mut app, &mut rx);
+    assert_eq!(next_patch.changes, expected_changes());
+    next_patch.id = "next-patch".into();
     app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        .push_approval_request(ApprovalRequest::ApplyPatch(next_patch));
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)),
+    )
+    .await?;
     assert_decision(
         &mut app,
         &mut rx,
         thread_id,
         FileChangeApprovalDecision::Accept,
     );
+    assert_eq!(open_patch(&mut app, &mut rx).id, "next-patch");
+    let mut output = vec!["more output".into(); usize::from(size.height)];
+    output.push("after approval".into());
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(crate::history_cell::PlainHistoryCell::new(output)),
+    );
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+        .await?;
+    assert!(buffer_text(last_rendered_buffer(&tui.terminal)).contains("after approval"));
+    tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }
 

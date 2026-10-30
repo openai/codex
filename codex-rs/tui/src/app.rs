@@ -867,6 +867,8 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        self.transcript_view
+            .sync_patch_approval(self.chat_widget.current_patch_approval());
         tui.link_hover.observe(&event);
         self.refresh_link_hover(tui)?;
         self.invalidate_right_click_paste(&event);

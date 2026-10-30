@@ -182,6 +182,11 @@ pub(crate) trait BottomPaneView: Renderable {
         false
     }
 
+    /// The patch whose inline review should end when this prompt is answered.
+    fn current_patch_approval(&self) -> Option<&super::ApplyPatchApprovalRequest> {
+        None
+    }
+
     /// Try to handle approval request; return the original value if not
     /// consumed.
     fn try_consume_approval_request(

@@ -436,6 +436,50 @@ impl HistoryCell for ActivityCell {
 }
 
 #[test]
+fn patch_disclosure_preserves_manual_scrolling() {
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![
+        Arc::new(PlainHistoryCell::new(vec!["older output".into(); 20])),
+        Arc::new(ActivityCell::default()),
+        Arc::new(PlainHistoryCell::new(vec!["tail".into()])),
+    ];
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 32, /*height*/ 10,
+    );
+    for scroll_before_click in [false, true] {
+        let mut view = TranscriptView::default();
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf, &cells);
+        if scroll_before_click {
+            view.scroll(&cells, /*rows*/ -1);
+            view.render(area, &mut buf, &cells);
+        }
+        let (column, row) = crate::transcript_view::tests::text(&buf)
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| line.find("+ Show details").map(|column| (column, row)))
+            .expect("activity disclosure");
+        view.handle_selection_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: column as u16,
+                row: row as u16,
+                modifiers: KeyModifiers::NONE,
+            },
+            &cells,
+            Some((codex_protocol::ThreadId::new(), "patch")),
+        );
+        assert!(view.is_activity_focused());
+        if !scroll_before_click {
+            view.scroll(&cells, /*rows*/ -1);
+        }
+        let position = view.position;
+        view.sync_patch_approval(/*current*/ None);
+        assert_eq!(view.position, position);
+        assert!(!view.is_following());
+    }
+}
+
+#[test]
 fn activity_focus_keeps_controls_without_passive_hints() {
     let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
     let cell = Arc::new(ActivityCell::default());

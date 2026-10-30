@@ -617,6 +617,13 @@ impl BottomPaneView for ApprovalOverlay {
         self.done
     }
 
+    fn current_patch_approval(&self) -> Option<&ApplyPatchApprovalRequest> {
+        let ApprovalRequest::ApplyPatch(patch) = self.current_request.as_ref()? else {
+            return None;
+        };
+        Some(patch)
+    }
+
     fn try_consume_approval_request(
         &mut self,
         request: ApprovalRequest,

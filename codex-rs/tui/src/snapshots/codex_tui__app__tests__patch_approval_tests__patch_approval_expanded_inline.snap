@@ -1,0 +1,28 @@
+---
+source: tui/src/app/tests/patch_approval_tests.rs
+expression: normalize_snapshot_paths(expanded)
+---
+• Edited 3 files (+5 -2)
+  └ a-added.txt (+4 -0)
+    1 +alpha
+    2 +beta
+    3 +gamma
+    4 +delta
+
+  └ m-updated.txt (+1 -1)
+    1 -old
+
+
+  Would you like to make the following edits?
+
+  Description: Apply proposed file edits
+  Destination: /tmp/project/a-added.txt
+  Destination: /tmp/project/m-updated.txt
+  Destination: /tmp/project/z-deleted.txt
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for these files (a)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel
