@@ -6351,7 +6351,7 @@ async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
 }
 
 #[tokio::test]
-async fn ctrl_l_clears_owned_history_and_preserves_the_draft() -> Result<()> {
+async fn ctrl_l_preserves_the_transcript_and_draft_after_clearing_the_screen() -> Result<()> {
     let (mut app, _codex_home, thread_id) =
         pagination_completion_tests::completed_history_app(&["Oldest", "Newest"]).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
@@ -6381,8 +6381,11 @@ async fn ctrl_l_clears_owned_history_and_preserves_the_draft() -> Result<()> {
         .await?;
     app.chat_widget.set_model("gpt-test");
     app.chat_widget.insert_str("draft survives");
-    app.transcript_cells = vec![Arc::new(history_cell::PlainHistoryCell::new(
-        (0..50).map(|_| "old transcript row".into()).collect(),
+    app.transcript_cells = vec![Arc::new(history_cell::new_user_prompt(
+        "Earlier exchange".into(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
     ))];
     tui.set_owned_screen(/*owned*/ true)?;
     let size = ratatui::layout::Size::new(/*width*/ 80, /*height*/ 12);
@@ -6394,22 +6397,76 @@ async fn ctrl_l_clears_owned_history_and_preserves_the_draft() -> Result<()> {
     )
     .await?;
     app.render_owned_transcript(&mut tui, size)?;
-    app.handle_older_history_page(&mut tui, &mut app_server, thread_id, &cursor, Ok(page))
-        .await?;
+    app.handle_older_history_page(
+        &mut tui,
+        &mut app_server,
+        thread_id,
+        &cursor,
+        Ok(page.clone()),
+    )
+    .await?;
     assert!(app_server.has_older_history(thread_id));
     app.request_owned_history(&mut tui, &mut app_server);
     assert!(!app_server.is_older_history_page_pending(thread_id, &cursor));
-    assert_eq!(app.transcript_cells.len(), 1);
-    assert!(
-        app.transcript_cells[0]
-            .as_any()
-            .is::<history_cell::SessionHeaderHistoryCell>()
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::PlainHistoryCell::new(vec![
+            "New exchange".into(),
+        ])),
     );
-    let header = lines_to_single_string(&app.transcript_cells[0].display_lines(/*width*/ 80));
-    assert!(header.contains("OpenAI Codex"));
-    let raw_header = lines_to_single_string(&app.transcript_cells[0].raw_lines());
-    assert!(raw_header.contains("gpt-test"));
-    assert!(!header.contains("old transcript row"));
+    let size = Size::new(/*width*/ 64, /*height*/ 16);
+    tui.screen_size_for_event(&TuiEvent::Resize(size))?;
+    app.render_owned_transcript(&mut tui, size)?;
+    let compact = transcript_composer::buffer_text(
+        crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+    );
+    assert!(compact.contains("OpenAI Codex"));
+    assert!(compact.contains("New exchange"));
+    assert!(!compact.contains("Earlier exchange"));
+    let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(ctrl_t))
+        .await?;
+    let area = Rect::new(/*x*/ 0, /*y*/ 0, size.width, size.height);
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    app.transcript_view
+        .render(area, &mut buffer, &app.transcript_cells);
+    assert_app_snapshot!(
+        "ctrl_l_detailed_transcript",
+        transcript_composer::buffer_text(&buffer).trim()
+    );
+
+    let home = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(home))
+        .await?;
+    assert_eq!(
+        app.transcript_view.history,
+        crate::pager_overlay::TranscriptHistoryState::LoadingBeginning
+    );
+    assert!(app_server.is_older_history_page_pending(thread_id, &cursor));
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(ctrl_t))
+        .await?;
+    app.handle_older_history_page(&mut tui, &mut app_server, thread_id, &cursor, Ok(page))
+        .await?;
+    for event in [TuiEvent::Draw, TuiEvent::Key(home)] {
+        app.handle_tui_event(&mut tui, &mut app_server, event)
+            .await?;
+        app.render_owned_transcript(&mut tui, size)?;
+        let compact = transcript_composer::buffer_text(
+            crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+        );
+        assert!(!compact.contains("Earlier exchange"));
+    }
+    // Native scrollback replay uses a separate renderer when the terminal changes width.
+    app.local_settings.tui.terminal_resize_reflow_max_rows = None;
+    let replay = app
+        .render_transcript_lines_for_reflow(size.width)
+        .lines
+        .iter()
+        .map(rendered_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(replay.contains("New exchange"));
+    assert!(!replay.contains("Earlier exchange"));
     assert_eq!(
         app.chat_widget.composer_text_with_pending(),
         "draft survives"

@@ -580,6 +580,10 @@ impl App {
             && self
                 .resize_reflow_max_rows()
                 .is_some_and(|max_rows| rendered_rows < max_rows)
+            && !self
+                .transcript_cells
+                .iter()
+                .any(|cell| cell.as_any().is::<history_cell::ClearScreenHeader>())
     }
 
     fn request_scrollback_history_top_up(&self, rendered_rows: usize) {
@@ -671,6 +675,9 @@ impl App {
                 is_stream_continuation: cell.is_stream_continuation(),
             });
 
+            if cell.as_any().is::<history_cell::ClearScreenHeader>() {
+                break;
+            }
             if row_cap.is_some_and(|max_rows| rendered_rows > max_rows) {
                 history_was_truncated = true;
                 break;

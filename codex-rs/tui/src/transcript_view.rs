@@ -219,7 +219,9 @@ impl TranscriptView {
         {
             // Freezing follow must preserve a header that yielded to the next visible prompt.
             self.suppressed_prompt_header = Some(header_position);
-        } else if area.height >= 4 && prompt_header::line(cells, start.0, area.width).is_some() {
+        } else if area.height >= 4
+            && prompt_header::line(cells, start.0, area.width, self.detailed).is_some()
+        {
             body = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
             let resized = resized || previous_height != body.height;
             self.area = body;
@@ -229,7 +231,9 @@ impl TranscriptView {
             }
             // Following may advance into the next turn after reserving the header row.
             start = self.start(cells);
-            if let Some((header, key)) = prompt_header::line(cells, start.0, area.width) {
+            if let Some((header, key)) =
+                prompt_header::line(cells, start.0, area.width, self.detailed)
+            {
                 let header_area = Rect::new(area.x, area.y, area.width, /*height*/ 1);
                 header.render(header_area, buf);
                 self.prompt_header_target = Some((header_area, key));
@@ -433,6 +437,15 @@ impl TranscriptView {
 
     /// Hold the current reading position until every older page has arrived.
     pub(crate) fn jump_to_beginning(&mut self, cells: &[Arc<dyn HistoryCell>]) {
+        if !self.detailed
+            && !self.is_select_mode()
+            && let Some(index) = cells
+                .iter()
+                .rposition(|cell| cell.as_any().is::<crate::history_cell::ClearScreenHeader>())
+        {
+            self.jump_to_entry(cells, index);
+            return;
+        }
         if self.history == TranscriptHistoryState::LoadingBeginning {
             return;
         }
@@ -631,6 +644,13 @@ impl TranscriptView {
         if rows < 0 {
             let mut remaining = rows.unsigned_abs();
             while remaining > row && index > 0 {
+                if !self.detailed
+                    && cells.get(index).is_some_and(|cell| {
+                        cell.as_any().is::<crate::history_cell::ClearScreenHeader>()
+                    })
+                {
+                    return (index, 0);
+                }
                 remaining -= row;
                 index -= 1;
                 row = self

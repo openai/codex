@@ -11,7 +11,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
-fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+pub(super) fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
     buffer
         .content()
         .chunks(usize::from(buffer.area.width))

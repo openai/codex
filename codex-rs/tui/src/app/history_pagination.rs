@@ -292,7 +292,7 @@ impl App {
                     .complete_select_beginning(&self.transcript_cells);
             } else {
                 self.transcript_view
-                    .jump_to_entry(&self.transcript_cells, /*index*/ 0);
+                    .jump_to_beginning(&self.transcript_cells);
             }
         }
         if self.scrollback_has_older_history

@@ -290,6 +290,29 @@ pub(crate) fn has_yolo_permissions(
                 }
         )
 }
+/// The fresh terminal header marks the start of visible scrollback after Ctrl+L.
+/// It has no transcript representation because the original session header is still retained.
+#[derive(Debug)]
+pub(crate) struct ClearScreenHeader(pub(crate) SessionHeaderHistoryCell);
+
+impl HistoryCell for ClearScreenHeader {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.0.display_lines(width)
+    }
+
+    fn live_raw_lines(&self) -> Vec<Line<'static>> {
+        self.0.raw_lines()
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        Vec::new()
+    }
+
+    fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        Vec::new()
+    }
+}
+
 /// Session banner with a model label already resolved for presentation by its caller.
 #[derive(Debug)]
 pub(crate) struct SessionHeaderHistoryCell {

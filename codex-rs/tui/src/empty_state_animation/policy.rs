@@ -14,6 +14,7 @@ pub(crate) enum Presentation {
 /// Startup metadata is the entire allowlist; new content types opt out by default.
 pub(crate) fn is_startup_cell(cell: &dyn HistoryCell) -> bool {
     cell.as_any().is::<history_cell::SessionHeaderHistoryCell>()
+        || cell.as_any().is::<history_cell::ClearScreenHeader>()
         || cell.as_any().is::<history_cell::SessionInfoCell>()
         || cell.as_any().is::<history_cell::StartupWarningsCell>()
         || cell.as_any().is::<history_cell::DeprecationNoticeCell>()

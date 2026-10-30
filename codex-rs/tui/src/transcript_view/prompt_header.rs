@@ -19,6 +19,7 @@ pub(super) fn line(
     cells: &[Arc<dyn HistoryCell>],
     first: usize,
     width: u16,
+    detailed: bool,
 ) -> Option<(Line<'static>, EntryKey)> {
     // A prompt that is still visible supplies its own context. Only pin a preceding prompt.
     if width < 16
@@ -29,10 +30,13 @@ pub(super) fn line(
     {
         return None;
     }
-    let (index, prompt) = cells[..first.min(cells.len())]
+    let (index, prompt) = cells[..first.saturating_add(1).min(cells.len())]
         .iter()
         .enumerate()
         .rev()
+        .take_while(|(_, cell)| {
+            detailed || !cell.as_any().is::<crate::history_cell::ClearScreenHeader>()
+        })
         .find_map(|(index, cell)| {
             cell.as_any()
                 .downcast_ref::<UserHistoryCell>()

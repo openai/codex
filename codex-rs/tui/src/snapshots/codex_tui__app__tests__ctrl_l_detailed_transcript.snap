@@ -1,0 +1,8 @@
+---
+source: tui/src/app/tests.rs
+expression: "transcript_composer::buffer_text(&buffer).trim()"
+---
+› Earlier exchange
+
+
+New exchange
