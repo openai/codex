@@ -1865,6 +1865,106 @@ async fn fullscreen_composer_scrolls_without_moving_caret_or_transcript() -> Res
 }
 
 #[tokio::test]
+async fn composer_thumbnails_follow_draft_deletion_and_resize() -> Result<()> {
+    use crate::custom_terminal::test_support::last_rendered_buffer;
+    use crate::pets::ImageProtocol;
+    use crate::pets::PetImageSupport;
+    use crate::pets::PetImageUnsupportedReason;
+
+    let dir = tempfile::tempdir()?;
+    let banner = dir.path().join("banner.png");
+    let portrait = dir.path().join("portrait.png");
+    let red = image::Rgba([255, 0, 0, 255]);
+    image::RgbaImage::from_pixel(/*width*/ 400, /*height*/ 1, red).save(&banner)?;
+
+    for owned in [false, true] {
+        image::RgbaImage::new(/*width*/ 4, /*height*/ 400).save(&portrait)?;
+        let mut app = crate::app::test_support::make_test_app().await;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.set_owned_screen(owned)?;
+        app.chat_widget
+            .set_pet_image_support_for_tests(PetImageSupport::Supported(ImageProtocol::Kitty));
+        app.chat_widget.attach_image(portrait.clone());
+        app.chat_widget.handle_key_event(KeyCode::Home.into());
+        app.chat_widget.attach_image(banner.clone());
+        app.chat_widget.handle_key_event(KeyCode::End.into());
+        app.chat_widget.attach_image(banner.clone());
+
+        let narrow = Size::new(/*width*/ 20, /*height*/ 24);
+        app.render_chat_widget_frame(&mut tui, narrow)?;
+        let placements = &tui.retained_images;
+        assert_eq!(placements.len(), 2);
+        let pixels = &placements[0].image.pixels;
+        // The whole panorama fits in a single pixel row inside the outlined tile.
+        assert_eq!(
+            pixels.pixels().filter(|pixel| **pixel == red).count(),
+            (pixels.width() - 2) as usize
+        );
+        let clear = &placements[1].image.pixels;
+        assert_eq!(
+            clear.get_pixel(clear.width() / 2, clear.height() / 2),
+            clear.get_pixel(/*x*/ 1, /*y*/ 1)
+        );
+        assert_ne!(
+            clear.get_pixel(/*x*/ 0, /*y*/ 0),
+            clear.get_pixel(/*x*/ 1, /*y*/ 1)
+        );
+
+        let buffer = last_rendered_buffer(&tui.terminal);
+        assert!(buffer_text(buffer).contains("+1"));
+        if owned {
+            // The terminal paints graphics after its text buffer. Mark their footprints
+            // for this snapshot of the strip and the first editable line.
+            let mut strip = buffer.clone();
+            for placement in placements {
+                for position in placement.area.positions() {
+                    strip[position].set_symbol("░");
+                }
+            }
+            let snapshot = buffer_text(&strip)
+                .lines()
+                .skip(usize::from(placements[0].area.y - strip.area.y))
+                .take(6)
+                .collect::<Vec<_>>()
+                .join("\n");
+            insta::assert_snapshot!("composer_thumbnail_strip", snapshot);
+        }
+
+        let wide = Size::new(/*width*/ 60, /*height*/ 24);
+        app.render_chat_widget_frame(&mut tui, wide)?;
+        assert_eq!(tui.retained_images.len(), 3);
+        let portrait_image = tui.retained_images[1].image.clone();
+        app.chat_widget.handle_key_event(KeyCode::Home.into());
+        app.chat_widget.handle_key_event(KeyCode::Delete.into());
+        app.render_chat_widget_frame(&mut tui, wide)?;
+        assert_eq!(tui.retained_images.len(), 2);
+        assert_eq!(tui.retained_images[0].image.pixels, portrait_image.pixels);
+        // A draft submits the current file, even if it was replaced since attachment.
+        image::RgbaImage::from_pixel(/*width*/ 2, /*height*/ 2, red).save(&portrait)?;
+        app.render_chat_widget_frame(&mut tui, wide)?;
+        let updated = &tui.retained_images[0].image.pixels;
+        assert!(updated.pixels().any(|pixel| *pixel == red));
+        // Both insufficient height and an unsupported terminal leave the references editable.
+        for (height, support) in [
+            (5, PetImageSupport::Supported(ImageProtocol::Kitty)),
+            (
+                24,
+                PetImageSupport::Unsupported(PetImageUnsupportedReason::Terminal),
+            ),
+        ] {
+            app.chat_widget.set_pet_image_support_for_tests(support);
+            app.render_chat_widget_frame(&mut tui, Size::new(wide.width, height))?;
+            assert!(tui.retained_images.is_empty());
+            assert!(
+                buffer_text(last_rendered_buffer(&tui.terminal)).contains("[Image #1][Image #2]")
+            );
+        }
+        tui.set_owned_screen(/*owned*/ false)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn fullscreen_composer_remote_images_leave_an_editable_prompt_row() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;

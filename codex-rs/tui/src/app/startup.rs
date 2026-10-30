@@ -1694,7 +1694,8 @@ See the Codex keymap documentation for supported actions and examples."
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
         let clear_pet_result = tui.clear_ambient_pet_image();
-        let clear_result = tui.terminal.clear();
+        let clear_images = tui.terminal.clear_frame_images(&mut tui.retained_images);
+        let clear_result = clear_images.and(tui.terminal.clear());
         if let Some(task) = app.daemon_restart.take()
             && let Err(err) = task.await.unwrap_or_else(|err| Err(err.into()))
         {

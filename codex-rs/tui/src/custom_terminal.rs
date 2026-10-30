@@ -82,8 +82,8 @@ pub struct Frame<'a> {
     /// The buffer that is used to draw the current frame
     pub(crate) buffer: &'a mut Buffer,
 
-    /// Fullscreen graphics to send after text, before the synchronized frame is committed.
-    pub(crate) transcript_images: Vec<crate::transcript_image::ImagePlacement>,
+    /// Frame graphics to send after text, before the synchronized frame is committed.
+    pub(crate) image_placements: Vec<crate::transcript_image::ImagePlacement>,
 }
 
 impl Frame<'_> {
@@ -257,7 +257,7 @@ where
     /// Get a Frame object which provides a consistent view into the terminal state for rendering.
     pub fn get_frame(&mut self) -> Frame<'_> {
         Frame {
-            transcript_images: Vec::new(),
+            image_placements: Vec::new(),
             cursor_position: None,
             cursor_style: SetCursorStyle::DefaultUserShape,
             viewport_area: self.viewport_area,
@@ -353,6 +353,28 @@ where
         self.draw_with_size(screen_size, &mut Vec::new(), render_callback)
     }
 
+    /// Remove graphics on the screen that owns them before switching buffers or yielding the terminal.
+    pub(crate) fn clear_frame_images(
+        &mut self,
+        images: &mut Vec<crate::transcript_image::ImagePlacement>,
+    ) -> io::Result<()> {
+        if images.is_empty() {
+            return Ok(());
+        }
+        let text = self.previous_buffer().clone();
+        let cursor = (!self.hidden_cursor).then_some(self.last_known_cursor_pos);
+        let style = self
+            .last_cursor_style
+            .unwrap_or(SetCursorStyle::DefaultUserShape);
+        self.draw_with_size(self.last_known_screen_size, images, |frame| {
+            *frame.buffer = text;
+            if let Some(cursor) = cursor {
+                frame.set_cursor_position(cursor);
+                frame.set_cursor_style(style);
+            }
+        })
+    }
+
     /// Draws a single frame using a screen size already obtained by the caller.
     pub(crate) fn draw_with_size<F>(
         &mut self,
@@ -375,7 +397,7 @@ where
         // Buffer. Thus, we're taking the important data out of the Frame and dropping it.
         let cursor_position = frame.cursor_position;
         let cursor_style = frame.cursor_style;
-        let images = std::mem::take(&mut frame.transcript_images);
+        let images = std::mem::take(&mut frame.image_placements);
         let changed = *retained_images != images;
         if changed {
             // Remove old graphics before text painting, including when switching to overlays.
@@ -931,7 +953,7 @@ mod tests {
                             frame.buffer_mut(),
                         );
                         frame
-                            .transcript_images
+                            .image_placements
                             .push(crate::transcript_image::ImagePlacement {
                                 image: std::sync::Arc::clone(&image),
                                 area: Rect::new(

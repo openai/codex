@@ -230,6 +230,10 @@
 //! - When all placeholders for a size are cleared or deleted, the next paste of that size reuses
 //!   the base label without a suffix.
 //!
+//! On supported terminals the local draft references also have a strip of thumbnails.
+//! It shows the first attachments that fit and a count of those hidden. Removing a
+//! reference removes its preview through the same attachment bookkeeping used for submission.
+//!
 //! # Remote Image Rows (Up/Down/Delete)
 //!
 //! Remote image URLs are rendered as non-editable `[Image #N]` rows above the textarea (inside the
@@ -4591,6 +4595,7 @@ impl ChatComposer {
             status,
             composer: composer_rect,
             remote_images: remote_images_rect,
+            thumbnails,
             textarea: textarea_rect,
             popup: popup_rect,
             footer: footer_rect,
@@ -4885,6 +4890,14 @@ impl ChatComposer {
         }
         let style = user_message_style();
         Block::default().style(style).render(composer_rect, buf);
+        if let Some(previews) = options.image_previews {
+            previews.render(
+                thumbnails,
+                buf,
+                &self.attachments.local_images,
+                &self.draft.textarea,
+            );
+        }
         if !remote_images_rect.is_empty() {
             let first = self
                 .attachments

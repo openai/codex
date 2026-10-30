@@ -122,6 +122,20 @@ impl ExternalWriterNotice {
 }
 
 impl ChatWidget {
+    pub(crate) fn prepare_composer_images(&mut self, protocol: Option<crate::pets::ImageProtocol>) {
+        self.composer_images = protocol
+            .filter(|_| {
+                !self.bottom_pane.composer_local_images().is_empty()
+                    && self.no_modal_or_popup_active()
+            })
+            .and_then(|protocol| {
+                crate::transcript_image::composer::ComposerImages::for_terminal(
+                    protocol,
+                    self.composer_images.take(),
+                )
+            });
+    }
+
     pub(crate) fn as_renderable(&self) -> RenderableItem<'_> {
         let backdrop = self.as_backdrop_renderable();
         match self.centered_dialog() {
@@ -270,6 +284,7 @@ impl ChatWidget {
                 self.ambient_pet_wrap_reserved_cols()
             };
             options.rendered_selection = Some(&self.rendered_selection);
+            options.image_previews = self.composer_images.as_ref();
             options.warning_count = self.warning_display_state.count;
             options.textarea_right_reserve = right_reserve;
             options.separate_status_line = options.command_popup_placement
