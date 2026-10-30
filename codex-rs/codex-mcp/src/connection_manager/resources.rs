@@ -1,5 +1,12 @@
+use super::McpServerConnection;
+use crate::CODEX_APPS_MCP_SERVER_NAME;
+use crate::McpRuntime;
+use codex_rmcp_client::RmcpClient;
+use rmcp::model::ServerResult;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Weak;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -183,6 +190,24 @@ impl McpConnectionSet {
             .map(|view| view.metadata.environment_id.as_str())
     }
 
+    /// Returns the first Apps startup attempt only while its inventory is pending.
+    pub(crate) fn early_apps_discovery(
+        &self,
+    ) -> Option<(&Arc<McpServerConnection>, Option<Duration>)> {
+        if !self.config.as_ref()?.apps_early_resource_discovery {
+            return None;
+        }
+        let view = self.servers.get(CODEX_APPS_MCP_SERVER_NAME)?;
+        let connection = &view.connection;
+        if connection.initialized_apps.is_some()
+            && !connection.client.startup_complete.load(Ordering::Acquire)
+        {
+            Some((connection, view.tool_timeout))
+        } else {
+            None
+        }
+    }
+
     pub(crate) async fn client_by_name(
         &self,
         name: &str,
@@ -197,5 +222,62 @@ impl McpConnectionSet {
             .await
             .context("failed to get client")?;
         Ok((client, view.tool_timeout))
+    }
+}
+
+impl McpServerConnection {
+    /// Borrows the authenticated transport while startup owns its inventory. Discard the page
+    /// if startup fails or the runtime replaces its connection, auth scope, or resource generation.
+    pub(crate) async fn with_early_apps_client(
+        self: &Arc<Self>,
+        runtime: &McpRuntime,
+        timeout: Option<Duration>,
+        request: impl AsyncFnOnce(Arc<RmcpClient>, Option<Duration>) -> Result<ServerResult>,
+    ) -> Result<ServerResult> {
+        let auth = runtime.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME);
+        let key = runtime
+            .resource_cache_key(CODEX_APPS_MCP_SERVER_NAME)
+            .context("Apps registration was removed")?;
+        anyhow::ensure!(
+            key.connection.ptr_eq(&Arc::downgrade(self)),
+            "Apps connection was replaced"
+        );
+        let client = self.initialized_apps_client().await?;
+        let response = tokio::select! {
+            biased;
+            _ = self.client.cancel_token.cancelled() => anyhow::bail!("Apps startup cancelled"),
+            Err(error) = self.client.client.clone() => return Err(error.into()),
+            response = request(client, timeout) => response?,
+        };
+        anyhow::ensure!(
+            Some(key) == runtime.resource_cache_key(CODEX_APPS_MCP_SERVER_NAME)
+                && auth == runtime.auth_cache_key_for_server(CODEX_APPS_MCP_SERVER_NAME),
+            "Apps connection changed during catalog discovery"
+        );
+        Ok(response)
+    }
+
+    pub(super) async fn initialized_apps_client(&self) -> Result<Arc<RmcpClient>> {
+        let mut initialized = self
+            .initialized_apps
+            .clone()
+            .context("Apps discovery is disabled")?;
+        let initialized_transport = async {
+            initialized
+                .wait_for(Option::is_some)
+                .await
+                .ok()
+                .and_then(|value| value.as_ref().and_then(Weak::upgrade))
+        };
+        let acquire = async {
+            tokio::select! {
+                biased;
+                ready = self.client.client.clone() => Ok(ready?.client),
+                Some(client) = initialized_transport => Ok(client),
+            }
+        };
+        tokio::time::timeout(self.startup_timeout, acquire)
+            .await
+            .context("timed out waiting for the initialized Apps client")?
     }
 }

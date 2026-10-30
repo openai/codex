@@ -863,6 +863,9 @@
             "apps": {
               "type": "boolean"
             },
+            "apps_early_resource_discovery": {
+              "type": "boolean"
+            },
             "apps_mcp_path_override": {
               "anyOf": [
                 {
@@ -7559,6 +7562,9 @@
           "type": "boolean"
         },
         "apps": {
+          "type": "boolean"
+        },
+        "apps_early_resource_discovery": {
           "type": "boolean"
         },
         "apps_mcp_path_override": {

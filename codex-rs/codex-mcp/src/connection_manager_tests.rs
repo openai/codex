@@ -149,6 +149,7 @@ impl McpConnectionSet {
                     identity: None,
                     client,
                     startup_timeout: DEFAULT_STARTUP_TIMEOUT,
+                    initialized_apps: None,
                     startup_trigger: None,
                     legacy_fallback: None,
                     _diagnostics_guard: LIVE_CONNECTIONS.track(),
@@ -620,6 +621,35 @@ pub(crate) async fn create_ready_async_managed_client(tools: Vec<ToolInfo>) -> A
         startup_reconnect: None,
         cancel_token: CancellationToken::new(),
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_apps_client_publication_expires_at_the_configured_startup_timeout() {
+    let mut manager = McpConnectionSet::empty(/*prefix_mcp_tool_names*/ false);
+    let mut client = create_ready_async_managed_client(Vec::new()).await;
+    client.client = futures::future::pending().boxed().shared();
+    client.startup_complete.store(false, Ordering::Release);
+    manager.insert_test_client(CODEX_APPS_MCP_SERVER_NAME, client);
+    let view = manager.servers.get_mut(CODEX_APPS_MCP_SERVER_NAME).unwrap();
+    let connection = Arc::get_mut(&mut view.connection).unwrap();
+    let (_publisher, initialized) = watch::channel(None);
+    connection.initialized_apps = Some(initialized);
+    connection.startup_timeout = Duration::from_secs(/*secs*/ 2);
+
+    let mut borrow = Box::pin(connection.initialized_apps_client());
+    assert!(futures::poll!(&mut borrow).is_pending());
+    tokio::time::advance(Duration::from_secs(/*secs*/ 1)).await;
+    assert!(futures::poll!(&mut borrow).is_pending());
+    tokio::time::advance(Duration::from_secs(/*secs*/ 1)).await;
+    let std::task::Poll::Ready(Err(error)) = futures::poll!(&mut borrow) else {
+        panic!(
+            "expected the early borrow to expire while startup and publication were still pending"
+        );
+    };
+    assert_eq!(
+        error.to_string(),
+        "timed out waiting for the initialized Apps client"
+    );
 }
 
 #[tokio::test]
@@ -5516,6 +5546,7 @@ async fn manager_with_reusable_ready_server(
                 startup_timeout: config
                     .startup_timeout_sec
                     .unwrap_or(DEFAULT_STARTUP_TIMEOUT),
+                initialized_apps: None,
                 startup_trigger: None,
                 legacy_fallback: None,
                 _diagnostics_guard: LIVE_CONNECTIONS.track(),
@@ -5974,6 +6005,7 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
                 startup_timeout: config
                     .startup_timeout_sec
                     .unwrap_or(DEFAULT_STARTUP_TIMEOUT),
+                initialized_apps: None,
                 startup_trigger: None,
                 legacy_fallback: None,
                 _diagnostics_guard: LIVE_CONNECTIONS.track(),
@@ -6811,6 +6843,7 @@ async fn reconciliation_replaces_closed_connections() -> anyhow::Result<()> {
         startup_timeout: config
             .startup_timeout_sec
             .unwrap_or(DEFAULT_STARTUP_TIMEOUT),
+        initialized_apps: None,
         startup_trigger: None,
         legacy_fallback: None,
         _diagnostics_guard: LIVE_CONNECTIONS.track(),

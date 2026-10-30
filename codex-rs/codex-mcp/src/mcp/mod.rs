@@ -183,6 +183,8 @@ pub struct McpConfig {
     /// ChatGPT auth is checked separately before a materialized host-owned Apps
     /// server can be used.
     pub apps_enabled: bool,
+    /// Allow hosted Apps catalog reads after MCP initialization, before tools are ready.
+    pub apps_early_resource_discovery: bool,
     /// Whether model-visible MCP tool namespaces should keep the legacy
     /// `mcp__` prefix.
     pub prefix_mcp_tool_names: bool,

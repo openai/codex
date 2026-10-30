@@ -103,6 +103,9 @@ pub(crate) struct McpServerConnection {
     // Startup-only budget; changing it must not replace a ready connection.
     startup_timeout: Duration,
     startup_trigger: Option<watch::Sender<bool>>,
+    // Only the initial host-owned Apps attempt publishes here. A retry uses normal readiness.
+    initialized_apps:
+        Option<watch::Receiver<Option<std::sync::Weak<codex_rmcp_client::RmcpClient>>>>,
     _diagnostics_guard: GaugeGuard,
 }
 
@@ -895,6 +898,13 @@ impl McpConnectionSet {
                     },
                 )
             });
+            let (publish_apps, initialized_apps) =
+                if is_host_owned_codex_apps && config.apps_early_resource_discovery {
+                    let (tx, rx) = watch::channel(None);
+                    (Some(tx), Some(rx))
+                } else {
+                    (None, None)
+                };
             let mut async_managed_client = AsyncManagedClient::new(
                 ema_auth.clone(),
                 server_name.clone(),
@@ -925,6 +935,7 @@ impl McpConnectionSet {
                 protocol_mode,
                 catalog_item_limit,
                 connection_pool,
+                publish_apps,
             );
             // A forced reconnect must also wait for the previously published helper to exit.
             if let Some(previous) = existing_ema.and_then(|set| set.servers.get(&server_name)) {
@@ -947,6 +958,7 @@ impl McpConnectionSet {
                         legacy_fallback,
                         startup_timeout,
                         startup_trigger,
+                        initialized_apps,
                         _diagnostics_guard: LIVE_CONNECTIONS.track(),
                     }),
                     protocol_mode,
