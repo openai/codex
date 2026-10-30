@@ -2,7 +2,7 @@
 //!
 //! Stored-backend preparation leaves active settings unchanged; active-backend resume retains its
 //! eager preference refresh. Neither detaches the active thread or replaces its composer. The
-//! prepared result retains the connection identity.
+//! prepared result retains the connection identity and any provider error for read-only history.
 
 use super::*;
 
@@ -32,6 +32,7 @@ pub(super) struct PreparedResume {
     pub(super) thread: AppServerStartedThread,
     pub(super) read_only: bool,
     pub(super) history_notice: Option<&'static str>,
+    pub(super) provider_error: Option<codex_app_server_protocol::ModelProviderError>,
 }
 
 impl App {
@@ -85,23 +86,34 @@ impl App {
             )
             .await;
         let mut history_notice = None;
+        let mut provider_error = None;
         let (resumed, read_only) = match resumed {
             Ok(resumed) => (resumed, false),
-            Err(err) if crate::app_server_session::is_active_writer_error(&err) => match app_server
-                .read_thread_for_viewing(&resume_config, &local_settings, target_session.thread_id)
-                .await
+            Err(err)
+                if crate::app_server_session::is_active_writer_error(&err)
+                    || crate::app_server_session::model_provider_error(&err).is_some() =>
             {
-                Ok((thread, notice)) => {
-                    history_notice = notice;
-                    (thread, true)
+                provider_error = crate::app_server_session::model_provider_error(&err);
+                match app_server
+                    .read_thread_for_viewing(
+                        &resume_config,
+                        &local_settings,
+                        target_session.thread_id,
+                    )
+                    .await
+                {
+                    Ok((thread, notice)) => {
+                        history_notice = notice;
+                        (thread, true)
+                    }
+                    Err(read_err) => {
+                        self.add_session_picker_error(format!(
+                            "Failed to load chat history: {read_err}"
+                        ));
+                        return Err(AppRunControl::Continue);
+                    }
                 }
-                Err(read_err) => {
-                    self.add_session_picker_error(format!(
-                        "Failed to view thread open elsewhere: {read_err}"
-                    ));
-                    return Err(AppRunControl::Continue);
-                }
-            },
+            }
             Err(err) => {
                 let path_display = target_session.display_label();
                 self.add_session_picker_error(format!(
@@ -117,6 +129,7 @@ impl App {
             thread: resumed,
             read_only,
             history_notice,
+            provider_error,
         })
     }
 }

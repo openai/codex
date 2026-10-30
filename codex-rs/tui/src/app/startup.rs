@@ -571,6 +571,7 @@ impl App {
         let mut start_in_agents_overview =
             matches!(&session_selection, SessionSelection::AgentsOverview);
         let mut read_only_thread = false;
+        let mut provider_error = None;
         let mut history_notice = None;
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh
@@ -683,7 +684,11 @@ impl App {
                     .await
                 {
                     Ok(Ok(resumed)) => Ok(resumed),
-                    Ok(Err(err)) if crate::app_server_session::is_active_writer_error(&err) => {
+                    Ok(Err(err))
+                        if crate::app_server_session::is_active_writer_error(&err)
+                            || crate::app_server_session::model_provider_error(&err).is_some() =>
+                    {
+                        provider_error = crate::app_server_session::model_provider_error(&err);
                         read_only_thread = true;
                         match startup_draft
                             .run_until(
@@ -1123,7 +1128,10 @@ See the Codex keymap documentation for supported actions and examples."
             if started.blocks_direct_input {
                 app.mark_primary_thread_parent_owned(thread_id);
             }
-            if read_only_thread {
+            if let Some(error) = provider_error.clone() {
+                app.chat_widget
+                    .show_provider_error(error, /*rejected_message_id*/ None);
+            } else if read_only_thread {
                 app.chat_widget.show_external_writer_thread();
             }
             match startup_draft
@@ -1138,13 +1146,16 @@ See the Codex keymap documentation for supported actions and examples."
                     return shutdown_on_startup_error(app_server, &mut other_backends, err).await;
                 }
             }
-            if read_only_thread {
+            if let Some(error) = provider_error {
+                app.chat_widget
+                    .show_provider_error(error, /*rejected_message_id*/ None);
+            } else if read_only_thread {
                 app.ensure_thread_channel(thread_id).mark_external_writer();
                 app.chat_widget.show_external_writer_thread();
-                if let Some(notice) = history_notice {
-                    app.chat_widget
-                        .add_info_message(notice.to_string(), /*hint*/ None);
-                }
+            }
+            if let Some(notice) = history_notice {
+                app.chat_widget
+                    .add_info_message(notice.to_string(), /*hint*/ None);
             }
             if !read_only_thread
                 && should_prompt_for_paused_goal_after_startup_resume

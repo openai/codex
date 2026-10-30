@@ -563,3 +563,95 @@ async fn external_writer_notice_offers_command_center_on_shared_servers() {
         }
     }
 }
+
+#[tokio::test]
+async fn provider_error_preserves_draft_and_survives_thread_navigation() {
+    use codex_app_server_protocol::ModelProviderError;
+    let mut snapshots = Vec::new();
+    for (kind, error) in [
+        (
+            "",
+            ModelProviderError::ModelProviderNotConfigured {
+                model_provider: "old-provider".into(),
+            },
+        ),
+        (
+            "_mismatch",
+            ModelProviderError::ModelProviderMismatch {
+                model_provider: "custom-gateway".into(),
+                current_model_provider: "amazon-bedrock-runtime".into(),
+            },
+        ),
+        (
+            "_policy_provider",
+            ModelProviderError::ModelProviderPolicyConflict {
+                model_provider: "openai".into(),
+                required_model_provider: "amazon-bedrock".into(),
+            },
+        ),
+        (
+            "_policy_settings",
+            ModelProviderError::ModelProviderPolicyConflict {
+                model_provider: "openai".into(),
+                required_model_provider: "openai".into(),
+            },
+        ),
+    ] {
+        let (mut widget, _sender, _events, _operations) =
+            make_chatwidget_manual_with_sender().await;
+        widget
+            .bottom_pane
+            .set_composer_text("unsent draft".to_string(), Vec::new(), Vec::new());
+        widget.show_provider_error(error, /*rejected_message_id*/ None);
+        let state = widget
+            .capture_thread_input_state()
+            .expect("saved input state");
+        let (mut restored, _sender, _events, mut operations) =
+            make_chatwidget_manual_with_sender().await;
+        let mut gateway = restored.config.model_provider.clone();
+        gateway.name = "Team Gateway".into();
+        restored
+            .config
+            .model_providers
+            .insert("custom-gateway".into(), gateway);
+        restored.restore_thread_input_state(
+            Some(state),
+            ThreadInputStateRestoreMode {
+                preserve_in_flight_turn: false,
+            },
+        );
+        assert!(restored.has_provider_error());
+        restored.thread_id = Some(ThreadId::from_u128(/*value*/ 1));
+        restored.current_rollout_path = Some(PathBuf::from("/tmp/saved-conversation.jsonl"));
+        restored.handle_paste("ignored paste".into());
+        restored.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        restored.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(restored.bottom_pane.composer_text(), "unsent draft");
+        assert!(operations.try_recv().is_err());
+        // Cover each message once; mismatch also exercises wrapping and the remote host note.
+        for (location, target, width) in [
+            ("local", crate::AppServerTarget::Embedded, 80),
+            ("local", crate::AppServerTarget::Embedded, 40),
+            (
+                "remote",
+                crate::AppServerTarget::Remote {
+                    endpoint: crate::resolve_remote_addr("ws://devbox.example.com:4500").unwrap(),
+                },
+                80,
+            ),
+        ] {
+            if kind != "_mismatch" && (location == "remote" || width == 40) {
+                continue;
+            }
+            restored.remote_connection =
+                crate::status::remote_connection::remote_connection_status_value(
+                    &target, /*server_version*/ None,
+                );
+            let rendered = crate::chatwidget::tests::render_bottom_popup(&restored, width);
+            snapshots.push(format!(
+                "provider_error{kind}_{location}_{width}\n{rendered}"
+            ));
+        }
+    }
+    insta::assert_snapshot!("provider_errors", snapshots.join("\n\n"));
+}

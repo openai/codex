@@ -24,11 +24,11 @@ pub(super) struct PickerAreas {
 }
 
 pub(super) fn areas(area: Rect) -> PickerAreas {
-    const FIXED_CHROME_ROWS: u16 = 7;
+    let fixed_chrome_rows = 7;
     const MIN_LIST_ROWS: u16 = 6;
     let gaps = area
         .height
-        .saturating_sub(FIXED_CHROME_ROWS + MIN_LIST_ROWS)
+        .saturating_sub(fixed_chrome_rows + MIN_LIST_ROWS)
         .min(/*other*/ 3);
     let [header, _, toolbar, _, search, _, list, footer] = Layout::vertical([
         Constraint::Length(1),
@@ -37,7 +37,7 @@ pub(super) fn areas(area: Rect) -> PickerAreas {
         Constraint::Length(u16::from(gaps >= 2)),
         Constraint::Length(1),
         Constraint::Length(u16::from(gaps >= 1)),
-        Constraint::Min(area.height.saturating_sub(FIXED_CHROME_ROWS + gaps)),
+        Constraint::Min(area.height.saturating_sub(fixed_chrome_rows + gaps)),
         Constraint::Length(4),
     ])
     .areas(area);

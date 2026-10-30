@@ -823,6 +823,7 @@ pub(crate) fn resume_source_kinds(include_non_interactive: bool) -> Vec<ThreadSo
 }
 
 async fn lookup_session_target_with_app_server(
+    action: resume_picker::SessionPickerAction,
     app_server: &mut AppServerSession,
     config: &Config,
     id_or_name: &str,
@@ -858,34 +859,47 @@ async fn lookup_session_target_with_app_server(
         };
     }
 
-    let model_provider = app_server.history_model_provider(config).await?;
+    let model_providers = match action {
+        resume_picker::SessionPickerAction::Resume => Some(Vec::new()),
+        resume_picker::SessionPickerAction::Fork => app_server
+            .history_model_provider(config)
+            .await?
+            .map(|provider| vec![provider]),
+    };
     Ok(named_session_lookup::lookup(
         app_server,
         config.codex_home.as_path(),
         id_or_name,
         &[named_session_lookup::SessionCollection::Active],
         &[resume_source_kinds(/*include_non_interactive*/ false)],
-        model_provider.as_deref(),
+        model_providers,
     )
     .await?
     .and_then(|thread| session_target_from_app_server_thread(app_server.backend_id(), thread)))
 }
 
 async fn lookup_latest_session_target_with_app_server(
+    action: resume_picker::SessionPickerAction,
     app_server: &mut AppServerSession,
     config: &Config,
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
+    let model_providers = match action {
+        resume_picker::SessionPickerAction::Resume => Some(Vec::new()),
+        resume_picker::SessionPickerAction::Fork => app_server
+            .history_model_provider(config)
+            .await?
+            .map(|provider| vec![provider]),
+    };
     let uses_remote_workspace = app_server.uses_remote_workspace();
-    let model_provider = app_server.history_model_provider(config).await?;
     for lookup_mode in [
         LatestSessionLookupMode::StateDbOnly,
         LatestSessionLookupMode::ScanAndRepair,
     ] {
         let response = app_server
             .thread_list(latest_session_lookup_params(
-                model_provider.clone(),
+                model_providers.clone(),
                 cwd_filter,
                 include_non_interactive,
                 lookup_mode,
@@ -918,7 +932,7 @@ enum LatestSessionLookupMode {
 }
 
 fn latest_session_lookup_params(
-    model_provider: Option<String>,
+    model_providers: Option<Vec<String>>,
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
     lookup_mode: LatestSessionLookupMode,
@@ -931,7 +945,7 @@ fn latest_session_lookup_params(
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
         sort_direction: None,
-        model_providers: model_provider.map(|provider| vec![provider]),
+        model_providers,
         source_kinds: Some(resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         section_id: None,
@@ -1531,7 +1545,12 @@ async fn run_ratatui_app(
             let lookup = startup_draft
                 .run_until(
                     &mut tui,
-                    lookup_session_target_with_app_server(startup_app_server, &config, id_str),
+                    lookup_session_target_with_app_server(
+                        crate::resume_picker::SessionPickerAction::Fork,
+                        startup_app_server,
+                        &config,
+                        id_str,
+                    ),
                 )
                 .await;
             let target_session = match lookup {
@@ -1567,6 +1586,7 @@ async fn run_ratatui_app(
                 .run_until(
                     &mut tui,
                     lookup_latest_session_target_with_app_server(
+                        crate::resume_picker::SessionPickerAction::Fork,
                         startup_app_server,
                         &config,
                         filter_cwd,
@@ -1629,7 +1649,12 @@ async fn run_ratatui_app(
         let lookup = startup_draft
             .run_until(
                 &mut tui,
-                lookup_session_target_with_app_server(startup_app_server, &config, id_str),
+                lookup_session_target_with_app_server(
+                    crate::resume_picker::SessionPickerAction::Resume,
+                    startup_app_server,
+                    &config,
+                    id_str,
+                ),
             )
             .await;
         let target_session = match lookup {
@@ -1665,6 +1690,7 @@ async fn run_ratatui_app(
             .run_until(
                 &mut tui,
                 lookup_latest_session_target_with_app_server(
+                    crate::resume_picker::SessionPickerAction::Resume,
                     startup_app_server,
                     &config,
                     filter_cwd,

@@ -407,6 +407,31 @@ impl App {
         if self.chat_widget.fork_in_progress {
             return;
         }
+        if self.chat_widget.has_provider_error()
+            && self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
+            && key_event.kind == KeyEventKind::Press
+            && key_event.modifiers == KeyModifiers::NONE
+        {
+            match key_event.code {
+                KeyCode::Char('c') if self.chat_widget.rollout_path().is_some() => {
+                    if let Some(thread_id) = self.chat_widget.thread_id() {
+                        self.app_event_tx
+                            .send(AppEvent::ContinueProviderChat { thread_id });
+                    }
+                    return;
+                }
+                KeyCode::Char('n') => {
+                    self.app_event_tx.send(AppEvent::NewSession { name: None });
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.app_event_tx.send(AppEvent::OpenResumePicker);
+                    return;
+                }
+                _ => {}
+            }
+        }
         if self.chat_widget.is_external_writer_view()
             && self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
@@ -793,6 +818,7 @@ impl App {
 
     pub(crate) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
         !self.chat_widget.is_external_writer_view()
+            && !self.chat_widget.has_provider_error()
             && !self.chat_widget.side_conversation_active()
             && !self.chat_widget.shortcut_overlay_visible()
             && self.chat_widget.is_normal_backtrack_mode()

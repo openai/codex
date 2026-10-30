@@ -542,7 +542,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.cancel_quick_dial_menu();
-        if self.external_writer_view && !self.bottom_pane.has_active_view() {
+        if (self.external_writer_view || self.has_provider_error())
+            && !self.bottom_pane.has_active_view()
+        {
             return;
         }
         if !self.startup_submission_has_protected_input() {

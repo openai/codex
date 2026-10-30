@@ -227,7 +227,8 @@ impl App {
         &mut self,
         target_session: &crate::resume_picker::SessionTarget,
     ) -> bool {
-        if self.active_thread_id != Some(target_session.thread_id)
+        if self.chat_widget.has_provider_error()
+            || self.active_thread_id != Some(target_session.thread_id)
             || self
                 .thread_event_channels
                 .get(&target_session.thread_id)
@@ -560,10 +561,32 @@ impl App {
             return Ok(());
         }
 
-        if self
+        let submitted = match self
             .try_submit_active_thread_op_via_app_server(app_server, thread_id, &op)
-            .await?
+            .await
         {
+            Ok(submitted) => submitted,
+            Err(error) => {
+                if let Some(provider_error) =
+                    crate::app_server_session::model_provider_error(&error)
+                    && self.current_displayed_thread_id() == Some(thread_id)
+                {
+                    self.chat_widget.show_provider_error(
+                        provider_error,
+                        match &op {
+                            AppCommand::UserTurn {
+                                client_user_message_id,
+                                ..
+                            } => Some(client_user_message_id.as_str()),
+                            _ => None,
+                        },
+                    );
+                    return Ok(());
+                }
+                return Err(error);
+            }
+        };
+        if submitted {
             if ThreadEventStore::op_can_change_pending_replay_state(&op) {
                 self.note_thread_outbound_op(thread_id, &op).await;
                 self.refresh_pending_thread_approvals().await;

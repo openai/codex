@@ -281,6 +281,7 @@ mod goal_menu;
 mod ide_context;
 use self::ide_context::IdeContextState;
 mod input_queue;
+mod provider_error;
 mod reconnect;
 use self::input_queue::InputQueueState;
 mod image_submission;
@@ -685,6 +686,7 @@ pub(crate) struct ChatWidget {
     active_side_conversation: bool,
     blocks_direct_input: bool,
     external_writer_view: bool,
+    provider_error: Option<codex_app_server_protocol::ModelProviderError>,
     /// Covers both queued and executing forks so repeated shortcuts cannot queue another one.
     pub(crate) fork_in_progress: bool,
     misalignment_policy_violation: Option<misalignment_policy::MisalignmentViolation>,

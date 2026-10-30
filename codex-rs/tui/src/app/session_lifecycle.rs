@@ -1391,6 +1391,7 @@ impl App {
             thread: resumed,
             read_only,
             history_notice,
+            provider_error,
         } = prepared;
         if backend_id != app_server.backend_id() {
             self.add_session_picker_error(
@@ -1400,7 +1401,8 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
         let resumed_thread_id = resumed.session.thread_id;
-        let retained_input = (self.chat_widget.is_external_writer_view()
+        let retained_input = ((self.chat_widget.is_external_writer_view()
+            || self.chat_widget.has_provider_error())
             && self.chat_widget.thread_id() == Some(resumed_thread_id))
         .then(|| self.chat_widget.capture_thread_input_state())
         .flatten();
@@ -1425,7 +1427,9 @@ impl App {
             .await
         {
             Ok(()) => {
-                if let Some(input) = retained_input {
+                if let Some(mut input) = retained_input {
+                    // A successful resume is the authority for clearing the old rejection.
+                    input.provider_error = None;
                     self.chat_widget.restore_thread_input_state(
                         Some(input),
                         ThreadInputStateRestoreMode {
@@ -1433,14 +1437,17 @@ impl App {
                         },
                     );
                 }
-                if read_only {
+                if let Some(error) = provider_error {
+                    self.chat_widget
+                        .show_provider_error(error, /*rejected_message_id*/ None);
+                } else if read_only {
                     self.ensure_thread_channel(resumed_thread_id)
                         .mark_external_writer();
                     self.chat_widget.show_external_writer_thread();
-                    if let Some(notice) = history_notice {
-                        self.chat_widget
-                            .add_info_message(notice.to_string(), /*hint*/ None);
-                    }
+                }
+                if let Some(notice) = history_notice {
+                    self.chat_widget
+                        .add_info_message(notice.to_string(), /*hint*/ None);
                 }
                 self.backfill_loaded_subagent_threads(app_server).await;
                 if matches!(

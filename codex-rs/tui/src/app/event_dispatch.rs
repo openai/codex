@@ -216,6 +216,42 @@ impl App {
                     self.chat_widget.show_misalignment_policy_precaution();
                 }
             }
+            AppEvent::ContinueProviderChat { thread_id } => {
+                // A queued shortcut must still refer to the locked chat on screen.
+                if self.chat_widget.thread_id() == Some(thread_id)
+                    && self.chat_widget.has_provider_error()
+                    && let Some(path) = self.chat_widget.rollout_path()
+                {
+                    let name = self
+                        .chat_widget
+                        .thread_name()
+                        .filter(|name| !name.trim().is_empty())
+                        .map_or_else(
+                            || "our previous conversation".to_string(),
+                            |name| format!("“{name}”"),
+                        );
+                    let message = format!(
+                        "Read {name} and let’s continue where we left off.\n\nSaved conversation: {}",
+                        path.display(),
+                    );
+                    self.start_fresh_session(
+                        tui,
+                        app_server,
+                        /*session_start_source*/ None,
+                        /*initial_user_message*/ None,
+                        /*new_thread_name*/ None,
+                    )
+                    .await;
+                    if self
+                        .chat_widget
+                        .thread_id()
+                        .is_some_and(|new_id| new_id != thread_id)
+                    {
+                        self.chat_widget
+                            .restore_user_message_to_composer(message.into());
+                    }
+                }
+            }
             AppEvent::StartManagedWorktree { mode, name } => {
                 if self.pending_start_managed_worktree.is_some() {
                     self.chat_widget
@@ -531,6 +567,7 @@ impl App {
             }
             AppEvent::ResumeSessionByIdOrName(id_or_name) => {
                 match crate::lookup_session_target_with_app_server(
+                    crate::resume_picker::SessionPickerAction::Resume,
                     app_server,
                     &self.config,
                     &id_or_name,

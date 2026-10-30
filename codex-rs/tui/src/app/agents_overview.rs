@@ -468,6 +468,7 @@ impl App {
             loading::draw(tui)?;
         }
         let mut restored_blank_session = false;
+        let mut provider_resume_checked = false;
         if self.primary_thread_id != Some(root_thread_id) {
             let previous_displayed_thread_id = self.current_displayed_thread_id();
             if let Some(id) = previous_displayed_thread_id
@@ -657,6 +658,7 @@ impl App {
                 }
             };
             let mut history_notice = None;
+            let mut provider_error = None;
             let presentation = if startup_draft.is_some() {
                 ThreadAttachPresentation::FreshWithDraft
             } else if started.is_some() {
@@ -686,8 +688,17 @@ impl App {
                     )
                     .await
                 {
-                    Ok(resumed) => (resumed, false),
-                    Err(error) if crate::app_server_session::is_active_writer_error(&error) => {
+                    Ok(resumed) => {
+                        provider_resume_checked = true;
+                        (resumed, false)
+                    }
+                    Err(error)
+                        if crate::app_server_session::is_active_writer_error(&error)
+                            || crate::app_server_session::model_provider_error(&error)
+                                .is_some() =>
+                    {
+                        provider_resume_checked = true;
+                        provider_error = crate::app_server_session::model_provider_error(&error);
                         match app_server
                             .read_thread_for_viewing(
                                 &resume_config,
@@ -800,14 +811,17 @@ impl App {
             if startup_draft.is_none() {
                 loading::draw(tui)?;
             }
-            if read_only {
+            if let Some(error) = provider_error {
+                self.chat_widget
+                    .show_provider_error(error, /*rejected_message_id*/ None);
+            } else if read_only {
                 self.ensure_thread_channel(root_thread_id)
                     .mark_external_writer();
                 self.chat_widget.show_external_writer_thread();
-                if let Some(notice) = history_notice {
-                    self.chat_widget
-                        .add_info_message(notice.to_string(), /*hint*/ None);
-                }
+            }
+            if let Some(notice) = history_notice {
+                self.chat_widget
+                    .add_info_message(notice.to_string(), /*hint*/ None);
             }
             let mut destination_config = self.chat_widget.config_ref().clone();
             if self.app_server_target.uses_remote_workspace() {
@@ -889,6 +903,10 @@ impl App {
         if self.current_displayed_thread_id() == Some(root_thread_id)
             && let Some(mut input_state) = self.agents_overview.input_states.remove(&root_thread_id)
         {
+            // A fresh server result supersedes the saved rejection, but not the draft.
+            if provider_resume_checked {
+                input_state.provider_error = None;
+            }
             // A saved draft includes model settings, so apply newer server settings after it.
             let pending_settings = restored_blank_session
                 .then(|| input_state.pending_thread_settings.take())

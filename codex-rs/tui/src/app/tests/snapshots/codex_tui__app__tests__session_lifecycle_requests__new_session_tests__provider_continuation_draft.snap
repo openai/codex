@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests/new_session_tests.rs
+expression: composer_lines
+---
+› Read “Launch readiness” and let’s continue where we left off.

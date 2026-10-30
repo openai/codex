@@ -1,9 +1,89 @@
 //! Browsing restores its origin and gives selection/search priority over rewind keys.
 
 use super::*;
+use crate::app::tests::make_test_app_with_channels;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::PlainHistoryCell;
+use codex_app_server_protocol::ModelProviderError;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn provider_error_escape_opens_resume_picker() -> Result<()> {
+    for (owned, draft) in [
+        (true, ""),
+        (true, "unsent draft"),
+        (false, ""),
+        (false, "unsent draft"),
+    ] {
+        let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+        attach_thread(&mut app, ThreadId::new());
+        app.transcript_cells = vec![user_cell("first prompt"), user_cell("second prompt")];
+        app.chat_widget.apply_external_edit(draft.to_string());
+        app.chat_widget.show_provider_error(
+            ModelProviderError::ModelProviderMismatch {
+                model_provider: "old-provider".into(),
+                current_model_provider: "test-provider".into(),
+            },
+            /*rejected_message_id*/ None,
+        );
+        let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.set_owned_screen(owned)?;
+        while events.try_recv().is_ok() {}
+        if owned {
+            app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 16))?;
+            app.transcript_view
+                .jump_to_entry(&app.transcript_cells, /*index*/ 0);
+            for search in [true, false] {
+                if search {
+                    app.transcript_view.begin_search();
+                } else {
+                    assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
+                }
+                assert!(app.transcript_view.has_active_interaction());
+                app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
+                    .await?;
+                assert!(!app.transcript_view.has_active_interaction());
+                assert!(
+                    !std::iter::from_fn(|| events.try_recv().ok())
+                        .any(|event| matches!(event, AppEvent::OpenResumePicker))
+                );
+                // Release Escape so selection's exit guard does not consume the next press.
+                app.handle_tui_event(
+                    &mut tui,
+                    &mut server,
+                    TuiEvent::Key(KeyEvent::new_with_kind(
+                        KeyCode::Esc,
+                        KeyModifiers::NONE,
+                        KeyEventKind::Release,
+                    )),
+                )
+                .await?;
+            }
+        }
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
+            .await?;
+        assert_eq!(
+            std::iter::from_fn(|| events.try_recv().ok())
+                .filter(|event| matches!(event, AppEvent::OpenResumePicker))
+                .count(),
+            1
+        );
+        assert_eq!(
+            (
+                app.chat_widget.has_provider_error(),
+                app.backtrack.primed,
+                app.backtrack.overlay_preview_active,
+                app.chat_widget.composer_text_with_pending(),
+                app.transcript_cells.len(),
+            ),
+            (true, false, false, draft.to_string(), 2)
+        );
+        tui.set_owned_screen(/*owned*/ false)?;
+        server.shutdown().await?;
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn escape_restores_reading_origin_after_details_navigation_and_resize() -> Result<()> {

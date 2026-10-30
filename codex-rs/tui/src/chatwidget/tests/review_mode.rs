@@ -418,6 +418,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
 
     chat.restore_thread_input_state(
         Some(ThreadInputState {
+            provider_error: None,
             pending_thread_settings: None,
             questions: None,
             initial_user_message: None,

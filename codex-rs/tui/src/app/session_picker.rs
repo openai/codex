@@ -112,8 +112,11 @@ impl App {
                 }
                 if switching_threads
                     && self.current_displayed_thread_id() == Some(thread_id)
-                    && let Some(input_state) = self.agents_overview.input_states.remove(&thread_id)
+                    && let Some(mut input_state) =
+                        self.agents_overview.input_states.remove(&thread_id)
                 {
+                    // The resumed widget already reflects the latest server result.
+                    input_state.provider_error = None;
                     let preserve_in_flight_turn =
                         self.active_turn_id_for_thread(thread_id).await.is_some();
                     self.chat_widget.restore_thread_input_state(

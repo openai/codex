@@ -219,7 +219,10 @@ enum PickerLoadRequest {
 
 #[derive(Clone)]
 enum ProviderFilter {
+    // Omit the filter and let the server use its default provider.
     Any,
+    // Explicitly include threads from every provider.
+    All,
     MatchDefault(String),
 }
 
@@ -498,7 +501,7 @@ async fn run_resume_picker_with_launch_context(
         app_server.remote_cwd_override(),
     );
     let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_filesystem);
-    let provider_filter = picker_provider_filter(config, &app_server).await?;
+    let provider_filter = ProviderFilter::All;
     let runtime_keymap = picker_runtime_keymap(local_settings)?;
     let options = SessionPickerRunOptions {
         backend_id: app_server.backend_id(),
@@ -2301,6 +2304,7 @@ fn thread_list_params(
         sort_direction: None,
         model_providers: match provider_filter {
             ProviderFilter::Any => None,
+            ProviderFilter::All => Some(Vec::new()),
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
         },
         source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
@@ -4144,7 +4148,7 @@ mod tests {
         drop(bg_rx);
         loader.task.await.unwrap();
         let local = crate::latest_session_lookup_params(
-            /*model_provider*/ None,
+            /*model_providers*/ None,
             Some(&primary),
             /*include_non_interactive*/ false,
             crate::LatestSessionLookupMode::StateDbOnly,
@@ -4152,7 +4156,7 @@ mod tests {
         assert_eq!(local.cwd, Some(single.clone()));
         assert_eq!(
             crate::latest_session_lookup_params(
-                /*model_provider*/ None,
+                /*model_providers*/ None,
                 Some(&primary),
                 /*include_non_interactive*/ false,
                 crate::LatestSessionLookupMode::StateDbOnly,
@@ -4596,38 +4600,6 @@ mod tests {
         let first_index = rendered.find(first).expect("first metadata item");
         let second_index = rendered.find(second).expect("second metadata item");
         assert!(first_index < second_index);
-    }
-
-    #[test]
-    fn picker_renders_server_provider_history() {
-        let cwd = PathBuf::from("/project");
-        let mut row = make_row(
-            "/session.jsonl",
-            "2025-01-02T11:00:00Z",
-            "Other provider session",
-        );
-        row.cwd = Some(cwd.clone());
-        let mut state = PickerState::new(
-            crate::backend_id::BackendId::new(),
-            FrameRequester::test_dummy(),
-            page_only_loader(|_| {}),
-            ProviderFilter::MatchDefault("server-provider".to_string()),
-            /*show_all*/ false,
-            Some(cwd),
-            SessionPickerAction::Resume,
-        );
-        state.ingest_page(page(
-            vec![row],
-            /*next_cursor*/ None,
-            /*num_scanned_files*/ 1,
-            /*reached_scan_cap*/ false,
-        ));
-        state.relative_time_reference = Some(parse_timestamp_str("2025-01-02T12:00:00Z").unwrap());
-        state.update_viewport(/*rows*/ 12, /*width*/ 80);
-        assert_snapshot!(
-            "resume_picker_shared_provider_history",
-            render_picker_list(&state, /*width*/ 80, /*height*/ 12)
-        );
     }
 
     #[test]

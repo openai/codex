@@ -1,5 +1,6 @@
 //! Shared composer and live-history composition for inline and owned transcript surfaces.
 
+use super::provider_error::ProviderErrorNotice;
 use super::transcript::ActiveCellLayoutCache;
 use super::transcript::ActiveCellLayoutCacheKey;
 use super::*;
@@ -236,6 +237,28 @@ impl ChatWidget {
                     /*top*/ 1, /*left*/ 2, /*bottom*/ 1, /*right*/ 2,
                 )),
             ))
+        } else if let Some(error) = &self.provider_error
+            && !self.bottom_pane.has_active_view()
+        {
+            let can_continue = self.thread_id.is_some() && self.current_rollout_path.is_some();
+            RenderableItem::Owned(Box::new(ProviderErrorNotice {
+                title: if can_continue
+                    && matches!(
+                        error,
+                        codex_app_server_protocol::ModelProviderError::ModelProviderMismatch { .. }
+                    ) {
+                    "Continue in a new chat"
+                } else {
+                    error.title()
+                },
+                message: self.provider_error_message(error),
+                can_continue,
+                configuration_location: self
+                    .remote_connection
+                    .as_ref()
+                    .filter(|remote| !remote.is_local_daemon)
+                    .map(|remote| format!("Configuration on {}", remote.address)),
+            }))
         } else if self.external_writer_view && !self.bottom_pane.has_active_view() {
             RenderableItem::Owned(Box::new(ExternalWriterNotice {
                 command_center_available: self.bottom_pane.command_center_enabled(),

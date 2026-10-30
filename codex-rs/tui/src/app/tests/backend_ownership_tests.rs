@@ -209,9 +209,14 @@ async fn auxiliary_picker_connection_preserves_backend_selection() -> Result<()>
         /*git_info*/ None,
     )
     .expect("saved rollout");
-    let target = crate::lookup_session_target_with_app_server(&mut picker, &app.config, &id)
-        .await?
-        .expect("picker target");
+    let target = crate::lookup_session_target_with_app_server(
+        crate::resume_picker::SessionPickerAction::Resume,
+        &mut picker,
+        &app.config,
+        &id,
+    )
+    .await?
+    .expect("picker target");
     assert_eq!(target.backend_id, consumer.backend_id());
     crate::legacy_core::config::set_project_trust_level(
         app.config.codex_home.as_path(),
@@ -303,6 +308,7 @@ async fn prepared_resume_cannot_activate_through_another_backend() -> Result<()>
         },
         read_only: false,
         history_notice: None,
+        provider_error: None,
     };
     requests.lock().unwrap().clear();
     while events.try_recv().is_ok() {}

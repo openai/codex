@@ -556,6 +556,11 @@ pub(crate) enum AppEvent {
         name: Option<String>,
     },
 
+    /// Continue a provider-locked conversation in a fresh chat using its saved history.
+    ContinueProviderChat {
+        thread_id: ThreadId,
+    },
+
     /// Create a managed checkout and start or fork a session into it.
     StartManagedWorktree {
         mode: ManagedWorktreeMode,

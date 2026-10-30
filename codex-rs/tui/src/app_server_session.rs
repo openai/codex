@@ -401,6 +401,20 @@ pub(crate) struct AppServerStartedThread {
     pub(crate) task_tools_available: bool,
 }
 
+/// Recognize typed server errors without depending on wording or an older server's behavior.
+pub(crate) fn model_provider_error(
+    error: &color_eyre::eyre::Report,
+) -> Option<codex_app_server_protocol::ModelProviderError> {
+    error.chain().find_map(|cause| {
+        let codex_app_server_client::TypedRequestError::Server { source, .. } =
+            cause.downcast_ref::<codex_app_server_client::TypedRequestError>()?
+        else {
+            return None;
+        };
+        serde_json::from_value(source.data.clone()?).ok()
+    })
+}
+
 pub(crate) fn is_active_writer_error(err: &color_eyre::eyre::Report) -> bool {
     err.chain()
         .any(|cause| cause.to_string().contains("already has an active writer"))

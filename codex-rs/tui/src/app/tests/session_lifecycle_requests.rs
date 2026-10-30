@@ -5383,3 +5383,74 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
 
 #[path = "backend_ownership_tests.rs"]
 mod backend_ownership_tests;
+
+#[tokio::test]
+async fn provider_error_preserves_partial_history_notice() -> Result<()> {
+    for reopen_via_overview in [false, true] {
+        let (mut app, _home) = Box::pin(make_history_test_app()).await?;
+        std::fs::write(
+            app.config.codex_home.join("config.toml"),
+            "[tui]\nresume_cwd = 'current'\n",
+        )?;
+        for cwd in [test_path_buf("/"), app.config.cwd.to_path_buf()] {
+            crate::legacy_core::config::set_project_trust_level(
+                app.config.codex_home.as_path(),
+                &cwd,
+                codex_protocol::config_types::TrustLevel::Trusted,
+            )
+            .map_err(std::io::Error::other)?;
+        }
+        let mut saved_config = app.config.clone();
+        saved_config.model_provider_id = "missing_provider".into();
+        let thread_id = create_history_rollout(
+            &saved_config,
+            ThreadHistoryMode::Paginated,
+            "Saved provider chat",
+        )?;
+        let (mut server, requests, proxy) = start_recording_app_server_with_history(
+            &app.config,
+            HistoryCapabilities::ItemsListFails,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides::default(),
+        )
+        .await?;
+        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        app.app_event_tx = AppEventSender::new(sender);
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        if reopen_via_overview {
+            Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, thread_id)).await?;
+        } else {
+            let target = SessionTarget {
+                backend_id: server.backend_id(),
+                path: None,
+                thread_id,
+                cwd: None,
+                history_mode: Some(ThreadHistoryMode::Paginated),
+            };
+            Box::pin(app.resume_target_session(&mut tui, &mut server, target)).await?;
+        }
+        assert!(app.chat_widget.has_provider_error());
+        let notice = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    Some(lines_to_single_string(&cell.display_lines(/*width*/ 200)))
+                }
+                _ => None,
+            })
+            .find(|message| message.contains("Showing up to 100 recent prompts"))
+            .expect("provider error should preserve the partial-history notice");
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(notice, @"• Showing up to 100 recent prompts and final replies. Intermediate messages and tool activity are unavailable.");
+        }
+        assert!(
+            recorded_params(&requests, "thread/turns/list")
+                .iter()
+                .any(|params| params["itemsView"] == "summary")
+        );
+        server.shutdown().await?;
+        proxy.await??;
+    }
+    Ok(())
+}
