@@ -5,6 +5,7 @@ use crate::app_event_sender::AppEventSender;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AudioReference;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
@@ -1385,7 +1386,10 @@ fn turn_summary(turn: &Turn, include_outputs: bool, output_chars: usize) -> Valu
                         ..
                     } => json!({"type": "image", "fileId": file_id}),
                     UserInput::LocalImage { path, .. } => json!({"type": "localImage", "path": path}),
-                    UserInput::Audio { url } => json!({"type": "audio", "url": url}),
+                    UserInput::Audio { audio: AudioReference::Inline { url } } => json!({"type": "audio", "url": url}),
+                    UserInput::Audio {
+                        audio: AudioReference::File { file_id, .. },
+                    } => json!({"type": "audio", "fileId": file_id}),
                     UserInput::LocalAudio { path } => json!({"type": "localAudio", "path": path}),
                     UserInput::Skill { name, path } => json!({"type": "skill", "name": name, "path": path}),
                     UserInput::Mention { name, path } => json!({"type": "mention", "name": name, "path": path}),

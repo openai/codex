@@ -1530,6 +1530,18 @@ async fn injected_response_item_reopens_turn_after_final_answer() {
     submit_user_input(&codex, INITIAL_PROMPT).await;
     wait_for_reasoning_item_started(&codex).await;
 
+    let rejected = vec![
+        responses::user_message_item("rejected injection prefix"),
+        serde_json::from_value(json!({
+            "type": "message", "role": "user",
+            "content": [{"type": "input_audio", "file_id": "file_live_injection"}],
+        }))
+        .expect("raw audio message"),
+    ];
+    assert_eq!(
+        codex.inject_if_running(rejected.clone()).await,
+        Err(rejected)
+    );
     assert!(
         codex
             .inject_if_running(vec![responses::user_message_item(INJECTED_CONTEXT)])
@@ -1555,6 +1567,11 @@ async fn injected_response_item_reopens_turn_after_final_answer() {
     let second: Value = from_slice(&requests[1]).expect("parse second request");
     responses::assert_root_turn(&second, Some(first_turn_id))
         .expect("external injection should preserve the active turn root");
+    assert!(
+        !message_input_texts(&second, "user")
+            .iter()
+            .any(|text| text == "rejected injection prefix")
+    );
     let relevant_user_input = message_input_texts(&second, "user")
         .into_iter()
         .filter(|text| {

@@ -9,6 +9,7 @@ use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::Submission;
 use crate::session::emit_subagent_session_started;
+use crate::session::inject::validate_injected_response_item;
 use crate::session::new_submission_id;
 use crate::session::session::AppServerClientMetadata;
 use crate::session::session::Session;
@@ -673,11 +674,18 @@ impl CodexThread {
     ///
     /// This is the thread-level bridge to `Session::inject_if_running` for
     /// callers that only hold a `CodexThread`.
-    /// It returns the unchanged items when this thread has no active turn.
+    /// Returns the unchanged batch when there is no active turn or an item requires typed turn input.
     pub async fn inject_if_running(
         &self,
         items: Vec<ResponseItem>,
     ) -> Result<(), Vec<ResponseItem>> {
+        if items
+            .iter()
+            .try_for_each(validate_injected_response_item)
+            .is_err()
+        {
+            return Err(items);
+        }
         self.session.inject_if_running(items).await
     }
 
@@ -952,6 +960,7 @@ impl CodexThread {
                 "items must not be empty".to_string(),
             ));
         }
+        items.iter().try_for_each(validate_injected_response_item)?;
 
         let had_reference_context = self.session.reference_context_item().await.is_some();
         let mut turn_context = if had_reference_context {

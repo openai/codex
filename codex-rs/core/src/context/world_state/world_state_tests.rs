@@ -1,5 +1,6 @@
 use super::*;
 use codex_context_fragments::AnnotatedContent;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
@@ -81,7 +82,9 @@ fn world_state_hash_tracks_typed_content_and_role() {
                 role,
                 ("", ""),
                 ContentItem::InputAudio {
-                    audio_url: audio_url.to_string(),
+                    audio: AudioReference::Inline {
+                        audio_url: audio_url.to_string(),
+                    },
                 },
             ),
             content_kind: ContentItemKind("generic.test".to_string()),

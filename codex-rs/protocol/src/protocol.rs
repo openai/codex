@@ -41,6 +41,7 @@ use crate::mcp::RequestId;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ActivePermissionProfile;
 use crate::models::AgentMessageInputContent;
+use crate::models::AudioReference;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::ImageDetail;
@@ -2777,6 +2778,14 @@ pub enum UserMessageImageKind {
     File,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UserMessageAudioKind {
+    Inline,
+    File,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct UserMessageEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2818,6 +2827,16 @@ pub struct UserMessageEvent {
     /// legacy UI history events and correspond to audio sent to the model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<Vec<String>>,
+    /// File-backed audio references. When `audio_order` is complete, consumers
+    /// combine this with `audio` without duplicating inline payloads. Older
+    /// producers may instead store the complete ordered reference list here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_references: Option<Vec<AudioReference>>,
+    /// Inline and file-backed audio kinds in their original input order.
+    /// New mixed-input producers populate this alongside the split `audio` and
+    /// `audio_references` fields; when absent, consumers retain the prior shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_order: Vec<UserMessageAudioKind>,
     /// Local file paths sourced from `UserInput::LocalAudio`. These are kept so
     /// clients can reattach audio when editing history and should not be
     /// treated as API-ready URLs.
@@ -2847,6 +2866,30 @@ impl UserMessageEvent {
         inline_count == self.images.as_ref().map_or(0, Vec::len)
             && file_count == self.file_ids.as_ref().map_or(0, Vec::len)
     }
+
+    /// Returns whether `audio_order` accounts for every split audio reference exactly once.
+    pub fn has_complete_audio_order(&self) -> bool {
+        if self.audio_order.is_empty() {
+            return false;
+        }
+
+        let mut inline_count = 0;
+        let mut file_count = 0;
+        for audio_kind in &self.audio_order {
+            match audio_kind {
+                UserMessageAudioKind::Inline => inline_count += 1,
+                UserMessageAudioKind::File => file_count += 1,
+            }
+        }
+
+        inline_count == self.audio.as_ref().map_or(0, Vec::len)
+            && file_count == self.audio_references.as_ref().map_or(0, Vec::len)
+            && self.audio_references.as_ref().is_none_or(|references| {
+                references
+                    .iter()
+                    .all(|reference| matches!(reference, AudioReference::File { .. }))
+            })
+    }
 }
 
 /// Returns the user-facing preview text for a user message.
@@ -2867,7 +2910,13 @@ pub fn user_message_preview(user: &UserMessageEvent) -> Option<String> {
     {
         return Some("[Image]".to_string());
     }
-    if user.audio.as_ref().is_some_and(|audio| !audio.is_empty()) || !user.local_audio.is_empty() {
+    if user.audio.as_ref().is_some_and(|audio| !audio.is_empty())
+        || user
+            .audio_references
+            .as_ref()
+            .is_some_and(|audio| !audio.is_empty())
+        || !user.local_audio.is_empty()
+    {
         return Some("[Audio]".to_string());
     }
     None
@@ -4762,6 +4811,7 @@ mod tests {
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
     use crate::mcp::CallToolResult;
+    use crate::models::AudioReference;
     use crate::permissions::FileSystemAccessMode;
     use crate::permissions::FileSystemPath;
     use crate::permissions::FileSystemSandboxEntry;
@@ -6297,7 +6347,14 @@ mod tests {
                 detail: Some(ImageDetail::Original),
             },
             crate::user_input::UserInput::Audio {
-                audio_url: "https://example.com/remote.mp3".to_string(),
+                audio: AudioReference::Inline {
+                    audio_url: "https://example.com/remote.mp3".to_string(),
+                },
+            },
+            crate::user_input::UserInput::Audio {
+                audio: AudioReference::File {
+                    file_id: "file_audio".to_string(),
+                },
             },
             crate::user_input::UserInput::LocalAudio {
                 path: local_audio_path.clone(),
@@ -6342,16 +6399,41 @@ mod tests {
             Some(vec!["https://example.com/remote.mp3".to_string()])
         );
         assert_eq!(event.local_audio, vec![local_audio_path]);
+        assert_eq!(
+            event.audio_references,
+            Some(vec![AudioReference::File {
+                file_id: "file_audio".to_string(),
+            }])
+        );
+        assert_eq!(
+            event.audio_order,
+            vec![UserMessageAudioKind::Inline, UserMessageAudioKind::File]
+        );
+        // Earlier readers ignore the new ordered field and retain inline recordings.
+        #[derive(Deserialize)]
+        struct EarlierUserMessageEvent {
+            audio: Option<Vec<String>>,
+        }
+        let earlier: EarlierUserMessageEvent = serde_json::from_value(event_json).unwrap();
+        assert_eq!(earlier.audio, event.audio);
     }
 
     #[test]
     fn audio_only_user_message_has_placeholder_preview() {
-        let event = UserMessageEvent {
-            audio: Some(vec!["https://example.com/remote.mp3".to_string()]),
-            ..Default::default()
-        };
-
-        assert_eq!(user_message_preview(&event), Some("[Audio]".to_string()));
+        for event in [
+            UserMessageEvent {
+                audio: Some(vec!["https://example.com/remote.mp3".to_string()]),
+                ..Default::default()
+            },
+            UserMessageEvent {
+                audio_references: Some(vec![AudioReference::File {
+                    file_id: "file_audio".into(),
+                }]),
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(user_message_preview(&event), Some("[Audio]".to_string()));
+        }
     }
 
     #[test]

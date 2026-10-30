@@ -1,9 +1,69 @@
 //! Verifies prepared context reaches both the first model request and a follow-up.
 
 use super::*;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::turn_input::AnnotatedResponseItem;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn raw_injection_rejects_uploaded_audio_before_modifying_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let before = test.codex.conversation_history_snapshot().await;
+    let audio: ResponseItem = serde_json::from_value(json!({
+        "type": "message", "role": "developer",
+        "content": [{"type": "input_audio", "file_id": "file_injected"}]
+    }))?;
+    let batch = vec![
+        core_test_support::responses::user_message_item("must not be partially written"),
+        audio.clone(),
+    ];
+
+    let history_error = test
+        .codex
+        .inject_response_items(batch.clone())
+        .await
+        .unwrap_err();
+    let preparation_error = test
+        .codex
+        .inject_response_items_for_turn(batch)
+        .await
+        .unwrap_err();
+    for error in [history_error, preparation_error] {
+        assert!(matches!(
+            error.details(),
+            CodexErrorDetails::InvalidRequest(_)
+        ));
+    }
+    for input in [
+        TurnInput::ResponseItem(audio.clone()),
+        TurnInput::AnnotatedResponseItem(AnnotatedResponseItem {
+            item: audio,
+            annotations: Default::default(),
+        }),
+    ] {
+        let error = test
+            .codex
+            .start_or_steer_turn(TurnInputRequest::new(input))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.details(),
+            CodexErrorDetails::InvalidRequest(_)
+        ));
+    }
+    let after = test.codex.conversation_history_snapshot().await;
+    assert_eq!(after.history_version(), before.history_version());
+    assert_eq!(
+        after.items().collect::<Vec<_>>(),
+        before.items().collect::<Vec<_>>()
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
 
 #[test_case(ThreadHistoryMode::Legacy; "legacy")]
 #[test_case(ThreadHistoryMode::Paginated; "paginated")]

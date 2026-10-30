@@ -7,6 +7,7 @@ use codex_utils_image::PromptImageMode;
 use codex_utils_image::data_url_from_bytes;
 use codex_utils_image::load_for_prompt_bytes;
 
+use crate::models::AudioReference;
 use crate::models::ImageDetail;
 use crate::models::ImageReference;
 use crate::user_input::UserInput;
@@ -42,7 +43,9 @@ pub fn snapshot_local_user_input(input: &mut UserInput) -> io::Result<()> {
             })?;
             let file_bytes = read_bounded_local_media(path, MAX_PROMPT_AUDIO_INPUT_BYTES, "audio")?;
             *input = UserInput::Audio {
-                audio_url: data_url_from_bytes(mime, &file_bytes),
+                audio: AudioReference::Inline {
+                    audio_url: data_url_from_bytes(mime, &file_bytes),
+                },
             };
         }
         UserInput::Text { .. }

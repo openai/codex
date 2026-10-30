@@ -37,6 +37,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -528,7 +529,9 @@ async fn sends_audio_urls_to_responses() {
 
     codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Audio {
-            audio_url: audio_url.to_string(),
+            audio: AudioReference::Inline {
+                audio_url: audio_url.to_string(),
+            },
         }]))
         .await
         .unwrap();

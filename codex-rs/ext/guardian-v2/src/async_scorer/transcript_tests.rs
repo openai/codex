@@ -5,6 +5,7 @@ use codex_guardian_context::ContextTarget;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::AgentMessageInputContent;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -1192,7 +1193,9 @@ fn transcript_omits_media_payloads_and_keeps_readable_content() {
                     detail: None,
                 },
                 ContentItem::InputAudio {
-                    audio_url: "data:audio/wav;base64,audio-payload".to_string(),
+                    audio: AudioReference::Inline {
+                        audio_url: "data:audio/wav;base64,audio-payload".to_string(),
+                    },
                 },
             ],
             phase: None,

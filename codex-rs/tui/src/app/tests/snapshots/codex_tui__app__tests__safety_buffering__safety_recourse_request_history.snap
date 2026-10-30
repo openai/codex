@@ -9,10 +9,14 @@ Scenario: The fork excludes the blocked turn and submits the selected rewrite.
 -- request 1 (turn) --
 00:message/developer:
     Help the user.
-01:message/developer[3]:
+01:message/developer[4]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
     [03] <COLLABORATION_MODE>
+    [04] <tools>
+        Deferred tool namespaces:
+        - codex_tui: Manage Codex tasks available through the connected app server.
+        </tools>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/user:
@@ -22,10 +26,14 @@ Scenario: The fork excludes the blocked turn and submits the selected rewrite.
 -- request 2 (turn) --
 00:message/developer:
     Help the user.
-01:message/developer[3]:
+01:message/developer[4]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
     [03] <COLLABORATION_MODE>
+    [04] <tools>
+        Deferred tool namespaces:
+        - codex_tui: Manage Codex tasks available through the connected app server.
+        </tools>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/user:

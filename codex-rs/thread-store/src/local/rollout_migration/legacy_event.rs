@@ -26,8 +26,10 @@ use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ImageReference;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::UserMessageAudioKind;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::UserMessageImageKind;
 use codex_protocol::user_input::UserInput;
@@ -40,6 +42,7 @@ pub(super) fn user_message_item(
 ) -> ThreadStoreResult<TurnItem> {
     let mut content = Vec::new();
     let has_image_order = event.has_complete_image_order();
+    let has_audio_order = event.has_complete_audio_order();
     if !event.message.trim().is_empty() {
         content.push(UserInput::Text {
             text: event.message,
@@ -110,12 +113,26 @@ pub(super) fn user_message_item(
             detail: event.local_image_details.get(index).copied().flatten(),
         });
     }
-    if let Some(audio) = event.audio {
-        content.extend(
-            audio
-                .into_iter()
-                .map(|audio_url| UserInput::Audio { audio_url }),
-        );
+    if has_audio_order {
+        let mut inline_audio = event.audio.unwrap_or_default().into_iter();
+        let mut file_audio = event.audio_references.unwrap_or_default().into_iter();
+        for audio_kind in event.audio_order {
+            let audio = match audio_kind {
+                UserMessageAudioKind::Inline => inline_audio
+                    .next()
+                    .map(|audio_url| AudioReference::Inline { audio_url }),
+                UserMessageAudioKind::File => file_audio.next(),
+            };
+            if let Some(audio) = audio {
+                content.push(UserInput::Audio { audio });
+            }
+        }
+    } else if let Some(audio) = event.audio_references {
+        content.extend(audio.into_iter().map(|audio| UserInput::Audio { audio }));
+    } else if let Some(audio) = event.audio {
+        content.extend(audio.into_iter().map(|audio_url| UserInput::Audio {
+            audio: AudioReference::Inline { audio_url },
+        }));
     }
     content.extend(
         event

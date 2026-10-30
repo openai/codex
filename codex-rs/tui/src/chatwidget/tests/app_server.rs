@@ -911,7 +911,9 @@ async fn live_app_server_user_message_omits_unsupported_media() {
                         text_elements: Vec::new(),
                     },
                     AppServerUserInput::Audio {
-                        url: "https://example.com/one.wav".to_string(),
+                        audio: codex_app_server_protocol::AudioReference::Inline {
+                            url: "https://example.com/one.wav".to_string(),
+                        },
                     },
                     AppServerUserInput::LocalAudio {
                         path: test_path_buf("/tmp/two.wav"),

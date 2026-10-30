@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::models::AudioReference;
 use crate::models::ImageDetail;
 use crate::models::ImageReference;
 
@@ -40,8 +41,11 @@ pub enum UserInput {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
-    /// Pre-encoded audio data URI forwarded to the Responses API.
-    Audio { audio_url: String },
+    /// Audio reference forwarded to the Responses API.
+    Audio {
+        #[serde(flatten)]
+        audio: AudioReference,
+    },
     /// Local audio path converted to an `Audio` data URI during request serialization.
     LocalAudio { path: std::path::PathBuf },
 

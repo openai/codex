@@ -555,6 +555,28 @@ def test_generated_inline_image_class_names_remain_stable() -> None:
     )
 
 
+def test_generated_audio_inputs_preserve_inline_and_file_shapes() -> None:
+    """Existing audio imports still work, and file references round-trip through the unions."""
+    from openai_codex.generated.v2_all import (
+        AudioUserInput,
+        ContentItem,
+        FileIdUserInput1,
+        InputAudioContentItem,
+        UserInput,
+    )
+
+    audio_url = "data:audio/wav;base64,YXVkaW8="
+    for model, wire in [
+        (AudioUserInput, {"type": "audio", "url": audio_url}),
+        (InputAudioContentItem, {"type": "input_audio", "audio_url": audio_url}),
+        (UserInput, {"type": "audio", "fileId": "file_audio"}),
+        (FileIdUserInput1, {"type": "audio", "fileId": "file_audio"}),
+        (ContentItem, {"type": "input_audio", "file_id": "file_audio"}),
+    ]:
+        audio = model.model_validate(wire)
+        assert audio.model_dump(by_alias=True, exclude_unset=True, mode="json") == wire
+
+
 def test_generated_image_generation_thread_item_alias_remains_available() -> None:
     """Existing SDK callers can still construct and validate inline image-generation items."""
     from openai_codex.generated.v2_all import (

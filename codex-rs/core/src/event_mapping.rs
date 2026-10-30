@@ -145,9 +145,9 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                     detail: *detail,
                 });
             }
-            ContentItem::InputAudio { audio_url } => {
+            ContentItem::InputAudio { audio } => {
                 content.push(UserInput::Audio {
-                    audio_url: audio_url.clone(),
+                    audio: audio.clone(),
                 });
             }
             ContentItem::OutputText { text, .. } => {

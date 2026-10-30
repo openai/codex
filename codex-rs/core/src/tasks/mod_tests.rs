@@ -19,8 +19,14 @@ use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_otel::TURN_UNIFIED_EXEC_RUNNING_PROCESSES_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::AudioReference;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::user_input::UserInput;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
@@ -52,6 +58,88 @@ impl SessionTask for PendingTask {
     ) -> SessionTaskResult {
         std::future::pending().await
     }
+}
+
+#[tokio::test]
+async fn task_finish_rejects_uploaded_audio_without_losing_other_pending_input() {
+    let (session, turn_context, receiver) = make_session_and_context_with_rx().await;
+    session
+        .spawn_task(Arc::clone(&turn_context), Vec::new(), PendingTask)
+        .await;
+    while receiver.try_recv().is_ok() {}
+
+    let turn_state = {
+        let active_turn = session.active_turn.lock().await;
+        Arc::clone(
+            &active_turn
+                .as_ref()
+                .expect("active pending task")
+                .turn_state,
+        )
+    };
+    session
+        .input_queue
+        .extend_pending_input_for_turn_state(
+            turn_state.as_ref(),
+            vec![TurnInput::UserInput {
+                content: vec![
+                    UserInput::Text {
+                        text: "preserve pending text".to_string(),
+                        text_elements: Vec::new(),
+                    },
+                    UserInput::Audio {
+                        audio: AudioReference::File {
+                            file_id: "file_disabled_at_finish".to_string(),
+                        },
+                    },
+                ],
+                client_id: None,
+                metadata: Default::default(),
+            }],
+        )
+        .await;
+
+    session
+        .on_task_finished(Arc::clone(&turn_context), /*task_result*/ Ok(None))
+        .await;
+
+    let history = session.clone_history().await;
+    assert!(history.raw_items().any(|item| {
+        matches!(item, ResponseItem::Message { content, .. } if content.iter().any(|part| {
+            matches!(part, ContentItem::InputText { text } if text == "preserve pending text")
+        }))
+    }));
+    assert!(history.raw_items().all(|item| {
+        !matches!(item, ResponseItem::Message { content, .. } if content.iter().any(|part| {
+            matches!(part, ContentItem::InputAudio {
+                audio: AudioReference::File { file_id, .. },
+            } if file_id == "file_disabled_at_finish")
+        }))
+    }));
+
+    let (saw_error, completed) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let mut saw_error = false;
+        loop {
+            match receiver.recv().await.expect("event channel open").msg {
+                EventMsg::Error(error) => {
+                    saw_error = true;
+                    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::BadRequest));
+                }
+                EventMsg::TurnComplete(completed) => break (saw_error, completed),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("task finish events");
+    assert!(saw_error, "the rejected drain should emit an error event");
+    assert_eq!(
+        completed
+            .error
+            .as_ref()
+            .and_then(|error| error.codex_error_info.clone()),
+        Some(CodexErrorInfo::BadRequest)
+    );
 }
 
 fn test_session_telemetry() -> SessionTelemetry {

@@ -14,6 +14,7 @@
 
 use super::TurnInput;
 use super::UserInputMetadata;
+use super::inject::validate_injected_response_item;
 use super::session::Session;
 use super::session::SessionConfiguration;
 use super::session::SessionSettingsUpdate;
@@ -237,6 +238,12 @@ pub(super) async fn handle(
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
     let request = request.into();
+    if let SubmittedTurnInput::ResponseItem(item)
+    | SubmittedTurnInput::AnnotatedResponseItem(AnnotatedResponseItem { item, .. }) =
+        &request.request.input
+    {
+        validate_injected_response_item(item)?;
+    }
     request
         .request
         .additional_context

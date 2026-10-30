@@ -4,6 +4,7 @@ use super::*;
 use crate::Budgeted;
 use crate::composition::SectionOutput;
 use crate::composition::user_message as message;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
@@ -62,6 +63,16 @@ fn section_costs_keep_multimodal_payloads_separate() {
                         },
                         detail: None,
                     }),
+                    Budgeted::required(ContentItem::InputAudio {
+                        audio: AudioReference::Inline {
+                            audio_url: "data:audio/wav;base64,AAAA".to_owned(),
+                        },
+                    }),
+                    Budgeted::required(ContentItem::InputAudio {
+                        audio: AudioReference::File {
+                            file_id: "file_audio".to_owned(),
+                        },
+                    }),
                 ]),
             },
             SectionOutput {
@@ -82,7 +93,7 @@ fn section_costs_keep_multimodal_payloads_separate() {
             (
                 "transcript",
                 SectionCost {
-                    text_bytes: "évidence".len(),
+                    text_bytes: "évidence".len() + "data:audio/wav;base64,AAAA".len(),
                     image_bytes: "data:image/png;base64,AAAA".len(),
                     image_count: 2
                 }

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_history::ResponseItemEnvelope;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
@@ -422,7 +423,12 @@ pub(crate) fn retain_content(
                     image: ImageReference::File { .. },
                     ..
                 }) => 0,
-                SectionContent::Other(ContentItem::InputAudio { audio_url }) => audio_url.len(),
+                SectionContent::Other(ContentItem::InputAudio {
+                    audio: AudioReference::Inline { audio_url },
+                }) => audio_url.len(),
+                SectionContent::Other(ContentItem::InputAudio {
+                    audio: AudioReference::File { .. },
+                }) => 0,
             };
             truncations.push(TruncationObservation {
                 component: section.id,

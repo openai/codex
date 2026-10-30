@@ -4,6 +4,7 @@ use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::config::RolloutBudgetConfig;
 use codex_core::config::TokenBudgetConfig;
 use codex_features::Feature;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ImageReference;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AdditionalContextEntry;
@@ -119,9 +120,7 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
                     },
                     detail: None,
                 },
-                UserInput::Audio {
-                    audio_url: "data:audio/wav;base64,AAAA".to_string(),
-                },
+                UserInput::Audio { audio: AudioReference::Inline { audio_url: "data:audio/wav;base64,AAAA".to_string() } },
             ])
             .with_additional_context(BTreeMap::from([
                 (

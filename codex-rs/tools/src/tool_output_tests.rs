@@ -1,3 +1,4 @@
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
@@ -31,7 +32,14 @@ fn code_mode_text_preserves_message_content() {
                 detail: None,
             },
             ContentItem::InputAudio {
-                audio_url: "data:audio/wav;base64,def".to_string(),
+                audio: AudioReference::Inline {
+                    audio_url: "data:audio/wav;base64,def".to_string(),
+                },
+            },
+            ContentItem::InputAudio {
+                audio: AudioReference::File {
+                    file_id: "file_audio".to_string(),
+                },
             },
         ],
         phase: None,
@@ -40,7 +48,7 @@ fn code_mode_text_preserves_message_content() {
     assert_eq!(
         response_input_to_code_mode_result(response),
         serde_json::json!(
-            "Input text\nOutput text\nfile_123\ndata:image/png;base64,abc\ndata:audio/wav;base64,def"
+            "Input text\nOutput text\nfile_123\ndata:image/png;base64,abc\ndata:audio/wav;base64,def\nfile_audio"
         )
     );
 }

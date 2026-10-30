@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ConfigurationReasoning;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
@@ -715,6 +716,79 @@ fn compacted_metadata_remains_compatible_with_legacy_response_item_readers() -> 
         panic!("expected legacy compacted item");
     };
     assert_eq!(legacy.replacement_history, vec![response_item]);
+    Ok(())
+}
+
+#[test]
+fn uploaded_audio_round_trips_in_canonical_message_content() -> Result<()> {
+    let mut message = response_message("user");
+    let ResponseItem::Message { content, .. } = &mut message else {
+        unreachable!()
+    };
+    content.push(ContentItem::InputAudio {
+        audio: AudioReference::Inline {
+            audio_url: "data:audio/wav;base64,aGVsbG8=".to_string(),
+        },
+    });
+    content.push(ContentItem::InputAudio {
+        audio: AudioReference::File {
+            file_id: "file_audio".to_string(),
+        },
+    });
+    content.push(ContentItem::InputText {
+        text: "after audio".to_string(),
+    });
+    let envelope = ResponseItemEnvelope::new(message);
+    let response = RolloutItem::ResponseItem(envelope.clone());
+    let compacted = RolloutItem::Compacted(Box::new(CompactedItem {
+        message: String::new(),
+        replacement_history: Some(vec![envelope.clone()]),
+        guardian_history: Some(GuardianHistoryCheckpoint(vec![envelope])),
+        retained_context: None,
+        mcp_resource_origins: None,
+        window_number: None,
+        first_window_id: None,
+        previous_window_id: None,
+        window_id: None,
+        compaction_response_id: None,
+        latest_token_usage_record: None,
+        resume_metadata: None,
+    }));
+    for (item, paths) in [
+        (response, vec!["/payload/content"]),
+        (
+            compacted,
+            vec![
+                "/payload/replacement_history/0/content",
+                "/payload/guardian_history/0/content",
+            ],
+        ),
+    ] {
+        let mut serialized = serde_json::to_value(&item)?;
+        for path in paths {
+            assert_eq!(
+                serialized.pointer(path),
+                Some(&json!([
+                    {"type": "input_text", "text": "hello"},
+                    {"type": "input_audio", "audio_url": "data:audio/wav;base64,aGVsbG8="},
+                    {"type": "input_audio", "file_id": "file_audio"},
+                    {"type": "input_text", "text": "after audio"},
+                ]))
+            );
+            // Rollouts from the prototype can contain this extra field. Reading
+            // them must preserve the same file reference in every history shape.
+            serialized.pointer_mut(path).unwrap()[2]["duration_ms"] = json!(1_000);
+        }
+        match (serde_json::from_value::<RolloutItem>(serialized)?, item) {
+            (RolloutItem::ResponseItem(restored), RolloutItem::ResponseItem(original)) => {
+                assert_eq!(restored, original)
+            }
+            (RolloutItem::Compacted(restored), RolloutItem::Compacted(original)) => {
+                assert_eq!(restored, original)
+            }
+            _ => panic!("unexpected rollout variant"),
+        }
+    }
     Ok(())
 }
 

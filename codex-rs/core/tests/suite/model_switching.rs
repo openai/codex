@@ -18,6 +18,7 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
@@ -908,7 +909,9 @@ async fn model_change_projects_media_without_changing_live_or_replayed_history(
                     detail: None,
                 },
                 UserInput::Audio {
-                    audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                    audio: AudioReference::Inline {
+                        audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                    },
                 },
                 UserInput::Text {
                     text: "first turn".to_string(),

@@ -1,0 +1,32 @@
+---
+source: core/tests/suite/scenarios_audio_file_tests.rs
+expression: "context_snapshot::format_context_snapshot(\"Unsupported audio queued during an active turn is never forwarded or persisted; the next turn and resumed thread continue without it.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Unsupported audio queued during an active turn is never forwarded or persisted; the next turn and resumed thread continue without it.
+
+## Window 1
+-- request 1 (request) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Start working.
+-- request 2 (request) --
+04:message/assistant:
+    I am working on your request.
+05:message/user:
+    Keep this queued text.
+06:message/user:
+    Continue without audio.
+-- request 3 (request) --
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/user:
+    Continue after restart.

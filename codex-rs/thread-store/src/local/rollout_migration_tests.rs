@@ -21,6 +21,7 @@ use codex_protocol::items::ReasoningItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::McpResourceOrigin;
 use codex_protocol::mcp::McpResourceOriginCheckpoint;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ImageDetail;
@@ -43,6 +44,7 @@ use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserMessageAudioKind;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::UserMessageImageKind;
 use codex_protocol::user_input::UserInput;
@@ -340,6 +342,11 @@ async fn migration_publishes_canonical_projected_history_and_is_idempotent() {
         file_ids: Some(vec!["file_123".to_string()]),
         file_id_details: vec![Some(ImageDetail::High)],
         image_order: vec![UserMessageImageKind::File, UserMessageImageKind::Inline],
+        audio: Some(vec!["data:audio/wav;base64,YXVkaW8=".into()]),
+        audio_references: Some(vec![AudioReference::File {
+            file_id: "file_audio".into(),
+        }]),
+        audio_order: vec![UserMessageAudioKind::File, UserMessageAudioKind::Inline],
         ..Default::default()
     };
     let path = write_rollout(
@@ -402,6 +409,16 @@ async fn migration_publishes_canonical_projected_history_and_is_idempotent() {
                 image_url: "https://example.com/image.png".to_string(),
             },
             detail: Some(ImageDetail::Original),
+        },
+        UserInput::Audio {
+            audio: AudioReference::File {
+                file_id: "file_audio".into(),
+            },
+        },
+        UserInput::Audio {
+            audio: AudioReference::Inline {
+                audio_url: "data:audio/wav;base64,YXVkaW8=".into(),
+            },
         },
     ];
     assert_eq!(user_item.map(|item| &item.content), Some(&expected_content));
@@ -1010,6 +1027,9 @@ async fn migration_coalesces_response_first_user_message_rollback_boundary() {
     let home = TempDir::new().expect("create Codex home");
     let thread_id = ThreadId::new();
     let file_id = "file_123".to_string();
+    let audio = AudioReference::File {
+        file_id: "file_audio".into(),
+    };
     let response = ResponseItem::Message {
         status: None,
         encrypted_content: None,
@@ -1025,6 +1045,9 @@ async fn migration_coalesces_response_first_user_message_rollback_boundary() {
                 },
                 detail: None,
             },
+            ContentItem::InputAudio {
+                audio: audio.clone(),
+            },
         ],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
@@ -1032,6 +1055,8 @@ async fn migration_coalesces_response_first_user_message_rollback_boundary() {
     let event = UserMessageEvent {
         message: "remove question".to_string(),
         file_ids: Some(vec![file_id]),
+        audio_references: Some(vec![audio]),
+        audio_order: vec![UserMessageAudioKind::File],
         ..Default::default()
     };
     let path = write_rollout(

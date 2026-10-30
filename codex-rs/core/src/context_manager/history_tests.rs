@@ -15,6 +15,7 @@ use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ConfigurationReasoning;
 use codex_protocol::models::ContentItem;
@@ -1381,7 +1382,9 @@ async fn for_prompt_strips_media_when_model_does_not_support_it() {
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 ContentItem::InputAudio {
-                    audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                    audio: AudioReference::Inline {
+                        audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                    },
                 },
                 ContentItem::InputText {
                     text: "caption".to_string(),
@@ -1623,7 +1626,9 @@ async fn for_prompt_strips_media_when_model_does_not_support_it() {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputAudio {
-            audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+            audio: AudioReference::Inline {
+                audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+            },
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: Some(unknown_content_metadata()),
@@ -3344,7 +3349,9 @@ fn audio_data_url_payload_does_not_dominate_message_estimate() {
         encrypted_content: None,
         id: None,
         role: "user".to_string(),
-        content: vec![ContentItem::InputAudio { audio_url }],
+        content: vec![ContentItem::InputAudio {
+            audio: AudioReference::Inline { audio_url },
+        }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     };
@@ -3355,6 +3362,35 @@ fn audio_data_url_payload_does_not_dominate_message_estimate() {
 
     assert_eq!(estimated, expected);
     assert!(estimated < raw_len);
+}
+
+#[test]
+fn uploaded_audio_estimate_accounts_for_each_recording_instead_of_its_id() {
+    let item = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputAudio {
+                audio: AudioReference::File {
+                    file_id: "file_a".into(),
+                },
+            },
+            ContentItem::InputAudio {
+                audio: AudioReference::File {
+                    file_id: "file_a_longer_reference".into(),
+                },
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    assert_eq!(
+        estimate_response_item_model_visible_bytes(&item),
+        approx_bytes_for_tokens(/*tokens*/ 24_000) as i64,
+    );
 }
 
 #[test]
@@ -3411,7 +3447,9 @@ fn malformed_audio_data_url_falls_back_to_whole_url_size_cost() {
         encrypted_content: None,
         id: None,
         role: "user".to_string(),
-        content: vec![ContentItem::InputAudio { audio_url }],
+        content: vec![ContentItem::InputAudio {
+            audio: AudioReference::Inline { audio_url },
+        }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     };

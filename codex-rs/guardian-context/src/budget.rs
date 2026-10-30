@@ -7,6 +7,7 @@ use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::ModelOrigin;
 use std::io::Write;
 
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
@@ -295,11 +296,16 @@ impl SectionCost {
             } => {
                 self.image_count = self.image_count.saturating_add(1);
             }
-            ContentItem::InputAudio { audio_url } => {
-                // Guardian currently has no audio contributor. Count a future opaque
-                // payload conservatively until its consumer supplies modality costs.
+            ContentItem::InputAudio {
+                audio: AudioReference::Inline { audio_url },
+            } => {
+                // Guardian has no audio contributor. Keep the existing inline
+                // transport cost, but do not treat a file handle as evidence.
                 self.text_bytes = self.text_bytes.saturating_add(audio_url.len());
             }
+            ContentItem::InputAudio {
+                audio: AudioReference::File { .. },
+            } => {}
         }
         self
     }

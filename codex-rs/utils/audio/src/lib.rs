@@ -2,6 +2,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::MAX_PROMPT_AUDIO_INPUT_BYTES;
@@ -91,7 +92,9 @@ pub fn prepare_response_items(items: &mut [ResponseItem]) {
 
 fn prepare_message_content(items: &mut [ContentItem]) {
     for item in items {
-        if let ContentItem::InputAudio { audio_url } = item
+        if let ContentItem::InputAudio {
+            audio: AudioReference::Inline { audio_url },
+        } = item
             && let Err(error) = prepare_audio(audio_url)
         {
             warn!(%error, "failed to prepare message audio");

@@ -2,6 +2,7 @@
 
 use codex_core::TurnInputRequest;
 
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ImageReference;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::EventMsg;
@@ -72,7 +73,9 @@ mv "${tmp_path}" "${payload_path}""#,
                 detail: None,
             },
             UserInput::Audio {
-                audio_url: audio_url.into(),
+                audio: AudioReference::Inline {
+                    audio_url: audio_url.into(),
+                },
             },
         ]))
         .await?;

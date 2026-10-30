@@ -59,6 +59,7 @@ use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserMessageAudioKind;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::UserMessageImageKind;
 use codex_protocol::protocol::ViewImageToolCallEvent;
@@ -1749,8 +1750,48 @@ impl ThreadHistoryBuilder {
                 detail: payload.local_image_details.get(idx).copied().flatten(),
             });
         }
-        if let Some(audio) = &payload.audio {
-            content.extend(audio.iter().cloned().map(|url| UserInput::Audio { url }));
+        if payload.has_complete_audio_order() {
+            let mut inline_index = 0;
+            let mut file_index = 0;
+            for audio_kind in &payload.audio_order {
+                let audio = match audio_kind {
+                    UserMessageAudioKind::Inline => {
+                        let Some(url) = payload
+                            .audio
+                            .as_deref()
+                            .and_then(|audio| audio.get(inline_index))
+                        else {
+                            continue;
+                        };
+                        inline_index += 1;
+                        codex_protocol::models::AudioReference::Inline {
+                            audio_url: url.clone(),
+                        }
+                    }
+                    UserMessageAudioKind::File => {
+                        let Some(audio) = payload
+                            .audio_references
+                            .as_deref()
+                            .and_then(|audio| audio.get(file_index))
+                        else {
+                            continue;
+                        };
+                        file_index += 1;
+                        audio.clone()
+                    }
+                };
+                content.push(UserInput::from(
+                    codex_protocol::user_input::UserInput::Audio { audio },
+                ));
+            }
+        } else if let Some(audio) = &payload.audio_references {
+            content.extend(audio.iter().cloned().map(|audio| {
+                UserInput::from(codex_protocol::user_input::UserInput::Audio { audio })
+            }));
+        } else if let Some(audio) = &payload.audio {
+            content.extend(audio.iter().cloned().map(|url| UserInput::Audio {
+                audio: crate::AudioReference::Inline { url },
+            }));
         }
         content.extend(
             payload
@@ -1948,6 +1989,7 @@ mod tests {
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::mcp::CallToolResult;
+    use codex_protocol::models::AudioReference as CoreAudioReference;
     use codex_protocol::models::ImageDetail;
     use codex_protocol::models::MessagePhase as CoreMessagePhase;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
@@ -1976,6 +2018,7 @@ mod tests {
     use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::protocol::WebSearchBeginEvent;
     use codex_protocol::protocol::WebSearchEndEvent;
+    use codex_protocol::user_input::UserInput as CoreUserInput;
     use codex_rollout::CompactedItem;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
@@ -2323,6 +2366,8 @@ mod tests {
                 local_images: vec![local_image_path.clone()],
                 local_image_details: vec![Some(ImageDetail::Original)],
                 audio: Some(vec!["https://example.com/audio.mp3".into()]),
+                audio_references: None,
+                audio_order: Vec::new(),
                 local_audio: vec![local_audio_path.clone()],
                 text_elements: Vec::new(),
             },
@@ -2358,7 +2403,9 @@ mod tests {
                         detail: Some(ImageDetail::Original),
                     },
                     UserInput::Audio {
-                        url: "https://example.com/audio.mp3".into(),
+                        audio: crate::AudioReference::Inline {
+                            url: "https://example.com/audio.mp3".into()
+                        }
                     },
                     UserInput::LocalAudio {
                         path: local_audio_path,
@@ -2402,6 +2449,32 @@ mod tests {
                     },
                 ],
             }
+        );
+    }
+
+    #[test]
+    fn rebuilds_uploaded_and_inline_audio_in_order_from_legacy_events() {
+        let item = CoreUserMessageItem::new(&[
+            CoreUserInput::Audio {
+                audio: CoreAudioReference::File {
+                    file_id: "file_audio".into(),
+                },
+            },
+            CoreUserInput::Audio {
+                audio: CoreAudioReference::Inline {
+                    audio_url: "data:audio/wav;base64,YXVkaW8=".into(),
+                },
+            },
+        ]);
+        let turns =
+            build_turns_from_rollout_items(&[RolloutItem::EventMsg(item.as_legacy_event())]);
+
+        assert_eq!(
+            serde_json::to_value(&turns[0].items[0]).unwrap()["content"],
+            serde_json::json!([
+                {"type": "audio", "fileId": "file_audio"},
+                {"type": "audio", "url": "data:audio/wav;base64,YXVkaW8="},
+            ]),
         );
     }
 

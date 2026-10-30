@@ -11,10 +11,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_protocol::ResponseItemId;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::UserMessageAudioKind;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::UserMessageImageKind;
 use codex_rollout::CompactedItem;
@@ -580,7 +582,7 @@ fn user_response_matches_event(content: &[ContentItem], event: &UserMessageEvent
                     file_ids.push(file_id.as_str());
                 }
             },
-            ContentItem::InputAudio { audio_url } => audio.push(audio_url.as_str()),
+            ContentItem::InputAudio { audio: reference } => audio.push(reference),
             ContentItem::OutputText { .. } => return false,
         }
     }
@@ -602,14 +604,48 @@ fn user_response_matches_event(content: &[ContentItem], event: &UserMessageEvent
                 .iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>()
-        && audio
-            == event
-                .audio
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
+        && {
+            if event.has_complete_audio_order() {
+                let mut actual = audio.into_iter();
+                let mut inline = event.audio.as_deref().unwrap_or_default().iter();
+                let mut file = event.audio_references.as_deref().unwrap_or_default().iter();
+                event.audio_order.iter().all(|kind| {
+                    let Some(actual) = actual.next() else {
+                        return false;
+                    };
+                    match kind {
+                        UserMessageAudioKind::Inline => matches!(
+                            (actual, inline.next()),
+                            (
+                                AudioReference::Inline { audio_url },
+                                Some(expected),
+                            ) if audio_url == expected
+                        ),
+                        UserMessageAudioKind::File => {
+                            file.next().is_some_and(|expected| actual == expected)
+                        }
+                    }
+                }) && actual.next().is_none()
+                    && inline.next().is_none()
+                    && file.next().is_none()
+            } else {
+                match &event.audio_references {
+                    Some(references) => audio.into_iter().eq(references),
+                    None => audio
+                        .into_iter()
+                        .map(|reference| match reference {
+                            AudioReference::Inline { audio_url } => Some(audio_url.as_str()),
+                            AudioReference::File { .. } => None,
+                        })
+                        .eq(event
+                            .audio
+                            .as_deref()
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|url| Some(url.as_str()))),
+                }
+            }
+        }
         && event.local_images.is_empty()
         && event.local_audio.is_empty()
 }

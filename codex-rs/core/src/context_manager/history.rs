@@ -50,6 +50,7 @@ use codex_prompts::render_model_instructions;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -86,6 +87,11 @@ use crate::context::GuardianContextMode;
 use codex_features::Feature;
 
 static GUARDIAN_REVIEW_CONTEXT_REVISION: AtomicU64 = AtomicU64::new(/*v*/ 1);
+
+// Responses validates uploaded audio against its 20-minute duration limit.
+// File durations are unavailable locally, so budget that maximum at the existing
+// inline estimate of 10 audio tokens per second.
+pub(crate) const FILE_AUDIO_TOKENS_ESTIMATE: usize = 20 * 60 * 10;
 
 fn next_guardian_review_context_revision() -> u64 {
     GUARDIAN_REVIEW_CONTEXT_REVISION.fetch_add(/*val*/ 1, Ordering::Relaxed)
@@ -1190,7 +1196,7 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
                 ContentItem::InputImage { image, detail } => {
                     estimate_image_reference_bytes(image, *detail)
                 }
-                ContentItem::InputAudio { audio_url } => estimate_audio_bytes(audio_url),
+                ContentItem::InputAudio { audio } => estimate_audio_reference_bytes(audio),
             })
             .fold(0i64, i64::saturating_add),
         ResponseItem::AgentMessage {
@@ -1401,6 +1407,17 @@ fn estimate_audio_bytes(audio_url: &str) -> i64 {
         audio_url,
     )))
     .unwrap_or(i64::MAX)
+}
+
+/// Audio estimate for callers that only have the reference. Uploaded file durations are not
+/// available locally, so file references use the maximum duration accepted by Responses.
+fn estimate_audio_reference_bytes(audio: &AudioReference) -> i64 {
+    match audio {
+        AudioReference::Inline { audio_url } => estimate_audio_bytes(audio_url),
+        AudioReference::File { .. } => {
+            i64::try_from(approx_bytes_for_tokens(FILE_AUDIO_TOKENS_ESTIMATE)).unwrap_or(i64::MAX)
+        }
+    }
 }
 
 fn estimate_function_output_bytes(output: &FunctionCallOutputBody) -> i64 {

@@ -1083,7 +1083,9 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
                 text_elements: Vec::new(),
             },
             UserInput::Audio {
-                url: "https://example.com/recording.mp3".to_string(),
+                audio: codex_app_server_protocol::AudioReference::Inline {
+                    url: "https://example.com/recording.mp3".to_string()
+                }
             },
             UserInput::LocalAudio {
                 path: "recording.wav".into(),

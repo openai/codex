@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
@@ -88,7 +89,9 @@ fn later_image_parts_preserve_labels_audio_and_annotations() {
         text(&image_close_tag_text()),
         text("keep"),
         ContentItem::InputAudio {
-            audio_url: "data:audio/wav;base64,abc".to_string(),
+            audio: AudioReference::Inline {
+                audio_url: "data:audio/wav;base64,abc".to_string(),
+            },
         },
     ];
     let kinds = (0..parts.len())
@@ -137,7 +140,9 @@ fn image_treatment_preserves_text_only_boundary_behavior() {
         text(&"middle".repeat(20)),
         text("later text"),
         ContentItem::InputAudio {
-            audio_url: "data:audio/wav;base64,abc".to_string(),
+            audio: AudioReference::Inline {
+                audio_url: "data:audio/wav;base64,abc".to_string(),
+            },
         },
     ]));
     for max_tokens in [0, 1, 4, 16, 100] {
