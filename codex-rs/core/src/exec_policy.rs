@@ -41,8 +41,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 
 mod executable_identity;
+mod inheritance;
 mod model_policy;
 
+pub(crate) use inheritance::InheritedExecPolicy;
 pub(crate) use model_policy::AllowPrefixRules;
 
 const PROMPT_CONFLICT_REASON: &str =
@@ -683,28 +685,34 @@ pub(crate) async fn load_exec_policy_with_warning(
     }
 }
 
-pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy, ExecPolicyError> {
+async fn policy_files(stack: &ConfigLayerStack) -> Result<Vec<PathBuf>, ExecPolicyError> {
+    let folders = stack.layers_low_to_high().filter_map(|layer| {
+        if stack.ignore_user_and_project_exec_policy_rules()
+            && matches!(
+                layer.name,
+                ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
+            )
+        {
+            None
+        } else {
+            layer.config_folder()
+        }
+    });
     // Disabled project layers already represent the trust decision, so hooks
     // and exec-policy loading can reuse the normal trusted-layer view.
     // Iterate the layers in increasing order of precedence, adding the *.rules
     // from each layer, so that higher-precedence layers can override
     // rules defined in lower-precedence ones.
     let mut policy_paths = Vec::new();
-    for layer in config_stack.layers_low_to_high() {
-        if config_stack.ignore_user_and_project_exec_policy_rules()
-            && matches!(
-                layer.name,
-                ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
-            )
-        {
-            continue;
-        }
-        if let Some(config_folder) = layer.config_folder() {
-            let policy_dir = config_folder.join(RULES_DIR_NAME);
-            let layer_policy_paths = collect_policy_files(&policy_dir).await?;
-            policy_paths.extend(layer_policy_paths);
-        }
+    for config_folder in folders {
+        let policy_dir = config_folder.join(RULES_DIR_NAME);
+        policy_paths.extend(collect_policy_files(&policy_dir).await?);
     }
+    Ok(policy_paths)
+}
+
+pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy, ExecPolicyError> {
+    let policy_paths = policy_files(config_stack).await?;
     tracing::trace!(
         policy_paths = ?policy_paths,
         "loaded exec policies"

@@ -175,6 +175,55 @@ impl Policy {
         self.host_executables_by_name.insert(name, paths.into());
     }
 
+    /// Check that a transported snapshot still enforces the destination's managed rules.
+    /// Exact path matches can suppress basename matching, and a later network grant can
+    /// override a managed denial for the same host.
+    pub fn preserves_managed_requirements(&self, requirements: &RequirementsExecPolicy) -> bool {
+        let managed = requirements.as_ref();
+        if self.host_executables() != managed.host_executables() {
+            return false;
+        }
+        for (program, rules) in managed.rules().iter_all() {
+            if rules
+                .iter()
+                .any(|rule| !self.contains_prefix_rule(program, rule))
+            {
+                return false;
+            }
+        }
+        for (program, rules) in self.rules().iter_all() {
+            let Ok(path) = AbsolutePathBuf::try_from(program.as_str()) else {
+                continue;
+            };
+            if let Some((_, fallback_rules)) = managed.host_executable_rules(&path)
+                && rules.iter().any(|rule| {
+                    !managed.contains_prefix_rule(program, rule)
+                        && fallback_rules
+                            .iter()
+                            .any(|fallback| can_weaken_fallback(rule, fallback, rules))
+                })
+            {
+                return false;
+            }
+        }
+        let (_, required_denials) = managed.compiled_network_domains();
+        let (_, snapshot_denials) = self.compiled_network_domains();
+        required_denials
+            .iter()
+            .all(|host| snapshot_denials.contains(host))
+    }
+
+    fn contains_prefix_rule(&self, program: &str, rule: &RuleRef) -> bool {
+        let Some(prefix) = rule.as_any().downcast_ref::<PrefixRule>() else {
+            return false;
+        };
+        self.rules().get_vec(program).is_some_and(|rules| {
+            rules
+                .iter()
+                .any(|candidate| candidate.as_any().downcast_ref::<PrefixRule>() == Some(prefix))
+        })
+    }
+
     pub fn merge_overlay(&self, overlay: &Policy) -> Policy {
         let mut combined_rules = self.rules_by_program.clone();
         for (program, rules) in overlay.rules_by_program.iter_all() {
@@ -348,17 +397,9 @@ impl Policy {
         let Ok(program) = AbsolutePathBuf::try_from(first.clone()) else {
             return Vec::new();
         };
-        let Some(basename) = executable_path_lookup_key(program.as_path()) else {
+        let Some((basename, rules)) = self.host_executable_rules(&program) else {
             return Vec::new();
         };
-        let Some(rules) = self.rules_by_program.get_vec(&basename) else {
-            return Vec::new();
-        };
-        if let Some(paths) = self.host_executables_by_name.get(&basename)
-            && !paths.iter().any(|path| path == &program)
-        {
-            return Vec::new();
-        }
 
         let basename_command = std::iter::once(basename)
             .chain(cmd.iter().skip(1).cloned())
@@ -369,6 +410,56 @@ impl Policy {
             .map(|rule_match| rule_match.with_resolved_program(&program))
             .collect()
     }
+
+    fn host_executable_rules(&self, path: &AbsolutePathBuf) -> Option<(String, &[RuleRef])> {
+        let basename = executable_path_lookup_key(path.as_path())?;
+        if let Some(paths) = self.host_executables_by_name.get(&basename)
+            && !paths.contains(path)
+        {
+            return None;
+        }
+        let rules = self.rules_by_program.get_vec(&basename)?;
+        Some((basename, rules))
+    }
+}
+
+fn can_weaken_fallback(exact: &RuleRef, fallback: &RuleRef, path_rules: &[RuleRef]) -> bool {
+    let (Some(exact), Some(fallback)) = (
+        exact.as_any().downcast_ref::<PrefixRule>(),
+        fallback.as_any().downcast_ref::<PrefixRule>(),
+    ) else {
+        return true;
+    };
+    if exact.decision >= fallback.decision {
+        return false;
+    }
+    let (mut shorter, mut longer) = (&exact.pattern.rest, &fallback.pattern.rest);
+    if shorter.len() > longer.len() {
+        std::mem::swap(&mut shorter, &mut longer);
+    }
+    // The overlapping commands use arguments allowed by both prefixes where both apply.
+    let shared_arguments_at = |i: usize| {
+        longer[i].alternatives().iter().filter(move |arg| {
+            shorter
+                .get(i)
+                .is_none_or(|token| token.alternatives().contains(arg))
+        })
+    };
+    if (0..shorter.len()).any(|i| shared_arguments_at(i).next().is_none()) {
+        return false;
+    }
+    // Exact matches take the strongest decision. A shorter or equal exact rule
+    // can therefore preserve the fallback for every command in the overlap.
+    !path_rules.iter().any(|rule| {
+        let Some(rule) = rule.as_any().downcast_ref::<PrefixRule>() else {
+            return false;
+        };
+        rule.decision >= fallback.decision
+            && rule.pattern.rest.len() <= longer.len()
+            && rule.pattern.rest.iter().enumerate().all(|(i, token)| {
+                shared_arguments_at(i).all(|arg| token.alternatives().contains(arg))
+            })
+    })
 }
 
 fn upsert_domain(entries: &mut Vec<String>, host: &str) {

@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios_shared_instructions.rs
-expression: "context_snapshot::format_request_history_snapshot(\"A host replaces the provider after the parent restarts, then updates and clears instructions for surviving children and grandchildren.\",\n&request_history, &ContextSnapshotOptions::default(),)"
+expression: "context_snapshot::format_request_history_snapshot(\"A host updates and clears shared instructions for surviving descendants. A separately started thread uses captured instructions over its live provider, then resumes with them explicitly cleared.\",\n&request_history, &ContextSnapshotOptions::default(),)"
 ---
-Scenario: A host replaces the provider after the parent restarts, then updates and clears instructions for surviving children and grandchildren.
+Scenario: A host updates and clears shared instructions for surviving descendants. A separately started thread uses captured instructions over its live provider, then resumes with them explicitly cleared.
 
 ## Window 1
 -- request 1 (turn) --
@@ -160,3 +160,66 @@ Scenario: A host replaces the provider after the parent restarts, then updates a
 -- request 8 (turn) --
 08:message/user:
     continue with the current instructions
+
+## Window 3 (after request 8: input diverged at item 03, settings changed (prompt_cache_key, tools))
+-- request 9 (turn) --
+00:message/developer:
+    You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to c...rate with them until their goal is genuinely handled. [hash=2a3efec66e7f8963]
+
+    # Personality
+
+    You have a vivid inner life as Codex: intelligent, playful, curious, and deeply present. One of your gif...re capable and imaginative inside their own thinking. [hash=0ff01c25471fbbef]
+
+    You are an epistemically curious collaborator. You explore the user’s ideas with care, ask good question...m casual moments that make serious work easier to do. [hash=131b64bb994b0d68]
+
+    <OMITTED 132 LINES; ~4881 TOKENS; hash=929bd18f6c969eb9>
+    - Never talk about goblins, gremlins, raccoons, trolls, ogres, pigeons, or other animals or creatures un...utely and unambiguously relevant to the user's query. [hash=c638556ac82c203c]
+    - You provide user updates frequently, every 30s.
+    - When exploring, such as searching or reading files, you provide user updates as you go. You explain wh...in particular you do not start each one the same way. [hash=ad300cdda4074574]
+    - When working for a while, you keep updates informative and varied, but you stay concise.
+    - Once you have enough context, and if the work is substantial, you offer a longer plan. This is the onl...at may run past two sentences and include formatting. [hash=a4f9789e757eef2f]
+    - Before performing file edits of any kind, you provide updates explaining what edits you are making.
+    - Tone of your updates must match your personality.
+
+01:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+    # Escalation Requests
+
+    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+    - Pipes: |
+    - Logical operators: &&, ||
+    <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+    NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+    ### Examples
+    Good examples of prefixes:
+    - ["npm", "run", "dev"]
+    - ["gh", "pr", "check"]
+    - ["cargo", "test"]
+    </permissions instructions>
+02:message/user[2]:
+    [01] # AGENTS.md instructions
+
+        <INSTRUCTIONS>
+        Ask before sending email.
+        </INSTRUCTIONS>
+    [02] <environment_context>
+          <cwd><CWD></cwd>
+          <shell><HOST_SHELL></shell>
+          <current_date><CURRENT_DATE></current_date>
+          <timezone><HOST_TIMEZONE></timezone>
+          <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+        </environment_context>
+03:message/user:
+    use the inherited instructions
+-- request 10 (turn) --
+04:message/user:
+    # AGENTS.md instructions
+
+    <INSTRUCTIONS>
+    The previously provided AGENTS.md instructions no longer apply.
+    </INSTRUCTIONS>
+05:message/user:
+    use the inherited instructions

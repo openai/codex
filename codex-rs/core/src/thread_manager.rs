@@ -23,6 +23,8 @@ use crate::config::ThreadStoreConfig;
 use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_requests;
+use crate::exec_policy::ExecPolicyManager;
+use crate::exec_policy::InheritedExecPolicy;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
 use crate::session::ForkPersistence;
@@ -50,8 +52,12 @@ use codex_code_mode::DisabledCodeModeSessionProvider;
 use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
+use codex_execpolicy::Policy;
+use codex_execpolicy::RequirementsExecPolicy;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::Instructions;
+use codex_extension_api::LoadInstructionsFuture;
 use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::SessionIsolation;
 use codex_extension_api::ThreadInstructionsProvider;
@@ -334,7 +340,42 @@ pub struct StartThreadOptions {
     pub disabled_plugin_ids: Option<Vec<String>>,
 }
 
+/// A private, non-sharing provider also detaches a resumed root from its previous live provider.
+struct InheritedThreadInstructions(Instructions);
+
+impl ThreadInstructionsProvider for InheritedThreadInstructions {
+    fn load_thread_instructions(&self) -> LoadInstructionsFuture<'_> {
+        Box::pin(async {
+            LoadedUserInstructions {
+                instructions: Some(self.0.clone()),
+                warnings: Vec::new(),
+            }
+        })
+    }
+}
+
 impl StartThreadOptions {
+    /// Use the spawning thread's applied text in place of the destination's live thread provider.
+    /// An empty text clears the thread contribution. Supply it again on cold resume.
+    pub fn set_inherited_thread_instructions(&mut self, instructions: Instructions) {
+        self.thread_extension_init
+            .insert(InheritedThreadInstructions(instructions));
+    }
+
+    /// Start from a trusted host's snapshot of a managed-only session's rules and source requirements.
+    /// The destination validates compatibility before installing a new, independent manager.
+    /// Hosts must reapply both values on cold resume.
+    pub fn set_inherited_exec_policy(
+        &mut self,
+        policy: Arc<Policy>,
+        source_requirements: Option<Arc<RequirementsExecPolicy>>,
+    ) {
+        self.thread_extension_init.insert(InheritedExecPolicy {
+            policy,
+            source_requirements,
+        });
+    }
+
     pub fn new(config: Config) -> Self {
         Self {
             config,
@@ -2386,6 +2427,27 @@ impl ThreadManagerState {
                 thread.session.services.mcp_runtime.revoke_ema();
             }
         }
+        let supplied_thread_instructions =
+            thread_extension_init.remove::<InheritedThreadInstructions>();
+        let supplied_exec_policy = thread_extension_init.remove::<InheritedExecPolicy>();
+        if isolation == SessionIsolation::Isolated
+            && (supplied_exec_policy.is_some() || supplied_thread_instructions.is_some())
+        {
+            return Err(CodexErr::InvalidRequest(
+                "isolated sessions cannot install host-inherited startup settings".to_string(),
+            ));
+        }
+        let inherited_exec_policy = match (inherited_exec_policy, supplied_exec_policy) {
+            (Some(_), Some(_)) => {
+                return Err(CodexErr::InvalidRequest(
+                    "cannot combine a local and a transported execution policy".to_string(),
+                ));
+            }
+            (None, Some(snapshot)) => Some(Arc::new(
+                ExecPolicyManager::from_inherited(&snapshot, &config.config_layer_stack).await?,
+            )),
+            (local, None) => local,
+        };
         let agent_control = match (&self.agent_control_factory, agent_control) {
             (Some(factory), AgentControlInit::Local(local)) => {
                 let thread_id = match &initial_history {
@@ -2438,6 +2500,9 @@ impl ThreadManagerState {
                 .await
             }
         };
+        if let Some(fixed) = supplied_thread_instructions {
+            instructions.thread_provider = Some(fixed);
+        }
         if let Some(supplied) = supplied_user_instructions {
             instructions.user = supplied.instructions;
             instructions.user_provider = None;

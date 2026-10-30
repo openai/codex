@@ -34,6 +34,11 @@ impl ExtensionDataInit {
             .map(downcast_data)
     }
 
+    /// Consumes a startup-only attachment before creating the live scope.
+    pub fn remove<T: Any + Send + Sync>(&mut self) -> Option<Arc<T>> {
+        self.entries.remove(&TypeId::of::<T>()).map(downcast_data)
+    }
+
     /// Returns a host-supplied initial attachment without creating a mutable scope.
     pub fn get<T>(&self) -> Option<Arc<T>>
     where

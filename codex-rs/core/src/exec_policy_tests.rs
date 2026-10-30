@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use super::*;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
@@ -15,6 +17,7 @@ use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::error::CodexErrKind;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -511,12 +514,6 @@ async fn ignore_user_project_rules_keeps_system_policy_files() {
     let temp_dir = tempdir().expect("create temp dir");
     let config_dir = temp_dir.path().join("system");
     let policy_dir = config_dir.join(RULES_DIR_NAME);
-    fs::create_dir_all(&policy_dir).expect("create policy dir");
-    fs::write(
-        policy_dir.join("allow.rules"),
-        r#"prefix_rule(pattern=["curl"], decision="allow")"#,
-    )
-    .expect("write policy file");
     let config_file =
         AbsolutePathBuf::from_absolute_path(config_dir.join(codex_config::CONFIG_TOML_FILE))
             .expect("absolute config file");
@@ -532,6 +529,28 @@ async fn ignore_user_project_rules_keeps_system_policy_files() {
     .expect("ConfigLayerStack")
     .with_user_and_project_exec_policy_rules_ignored(
         /*ignore_user_and_project_exec_policy_rules*/ true,
+    );
+
+    let snapshot = InheritedExecPolicy {
+        policy: Arc::new(Policy::empty()),
+        source_requirements: None,
+    };
+    ExecPolicyManager::from_inherited(&snapshot, &config_stack)
+        .await
+        .expect("missing system rules directory allows inheritance");
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    ExecPolicyManager::from_inherited(&snapshot, &config_stack)
+        .await
+        .expect("empty system rules directory allows inheritance");
+    fs::write(
+        policy_dir.join("allow.rules"),
+        r#"prefix_rule(pattern=["curl"], decision="allow")"#,
+    )
+    .expect("write policy file");
+    let result = ExecPolicyManager::from_inherited(&snapshot, &config_stack).await;
+    assert_eq!(
+        result.as_ref().err().map(CodexErrKind::from),
+        Some(CodexErrKind::InvalidRequest)
     );
 
     let policy = load_exec_policy(&config_stack)

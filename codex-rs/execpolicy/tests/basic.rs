@@ -16,6 +16,7 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::PrefixPattern;
 use codex_execpolicy::PrefixRule;
+use codex_execpolicy::RequirementsExecPolicy;
 use codex_execpolicy::RuleMatch;
 use codex_execpolicy::RuleRef;
 use codex_execpolicy::blocking_append_allow_prefix_rule;
@@ -800,6 +801,55 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
             }],
         }
     );
+    Ok(())
+}
+
+/// An absolute-path amendment may bypass a basename rule only if its restriction is preserved.
+#[test]
+fn inherited_absolute_amendments_preserve_managed_basename_restrictions() -> Result<()> {
+    let mut parser = PolicyParser::new();
+    parser.parse(
+        "managed.rules",
+        r#"prefix_rule(pattern = ["git", ["push", "send-pack"]], decision = "forbidden")"#,
+    )?;
+    let managed = parser.build();
+    let requirements = RequirementsExecPolicy::new(managed.clone());
+    let git = host_absolute_path(&["usr", "bin", &host_executable_name("git")]);
+    for (args, decision, accepted) in [
+        (&["status"][..], Decision::Allow, true),
+        (&[], Decision::Allow, false),
+        (&["send-pack", "origin"], Decision::Allow, false),
+        (&["push"], Decision::Forbidden, true),
+    ] {
+        let mut snapshot = managed.clone();
+        let mut prefix = vec![git.clone()];
+        prefix.extend(tokens(args));
+        snapshot.add_prefix_rule(&prefix, decision)?;
+        assert_eq!(
+            snapshot.preserves_managed_requirements(&requirements),
+            accepted
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn inherited_absolute_amendment_respects_existing_exact_denials() -> Result<()> {
+    let git = host_absolute_path(&["usr", "bin", &host_executable_name("git")]);
+    for (denied_args, accepted) in [(&["push"][..], true), (&["push", "origin"][..], false)] {
+        let mut managed = Policy::empty();
+        managed.add_prefix_rule(&tokens(&["git", "push"]), Decision::Forbidden)?;
+        let mut exact = vec![git.clone()];
+        exact.extend(tokens(denied_args));
+        managed.add_prefix_rule(&exact, Decision::Forbidden)?;
+
+        let mut snapshot = managed.clone();
+        snapshot.add_prefix_rule(std::slice::from_ref(&git), Decision::Allow)?;
+        assert_eq!(
+            snapshot.preserves_managed_requirements(&RequirementsExecPolicy::new(managed)),
+            accepted
+        );
+    }
     Ok(())
 }
 
