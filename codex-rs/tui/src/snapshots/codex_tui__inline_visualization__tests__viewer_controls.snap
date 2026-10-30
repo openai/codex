@@ -1,0 +1,34 @@
+---
+source: tui/src/inline_visualization_tests.rs
+expression: "format!(\"{}\\n\\n{controls}\\n\\n{styles}\", fragment.trim())"
+---
+<nav class="nav nav-pills" role="tablist">
+  <button class="nav-link btn-sm" role="tab" aria-controls="costs" data-tooltip="Show costs">Costs</button>
+</nav>
+<section id="costs" role="tabpanel" class="viz-carousel">
+  <div data-variant="Daily">Day</div><div data-variant="Weekly">Week</div>
+</section>
+
+<script id="codex-visualization-tabs">
+<script id="codex-visualization-carousel">
+<button type="button" class="viz-carousel-previous cursor-interaction">
+<details class="viz-carousel-picker">
+<button type="button" class="viz-carousel-next cursor-interaction">
+
+.btn-sm {
+  --btn-size: 24px;
+  padding-inline: 8px;
+  font-size: calc(var(--font-size-base) * 12 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 12 / 16), 1px);
+  line-height: 16px;
+}
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.viz-carousel > [data-variant][hidden] {
+  display: none !important;
+}
+.form-select :is(option, optgroup):disabled {
+  color: var(--muted-foreground);
+}

@@ -22,11 +22,18 @@
     let autoUpdateCleanup = null;
     let positionRequest = 0;
     let skipDelayUntil = 0;
+    let lastPointerWasTouch = false;
+    let pinnedByTouch = false;
 
-    const getTrigger = (target) =>
-      target?.nodeType === Node.ELEMENT_NODE
-        ? target.closest("[data-tooltip]")
-        : null;
+    const getTrigger = (event) => {
+      for (const target of event.composedPath()) {
+        if (target?.nodeType === Node.ELEMENT_NODE) {
+          const trigger = target.closest("[data-tooltip]");
+          if (trigger) return trigger;
+        }
+      }
+      return null;
+    };
     const containsTarget = (trigger, target) =>
       target?.nodeType != null && trigger.contains(target);
     const getContent = (trigger) =>
@@ -70,6 +77,7 @@
     };
     const closeTooltip = (activateSkipDelay = true) => {
       clearOpenTimeout();
+      pinnedByTouch = false;
       positionRequest += 1;
       autoUpdateCleanup?.();
       autoUpdateCleanup = null;
@@ -170,14 +178,47 @@
       if (event.pointerType === "touch") {
         return;
       }
-      const trigger = getTrigger(event.target);
+      const trigger = getTrigger(event);
       if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
         return;
       }
       requestOpen(trigger);
     };
+    const handlePointer = (event) => {
+      lastPointerWasTouch =
+        event.type === "pointerdown" && event.pointerType === "touch";
+    };
+    const handleTouchClick = (event) => {
+      const isTouch = event.pointerType === "touch" || lastPointerWasTouch;
+      lastPointerWasTouch = false;
+      if (!isTouch || event.detail === 0) {
+        return;
+      }
+      const trigger = getTrigger(event);
+      if (
+        trigger == null ||
+        !trigger.isConnected ||
+        getContent(trigger).length === 0 ||
+        (pinnedByTouch && activeTrigger === trigger)
+      ) {
+        if (pinnedByTouch) {
+          closeTooltip();
+        }
+        return;
+      }
+      openTooltip(trigger);
+      pinnedByTouch = activeTrigger === trigger;
+      window.setTimeout(() => {
+        if (activeTrigger === trigger && !trigger.isConnected) {
+          closeTooltip(false);
+        }
+      }, 0);
+    };
     const handleLeave = (event) => {
-      const trigger = getTrigger(event.target);
+      if (pinnedByTouch) {
+        return;
+      }
+      const trigger = getTrigger(event);
       if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
         return;
       }
@@ -186,7 +227,7 @@
       }
     };
     const handleFocusIn = (event) => {
-      const trigger = getTrigger(event.target);
+      const trigger = getTrigger(event);
       if (trigger?.matches(":focus-visible")) {
         requestOpen(trigger, true);
       }
@@ -197,29 +238,342 @@
       }
     };
     const handleContextMenu = (event) => {
-      const trigger = getTrigger(event.target);
+      lastPointerWasTouch = false;
+      const trigger = getTrigger(event);
       if (activeTrigger === trigger || pendingTrigger === trigger) {
         closeTooltip();
       }
     };
+    const handlers = {
+      pointerover: handlePointerOpen,
+      pointerdown: handlePointer,
+      pointercancel: handlePointer,
+      click: handleTouchClick,
+      pointerout: handleLeave,
+      focusin: handleFocusIn,
+      focusout: handleLeave,
+      keydown: handleKeyDown,
+      contextmenu: handleContextMenu,
+    };
+    const roots = new Map();
+    const handledEvents = new WeakSet();
+    const handleEvent = (event) => {
+      if (handledEvents.has(event)) return;
+      handledEvents.add(event);
+      handlers[event.type](event);
+    };
+    const discoverRoots = (node) => {
+      if (node.shadowRoot) listen(node.shadowRoot);
+      for (const element of node.querySelectorAll("*")) {
+        if (element.shadowRoot) listen(element.shadowRoot);
+      }
+    };
+    const listen = (root) => {
+      if (roots.has(root)) return;
+      for (const type of Object.keys(handlers))
+        root.addEventListener(type, handleEvent);
+      const observer = new window.MutationObserver((records) => {
+        for (const { addedNodes } of records) {
+          for (const node of addedNodes) {
+            if (node.nodeType === Node.ELEMENT_NODE) discoverRoots(node);
+          }
+        }
+        for (const [root, cleanup] of roots) {
+          if (root.host && !root.host.isConnected) {
+            cleanup();
+            roots.delete(root);
+          }
+        }
+        if (activeTrigger && !activeTrigger.isConnected) closeTooltip(false);
+      });
+      observer.observe(root, { childList: true, subtree: true });
+      roots.set(root, () => {
+        observer.disconnect();
+        for (const type of Object.keys(handlers))
+          root.removeEventListener(type, handleEvent);
+      });
+      discoverRoots(root);
+    };
     const destroy = () => {
       closeTooltip(false);
-      document.removeEventListener("pointerover", handlePointerOpen);
-      document.removeEventListener("pointerout", handleLeave);
-      document.removeEventListener("focusin", handleFocusIn);
-      document.removeEventListener("focusout", handleLeave);
-      document.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("contextmenu", handleContextMenu);
+      lastPointerWasTouch = false;
+      for (const cleanup of roots.values()) cleanup();
+      roots.clear();
       tooltip = null;
     };
 
-    document.addEventListener("pointerover", handlePointerOpen);
-    document.addEventListener("pointerout", handleLeave);
-    document.addEventListener("focusin", handleFocusIn);
-    document.addEventListener("focusout", handleLeave);
-    document.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("contextmenu", handleContextMenu);
+    // Events between children of one shadow root never reach the document.
+    listen(document);
     window.addEventListener("pagehide", destroy, { once: true });
+  })();
+</script>
+<script id="codex-visualization-tabs">
+  (() => {
+    const selector = '.nav[role="tablist"] [role="tab"]';
+    const disabled = ':disabled,[aria-disabled="true"]';
+    const selectTab = (selected) => {
+      const panelId = selected.getAttribute("aria-controls");
+      for (const tab of selected
+        .closest('[role="tablist"]')
+        .querySelectorAll('[role="tab"]')) {
+        const active = tab === selected;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", String(active));
+        const id = tab.getAttribute("aria-controls");
+        const panel = id && document.getElementById(id);
+        if (panel != null) {
+          panel.hidden = id !== panelId;
+          if (!panel.hidden && selected.id) {
+            panel.setAttribute("aria-labelledby", selected.id);
+          }
+        }
+      }
+    };
+    const interact = (event) => {
+      const tab = event.target?.closest?.(selector);
+      if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+        return;
+      }
+      if (event.type === "click") {
+        selectTab(tab);
+        return;
+      }
+      const tabs = Array.from(
+        tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]'),
+      ).filter((candidate) => !candidate.matches(disabled));
+      const current = tabs.indexOf(tab);
+      let next;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        next = (current + 1) % tabs.length;
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        next = (current + tabs.length - 1) % tabs.length;
+      } else if (event.key === "Home") {
+        next = 0;
+      } else if (event.key === "End") {
+        next = tabs.length - 1;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      tabs[next].focus();
+      selectTab(tabs[next]);
+    };
+
+    for (const list of document.querySelectorAll('.nav[role="tablist"]')) {
+      const selected =
+        list.querySelector('[role="tab"][aria-selected="true"]') ??
+        list.querySelector('[role="tab"].active') ??
+        list.querySelector('[role="tab"]');
+      if (selected != null) {
+        selectTab(selected);
+      }
+    }
+    document.addEventListener("click", interact);
+    document.addEventListener("keydown", interact);
+    window.addEventListener(
+      "pagehide",
+      () => {
+        document.removeEventListener("click", interact);
+        document.removeEventListener("keydown", interact);
+      },
+      { once: true },
+    );
+  })();
+</script>
+<script id="codex-visualization-carousel">
+  (() => {
+    for (const root of document.querySelectorAll(".viz-carousel")) {
+      const panels = Array.from(
+        root.querySelectorAll(":scope > [data-variant]"),
+      );
+      if (panels.length === 0) {
+        continue;
+      }
+      root.setAttribute("role", "group");
+      panels.forEach((panel, index) => {
+        panel.hidden = index !== 0;
+        panel.setAttribute("role", "group");
+        if (!panel.hasAttribute("aria-label")) {
+          panel.setAttribute("aria-label", panel.dataset.variant);
+        }
+      });
+      root.dataset.activeVariant = panels[0].dataset.variant;
+      if (panels.length === 1) {
+        continue;
+      }
+
+      const controls = document.createElement("div");
+      controls.className = "viz-carousel-controls";
+      // Portable copy of the settings dropdown's legacy glyph; no 14px icon-package preset matches it.
+      controls.innerHTML = `
+      <button type="button" class="viz-carousel-previous cursor-interaction"><i data-lucide="chevron-left" aria-hidden="true"></i></button>
+      <details class="viz-carousel-picker">
+        <summary class="cursor-interaction">
+          <span class="viz-carousel-count tabular-nums"></span>
+          <span class="viz-carousel-name"></span>
+          <svg class="viz-carousel-caret" width="14" height="14" viewBox="0 0 20 21" fill="none" aria-hidden="true" focusable="false">
+            <path d="M15.2793 7.71101C15.539 7.45131 15.961 7.45131 16.2207 7.71101C16.4804 7.97071 16.4804 8.39272 16.2207 8.65242L10.4707 14.4024C10.211 14.6621 9.78902 14.6621 9.52932 14.4024L3.77932 8.65242L3.69436 8.54792C3.52385 8.28979 3.55205 7.93828 3.77932 7.71101C4.00659 7.48374 4.3581 7.45554 4.61623 7.62605L4.72073 7.71101L10 12.9903L15.2793 7.71101Z" fill="currentColor" stroke="currentColor" stroke-width="0.6" />
+          </svg>
+        </summary>
+        <div class="viz-carousel-options"></div>
+      </details>
+      <button type="button" class="viz-carousel-next cursor-interaction"><i data-lucide="chevron-right" aria-hidden="true"></i></button>`;
+      const previous = controls.querySelector(".viz-carousel-previous");
+      const next = controls.querySelector(".viz-carousel-next");
+      const picker = controls.querySelector(".viz-carousel-picker");
+      const summary = picker.querySelector("summary");
+      const count = controls.querySelector(".viz-carousel-count");
+      const name = controls.querySelector(".viz-carousel-name");
+      const options = controls.querySelector(".viz-carousel-options");
+      const status = document.createElement("span");
+      status.className = "sr-only";
+      status.setAttribute("role", "status");
+      status.setAttribute("aria-live", "polite");
+      status.setAttribute("aria-atomic", "true");
+      previous.setAttribute(
+        "aria-label",
+        root.dataset.previousLabel ?? "Previous variant",
+      );
+      next.setAttribute("aria-label", root.dataset.nextLabel ?? "Next variant");
+
+      let active = 0;
+      let mousePointerId = null;
+      let summaryPointerHandled = false;
+      summary.addEventListener("pointerdown", (event) => {
+        summaryPointerHandled =
+          event.pointerType === "mouse" && event.button === 0 && !event.ctrlKey;
+        if (!summaryPointerHandled) {
+          return;
+        }
+        event.preventDefault();
+        summary.focus({ preventScroll: true });
+        picker.open = !picker.open;
+        mousePointerId = picker.open ? event.pointerId : null;
+      });
+      summary.addEventListener("click", (event) => {
+        if (summaryPointerHandled && event.detail > 0) {
+          event.preventDefault();
+        }
+      });
+      const choices = panels.map((panel, index) => {
+        const choice = document.createElement("button");
+        choice.type = "button";
+        choice.className = "cursor-interaction";
+        choice.textContent = panel.dataset.variant;
+        choice.addEventListener("click", () => {
+          select(index);
+          summary.focus();
+        });
+        choice.addEventListener("pointerup", (event) => {
+          if (
+            picker.open &&
+            event.pointerType === "mouse" &&
+            event.button === 0 &&
+            event.pointerId === mousePointerId
+          ) {
+            choice.click();
+          }
+        });
+        options.appendChild(choice);
+        return choice;
+      });
+      const select = (index) => {
+        const changed = active !== index;
+        active = index;
+        panels.forEach((panel, position) => {
+          panel.hidden = position !== active;
+          choices[position].setAttribute(
+            "aria-current",
+            String(position === active),
+          );
+        });
+        root.dataset.activeVariant = panels[active].dataset.variant;
+        count.textContent = `${active + 1} / ${panels.length}`;
+        name.textContent = panels[active].dataset.variant;
+        picker.open = false;
+        mousePointerId = null;
+        if (changed) {
+          status.textContent = `${count.textContent}: ${name.textContent}`;
+        }
+      };
+      previous.addEventListener("click", () =>
+        select((active + panels.length - 1) % panels.length),
+      );
+      next.addEventListener("click", () =>
+        select((active + 1) % panels.length),
+      );
+      picker.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && picker.open) {
+          event.preventDefault();
+          picker.open = false;
+          mousePointerId = null;
+          summary.focus();
+          return;
+        }
+        if (event.altKey || event.ctrlKey || event.metaKey) {
+          return;
+        }
+        const index = choices.indexOf(document.activeElement);
+        let nextIndex;
+        if (event.key === "ArrowDown") {
+          nextIndex = index < 0 ? active : (index + 1) % choices.length;
+        } else if (event.key === "ArrowUp") {
+          nextIndex =
+            index < 0 ? active : (index + choices.length - 1) % choices.length;
+        } else if (picker.open && event.key === "Home") {
+          nextIndex = 0;
+        } else if (picker.open && event.key === "End") {
+          nextIndex = choices.length - 1;
+        } else {
+          return;
+        }
+        event.preventDefault();
+        picker.open = true;
+        choices[nextIndex].focus();
+      });
+      picker.addEventListener("focusout", (event) => {
+        if (!picker.contains(event.relatedTarget)) {
+          picker.open = false;
+          mousePointerId = null;
+        }
+      });
+      const dismiss = (event) => {
+        if (!summary.contains(event.target)) {
+          mousePointerId = null;
+        }
+        if (!picker.contains(event.target)) {
+          picker.open = false;
+        }
+      };
+      const endPointerSelection = () => {
+        mousePointerId = null;
+      };
+      const sizePicker = () => {
+        root.style.setProperty(
+          "--viz-carousel-picker-height",
+          `${picker.open ? options.offsetHeight : 0}px`,
+        );
+      };
+      picker.addEventListener("toggle", sizePicker);
+      window.addEventListener("resize", sizePicker);
+      document.addEventListener("pointerdown", dismiss);
+      document.addEventListener("pointerup", endPointerSelection);
+      document.addEventListener("pointercancel", endPointerSelection);
+      window.addEventListener("blur", endPointerSelection);
+      window.addEventListener(
+        "pagehide",
+        () => {
+          document.removeEventListener("pointerdown", dismiss);
+          document.removeEventListener("pointerup", endPointerSelection);
+          document.removeEventListener("pointercancel", endPointerSelection);
+          window.removeEventListener("blur", endPointerSelection);
+          window.removeEventListener("resize", sizePicker);
+        },
+        { once: true },
+      );
+      root.append(controls, status);
+      select(0);
+    }
   })();
 </script>
 <script

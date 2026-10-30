@@ -258,6 +258,60 @@ fn viewer_materializes_sandboxed_static_document() {
 }
 
 #[test]
+fn viewer_embeds_interactive_controls() {
+    let (_home, context) = context_with_fragment(
+        r#"<nav class="nav nav-pills" role="tablist">
+  <button class="nav-link btn-sm" role="tab" aria-controls="costs" data-tooltip="Show costs">Costs</button>
+</nav>
+<section id="costs" role="tabpanel" class="viz-carousel">
+  <div data-variant="Daily">Day</div><div data-variant="Weekly">Week</div>
+</section>"#,
+    );
+    let url = context.link_for("chart.html").expect("viewer link");
+    let document = fs::read_to_string(url.to_file_path().expect("viewer path")).expect("viewer");
+    let (_, srcdoc) = document.split_once(" srcdoc=\"").expect("embedded frame");
+    let (srcdoc, _) = srcdoc.split_once('"').expect("end of frame");
+    let frame = srcdoc
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+    let (head, body) = frame.split_once("<body>").expect("frame body");
+    let (fragment, runtime) = body.split_once("<script").expect("control runtime");
+
+    // Snapshot the controls shipped with the fragment, without copying the entire runtime.
+    let tags = regex_lite::Regex::new(
+        r#"<script id="codex-visualization-(?:tabs|carousel)">|<(?:button|details) [^<>]*class="viz-carousel-[^"]+"[^<>]*>"#,
+    ).unwrap();
+    let controls = tags
+        .find_iter(runtime)
+        .map(|tag| tag.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let rules = regex_lite::Regex::new(r"(?m)^([^{}\n]+) \{[^{}]*\}").unwrap();
+    let styles = rules
+        .captures_iter(head)
+        .filter(|rule| {
+            matches!(
+                &rule[1],
+                ".btn-sm"
+                    | ".nav-pills .nav-link.active"
+                    | ".viz-carousel > [data-variant][hidden]"
+                    | ".form-select :is(option, optgroup):disabled"
+            )
+        })
+        .map(|rule| rule.get(0).unwrap().as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!(
+        "viewer_controls",
+        format!("{}\n\n{controls}\n\n{styles}", fragment.trim())
+    );
+}
+
+#[test]
 fn viewer_reuses_path_and_refreshes_static_document() {
     let (_codex_home, context) = context_with_fragment("<div>first</div>");
     let first_url = context.link_for("chart.html").expect("first viewer link");
