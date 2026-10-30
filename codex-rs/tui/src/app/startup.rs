@@ -743,7 +743,6 @@ impl App {
                             config: &config,
                             local_settings: &local_settings,
                         },
-                        &app_server_target,
                         &target_session,
                         action,
                         resumed,
@@ -848,7 +847,6 @@ impl App {
                         config: &config,
                         local_settings: &local_settings,
                     },
-                    &app_server_target,
                     &target_session,
                     action,
                     forked,
@@ -1111,7 +1109,7 @@ See the Codex keymap documentation for supported actions and examples."
             );
         }
         if start_in_agents_overview {
-            app.open_initial_agents_overview(&app_server);
+            app.open_agents_overview(&app_server);
         } else {
             app.refresh_agents_overview_threads(&app_server);
         }

@@ -14,7 +14,7 @@ tab: Navigation (21 selectable)
 tab: Agents (11 selectable)
 tab: Approval (8 selectable)
 tab: Debug (1 selectable)
-Open Agents | unbound | Global open_agents Open Agents Open the shared agent-session overview. unbound Default
+Open Agents | unbound | Global open_agents Open Agents Open the agent command center. unbound Default
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
 Find Transcript | f3 | Global find_transcript Find Transcript Find text in the full transcript. f3 Default
 Focus Activity | f4 | Global focus_activity Focus Activity Focus transcript activity groups to expand or collapse their details. f4 Default

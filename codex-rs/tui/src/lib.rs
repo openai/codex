@@ -338,13 +338,6 @@ pub(crate) enum AppServerTarget {
 }
 
 impl AppServerTarget {
-    fn supports_command_center(&self) -> bool {
-        match self {
-            Self::Embedded => false,
-            Self::LocalDaemon { .. } | Self::Remote { .. } => true,
-        }
-    }
-
     fn preserve_selected_backend(&mut self, selection: &resume_picker::SessionSelection) {
         if matches!(
             selection,
@@ -1955,12 +1948,10 @@ async fn run_ratatui_app(
     }
 
     // The shared overview does not open a workspace; session selection checks trust when needed.
-    // Embedded fallback cannot show the overview and still needs normal startup initialization.
-    if (!matches!(
+    if !matches!(
         session_selection,
         resume_picker::SessionSelection::AgentsOverview
-    ) || !app_server_target.supports_command_center())
-        && (!uses_remote_workspace || remote_cwd_override.is_some())
+    ) && (!uses_remote_workspace || remote_cwd_override.is_some())
     {
         let resumed_thread = if matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
             && let resume_picker::SessionSelection::Resume(target) = &session_selection
@@ -1987,8 +1978,7 @@ async fn run_ratatui_app(
             trust_cwd,
             onboarding::DirectoryTrustOptions {
                 resumed_thread: resumed_thread.as_ref(),
-                cancel: (!app_server_target.supports_command_center())
-                    .then_some(onboarding::TrustCancelAction::Quit),
+                ..Default::default()
             },
             Some(&mut startup_draft),
         )
@@ -2040,17 +2030,6 @@ async fn run_ratatui_app(
                 trust_decision_was_made = true;
             }
         } else if consent.should_exit {
-            if !app_server_target.supports_command_center() {
-                shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
-                return Ok(AppExitInfo {
-                    token_usage: crate::token_usage::TokenUsage::default(),
-                    thread_id: None,
-                    resume_hint: None,
-                    disconnect_info: None,
-                    update_action: None,
-                    exit_reason: ExitReason::UserRequested,
-                });
-            }
             if !uses_remote_workspace {
                 config = load_config_or_exit_with_fallback_cwd(
                     cli_kv_overrides.clone(),

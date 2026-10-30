@@ -1,6 +1,0 @@
----
-source: tui/src/app/agents_overview_tests.rs
-assertion_line: 401
-expression: rendered
----
-■ Failed to start the background server: The host does not allow detached processes

@@ -1511,66 +1511,6 @@ async fn shared_overview_shows_only_root_sessions() {
     assert!(app.last_rendered_history_tail.is_some());
 }
 
-#[cfg(any(unix, windows))]
-#[tokio::test]
-async fn embedded_sessions_offer_to_start_a_background_server_without_migrating() {
-    let mut app = make_test_app().await;
-    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
-        .await
-        .expect("embedded app server");
-
-    app.open_initial_agents_overview(&app_server);
-
-    insta::with_settings!({snapshot_path => "../snapshots"}, {
-        insta::assert_snapshot!(
-            "agents_overview_embedded",
-            render_bottom_popup(&app.chat_widget, /*width*/ 96)
-        );
-    });
-    app_server.shutdown().await.expect("shutdown app server");
-}
-
-#[cfg(any(unix, windows))]
-#[tokio::test]
-async fn daemon_start_result_snapshots() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) =
-        crate::app::tests::make_test_app_with_channels().await;
-    let mut app_server =
-        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-
-    for (name, result) in [
-        ("agents_daemon_started", Ok(())),
-        (
-            "agents_daemon_start_failed",
-            Err("The host does not allow detached processes".to_string()),
-        ),
-    ] {
-        app.handle_event(
-            &mut tui,
-            &mut app_server,
-            AppEvent::AgentsDaemonStarted { result },
-        )
-        .await?;
-        let cell = match app_event_rx.try_recv()? {
-            AppEvent::InsertHistoryCell(cell) => cell,
-            other => panic!("expected daemon result history, got {other:?}"),
-        };
-        let rendered = cell
-            .display_lines(/*width*/ 80)
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        insta::with_settings!({snapshot_path => "../snapshots"}, {
-            insta::assert_snapshot!(name, rendered);
-        });
-    }
-
-    app_server.shutdown().await?;
-    Ok(())
-}
-
 #[tokio::test]
 async fn filtered_dashboard_actions_use_configured_shortcuts() {
     let mut app = make_test_app().await;

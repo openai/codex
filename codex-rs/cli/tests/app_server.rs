@@ -64,6 +64,8 @@ fn agents_accept_interactive_configuration_overrides() -> Result<()> {
         ["-c", "features.multi_agent_mode=true", "agents"].as_slice(),
         ["--enable", "multi_agent_mode", "agents"].as_slice(),
         ["--yolo", "agents"].as_slice(),
+        ["--no-daemon", "agents"].as_slice(),
+        ["agents", "--no-daemon"].as_slice(),
         ["--search", "agents"].as_slice(),
         ["--model", "gpt-5", "agents"].as_slice(),
         ["--approve-for-me", "agents"].as_slice(),
@@ -71,8 +73,6 @@ fn agents_accept_interactive_configuration_overrides() -> Result<()> {
     ] {
         let mut cmd = codex_command(codex_home.path())?;
         cmd.env("TERM", "xterm-256color").args(args);
-        #[cfg(not(any(unix, windows)))]
-        cmd.args(["--remote", "ws://127.0.0.1:4512"]);
 
         cmd.assert()
             .failure()

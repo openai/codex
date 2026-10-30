@@ -111,7 +111,7 @@ macro_rules! define_keymap_actions {
 
 define_keymap_actions! {
     global "Global" {
-        open_agents => "Open the shared agent-session overview.",
+        open_agents => "Open the agent command center.",
         open_transcript => "Open the transcript overlay.",
         find_transcript => "Find text in the full transcript.",
         // Keep the new warnings action out of shared-config writes until older strict readers

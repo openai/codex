@@ -25,7 +25,6 @@ async fn start_session(
             config,
             local_settings: &local_settings,
         },
-        &crate::AppServerTarget::Embedded,
         target,
         action,
         initial_result,
@@ -74,57 +73,32 @@ async fn archived_session_requires_confirmation_before_resume_or_fork() -> Resul
             history_mode: None,
         };
         let prompts = Cell::new(0);
-        let local_settings = LocalSettings::from(&config);
 
-        let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
-        for server_target in [
-            crate::AppServerTarget::LocalDaemon {
-                allow_embedded_fallback: true,
-                endpoint: endpoint.clone(),
-            },
-            crate::AppServerTarget::Remote { endpoint },
-            crate::AppServerTarget::Embedded,
-        ] {
-            for choice in [UnarchiveChoice::Cancel, UnarchiveChoice::Quit] {
-                let initial = action
-                    .start(&mut app_server, &config, &local_settings, &target)
-                    .await;
-                let outcome = complete_session_start(
-                    &mut app_server,
-                    SessionStartConfig {
-                        config: &config,
-                        local_settings: &local_settings,
-                    },
-                    &server_target,
-                    &target,
-                    action,
-                    initial,
-                    async || {
-                        prompts.set(prompts.get() + 1);
-                        Ok(choice)
-                    },
-                )
-                .await?;
-                assert_eq!(
-                    matches!(outcome, SessionStartOutcome::CommandCenter),
-                    choice == UnarchiveChoice::Cancel
-                        && !matches!(server_target, crate::AppServerTarget::Embedded),
-                );
-                assert_eq!(
-                    (archived_path.exists(), active_path.exists()),
-                    (true, false)
-                );
-                assert!(
-                    app_server
-                        .thread_loaded_list(Default::default())
-                        .await?
-                        .data
-                        .is_empty()
-                );
-            }
+        for choice in [UnarchiveChoice::Cancel, UnarchiveChoice::Quit] {
+            let outcome = start_session(&mut app_server, &config, &target, action, async || {
+                prompts.set(prompts.get() + 1);
+                Ok(choice)
+            })
+            .await?;
+            assert!(matches!(
+                (choice, outcome),
+                (UnarchiveChoice::Cancel, SessionStartOutcome::CommandCenter)
+                    | (UnarchiveChoice::Quit, SessionStartOutcome::Exit)
+            ));
+            assert_eq!(
+                (archived_path.exists(), active_path.exists()),
+                (true, false)
+            );
+            assert!(
+                app_server
+                    .thread_loaded_list(Default::default())
+                    .await?
+                    .data
+                    .is_empty()
+            );
         }
 
-        assert_eq!(prompts.get(), 6);
+        assert_eq!(prompts.get(), 2);
         let SessionStartOutcome::Started(started) =
             start_session(&mut app_server, &config, &target, action, async || {
                 prompts.set(prompts.get() + 1);
@@ -136,7 +110,7 @@ async fn archived_session_requires_confirmation_before_resume_or_fork() -> Resul
         };
         assert_eq!(
             (prompts.get(), archived_path.exists(), active_path.exists()),
-            (7, false, true)
+            (3, false, true)
         );
         match action {
             SessionStartAction::Resume(..) => {

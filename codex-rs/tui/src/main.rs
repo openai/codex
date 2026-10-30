@@ -43,10 +43,7 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("ERROR: {message}");
                 true
             }
-            ExitReason::UserRequested
-            | ExitReason::Archived(_)
-            | ExitReason::TurnInterrupted
-            | ExitReason::ThreadRemoved => false,
+            ExitReason::UserRequested | ExitReason::TurnInterrupted => false,
         };
 
         let color_enabled = supports_color::on(Stream::Stdout).is_some();

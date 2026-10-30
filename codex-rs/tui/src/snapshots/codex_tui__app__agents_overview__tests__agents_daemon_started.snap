@@ -1,6 +1,0 @@
----
-source: tui/src/app/agents_overview_tests.rs
-assertion_line: 401
-expression: rendered
----
-• Background server started. Run `codex agents` in another terminal; this session remains unchanged.

@@ -23,12 +23,7 @@ pub struct DisconnectInfo {
 
 impl App {
     pub(super) fn exit_info(&self, exit_reason: ExitReason) -> AppExitInfo {
-        let thread_id = match exit_reason {
-            ExitReason::Archived(_) | ExitReason::ThreadRemoved => None,
-            ExitReason::UserRequested | ExitReason::TurnInterrupted | ExitReason::Fatal(_) => {
-                self.chat_widget.thread_id().or(self.primary_thread_id)
-            }
-        };
+        let thread_id = self.chat_widget.thread_id().or(self.primary_thread_id);
         let disconnect_info = thread_id.and_then(|_| {
             let command = match &self.app_server_target {
                 AppServerTarget::Embedded => return None,
@@ -93,7 +88,7 @@ impl AppExitInfo {
         {
             let turn_interrupted = matches!(self.exit_reason, ExitReason::TurnInterrupted);
             let message = match self.exit_reason {
-                ExitReason::UserRequested | ExitReason::Archived(_) | ExitReason::ThreadRemoved => {
+                ExitReason::UserRequested => {
                     "Disconnected from this task. Any running work continues."
                 }
                 ExitReason::Fatal(_) => "Disconnected from this task. Work may still be running.",
@@ -132,9 +127,7 @@ impl AppExitInfo {
         if !self.token_usage.is_zero() {
             lines.push(self.token_usage.to_string());
         }
-        if let ExitReason::Archived(thread_id) = self.exit_reason {
-            lines.push(format!("Session archived: {thread_id}"));
-        } else if let Some(thread) = self.resume_hint {
+        if let Some(thread) = self.resume_hint {
             lines.push("To continue this session, run:".to_string());
             lines.push(format!(
                 "  {}",

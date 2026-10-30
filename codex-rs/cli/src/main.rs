@@ -102,7 +102,6 @@ use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
-use codex_login::is_workload_identity_selected;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
@@ -144,7 +143,7 @@ struct MultitoolCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
-    /// Browse all agent sessions on the shared local app-server daemon.
+    /// Open the agent command center to browse and switch sessions.
     Agents(AgentsCommand),
 
     /// Internal: forward a local TCP socket through an HTTP/3 CONNECT proxy.
@@ -337,8 +336,8 @@ struct DebugTraceReduceCommand {
 
 #[derive(Debug, Parser)]
 struct AgentsCommand {
-    /// The agents overview requires a shared server; this option is rejected.
-    #[arg(long, hide = true)]
+    /// Run the agents overview with an embedded app server.
+    #[arg(long)]
     no_daemon: bool,
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
@@ -771,10 +770,7 @@ fn handle_app_exit(
             eprintln!("ERROR: {message}");
             true
         }
-        ExitReason::UserRequested
-        | ExitReason::Archived(_)
-        | ExitReason::TurnInterrupted
-        | ExitReason::ThreadRemoved => false,
+        ExitReason::UserRequested | ExitReason::TurnInterrupted => false,
     };
 
     let update_action = exit_info.update_action;
@@ -1130,19 +1126,6 @@ async fn cli_main(
                     anyhow::bail!(
                         "`codex agents` cannot apply local provider or additional-directory overrides to a remote server"
                     );
-                }
-                if is_workload_identity_selected() {
-                    anyhow::bail!(
-                        "`codex agents` is unavailable while workload identity is active"
-                    );
-                }
-                if root_remote.is_none() {
-                    resolve_remote_endpoint(
-                        /*remote*/ None,
-                        root_remote_auth_token_env.clone(),
-                    )?;
-                    #[cfg(not(any(unix, windows)))]
-                    anyhow::bail!("`codex agents` requires `--remote` on this platform");
                 }
                 interactive.agents_overview = true;
             }
@@ -2500,17 +2483,10 @@ async fn run_interactive_tui(
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
-    if interactive.no_daemon {
-        if interactive.agents_overview {
-            return Ok(AppExitInfo::fatal(
-                "--no-daemon cannot be used with codex agents. The agents overview requires a shared server. Use codex --no-daemon to work without it.",
-            ));
-        }
-        if remote.is_some() {
-            return Ok(AppExitInfo::fatal(
-                "--no-daemon cannot be used with --remote.",
-            ));
-        }
+    if interactive.no_daemon && remote.is_some() {
+        return Ok(AppExitInfo::fatal(
+            "--no-daemon cannot be used with --remote.",
+        ));
     }
     if let Some(prompt) = interactive.prompt.take() {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -2535,25 +2511,6 @@ async fn run_interactive_tui(
         }
     }
 
-    #[cfg(any(unix, windows))]
-    if interactive.agents_overview && remote.is_none() {
-        if !std::io::stdin().is_terminal() {
-            return Ok(AppExitInfo::fatal("stdin is not a terminal"));
-        }
-        if !std::io::stdout().is_terminal() {
-            return Ok(AppExitInfo::fatal("stdout is not a terminal"));
-        }
-        cloud_config::load_config(&interactive.config_overrides, LoaderOverrides::default())
-            .await
-            .map_err(std::io::Error::other)?;
-        let output = codex_app_server_daemon::run(AppServerLifecycleCommand::Start)
-            .await
-            .map_err(|err| std::io::Error::other(format!(
-                "{err:#}\nThe agents overview requires a shared server. Use codex --no-daemon to work without it."
-            )))?;
-        interactive.managed_daemon = output.backend.is_some();
-    }
-
     let remote_endpoint = match resolve_remote_endpoint(remote, remote_auth_token_env.clone()) {
         Ok(remote_endpoint) => remote_endpoint,
         Err(err) if is_remote_auth_usage_error(&err) => {
@@ -2561,6 +2518,14 @@ async fn run_interactive_tui(
         }
         Err(err) => return Err(err),
     };
+    if interactive.agents_overview && remote_endpoint.is_none() {
+        if !std::io::stdin().is_terminal() {
+            return Ok(AppExitInfo::fatal("stdin is not a terminal"));
+        }
+        if !std::io::stdout().is_terminal() {
+            return Ok(AppExitInfo::fatal("stdout is not a terminal"));
+        }
+    }
     let start_tui = || {
         codex_tui::run_main(
             interactive.clone(),
@@ -3900,20 +3865,6 @@ enabled = true
         exit_info.resume_hint = None;
         let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
         insta::assert_snapshot!(lines.join("\n"), @"Session ID: 123e4567-e89b-12d3-a456-426614174000");
-    }
-
-    #[test]
-    fn format_exit_messages_confirms_archive() {
-        let mut exit_info = sample_exit_info(
-            Some("123e4567-e89b-12d3-a456-426614174000"),
-            /*thread_name*/ None,
-        );
-        exit_info.exit_reason = ExitReason::Archived(exit_info.thread_id.unwrap());
-        let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
-        insta::assert_snapshot!(lines.join("\n"), @"
-        Token usage: total=2 input=0 output=2
-        Session archived: 123e4567-e89b-12d3-a456-426614174000
-        ");
     }
 
     #[test]

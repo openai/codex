@@ -23,7 +23,6 @@ use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::bottom_pane::BottomPaneView;
-use crate::bottom_pane::SelectionDescriptionLayout;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::chatwidget::ThreadInputStateRestoreMode;
@@ -89,58 +88,6 @@ impl Drop for AgentsOverviewState {
 }
 
 impl App {
-    pub(super) fn open_initial_agents_overview(&mut self, app_server: &AppServerSession) {
-        if !self.app_server_target.supports_command_center() {
-            let workload_identity_selected = codex_login::is_workload_identity_selected();
-            self.chat_widget.show_selection_view(SelectionViewParams {
-                title: Some("Shared agents unavailable".to_string()),
-                subtitle: Some(
-                    if workload_identity_selected {
-                        "The agents dashboard is unavailable while workload identity is active."
-                    } else if cfg!(any(unix, windows)) {
-                        "This session isn’t connected to a shared background server."
-                    } else {
-                        "Connect to a remote background server to use the agents dashboard."
-                    }
-                    .to_string(),
-                ),
-                footer_note: (cfg!(any(unix, windows)) && !workload_identity_selected).then(|| {
-                    Line::from(
-                        "Starting a background server will not interrupt or move this session."
-                            .dim(),
-                    )
-                }),
-                items: [
-                    #[cfg(any(unix, windows))]
-                    (!workload_identity_selected).then(|| SelectionItem {
-                        name: "Start background server".to_string(),
-                        description: Some(
-                            "Open `codex agents` in another terminal afterward".to_string(),
-                        ),
-                        actions: vec![Box::new(|tx| tx.send(AppEvent::StartAgentsDaemon))],
-                        dismiss_on_select: true,
-                        ..Default::default()
-                    }),
-                    Some(SelectionItem {
-                        name: "Return to this session".to_string(),
-                        dismiss_on_select: true,
-                        ..Default::default()
-                    }),
-                ]
-                .into_iter()
-                .flatten()
-                .collect(),
-                description_layout: SelectionDescriptionLayout::HideWhenNarrow {
-                    min_description_width: 28,
-                },
-                ..SelectionViewParams::picker()
-            });
-            return;
-        }
-
-        self.open_agents_overview(app_server);
-    }
-
     pub(super) fn open_agents_overview(&mut self, app_server: &AppServerSession) {
         let threads = self
             .agents_overview
@@ -1197,53 +1144,6 @@ impl App {
             self.add_agents_overview_error(format!("Failed to stop background task: {error}"));
             self.refresh_agents_overview_threads(app_server);
         }
-    }
-
-    #[cfg(any(unix, windows))]
-    pub(super) fn start_agents_daemon(&self) {
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = async {
-                let current_executable =
-                    std::env::current_exe().map_err(|error| error.to_string())?;
-                let executable = if current_executable
-                    .file_stem()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .is_some_and(|name| {
-                        if cfg!(windows) {
-                            name.eq_ignore_ascii_case("codex-tui")
-                        } else {
-                            name == "codex-tui"
-                        }
-                    }) {
-                    current_executable.with_file_name(if cfg!(windows) {
-                        "codex.exe"
-                    } else {
-                        "codex"
-                    })
-                } else {
-                    current_executable
-                };
-                let output = tokio::process::Command::new(executable)
-                    .args(["app-server", "daemon", "start"])
-                    .output()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                if output.status.success() {
-                    Ok(())
-                } else {
-                    let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    Err(if message.is_empty() {
-                        format!("daemon process exited with {}", output.status)
-                    } else {
-                        message
-                    })
-                }
-            }
-            .await;
-
-            app_event_tx.send(AppEvent::AgentsDaemonStarted { result });
-        });
     }
 }
 

@@ -77,7 +77,6 @@ async fn foreign_backend_selection_cannot_resume_same_id_or_unarchive() -> Resul
                 config: &app.config,
                 local_settings: &app.local_settings,
             },
-            &AppServerTarget::Embedded,
             &target,
             action,
             Err(color_eyre::eyre::eyre!(

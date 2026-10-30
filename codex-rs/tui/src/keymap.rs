@@ -102,7 +102,7 @@ pub(crate) struct RuntimeKeymap {
 
 #[derive(Clone, Debug)]
 pub(crate) struct AppKeymap {
-    /// Open the daemon-wide agent-session overview.
+    /// Open the agent command center.
     pub(crate) open_agents: Vec<KeyBinding>,
     /// Open transcript overlay.
     pub(crate) open_transcript: Vec<KeyBinding>,
@@ -452,7 +452,7 @@ impl ListKeymap {
     }
 }
 
-/// Task-management shortcuts specific to the shared agents dashboard.
+/// Task-management shortcuts specific to the agents dashboard.
 #[derive(Clone, Debug)]
 pub(crate) struct AgentsKeymap {
     pub(crate) resume: Vec<KeyBinding>,

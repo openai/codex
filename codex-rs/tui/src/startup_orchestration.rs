@@ -26,7 +26,6 @@ pub(super) async fn run_main_inner(
     #[cfg(windows)]
     let elevated_warning = if explicit_remote_endpoint.is_none()
         && !cli.no_daemon
-        && !cli.agents_overview
         && codex_app_server_daemon::is_elevated().map_err(std::io::Error::other)?
     {
         cli.no_daemon = true;
@@ -568,9 +567,9 @@ pub(super) async fn run_main_inner(
     } else {
         None
     };
-    let auto_start_daemon = config.features.enabled(Feature::DaemonAutoStart)
+    let auto_start_daemon = cfg!(any(unix, windows))
+        && (cli.agents_overview || config.features.enabled(Feature::DaemonAutoStart))
         && implicit_connection
-        && !cli.agents_overview
         && !cli.no_daemon
         && !app_server_target.uses_remote_workspace();
     if auto_start_daemon
@@ -608,7 +607,7 @@ pub(super) async fn run_main_inner(
     {
         daemon_exclusion = Some(daemon_startup::WSL_DRVFS_EXCLUSION);
     }
-    let mut managed_daemon = cli.managed_daemon;
+    let mut managed_daemon = false;
     if auto_start_daemon && daemon_exclusion.is_none() {
         let output = startup_draft
             .run_until(async {
@@ -644,19 +643,14 @@ pub(super) async fn run_main_inner(
             daemon_exclusion = Some("this Windows launcher");
         }
     }
-    // The overview must inspect the shared server's agents regardless of local settings.
-    let compatibility_warning = if cli.agents_overview {
-        None
-    } else {
-        daemon_recovery::check(
-            &mut startup_draft,
-            &app_server_target,
-            &config,
-            &cli_kv_overrides,
-            managed_daemon,
-        )
-        .await?
-    };
+    let compatibility_warning = daemon_recovery::check(
+        &mut startup_draft,
+        &app_server_target,
+        &config,
+        &cli_kv_overrides,
+        managed_daemon,
+    )
+    .await?;
     if compatibility_warning.is_some() {
         app_server_target = AppServerTarget::Embedded;
         daemon_exclusion = Some("daemon feature settings");
