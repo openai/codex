@@ -69,6 +69,8 @@ pub use retained_instructions::RetainedInstructionItem;
 pub use retained_instructions::retained_assistant_message;
 
 mod action;
+mod allocation;
+pub use allocation::PreparedElasticContext;
 mod enforcement;
 pub(crate) use enforcement::BudgetPriority;
 pub use enforcement::Budgeted;

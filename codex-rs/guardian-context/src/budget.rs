@@ -112,7 +112,7 @@ pub struct RequestBudget {
     pub existing_context_tokens: usize,
 }
 
-/// Named optional allocation groups, independent of prompt placement.
+/// Optional allocation groups named for the source section that owns the evidence.
 /// The transcript has separate message and tool groups despite sharing one section.
 /// Required evidence, including the action and manual approvals, bypasses these limits.
 #[derive(
@@ -122,28 +122,57 @@ pub struct RequestBudget {
 pub enum ElasticSection {
     TranscriptMessages,
     TranscriptTools,
-    RootMessages,
-    RetainedInstructions,
-    UserAnswers,
-    SenderMessages,
-    ToolDescriptions,
+    #[serde(alias = "root_messages")]
+    RootConversationMessages,
+    #[serde(alias = "retained_instructions")]
+    RetainedUserInstructions,
+    #[serde(alias = "user_answers")]
+    TrustedUserAnswers,
+    #[serde(alias = "sender_messages")]
+    SenderUserMessages,
+    #[serde(
+        alias = "tool_descriptions",
+        alias = "planned_action_tool_descriptions"
+    )]
+    PlannedAction,
     PreviousReviews,
     TrustedTools,
     TrustedSkills,
-    Images,
-    ReplEvidence,
+    #[serde(alias = "images")]
+    TranscriptImages,
+    #[serde(alias = "repl_evidence")]
+    NodeReplEvidence,
     PermissionContext,
 }
 
 /// Per-group elastic limits, validated when decoded; not an activation switch.
 /// Entries configure only optional evidence in the named group. They cannot
-/// downgrade required evidence. Omitted groups have no override; the allocator
-/// must supply its defaults when it is introduced.
+/// downgrade required evidence. Omitted groups use the synchronous entry caps,
+/// reserving one capped entry as their minimum.
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ElasticBudgetConfig {
     #[serde(default)]
     pub sections: std::collections::BTreeMap<ElasticSection, ElasticSectionLimits>,
+}
+
+impl ElasticBudgetConfig {
+    pub(crate) fn section_limits(&self, section: ElasticSection) -> ElasticSectionLimits {
+        self.sections.get(&section).copied().unwrap_or_else(|| {
+            let entries = crate::ContextProfile::synchronous().transcript.entry_limits;
+            let tokens = if section == ElasticSection::TranscriptMessages {
+                entries.message_tokens
+            } else if section == ElasticSection::TranscriptTools {
+                entries.tool_tokens
+            } else {
+                crate::preparation::MAX_INSTRUCTION_TOKENS
+            };
+            ElasticSectionLimits {
+                min_total_section_tokens: tokens,
+                max_section_entry_tokens: tokens,
+            }
+        })
+    }
 }
 
 /// Demand-capped minimum allocation and per-entry text allowance for optional evidence.
@@ -153,7 +182,7 @@ pub struct ElasticBudgetConfig {
 /// Entry caps cannot exceed the existing text-part delivery allowance.
 /// Opaque text messages must be kept or omitted whole, never shortened.
 /// Images stay whole and use section/global space rather than the text entry cap.
-/// Request-level feasibility depends on the active groups and remaining global budget.
+/// Minimum reservations scale down together to fit the available optional budget.
 /// These settings do not change storage bounds or activate elastic allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct ElasticSectionLimits {

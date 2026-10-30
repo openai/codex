@@ -396,7 +396,7 @@ impl ComposedContext {
     }
 }
 
-fn retain_content(
+pub(crate) fn retain_content(
     section: &mut SectionOutput,
     truncations: &mut Vec<TruncationObservation>,
     mut retain: impl FnMut(usize, &mut SectionContent) -> bool,
