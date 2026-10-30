@@ -253,10 +253,7 @@ impl App {
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
             .is_some();
-        if !visible
-            && (self.agents_overview.initialized
-                || !self.app_server_target.supports_command_center())
-        {
+        if !visible && self.agents_overview.initialized {
             return;
         }
         if self.agents_overview.request_id.is_some() {

@@ -158,16 +158,12 @@ async fn misalignment_policy_failure_stops_the_thread_and_renders_once() {
 
     chat.show_misalignment_policy_precaution();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
     assert!(chat.bottom_pane.has_active_view());
 
-    chat.set_command_center_enabled(/*enabled*/ true);
     chat.show_misalignment_policy_precaution();
-    assert_chatwidget_snapshot!(
-        "misalignment_policy_violation_remote",
-        render_bottom_popup(&chat, /*width*/ 80)
-    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentsOverview));

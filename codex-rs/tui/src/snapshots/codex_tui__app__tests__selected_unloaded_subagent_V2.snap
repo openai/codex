@@ -5,4 +5,4 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
 ---
 › Viewing sub-agent — direct input is disabled
 
-  GPT-6.1-Sol default · /tmp/project · child-1 [worker]
+  GPT-6.1-Sol default · /tmp/project · child-1 [worker] · ← for agents

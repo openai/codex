@@ -2,7 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn external_writer_view_quits_with_escape_ctrl_c_or_q() -> Result<()> {
+async fn external_writer_view_quits_with_ctrl_c_or_q() -> Result<()> {
     let (mut app, mut events, _operations) = make_test_app_with_channels().await;
     app.chat_widget.show_external_writer_thread();
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
@@ -27,7 +27,6 @@ async fn external_writer_view_quits_with_escape_ctrl_c_or_q() -> Result<()> {
     );
 
     for key in [
-        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
     ] {
@@ -37,6 +36,41 @@ async fn external_writer_view_quits_with_escape_ctrl_c_or_q() -> Result<()> {
             Ok(AppEvent::Exit(ExitMode::Immediate))
         ));
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn embedded_quit_confirms_stopping_a_running_side_conversation() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let (mut server, mut tui) = prepare_background_exit_test(&app, &mut events, &mut ops).await?;
+    let id = ThreadId::new();
+    app.side_threads
+        .insert(id, SideThreadState::new(ThreadId::new()));
+    app.thread_event_channels.insert(
+        id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(id, test_path_buf("/tmp/project")),
+            vec![test_turn("side-turn", TurnStatus::InProgress, Vec::new())],
+        ),
+    );
+    assert_matches!(
+        app.handle_event(&mut tui, &mut server, AppEvent::Exit(ExitMode::Immediate))
+            .await?,
+        AppRunControl::Continue
+    );
+    insta::assert_snapshot!(
+        "embedded_exit_running_sessions",
+        render_bottom_popup(&app.chat_widget, /*width*/ 90)
+    );
+    app.chat_widget.handle_key_event(KeyCode::Down.into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    assert_matches!(
+        app.handle_event(&mut tui, &mut server, events.try_recv()?)
+            .await?,
+        AppRunControl::Exit(ExitReason::UserRequested)
+    );
+    server.shutdown().await?;
     Ok(())
 }
 
@@ -157,8 +191,6 @@ async fn external_writer_view_respects_remapped_left() -> Result<()> {
         app.app_server_target = AppServerTarget::Remote {
             endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
         };
-        app.chat_widget
-            .set_command_center_enabled(app.app_server_target.supports_command_center());
         app.chat_widget.apply_keymap_update(config.clone(), &keymap);
         app.keymap = keymap.clone();
         if vim {

@@ -1,6 +1,5 @@
 //! Availability of the empty-prompt agents shortcut and its footer hint.
 //!
-//! Sessions connected to a local daemon or remote App Server enable this shortcut.
 //! Draft contents, transient input surfaces, and explicit editor remaps take precedence.
 
 use super::*;

@@ -285,12 +285,7 @@ impl ChatWidget {
                             ..Default::default()
                         },
                         SelectionItem {
-                            name: if self.bottom_pane.command_center_enabled() {
-                                "Yes, delete and return to command center"
-                            } else {
-                                "Yes, delete and exit"
-                            }
-                            .to_string(),
+                            name: "Yes, delete and return to command center".to_string(),
                             description: Some("Permanently delete this session now".to_string()),
                             actions: vec![Box::new(|tx| {
                                 tx.send(AppEvent::DeleteCurrentThread);

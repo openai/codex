@@ -324,6 +324,109 @@ async fn agents_overview_acknowledges_inactive_steer_before_interrupt() -> Resul
     Box::pin(interrupt_after_inactive_steer(SteerSwitch::BetweenTasks)).await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn embedded_session_switch_routes_background_approval_and_restores_draft() -> Result<()> {
+    use app_test_support::MockResponsesConfig;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    let (release_command, gate) = oneshot::channel();
+    let (model, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: Some(gate),
+            body: responses::sse(vec![
+                responses::ev_response_created("first"),
+                responses::ev_function_call("command", "exec_command",
+                    r#"{"cmd":"echo embedded","sandbox_permissions":"require_escalated","justification":"Test background approval"}"#),
+                responses::ev_completed("first"),
+            ]),
+        }],
+        response_chunks("finished"),
+    ]).await;
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let folder = tempdir()?;
+    let cwd = folder.path().canonicalize()?;
+    MockResponsesConfig::new(model.uri())
+        .with_approval_policy("on-request")
+        .with_extra_config(&format!(
+            "[projects.{}]\ntrust_level = 'trusted'",
+            serde_json::to_string(&cwd)?
+        ))
+        .write(&app.config.codex_home)?;
+    app.config = app.rebuild_config_for_cwd(cwd.clone()).await?;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.pause_events();
+    app.start_agents_overview_session(
+        &mut tui,
+        &mut server,
+        Some(cwd.clone().abs()),
+        /*managed_worktree*/ None,
+        /*startup_draft*/ None,
+    )
+    .await?;
+    let first = app.chat_widget.thread_id().expect("first session");
+    submit_prompt(&mut app, "Run the command");
+    app.submit_thread_op(&mut server, first, next_user_turn_event(&mut events))
+        .await?;
+    next_turn_started(&mut app, &mut server, first).await;
+
+    app.open_agents_overview(&server);
+    app.start_agents_overview_session(
+        &mut tui,
+        &mut server,
+        Some(cwd.abs()),
+        /*managed_worktree*/ None,
+        /*startup_draft*/ None,
+    )
+    .await?;
+    let second = app.chat_widget.thread_id().expect("second session");
+    assert_ne!(first, second);
+    app.chat_widget.insert_str("Draft for the second session");
+    release_command.send(()).unwrap();
+    loop {
+        let event = server.next_event().await.expect("connected");
+        let approval = match &event.event {
+            AppServerEvent::ServerRequest(request) => matches!(
+                request.as_ref(),
+                ServerRequest::CommandExecutionRequestApproval { .. }
+            ),
+            AppServerEvent::ServerNotification(n) if matches!(n.as_ref(), ServerNotification::TurnCompleted(done) if done.thread_id == first.to_string()) =>
+            {
+                panic!("turn ended before approval")
+            }
+            _ => false,
+        };
+        app.handle_backend_event(&server, event).await;
+        if approval {
+            break;
+        }
+    }
+    let quit = AppEvent::Exit(ExitMode::ShutdownFirst);
+    assert!(matches!(
+        boxed_future!(app.handle_event(&mut tui, &mut server, quit)).await?,
+        AppRunControl::Continue
+    ));
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 90).contains("Stop sessions and quit"));
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.select_agents_overview_thread(&mut tui, &mut server, first)
+        .await?;
+    drain_active_thread_events(&mut app);
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    while let Ok(event) = events.try_recv() {
+        boxed_future!(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    wait_for_turn_completed(&mut app, &mut server, first).await;
+    app.select_agents_overview_thread(&mut tui, &mut server, second)
+        .await?;
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "Draft for the second session"
+    );
+    server.shutdown().await?;
+    model.shutdown().await;
+    Ok(())
+}
+
 enum SteerSwitch {
     WithinTask,
     BetweenTasks,

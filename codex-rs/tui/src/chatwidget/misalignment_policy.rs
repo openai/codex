@@ -155,16 +155,14 @@ impl ChatWidget {
                 },
             );
         }
-        if self.bottom_pane.command_center_enabled() {
-            items.insert(
-                1,
-                SelectionItem {
-                    name: "Agent command center".to_string(),
-                    actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAgentsOverview))],
-                    ..Default::default()
-                },
-            );
-        }
+        items.insert(
+            1,
+            SelectionItem {
+                name: "Agent command center".to_string(),
+                actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAgentsOverview))],
+                ..Default::default()
+            },
+        );
         self.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(PRECAUTION_VIEW),
             header: Box::new(

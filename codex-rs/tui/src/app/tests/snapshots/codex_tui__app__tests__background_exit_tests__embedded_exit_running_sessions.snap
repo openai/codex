@@ -1,0 +1,13 @@
+---
+source: tui/src/app/tests/background_exit_tests.rs
+assertion_line: 57
+expression: "render_bottom_popup(&app.chat_widget, 90)"
+---
+           Quit and stop running sessions?
+› Ask Cod  Quitting this TUI will stop its running sessions.
+
+  GPT-5.6
+         › 1. Stay in Codex
+           2. Stop sessions and quit
+
+           enter select · esc back

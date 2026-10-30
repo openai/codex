@@ -997,7 +997,7 @@ pub(super) async fn run_main_inner(
     }
 
     // Keep the large app future off the enclosing CLI startup stack during transitions.
-    let app_result = Box::pin(run_ratatui_app(
+    let app_result = crate::boxed_future!(run_ratatui_app(
         cli,
         arg0_paths,
         loader_overrides,

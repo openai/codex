@@ -438,15 +438,11 @@ impl App {
             && key_event.kind == KeyEventKind::Press
         {
             let modifiers = key_event.modifiers;
-            if key_event.code == KeyCode::Esc
-                && modifiers == KeyModifiers::NONE
-                && self.app_server_target.supports_command_center()
-            {
+            if key_event.code == KeyCode::Esc && modifiers == KeyModifiers::NONE {
                 self.open_agents_overview(app_server);
                 return;
             }
             let quit = match key_event.code {
-                KeyCode::Esc => modifiers == KeyModifiers::NONE,
                 KeyCode::Char('q' | 'Q') => {
                     modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT
                 }
@@ -550,12 +546,7 @@ impl App {
             let mut running_side_thread_id =
                 running_thread_id.filter(|thread_id| self.side_threads.contains_key(thread_id));
             if running_side_thread_id.is_none() {
-                for thread_id in self.side_threads.keys().copied() {
-                    if self.active_turn_id_for_thread(thread_id).await.is_some() {
-                        running_side_thread_id = Some(thread_id);
-                        break;
-                    }
-                }
+                running_side_thread_id = self.running_side_thread_id().await;
             }
             if running_thread_id.is_none() {
                 running_thread_id = running_side_thread_id;
@@ -651,7 +642,6 @@ impl App {
                 && key_event.code == KeyCode::Left
                 && key_event.modifiers == KeyModifiers::NONE
                 && self.chat_widget.agents_navigation_key_available()
-                && self.app_server_target.supports_command_center()
             {
                 self.open_agents_overview(app_server);
             }

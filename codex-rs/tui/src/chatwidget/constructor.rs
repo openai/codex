@@ -4,7 +4,9 @@ use super::*;
 
 impl ChatWidget {
     pub(crate) fn new_with_app_event(common: ChatWidgetInit) -> Self {
-        Self::new_with_op_target(common, CodexOpTarget::AppEvent)
+        let mut widget = Self::new_with_op_target(common, CodexOpTarget::AppEvent);
+        widget.bottom_pane.enable_agents_navigation();
+        widget
     }
 
     pub(super) fn new_with_op_target(

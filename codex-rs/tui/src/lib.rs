@@ -1159,6 +1159,21 @@ fn restore_terminal_before_fatal_exit() {
     startup_recovery::print_unsent_draft();
 }
 
+/// Construct a large future outside its caller's poll frame before boxing it.
+/// `Box::pin(large_future())` can still reserve the future's full size on that stack.
+#[inline(never)]
+fn box_future<F: std::future::Future>(create: impl FnOnce() -> F) -> std::pin::Pin<Box<F>> {
+    Box::pin(create())
+}
+
+// Keep boxed call sites shaped like ordinary calls, without closure indentation.
+macro_rules! boxed_future {
+    ($future:expr) => {
+        $crate::box_future(|| $future)
+    };
+}
+pub(crate) use boxed_future;
+
 pub async fn run_main(
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -1169,7 +1184,7 @@ pub async fn run_main(
     startup_recovery::scope(async move {
         // Startup retains a large future for the whole session. Keep it off callers' stacks,
         // which also need room to construct a replacement chat widget on `/new`.
-        match Box::pin(startup_orchestration::run_main_inner(
+        match boxed_future!(startup_orchestration::run_main_inner(
             cli,
             arg0_paths,
             loader_overrides,
@@ -1972,7 +1987,8 @@ async fn run_ratatui_app(
             trust_cwd,
             onboarding::DirectoryTrustOptions {
                 resumed_thread: resumed_thread.as_ref(),
-                ..Default::default()
+                cancel: (!app_server_target.supports_command_center())
+                    .then_some(onboarding::TrustCancelAction::Quit),
             },
             Some(&mut startup_draft),
         )
@@ -2213,7 +2229,7 @@ async fn run_ratatui_app(
 
     // Keep the large event-loop future out of the enclosing startup futures so session
     // transitions have enough stack headroom to rebuild configuration and the chat widget.
-    let app_result = Box::pin(App::run(
+    let app_result = boxed_future!(App::run(
         &mut tui,
         crate::app::backend_sessions::InitialBackendSessions::singleton(app_server),
         config,

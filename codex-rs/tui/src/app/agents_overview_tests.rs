@@ -1519,7 +1519,7 @@ async fn embedded_sessions_offer_to_start_a_background_server_without_migrating(
         .await
         .expect("embedded app server");
 
-    app.open_agents_overview(&app_server);
+    app.open_initial_agents_overview(&app_server);
 
     insta::with_settings!({snapshot_path => "../snapshots"}, {
         insta::assert_snapshot!(

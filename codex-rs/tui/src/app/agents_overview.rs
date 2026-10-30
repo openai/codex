@@ -1,4 +1,4 @@
-//! Daemon-wide overview of recent and locally retained sessions and their subagents.
+//! Overview of recent and locally retained sessions and their subagents.
 //! Tasks owned by another app server open as frozen, read-only history snapshots.
 //! Only the immediate attachment of a dashboard-created task is treated as fresh.
 
@@ -89,7 +89,7 @@ impl Drop for AgentsOverviewState {
 }
 
 impl App {
-    pub(super) fn open_agents_overview(&mut self, app_server: &AppServerSession) {
+    pub(super) fn open_initial_agents_overview(&mut self, app_server: &AppServerSession) {
         if !self.app_server_target.supports_command_center() {
             let workload_identity_selected = codex_login::is_workload_identity_selected();
             self.chat_widget.show_selection_view(SelectionViewParams {
@@ -138,6 +138,10 @@ impl App {
             return;
         }
 
+        self.open_agents_overview(app_server);
+    }
+
+    pub(super) fn open_agents_overview(&mut self, app_server: &AppServerSession) {
         let threads = self
             .agents_overview
             .threads
@@ -245,7 +249,7 @@ impl App {
                 }
             }
             Err(error) => {
-                tracing::warn!(%error, "failed to refresh shared agents");
+                tracing::warn!(%error, "failed to refresh agents overview");
             }
         }
         for notifications in

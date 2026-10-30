@@ -65,10 +65,6 @@ impl ChatWidget {
         self.bottom_pane.prepare_composer_mouse(event)
     }
 
-    pub(crate) fn set_command_center_enabled(&mut self, enabled: bool) {
-        self.bottom_pane.set_command_center_enabled(enabled);
-    }
-
     pub(crate) fn agents_navigation_key_available(&self) -> bool {
         self.bottom_pane.agents_navigation_key_available()
     }

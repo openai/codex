@@ -9,5 +9,6 @@ expression: "format!(\"{errors}\\n{}\", render_bottom_popup(&app.chat_widget, 80
 
 
 › 1. Review findings
-  2. New chat
-  3. Resume another chat
+  2. Agent command center
+  3. New chat
+  4. Resume another chat

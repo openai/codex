@@ -43,7 +43,7 @@ async fn fork_current_session_preserves_conversation_ultra() -> Result<()> {
     assert!(matches!(control, AppRunControl::Continue));
     assert_ne!(app.chat_widget.thread_id(), Some(source_thread_id));
     assert!(
-        !app.agents_overview
+        app.agents_overview
             .dispatched_requests
             .contains_key(&source_thread_id)
     );

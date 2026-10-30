@@ -489,13 +489,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_command_center_enabled(&mut self, enabled: bool) {
-        self.composer.command_center_enabled = enabled;
-        self.request_redraw();
-    }
-
-    pub(crate) fn command_center_enabled(&self) -> bool {
-        self.composer.command_center_enabled
+    pub(crate) fn enable_agents_navigation(&mut self) {
+        self.composer.command_center_enabled = true;
     }
 
     pub(crate) fn agents_navigation_key_available(&self) -> bool {

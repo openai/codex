@@ -320,7 +320,7 @@ pub(crate) enum AppEvent {
     NewAgentsOverviewSession {
         cwd: Option<AbsolutePathBuf>,
     },
-    /// Update the daemon-wide overview after a background thread listing finishes.
+    /// Update the agents overview after a background thread listing finishes.
     AgentsOverviewThreadsLoaded {
         request_id: Uuid,
         result: Result<AgentsOverviewThreadRefresh, String>,
@@ -657,10 +657,10 @@ pub(crate) enum AppEvent {
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
 
-    /// Archive the current active main thread and exit after it succeeds.
+    /// Archive the current active main thread and return to the command center.
     ArchiveCurrentThread,
 
-    /// Permanently delete the current active main thread and exit after it succeeds.
+    /// Permanently delete the current active main thread and return to the command center.
     DeleteCurrentThread,
 
     /// Fork the current session into a new thread, optionally assigning it a name.
@@ -686,6 +686,8 @@ pub(crate) enum AppEvent {
     /// escape hatch that skips shutdown and may drop in-flight work (e.g.,
     /// background tasks, rollout flush, or child process cleanup).
     Exit(ExitMode),
+    /// The user accepted stopping other sessions owned by this embedded server.
+    ConfirmedEmbeddedExit(ExitMode),
 
     /// Apply a choice from the running-task exit menu to its originating thread.
     RunningTaskExit {

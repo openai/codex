@@ -5,4 +5,4 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
 ---
 › Ask Codex to do anything
 
-  GPT-6.1-Sol default · /tmp/project · child-0 [worker]
+  GPT-6.1-Sol default · /tmp/project · child-0 [worker] · ← for agents

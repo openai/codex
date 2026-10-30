@@ -544,23 +544,12 @@ async fn removing_active_cell_invalidates_layout_before_reusing_its_identity() {
 }
 
 #[tokio::test]
-async fn external_writer_notice_offers_command_center_on_shared_servers() {
-    let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500").unwrap();
-    for target in [
-        crate::AppServerTarget::LocalDaemon {
-            allow_embedded_fallback: true,
-            endpoint: endpoint.clone(),
-        },
-        crate::AppServerTarget::Remote { endpoint },
-    ] {
-        let (mut widget, _sender, _events, _operations) =
-            make_chatwidget_manual_with_sender().await;
-        widget.set_command_center_enabled(target.supports_command_center());
-        widget.show_external_writer_thread();
-        for width in [60, 100] {
-            let rendered = crate::chatwidget::tests::render_bottom_popup(&widget, width);
-            insta::assert_snapshot!(format!("external_writer_command_center_{width}"), rendered);
-        }
+async fn external_writer_notice_offers_command_center() {
+    let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
+    widget.show_external_writer_thread();
+    for width in [60, 100] {
+        let rendered = crate::chatwidget::tests::render_bottom_popup(&widget, width);
+        insta::assert_snapshot!(format!("external_writer_command_center_{width}"), rendered);
     }
 }
 

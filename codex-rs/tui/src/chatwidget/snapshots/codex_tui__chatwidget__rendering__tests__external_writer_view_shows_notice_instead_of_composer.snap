@@ -7,4 +7,5 @@ expression: "rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>().join(\"\\
   🔒   This conversation is open in another app  r to retry
       Close it there and press R to continue here.
 
-   r retry   f fork   esc/⌃c/q exit   ⌃t transcript
+   r retry   f fork   ←/esc command center   ⌃c/q exit   ⌃t
+  transcript
