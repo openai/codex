@@ -559,6 +559,37 @@ impl AuthStorageBackend for AutoAuthStorage {
         }
     }
 
+    fn compare_and_save(&self, expected: &AuthDotJson, auth: &AuthDotJson) -> std::io::Result<()> {
+        let keyring_auth = self.keyring_storage.load();
+        let current = match keyring_auth {
+            Ok(Some(current)) => Some(current),
+            Ok(None) => self.file_storage.load()?,
+            Err(ref error) => {
+                // Preserve refreshed fallback tokens without writing to a keyring
+                // whose current generation we could not read, even if it recovers.
+                let mut telemetry = storage_telemetry::telemetry(
+                    AuthCredentialsStoreMode::Auto,
+                    self.keyring_backend_kind,
+                    Operation::Save,
+                );
+                telemetry.record_load_attempt(
+                    storage_telemetry::keyring_store(self.keyring_backend_kind),
+                    &keyring_auth,
+                );
+                telemetry.record_secure_error(error);
+                let result = self.file_storage.compare_and_save(expected, auth);
+                telemetry.record_save_attempt(Store::File, &result);
+                return result;
+            }
+        };
+        if current.as_ref() != Some(expected) {
+            return Err(std::io::Error::other(
+                "Credentials changed before refresh commit.",
+            ));
+        }
+        self.save(auth)
+    }
+
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let mut telemetry = storage_telemetry::telemetry(
             AuthCredentialsStoreMode::Auto,

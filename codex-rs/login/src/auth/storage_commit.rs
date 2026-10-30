@@ -27,10 +27,16 @@ struct CommittedStorage {
 
 impl CommittedStorage {
     fn lock(&self) -> std::io::Result<File> {
-        // File, keyring, and auto writers must coordinate: auto may use the file
-        // fallback. Resolve symlinks so aliases of that file share the same lock.
-        let path =
-            storage_file::resolve_auth_file(get_auth_file(&self.home))?.with_extension("json.lock");
+        let auth_file = get_auth_file(&self.home);
+        // Keyring commits can unlink an intermediate symlink used by another
+        // home, so resolvable chains must share the target's commit lock.
+        let path = match storage_file::resolve_auth_file(auth_file.clone()) {
+            Ok(path) => path,
+            // Unresolvable fallback links can still be removed by keyring commits.
+            Err(_) if self.mode == AuthCredentialsStoreMode::Keyring => auth_file,
+            Err(error) => return Err(error),
+        }
+        .with_extension("json.lock");
         std::fs::create_dir_all(
             path.parent()
                 .ok_or_else(|| std::io::Error::other("credential lock has no parent"))?,
