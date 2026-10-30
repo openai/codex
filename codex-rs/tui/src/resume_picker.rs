@@ -390,6 +390,71 @@ enum PageCursor {
     SourcesPending,
 }
 
+pub(crate) struct ResumePickerAppServers {
+    ordered: Vec<AppServerSession>,
+    displayed_owner: crate::backend_id::BackendId,
+}
+
+impl ResumePickerAppServers {
+    pub(crate) fn new(
+        ordered: Vec<AppServerSession>,
+        displayed_owner: crate::backend_id::BackendId,
+    ) -> Self {
+        assert!(
+            ordered
+                .iter()
+                .any(|session| session.backend_id() == displayed_owner)
+        );
+        Self {
+            ordered,
+            displayed_owner,
+        }
+    }
+
+    fn singleton(session: AppServerSession) -> Self {
+        let displayed_owner = session.backend_id();
+        Self::new(vec![session], displayed_owner)
+    }
+}
+
+struct AppServerPickerBackend {
+    uses_remote_filesystem: bool,
+    session: AppServerSession,
+    archive_request_handle: AppServerRequestHandle,
+    include_non_interactive: bool,
+    raw_reasoning_visibility: RawReasoningVisibility,
+    config: Option<Config>,
+}
+
+fn resume_picker_backends(
+    uses_remote_filesystem: bool,
+    config: &Config,
+    include_non_interactive: bool,
+    app_servers: ResumePickerAppServers,
+) -> (Vec<AppServerPickerBackend>, crate::backend_id::BackendId) {
+    let displayed_owner = app_servers.displayed_owner;
+    let backends = app_servers
+        .ordered
+        .into_iter()
+        .map(|session| {
+            let is_displayed_owner = session.backend_id() == displayed_owner;
+            AppServerPickerBackend {
+                uses_remote_filesystem: if is_displayed_owner {
+                    uses_remote_filesystem
+                } else {
+                    session.uses_remote_workspace()
+                },
+                archive_request_handle: session.request_handle(),
+                config: (!session.uses_remote_workspace()).then(|| config.clone()),
+                session,
+                include_non_interactive,
+                raw_reasoning_visibility: raw_reasoning_visibility(config),
+            }
+        })
+        .collect();
+    (backends, displayed_owner)
+}
+
 struct PickerPage {
     rows: Vec<Row>,
     read_states: HashMap<String, codex_app_server_protocol::ThreadReadState>,
@@ -447,16 +512,41 @@ pub async fn run_resume_picker_with_app_server(
     include_non_interactive: bool,
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
-    let archive_request_handle = app_server.request_handle();
-    run_resume_picker_with_launch_context(
+    run_resume_picker_with_app_servers(
         uses_remote_filesystem,
         tui,
         config,
         local_settings,
         show_all,
         include_non_interactive,
-        app_server,
-        archive_request_handle,
+        ResumePickerAppServers::singleton(app_server),
+    )
+    .await
+}
+
+pub(crate) async fn run_resume_picker_with_app_servers(
+    uses_remote_filesystem: bool,
+    tui: &mut Tui,
+    config: &Config,
+    local_settings: &crate::local_settings::LocalSettings,
+    show_all: bool,
+    include_non_interactive: bool,
+    app_servers: ResumePickerAppServers,
+) -> Result<SessionSelection> {
+    let (backends, displayed_owner) = resume_picker_backends(
+        uses_remote_filesystem,
+        config,
+        include_non_interactive,
+        app_servers,
+    );
+    run_resume_picker_with_launch_context(
+        uses_remote_filesystem,
+        tui,
+        config,
+        local_settings,
+        show_all,
+        backends,
+        displayed_owner,
         SessionPickerLaunchContext::Startup,
     )
     .await
@@ -464,28 +554,32 @@ pub async fn run_resume_picker_with_app_server(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "keep local preferences separate while the legacy Config parameter is still required"
+    reason = "picker configuration follows the existing session entry point"
 )]
-pub async fn run_resume_picker_from_existing_session_with_app_server(
+pub(crate) async fn run_resume_picker_from_existing_session_with_app_servers(
     uses_remote_filesystem: bool,
     tui: &mut Tui,
     config: &Config,
     local_settings: &crate::local_settings::LocalSettings,
     show_all: bool,
     include_non_interactive: bool,
-    app_server: AppServerSession,
-    archive_request_handle: AppServerRequestHandle,
+    app_servers: ResumePickerAppServers,
     current_thread_id: Option<ThreadId>,
 ) -> Result<SessionSelection> {
+    let (backends, displayed_owner) = resume_picker_backends(
+        uses_remote_filesystem,
+        config,
+        include_non_interactive,
+        app_servers,
+    );
     run_resume_picker_with_launch_context(
         uses_remote_filesystem,
         tui,
         config,
         local_settings,
         show_all,
-        include_non_interactive,
-        app_server,
-        archive_request_handle,
+        backends,
+        displayed_owner,
         SessionPickerLaunchContext::ExistingSession { current_thread_id },
     )
     .await
@@ -501,24 +595,36 @@ async fn run_resume_picker_with_launch_context(
     config: &Config,
     local_settings: &crate::local_settings::LocalSettings,
     show_all: bool,
-    include_non_interactive: bool,
-    app_server: AppServerSession,
-    archive_request_handle: AppServerRequestHandle,
+    app_servers: Vec<AppServerPickerBackend>,
+    displayed_owner: crate::backend_id::BackendId,
     launch_context: SessionPickerLaunchContext,
 ) -> Result<SessionSelection> {
+    let has_multiple_backends = app_servers.len() > 1;
+    let Some(app_server) = app_servers
+        .iter()
+        .find(|backend| backend.session.backend_id() == displayed_owner)
+    else {
+        unreachable!("displayed owner must belong to the resume picker's nonempty backend set");
+    };
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
-    let uses_remote_workspace = app_server.uses_remote_workspace();
-    let cwd_filter = picker_cwd_filter(
-        config.cwd.as_path(),
-        /*show_all*/ false,
-        uses_remote_workspace,
-        app_server.remote_cwd_override(),
-    );
+    let uses_remote_workspace = app_server.session.uses_remote_workspace();
+    // A single path cannot describe both local and remote workspaces. Until the
+    // picker owns per-backend filters, a mixed listing starts unfiltered.
+    let cwd_filter = (!has_multiple_backends)
+        .then(|| {
+            picker_cwd_filter(
+                config.cwd.as_path(),
+                /*show_all*/ false,
+                uses_remote_workspace,
+                app_server.session.remote_cwd_override(),
+            )
+        })
+        .flatten();
     let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_filesystem);
     let provider_filter = ProviderFilter::All;
     let runtime_keymap = picker_runtime_keymap(local_settings)?;
     let options = SessionPickerRunOptions {
-        backend_id: app_server.backend_id(),
+        backend_id: app_server.session.backend_id(),
         use_theme_colors: local_settings.tui.status_line_use_colors,
         copy_on_select: local_settings.copy_on_select(&codex_terminal_detection::terminal_info()),
         copy_on_select_clear_selection: local_settings.tui.copy_on_select_clear_selection,
@@ -536,7 +642,7 @@ async fn run_resume_picker_with_launch_context(
             codex_home: local_settings.codex_home.to_path_buf(),
         }),
         keymap: runtime_keymap,
-        initial_page_mode: if uses_remote_workspace {
+        initial_page_mode: if uses_remote_workspace || has_multiple_backends {
             PageLoadMode::StoreDefault
         } else {
             PageLoadMode::StateDbOnly
@@ -545,15 +651,7 @@ async fn run_resume_picker_with_launch_context(
     run_session_picker_with_loader(
         tui,
         options,
-        spawn_app_server_page_loader(
-            uses_remote_filesystem,
-            app_server,
-            archive_request_handle,
-            include_non_interactive,
-            raw_reasoning_visibility(config),
-            (!uses_remote_workspace).then(|| config.clone()),
-            bg_tx,
-        ),
+        spawn_app_server_page_loaders(app_servers, bg_tx),
         bg_rx,
     )
     .await
@@ -807,6 +905,39 @@ fn spawn_app_server_page_loader(
     config: Option<Config>,
     output: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PickerBackground {
+    spawn_app_server_page_loaders(
+        vec![AppServerPickerBackend {
+            uses_remote_filesystem,
+            session: app_server,
+            archive_request_handle,
+            include_non_interactive,
+            raw_reasoning_visibility,
+            config,
+        }],
+        output,
+    )
+}
+
+fn spawn_app_server_page_loaders(
+    backends: Vec<AppServerPickerBackend>,
+    output: mpsc::UnboundedSender<BackgroundEvent>,
+) -> PickerBackground {
+    let mut sources = Vec::with_capacity(backends.len());
+    for backend in backends {
+        sources.push(spawn_app_server_source(backend));
+    }
+    sources::spawn(sources, output)
+}
+
+fn spawn_app_server_source(backend: AppServerPickerBackend) -> sources::Source {
+    let AppServerPickerBackend {
+        uses_remote_filesystem,
+        session: app_server,
+        archive_request_handle,
+        include_non_interactive,
+        raw_reasoning_visibility,
+        config,
+    } = backend;
     let backend_id = app_server.backend_id();
     let (bg_tx, events) = mpsc::unbounded_channel();
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PickerLoadRequest>();
@@ -818,6 +949,7 @@ fn spawn_app_server_page_loader(
             match request {
                 PickerLoadRequest::Page(request) => {
                     let mode = request.mode;
+                    let provider_filter = request.provider_filter;
                     let cwd_filter = page_cwd_filter.for_request(
                         request.cursor.as_ref(),
                         request.cwd_filter.as_deref(),
@@ -834,7 +966,7 @@ fn spawn_app_server_page_loader(
                         cursor,
                         cwd_filter,
                         request.status,
-                        request.provider_filter,
+                        provider_filter,
                         request.sort_key,
                         include_non_interactive,
                         matches!(request.mode, PageLoadMode::StateDbOnly),
@@ -941,15 +1073,14 @@ fn spawn_app_server_page_loader(
         }
     });
 
-    let source = sources::Source {
+    sources::Source {
         backend_id,
         loader: Arc::new(move |request: PickerLoadRequest| {
             let _ = request_tx.send(request);
         }),
         events,
         task,
-    };
-    sources::spawn(vec![source], output)
+    }
 }
 
 /// Returns the human-readable column header for the given sort key.

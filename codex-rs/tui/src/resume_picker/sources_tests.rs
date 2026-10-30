@@ -226,6 +226,51 @@ async fn sources_stream_rows_and_route_actions_to_each_source() {
     assert!(first_requests.recv().await.is_none());
     assert!(second_requests.recv().await.is_none());
 }
+#[tokio::test]
+async fn late_source_failure_clears_pending_cursor() {
+    let (first, mut first_requests, first_events) = source();
+    let (second, mut second_requests, second_events) = source();
+    let (output, mut events) = mpsc::unbounded_channel();
+    let PickerBackground { loader, task } = spawn(vec![first, second], output);
+    loader(request(/*token*/ 1, /*cursor*/ None));
+    first_requests.recv().await.unwrap();
+    second_requests.recv().await.unwrap();
+
+    first_events
+        .send(reply(
+            /*token*/ 1,
+            ThreadId::new(),
+            /*cursor*/ None,
+        ))
+        .unwrap();
+    let BackgroundEvent::PartialPage { page, .. } = next(&mut events).await else {
+        panic!("expected first source page")
+    };
+    assert!(matches!(page.next_cursor, Some(PageCursor::SourcesPending)));
+    assert!(matches!(
+        next(&mut events).await,
+        BackgroundEvent::Page { .. }
+    ));
+
+    second_events
+        .send(BackgroundEvent::Page {
+            request_token: 1,
+            search_token: None,
+            mode: PageLoadMode::StoreDefault,
+            page: Err(std::io::Error::other("source failed")),
+        })
+        .unwrap();
+    assert!(matches!(
+        next(&mut events).await,
+        BackgroundEvent::SourceError {
+            next_cursor: None,
+            ..
+        }
+    ));
+
+    drop(loader);
+    task.await.unwrap();
+}
 
 #[tokio::test]
 async fn late_source_failure_finishes_catalog_progress() {

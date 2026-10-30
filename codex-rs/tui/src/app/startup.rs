@@ -1311,9 +1311,11 @@ See the Codex keymap documentation for supported actions and examples."
                 }
                 if app.pending_open_resume_picker {
                     app.pending_open_resume_picker = false;
-                    match Box::pin(
-                        app.open_resume_picker(tui, backends.session_at_mut(displayed_session)),
-                    )
+                    match Box::pin(app.open_resume_picker_for_backends(
+                        tui,
+                        &mut backends,
+                        displayed_session,
+                    ))
                     .await
                     {
                         Ok(AppRunControl::Continue) => {}

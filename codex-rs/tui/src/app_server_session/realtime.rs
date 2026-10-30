@@ -26,7 +26,7 @@ impl AppServerSession {
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadRealtimeStartResponse = self
-            .client
+            .request_handle
             .request_typed(ClientRequest::ThreadRealtimeStart {
                 request_id,
                 params: ThreadRealtimeStartParams {
@@ -61,7 +61,7 @@ impl AppServerSession {
     pub(crate) async fn thread_realtime_stop(&mut self, thread_id: ThreadId) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadRealtimeStopResponse = self
-            .client
+            .request_handle
             .request_typed(ClientRequest::ThreadRealtimeStop {
                 request_id,
                 params: ThreadRealtimeStopParams {
@@ -80,7 +80,7 @@ impl AppServerSession {
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadRealtimeAppendSpeechResponse = self
-            .client
+            .request_handle
             .request_typed(ClientRequest::ThreadRealtimeAppendSpeech {
                 request_id,
                 params: ThreadRealtimeAppendSpeechParams {

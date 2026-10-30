@@ -4,50 +4,15 @@ use super::*;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 
 impl App {
-    pub(super) async fn open_resume_picker(
+    pub(super) async fn open_resume_picker_for_backends(
         &mut self,
         tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
+        backends: &mut super::backend_sessions::BackendSessions,
+        displayed_session: super::backend_sessions::SessionSlot,
     ) -> Result<AppRunControl> {
-        // Keep embedded-server initialization on its own runtime task as well as opening the
-        // picker on a fresh event-loop iteration; its auth manager needs more stack headroom.
-        let backend_id = app_server.backend_id();
-        let picker_config = self.config.clone();
-        let picker_target = self.app_server_target.clone();
-        let picker_cli_kv_overrides = self.cli_kv_overrides.clone();
-        let picker_loader_overrides = self.loader_overrides.clone();
-        let picker_state_db = self.state_db.clone();
-        let picker_environment_manager = Arc::clone(&self.environment_manager);
-        let picker_app_server = tokio::spawn(async move {
-            crate::start_app_server_for_picker(
-                backend_id,
-                &picker_config,
-                &picker_target,
-                picker_cli_kv_overrides,
-                picker_loader_overrides,
-                picker_state_db,
-                picker_environment_manager,
-            )
-            .await
-        })
-        .await;
-        let picker_app_server = match picker_app_server {
-            Ok(result) => result,
-            Err(err) => Err(err.into()),
-        };
-        let mut picker_app_server = match picker_app_server {
-            Ok(app_server) => app_server,
-            Err(err) => {
-                self.add_session_picker_error(format!("Failed to start TUI session picker: {err}"));
-                self.chat_widget.maybe_send_next_queued_input();
-                return Ok(AppRunControl::Continue);
-            }
-        };
-        picker_app_server = picker_app_server
-            .with_remote_cwd_override(app_server.remote_cwd_override().map(Path::to_path_buf));
-        picker_app_server.model_provider_override = self.harness_overrides.model_provider.clone();
+        let displayed_owner = backends.session_at(displayed_session).backend_id();
         let selection =
-            crate::resume_picker::run_resume_picker_from_existing_session_with_app_server(
+            crate::resume_picker::run_resume_picker_from_existing_session_with_app_servers(
                 crate::uses_remote_workspace_or_environment(
                     &self.app_server_target,
                     &self.environment_manager,
@@ -57,16 +22,22 @@ impl App {
                 &self.local_settings,
                 /*show_all*/ false,
                 /*include_non_interactive*/ false,
-                picker_app_server,
-                app_server.request_handle(),
+                crate::resume_picker::ResumePickerAppServers::new(
+                    backends.picker_views(displayed_owner),
+                    displayed_owner,
+                ),
                 self.primary_thread_id
                     .or(self.current_displayed_thread_id()),
             )
             .await;
         match selection {
             Ok(selection) => {
-                self.apply_resume_picker_selection(tui, app_server, selection)
-                    .await
+                self.apply_resume_picker_selection(
+                    tui,
+                    backends.session_at_mut(displayed_session),
+                    selection,
+                )
+                .await
             }
             Err(err) => {
                 self.add_session_picker_error(format!("Failed to open session picker: {err}"));

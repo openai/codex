@@ -633,6 +633,7 @@ async fn start_app_server(
     .map(AppServerClient::InProcess)
 }
 
+#[cfg(test)]
 pub(crate) async fn start_app_server_for_picker(
     backend_id: crate::backend_id::BackendId,
     config: &Config,

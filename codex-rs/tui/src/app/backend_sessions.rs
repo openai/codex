@@ -94,6 +94,14 @@ impl BackendSessions {
         &self.entries[slot.0].session
     }
 
+    pub(super) fn picker_views(&self, displayed_owner: BackendId) -> Vec<AppServerSession> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.listening || entry.session.backend_id() == displayed_owner)
+            .map(|entry| entry.session.picker_view())
+            .collect()
+    }
+
     pub(super) fn session_at_mut(&mut self, slot: SessionSlot) -> &mut AppServerSession {
         &mut self.entries[slot.0].session
     }

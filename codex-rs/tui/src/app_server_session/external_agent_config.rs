@@ -13,7 +13,7 @@ impl AppServerSession {
         params: ExternalAgentConfigDetectParams,
     ) -> Result<ExternalAgentConfigDetectResponse> {
         let request_id = self.next_request_id();
-        self.client
+        self.request_handle
             .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
             .await
             .wrap_err("externalAgentConfig/detect failed during external agent import")
@@ -29,7 +29,7 @@ impl AppServerSession {
         }
         let request_id = self.next_request_id();
         let response: ExternalAgentConfigImportResponse = self
-            .client
+            .request_handle
             .request_typed(ClientRequest::ExternalAgentConfigImport {
                 request_id,
                 params: ExternalAgentConfigImportParams {

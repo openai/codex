@@ -946,85 +946,50 @@ async fn make_history_test_app() -> Result<(Box<App>, tempfile::TempDir)> {
 }
 
 #[tokio::test]
-async fn in_app_remote_resume_picker_preserves_remote_cwd_filter() -> Result<()> {
+async fn in_app_remote_resume_picker_lists_all_providers_after_provider_switch() -> Result<()> {
     let (mut app, _codex_home) = make_history_test_app().await?;
     let remote_root = tempdir()?;
     let remote_cwd = remote_root.path().join("project");
     std::fs::create_dir(&remote_cwd)?;
-    let (app_server, _requests, active_proxy) =
-        start_recording_remote_app_server(&app.config).await?;
+    let (app_server, requests, proxy) = start_recording_remote_app_server(&app.config).await?;
+    let backend_id = app_server.backend_id();
     let mut app_server = app_server.with_remote_cwd_override(Some(remote_cwd.clone()));
-    app.harness_overrides.model_provider = Some(app.config.model_provider_id.clone());
-
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    app.app_server_target = AppServerTarget::Remote {
-        endpoint: crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?,
-    };
-    let (request_tx, request_rx) = oneshot::channel();
-    let (release_tx, release_rx) = oneshot::channel::<()>();
-    let codex_home = app.config.codex_home.display().to_string();
-    let recorder = tokio::spawn(async move {
-        let (socket, _) = listener.accept().await?;
-        let mut websocket = accept_async(socket).await?;
-        while let Some(frame) = websocket.next().await {
-            let Message::Text(text) = frame? else {
-                continue;
-            };
-            match serde_json::from_str::<JSONRPCMessage>(&text)? {
-                JSONRPCMessage::Request(request) if request.method == "initialize" => {
-                    let response = JSONRPCMessage::Response(JSONRPCResponse {
-                        id: request.id,
-                        result: serde_json::json!({
-                            "userAgent": "codex-tui-test",
-                            "codexHome": codex_home,
-                        }),
-                    });
-                    websocket
-                        .send(Message::Text(serde_json::to_string(&response)?.into()))
-                        .await?;
-                }
-                JSONRPCMessage::Request(request) if request.method == "thread/list" => {
-                    let _ = request_tx.send(request.params.unwrap_or_default());
-                    let _ = release_rx.await;
-                    return Ok::<(), color_eyre::Report>(());
-                }
-                _ => {}
-            }
-        }
-        Err(color_eyre::eyre::eyre!(
-            "picker disconnected before requesting its thread list"
-        ))
-    });
+    // Provider A's conversations must remain visible after switching to provider B.
+    app_server.model_provider_override = Some("provider-b".to_string());
+    let mut backends = crate::app::backend_sessions::BackendSessions::new(app_server);
+    let displayed = backends.slot(backend_id).expect("registered backend");
 
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_alt_screen_enabled(/*enabled*/ false);
     tui.pause_events();
-    let mut picker = Box::pin(app.open_resume_picker(&mut tui, &mut app_server));
+    let mut picker =
+        Box::pin(app.open_resume_picker_for_backends(&mut tui, &mut backends, displayed));
     let params = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), async {
-        tokio::select! {
-            biased;
-            params = request_rx => params.map_err(|_| {
-                color_eyre::eyre::eyre!("picker request recorder closed")
-            }),
-            result = &mut picker => {
-                result?;
-                Err(color_eyre::eyre::eyre!(
-                    "picker exited before requesting its thread list"
-                ))
+        loop {
+            if let Some(params) = recorded_params(&requests, "thread/list").pop() {
+                break Ok::<_, color_eyre::Report>(params);
+            }
+            tokio::select! {
+                result = &mut picker => {
+                    result?;
+                    break Err(color_eyre::eyre::eyre!(
+                        "picker exited before requesting its thread list"
+                    ));
+                }
+                _ = tokio::task::yield_now() => {}
             }
         }
     })
     .await??;
     drop(picker);
-    let _ = release_tx.send(());
-    recorder.await??;
-    app_server.shutdown().await?;
-    active_proxy.await??;
+    backends.shutdown().await?;
+    proxy.await??;
 
     assert_eq!(
         params["cwd"],
         serde_json::Value::String(remote_cwd.display().to_string())
     );
+    assert_eq!(params["modelProviders"], serde_json::json!([]));
     Ok(())
 }
 
