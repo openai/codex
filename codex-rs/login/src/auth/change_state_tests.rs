@@ -1,4 +1,6 @@
 use super::*;
+use crate::auth::storage::AuthStorageBackend;
+use crate::auth::storage::FileAuthStorage;
 use base64::Engine;
 use codex_http_client::DestinationPolicy;
 use codex_http_client::NetworkPolicyController;
@@ -63,6 +65,75 @@ fn auth_owner_generation_distinguishes_refreshes_from_identity_changes() {
             },
         );
         assert_eq!(*legacy_changes.borrow_and_update(), generation);
+    }
+}
+
+#[tokio::test]
+#[serial_test::serial(codex_auth_env)]
+async fn auth_refresh_read_failure_is_transient_and_preserves_network_permit() {
+    let home = tempfile::tempdir().unwrap();
+    let storage = FileAuthStorage::new(home.path().to_path_buf());
+    let initial = chatgpt_auth("user-a", "workspace-a", "token-1");
+    let stored = crate::AuthDotJson {
+        auth_mode: Some(codex_protocol::auth::AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(initial.get_token_data().unwrap()),
+        last_refresh: Some(chrono::Utc::now()),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    };
+    storage.save(&stored).unwrap();
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    let manager = AuthManager::new(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        crate::AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ Some(vec!["workspace-a".to_string()]),
+        /*chatgpt_base_url*/ None,
+        crate::AuthKeyringBackendKind::default(),
+        AuthRouteConfig::from_http_client_factory(
+            crate::test_support::transport_default_auth_route_config()
+                .http_client_factory()
+                .clone()
+                .with_network_policy(policy.clone()),
+        ),
+    )
+    .await;
+    let initial_tokens = manager.auth_cached().unwrap().get_token_data().unwrap();
+    let changes = manager.auth_change_state_receiver();
+    let initial_changes = *changes.borrow();
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    let permit = policy
+        .acquire(&"https://example.com/".parse().unwrap())
+        .unwrap();
+
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(json!({"iat": "private-credential-value"}).to_string());
+    let jwt_auth = json!({"agent_identity": format!("header.{payload}.signature")}).to_string();
+    // Cover interrupted writes and credential values rejected by outer JSON or nested JWT parsing.
+    for contents in [
+        "",
+        r#"{"auth_mode":"private-credential-value"}"#,
+        jwt_auth.as_str(),
+    ] {
+        std::fs::write(home.path().join("auth.json"), contents).unwrap();
+        let error = manager.refresh_token().await.unwrap_err();
+        assert!(matches!(error, RefreshTokenError::Transient(_)));
+        for formatted in [error.to_string(), format!("{error:?}")] {
+            assert!(
+                !formatted.contains("private-credential-value"),
+                "{formatted}"
+            );
+        }
+        assert_eq!(
+            manager.auth_cached().unwrap().get_token_data().unwrap(),
+            initial_tokens
+        );
+        assert_eq!(*changes.borrow(), initial_changes);
+        assert_eq!(permit.check(), Ok(()));
     }
 }
 

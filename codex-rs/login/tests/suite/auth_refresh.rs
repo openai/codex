@@ -1709,6 +1709,23 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
     let mut recovery = ctx.auth_manager.unauthorized_recovery();
     assert!(recovery.has_next());
 
+    std::fs::write(ctx.codex_home.path().join("auth.json"), "")?;
+    let error = recovery.next().await.expect_err("auth read should fail");
+    assert!(matches!(error, RefreshTokenError::Transient(_)));
+    assert_eq!(
+        ctx.auth_manager
+            .auth_cached()
+            .expect("read failure must preserve cached auth")
+            .get_token_data()?,
+        initial_tokens
+    );
+    save_auth(
+        ctx.codex_home.path(),
+        &disk_auth,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+
     recovery.next().await?;
 
     let cached_after = ctx
