@@ -25,6 +25,8 @@
 //!
 //! Preset submenu hints borrow slots and reflow with the composer.
 //!
+//! Shell mode starts when input inserts a leading `!`, never when deletion exposes one.
+//! Literal leading bangs remain ordinary messages on submission and during same-draft restoration.
 //! Vim Replace preserves the overwritten leading grapheme until Backspace removes an absorbed `!`.
 //! The plain-text preset keeps command prefixes literal, including `!`, so Enter and Tab
 //! submit ordinary text without enabling shell mode.
@@ -687,8 +689,15 @@ struct MentionCompletionTarget {
     prebuilt_mentions: Option<Vec<MentionItem>>,
 }
 
+#[derive(Clone, Copy)]
+enum ShellPrefixHandling {
+    Interpret,
+    Literal,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct ComposerDraft {
+    is_bash_mode: bool,
     pub(super) text: String,
     text_elements: Vec<TextElement>,
     local_image_paths: Vec<PathBuf>,
@@ -1580,6 +1589,23 @@ impl ChatComposer {
         local_image_paths: Vec<PathBuf>,
         mention_bindings: Vec<MentionBinding>,
     ) {
+        self.set_text_content_with_shell_prefix(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_bindings,
+            ShellPrefixHandling::Interpret,
+        );
+    }
+
+    fn set_text_content_with_shell_prefix(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        mention_bindings: Vec<MentionBinding>,
+        shell_prefix: ShellPrefixHandling,
+    ) {
         if !self.sparkle.history_preview {
             if local_image_paths.is_empty() {
                 self.note_sparkle_replaced_text(&text);
@@ -1596,7 +1622,10 @@ impl ChatComposer {
         self.draft.pending_pastes.clear();
         self.draft.mention_bindings.clear();
 
-        let (text, text_elements) = self.imported_text_for_textarea(text, text_elements);
+        let (text, text_elements) = match shell_prefix {
+            ShellPrefixHandling::Interpret => self.imported_text_for_textarea(text, text_elements),
+            ShellPrefixHandling::Literal => (text, text_elements),
+        };
         self.draft
             .textarea
             .set_text_with_elements(&text, &text_elements);
@@ -1664,6 +1693,7 @@ impl ChatComposer {
     pub(super) fn snapshot_draft(&self) -> ComposerDraft {
         let (mention_bindings, mention_ranges) = self.snapshot_mention_bindings_with_ranges();
         ComposerDraft {
+            is_bash_mode: self.draft.is_bash_mode,
             text: self.current_text(),
             text_elements: self.current_text_elements(),
             local_image_paths: self.attachments.local_image_paths(),
@@ -1677,6 +1707,7 @@ impl ChatComposer {
 
     pub(super) fn restore_draft(&mut self, draft: ComposerDraft) {
         let ComposerDraft {
+            is_bash_mode,
             text,
             text_elements,
             local_image_paths,
@@ -1687,11 +1718,16 @@ impl ChatComposer {
             cursor,
         } = draft;
         self.set_remote_image_urls(remote_image_urls);
-        self.set_text_content_with_mention_bindings(
+        self.set_text_content_with_shell_prefix(
             text,
             text_elements,
             local_image_paths,
             Vec::new(),
+            if is_bash_mode {
+                ShellPrefixHandling::Interpret
+            } else {
+                ShellPrefixHandling::Literal
+            },
         );
         for (binding, range) in mention_bindings.into_iter().zip(mention_ranges) {
             if let Some(id) = self.draft.textarea.element_id_for_exact_range(range) {
@@ -3290,6 +3326,7 @@ impl ChatComposer {
             return (result, true);
         }
 
+        let visible_shell_command = self.is_bang_shell_command();
         let original_input = self.current_text();
         let original_text_elements = self.current_text_elements();
         let original_mention_bindings = self.snapshot_mention_bindings();
@@ -3302,10 +3339,7 @@ impl ChatComposer {
         if let Some((text, text_elements)) =
             self.prepare_submission_text(/*record_history*/ true)
         {
-            if self.slash_commands_enabled()
-                && text.starts_with('!')
-                && !original_input.trim_start().starts_with('!')
-            {
+            if self.slash_commands_enabled() && text.starts_with('!') && !visible_shell_command {
                 let text = original_input.trim().to_string();
                 let text_elements =
                     Self::trim_text_elements(&original_input, &text, original_text_elements);
@@ -3640,7 +3674,7 @@ impl ChatComposer {
     }
 
     fn is_bang_shell_command(&self) -> bool {
-        self.config.shell_commands_enabled && self.current_text().trim_start().starts_with('!')
+        self.config.shell_commands_enabled && self.draft.is_bash_mode
     }
 
     fn shell_mode_footer_line(&self) -> Option<Line<'static>> {
@@ -3805,6 +3839,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
+        let prefix_insertion_revision = self.draft.textarea.prefix_insertion_revision();
         self.begin_vim_edit(input);
         if self.draft.textarea.is_vim_normal_mode()
             && !self.draft.textarea.is_vim_operator_pending()
@@ -3814,11 +3849,15 @@ impl ChatComposer {
             if let Some(edits) = self.draft.textarea.begin_vim_repeat() {
                 for edit in edits {
                     let elements = self.draft.textarea.element_payloads();
+                    let prefix_insertion_revision = self.draft.textarea.prefix_insertion_revision();
                     if !self.draft.textarea.apply_vim_edit(&edit) {
                         break;
                     }
                     vim_register::sync(self);
-                    self.sync_bash_mode_from_text();
+                    if self.draft.textarea.prefix_insertion_revision() != prefix_insertion_revision
+                    {
+                        self.sync_bash_mode_from_text();
+                    }
                     self.reconcile_deleted_elements(elements);
                 }
                 self.draft.textarea.finish_vim_repeat();
@@ -3827,7 +3866,9 @@ impl ChatComposer {
             self.draft.textarea.input(input);
             vim_register::sync(self);
         }
-        self.sync_bash_mode_from_text();
+        if self.draft.textarea.prefix_insertion_revision() != prefix_insertion_revision {
+            self.sync_bash_mode_from_text();
+        }
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
         }
@@ -5696,6 +5737,71 @@ mod tests {
             .filter(|&(x, y)| buf[(x, y)].symbol().contains(url))
             .count();
         assert_eq!(marked_cells, "PR #20252".chars().count());
+    }
+
+    #[test]
+    fn deleting_prefix_keeps_bang_literal_on_submission() {
+        for disable_paste_burst in [false, true] {
+            for should_queue in [false, true] {
+                let (mut composer, _rx) = new_test_composer();
+                composer.set_disable_paste_burst(disable_paste_burst);
+                composer.set_task_running(should_queue);
+                type_chars_humanlike(&mut composer, &"Yes! I agree.".chars().collect::<Vec<_>>());
+                composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+                for _ in 0..3 {
+                    composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+                }
+                assert!(!composer.draft.is_bash_mode);
+                assert_eq!(composer.current_text(), "! I agree.");
+                // Moving and inserting elsewhere must not reinterpret the exposed bang either.
+                composer.handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+                type_chars_humanlike(&mut composer, &['!']);
+                assert!(!composer.draft.is_bash_mode);
+                assert_eq!(
+                    composer
+                        .handle_key_event(KeyEvent::new(
+                            if should_queue {
+                                KeyCode::Tab
+                            } else {
+                                KeyCode::Enter
+                            },
+                            KeyModifiers::NONE,
+                        ))
+                        .0,
+                    InputResult::Queued {
+                        text: "! I agree.!".to_owned(),
+                        text_elements: Vec::new(),
+                        action: QueuedInputAction::Literal,
+                        pending_pastes: Vec::new(),
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deleting_prefix_keeps_bang_editable_snapshot() {
+        snapshot_composer_state_with_width(
+            "deleting_prefix_keeps_bang_literal",
+            /*width*/ 60,
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_disable_paste_burst(/*disabled*/ true);
+                composer.handle_paste("Yes! I agree.".to_owned());
+                composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+                for _ in 0..3 {
+                    composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+                }
+            },
+        );
+        let (mut composer, _rx) = new_test_composer();
+        composer.handle_paste("Yes! I agree.".to_owned());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        for _ in 0..4 {
+            composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        }
+        assert_eq!(composer.current_text(), " I agree.");
+        assert!(!composer.draft.is_bash_mode);
     }
 
     #[test]
@@ -9965,7 +10071,11 @@ mod tests {
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        fn assert_queued_shell(input: &str, expected_text: &str) {
+        fn assert_queued_bang_input(
+            input: &str,
+            expected_text: &str,
+            expected_action: QueuedInputAction,
+        ) {
             let (tx, mut rx) = unbounded_channel::<AppEvent>();
             let sender = AppEventSender::new(tx);
             let mut composer = ChatComposer::new(
@@ -9976,7 +10086,7 @@ mod tests {
                 /*disable_paste_burst*/ false,
             );
             composer.set_task_running(/*running*/ true);
-            composer.draft.textarea.set_text_clearing_elements(input);
+            composer.handle_paste(input.to_owned());
 
             let (result, _needs_redraw) =
                 composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -9990,7 +10100,7 @@ mod tests {
                 } => {
                     assert_eq!(text, expected_text);
                     assert!(text_elements.is_empty());
-                    assert_eq!(action, QueuedInputAction::RunShell);
+                    assert_eq!(action, expected_action);
                 }
                 other => panic!("expected bang shell input to queue, got {other:?}"),
             }
@@ -10001,9 +10111,9 @@ mod tests {
             );
         }
 
-        assert_queued_shell("!echo hi", "!echo hi");
-        assert_queued_shell("!", "!");
-        assert_queued_shell(" !echo hi", "!echo hi");
+        assert_queued_bang_input("!echo hi", "!echo hi", QueuedInputAction::RunShell);
+        assert_queued_bang_input("!", "!", QueuedInputAction::RunShell);
+        assert_queued_bang_input(" !echo hi", "!echo hi", QueuedInputAction::Literal);
     }
 
     #[test]

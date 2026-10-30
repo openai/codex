@@ -21,8 +21,8 @@ async fn question_turn_end_escapes_command_drafts_before_submission() {
         ("!echo partial", "\\!echo partial", QueuedInputAction::Plain),
         (
             "  !echo partial",
-            "  \\!echo partial",
-            QueuedInputAction::Plain,
+            "  !echo partial",
+            QueuedInputAction::Literal,
         ),
         ("/", "\\/", QueuedInputAction::Plain),
         ("/diff", "\\/diff", QueuedInputAction::Plain),

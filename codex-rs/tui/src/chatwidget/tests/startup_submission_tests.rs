@@ -305,6 +305,7 @@ async fn startup_submission_escape_restores_editing_without_submitting() {
 async fn startup_submission_waits_for_protected_view_and_preserves_paste_provenance() {
     for payload in [
         "  !echo hi\n# visible tail".to_string(),
+        "!echo hi\n# visible tail".to_string(),
         format!("!echo {}", "x".repeat(/*n*/ 1000)),
     ] {
         let (mut source, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -331,7 +332,7 @@ async fn startup_submission_waits_for_protected_view_and_preserves_paste_provena
         chat.input_queue.suppress_queue_autosend = false;
         chat.thread_id = Some(ThreadId::new());
         chat.restore_startup_input_when_ready(&mut draft, &mut confirmed);
-        if payload.starts_with(' ') {
+        if payload == "!echo hi\n# visible tail" {
             assert!(op_rx.try_recv().is_err());
             assert_eq!(chat.bottom_pane.composer_text(), payload);
             chat.handle_key_event(KeyCode::Enter.into());
@@ -339,7 +340,7 @@ async fn startup_submission_waits_for_protected_view_and_preserves_paste_provena
                 if command == payload.trim_start().trim_start_matches('!'));
         } else {
             assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { items, .. } if items == vec![UserInput::Text {
-                text: payload, text_elements: Vec::new(),
+                text: payload.trim().to_string(), text_elements: Vec::new(),
             }]);
         }
         assert_no_submit_op(&mut op_rx);

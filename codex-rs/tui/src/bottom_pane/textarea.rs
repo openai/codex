@@ -143,6 +143,7 @@ pub(crate) struct TextElementSnapshot {
 /// will appear to restore stale text from the user's perspective.
 #[derive(Debug)]
 pub(crate) struct TextArea {
+    prefix_insertion_revision: u64,
     text: String,
     single_line: bool,
     cursor_pos: usize,
@@ -216,6 +217,7 @@ impl TextArea {
         let defaults = RuntimeKeymap::defaults();
         Self {
             text: String::new(),
+            prefix_insertion_revision: 0,
             single_line: false,
             cursor_pos: 0,
             mouse_selection: None,
@@ -470,12 +472,20 @@ impl TextArea {
         &self.text
     }
 
+    /// Changes when an edit inserts text at the beginning, but not when deletion exposes text.
+    pub(super) fn prefix_insertion_revision(&self) -> u64 {
+        self.prefix_insertion_revision
+    }
+
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
         let filtered = self.filter_line_breaks(text);
         let text = filtered.as_ref();
         self.mouse_selection = None;
         self.clear_vim_replace_recovery();
         let pos = self.clamp_pos_for_insertion(pos);
+        if pos == 0 && !text.is_empty() {
+            self.prefix_insertion_revision = self.prefix_insertion_revision.wrapping_add(1);
+        }
         self.text.insert_str(pos, text);
         self.wrap_cache.replace(None);
         if pos <= self.cursor_pos {
@@ -510,6 +520,9 @@ impl TextArea {
         }
         let diff = inserted_len as isize - removed_len as isize;
 
+        if start == 0 && !text.is_empty() {
+            self.prefix_insertion_revision = self.prefix_insertion_revision.wrapping_add(1);
+        }
         self.text.replace_range(range, text);
         self.wrap_cache.replace(None);
         self.preferred_col = None;

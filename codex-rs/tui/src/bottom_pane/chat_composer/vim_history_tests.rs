@@ -803,3 +803,66 @@ fn external_editor_import_preserves_replace_backspace_recovery() {
         ("bc", Some("Replace"))
     );
 }
+
+#[test]
+fn repeated_deletion_leaves_exposed_bang_literal() {
+    let mut composer = vim_composer("Yes! I agree.");
+    keys(&mut composer, "x..");
+    let literal = composer.snapshot_draft();
+    keys(&mut composer, "u");
+    ctrl_r(&mut composer);
+    assert_eq!(composer.snapshot_draft(), literal);
+    assert_eq!(composer.current_text(), "! I agree.");
+    assert!(!composer.draft.is_bash_mode);
+    keys(&mut composer, "x");
+    assert_eq!(composer.current_text(), " I agree.");
+}
+
+#[test]
+fn cancelled_history_search_preserves_literal_bang_draft() {
+    let mut composer = vim_composer("x!echo hello");
+    composer.set_vim_enabled(/*enabled*/ false);
+    composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+    let literal = composer.snapshot_draft();
+    ctrl_r(&mut composer);
+    escape(&mut composer);
+    assert_eq!(composer.snapshot_draft(), literal);
+    assert_eq!(
+        composer
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .0,
+        InputResult::Queued {
+            text: "!echo hello".to_owned(),
+            text_elements: Vec::new(),
+            action: super::super::QueuedInputAction::Literal,
+            pending_pastes: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn editor_actions_insert_shell_prefixes() {
+    let mut composer = vim_composer("x!echo hi");
+    composer.set_vim_enabled(/*enabled*/ false);
+    for (code, modifiers) in [
+        (KeyCode::Right, KeyModifiers::NONE),
+        (KeyCode::Char('k'), KeyModifiers::CONTROL),
+        (KeyCode::Backspace, KeyModifiers::NONE),
+        (KeyCode::Char('y'), KeyModifiers::CONTROL),
+    ] {
+        composer.handle_key_event(KeyEvent::new(code, modifiers));
+    }
+    assert_eq!(
+        (composer.current_text(), composer.draft.is_bash_mode),
+        ("!echo hi".to_owned(), true)
+    );
+
+    for (commands, expected) in [("r!", "!xecho hi"), ("lr!0.", "!!echo hi")] {
+        let mut composer = vim_composer("xxecho hi");
+        keys(&mut composer, commands);
+        assert_eq!(
+            (composer.current_text(), composer.draft.is_bash_mode),
+            (expected.to_owned(), true)
+        );
+    }
+}
