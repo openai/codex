@@ -213,6 +213,7 @@ enum PatCredentialChange {
     Logout,
     Unchanged,
     UnavailableReplacement,
+    SlowReplacement,
 }
 
 async fn assert_pat_registry_reload(change: PatCredentialChange) -> Result<()> {
@@ -271,9 +272,9 @@ async fn assert_pat_registry_reload(change: PatCredentialChange) -> Result<()> {
         PatCredentialChange::Logout | PatCredentialChange::Unchanged
     ) {
         let account = match change {
-            PatCredentialChange::Rotate | PatCredentialChange::UnavailableReplacement => {
-                "account-pat-test"
-            }
+            PatCredentialChange::Rotate
+            | PatCredentialChange::UnavailableReplacement
+            | PatCredentialChange::SlowReplacement => "account-pat-test",
             PatCredentialChange::SwitchAccount => "another-account",
             PatCredentialChange::Logout | PatCredentialChange::Unchanged => unreachable!(),
         };
@@ -297,6 +298,13 @@ async fn assert_pat_registry_reload(change: PatCredentialChange) -> Result<()> {
             "chatgpt_plan_type": "enterprise",
             "chatgpt_account_is_fedramp": false,
         }));
+        // Exceed registration's 10-second deadline while the detached auth
+        // resolution can still finish within its own 30-second budget.
+        let response = if matches!(change, PatCredentialChange::SlowReplacement) {
+            response.set_delay(Duration::from_secs(11))
+        } else {
+            response
+        };
         Mock::given(method("GET"))
             .and(path("/v1/user-auth-credential/whoami"))
             .and(header(
@@ -312,7 +320,8 @@ async fn assert_pat_registry_reload(change: PatCredentialChange) -> Result<()> {
     let expected_registry_requests = match change {
         PatCredentialChange::Rotate
         | PatCredentialChange::Unchanged
-        | PatCredentialChange::UnavailableReplacement => 2,
+        | PatCredentialChange::UnavailableReplacement
+        | PatCredentialChange::SlowReplacement => 2,
         PatCredentialChange::SwitchAccount | PatCredentialChange::Logout => 1,
     };
     let second_bearer = if matches!(change, PatCredentialChange::Unchanged) {
@@ -331,7 +340,8 @@ async fn assert_pat_registry_reload(change: PatCredentialChange) -> Result<()> {
             let result = match change {
                 PatCredentialChange::Rotate
                 | PatCredentialChange::SwitchAccount
-                | PatCredentialChange::UnavailableReplacement => std::fs::write(
+                | PatCredentialChange::UnavailableReplacement
+                | PatCredentialChange::SlowReplacement => std::fs::write(
                     &auth_path,
                     r#"{"personal_access_token":"at-synthetic-replacement-pat"}"#,
                 ),
@@ -434,6 +444,11 @@ async fn remote_exec_server_pat_reuses_metadata_during_authapi_outage() -> Resul
 #[tokio::test]
 async fn remote_exec_server_pat_recovers_after_replacement_metadata_outage() -> Result<()> {
     assert_pat_registry_reload(PatCredentialChange::UnavailableReplacement).await
+}
+
+#[tokio::test]
+async fn remote_exec_server_pat_recovers_after_replacement_metadata_timeout() -> Result<()> {
+    assert_pat_registry_reload(PatCredentialChange::SlowReplacement).await
 }
 
 #[tokio::test]

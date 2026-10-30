@@ -84,32 +84,48 @@ impl AuthProvider for RotatingAuth {
 }
 
 #[tokio::test]
-async fn connect_deadline_covers_initial_auth_refresh_and_retry() -> anyhow::Result<()> {
-    for stage in [AuthStage::Initial, AuthStage::Refresh, AuthStage::Retry] {
-        let server = MockServer::start().await;
-        Mock::given(wiremock::matchers::any())
-            .respond_with(ResponseTemplate::new(401))
-            .mount(&server)
-            .await;
-        let provider = Arc::new(RotatingAuth {
-            stall: Some(stage),
-            ..Default::default()
-        });
-        let mut client = EnvironmentRegistryClient::new(server.uri(), provider.clone())?;
-        client.connect_timeout = Duration::from_secs(60);
-        let key = NoiseChannelIdentity::generate()?.public_key();
-        let task = tokio::spawn(async move { client.connect_environment("env", key).await });
-        provider.reached.notified().await;
-        // Advance only after real socket I/O reached the selected auth stage.
-        tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(61)).await;
-        let result = tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .expect("connect must finish at its original deadline")?;
-        assert!(
-            matches!(result, Err(ExecServerError::EnvironmentRegistryRequest(error)) if error.is_timeout())
-        );
-        tokio::time::resume();
+async fn registry_deadline_covers_initial_auth_refresh_and_retry() -> anyhow::Result<()> {
+    for operation in ["connect", "register"] {
+        for stage in [AuthStage::Initial, AuthStage::Refresh, AuthStage::Retry] {
+            let server = MockServer::start().await;
+            Mock::given(wiremock::matchers::any())
+                .respond_with(ResponseTemplate::new(401))
+                .mount(&server)
+                .await;
+            let provider = Arc::new(RotatingAuth {
+                stall: Some(stage),
+                ..Default::default()
+            });
+            let mut client = EnvironmentRegistryClient::new(server.uri(), provider.clone())?;
+            client.connect_timeout = Duration::from_secs(60);
+            let key = NoiseChannelIdentity::generate()?.public_key();
+            let task = tokio::spawn(async move {
+                if operation == "register" {
+                    client.register_environment("env", &key).await.map(|_| ())
+                } else {
+                    client.connect_environment("env", key).await.map(|_| ())
+                }
+            });
+            provider.reached.notified().await;
+            // Advance only after real socket I/O reached the selected auth stage.
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(61)).await;
+            let result = tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .expect("registry operation must finish at its original deadline")?;
+            if operation == "register" && stage == AuthStage::Initial {
+                assert!(matches!(result, Err(ExecServerError::RequestNotSent(_))));
+            } else {
+                assert!(
+                    matches!(result, Err(ExecServerError::EnvironmentRegistryRequest(error)) if error.is_timeout())
+                );
+            }
+            assert_eq!(
+                server.received_requests().await.unwrap().len(),
+                if stage == AuthStage::Initial { 0 } else { 1 }
+            );
+            tokio::time::resume();
+        }
     }
     Ok(())
 }
@@ -192,7 +208,10 @@ async fn only_401_retries_and_only_once() -> anyhow::Result<()> {
         let provider = Arc::new(RotatingAuth::default());
         let client = EnvironmentRegistryClient::new(server.uri(), provider.clone())?;
         let (response, _) = client
-            .send_authenticated(Request::new(Method::POST, server.uri()))
+            .send_authenticated(
+                Request::new(Method::POST, server.uri()),
+                /*deadline*/ None,
+            )
             .await?;
         assert_eq!(response.status().as_u16(), status);
         assert_eq!(provider.refreshes.load(Ordering::SeqCst), refreshes);

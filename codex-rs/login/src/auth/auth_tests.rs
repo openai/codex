@@ -60,6 +60,118 @@ fn header_auth_exposes_a_valid_chatgpt_account_id() {
 }
 
 #[tokio::test]
+async fn cancelled_refresh_marks_only_started_exchanges_as_unsettled() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".into()),
+            chatgpt_account_id: Some(WORKSPACE_ID_ALLOWED.into()),
+        },
+        home.path(),
+    )?;
+    let server = MockServer::start().await;
+    let storage = FileAuthStorage::new(home.path().to_path_buf());
+    let mut stored = storage.load()?.context("stored credentials")?;
+    stored
+        .tokens
+        .as_mut()
+        .context("stored tokens")?
+        .oauth_provenance = Some(AccountOAuthProvenance {
+        issuer: server.uri(),
+        client_id: "codex-client".into(),
+    });
+    storage.save(&stored)?;
+    let manager = Arc::new(
+        AuthManager::new_from_auth_config(
+            build_config(
+                home.path(),
+                /*forced_login_method*/ None,
+                /*forced_chatgpt_workspace_id*/ None,
+            )
+            .await,
+            /*enable_codex_api_key_env*/ false,
+            /*allowed_auth_modes*/ None,
+        )
+        .await,
+    );
+    let initial = manager.auth_cached().context("initial auth")?;
+
+    // Poll directly while the guard is held, then cancel before any OAuth request.
+    let guard = manager.refresh_lock.acquire().await?;
+    let mut waiting = Box::pin(manager.refresh_token_if_unchanged(&initial));
+    assert!(
+        waiting
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(
+                std::task::Waker::noop(),
+            ))
+            .is_pending()
+    );
+    drop(waiting);
+    assert!(!manager.is_chatgpt_refresh_unsettled(&initial)?);
+    assert!(server.received_requests().await.unwrap().is_empty());
+    drop(guard);
+
+    let received = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::clone(&received);
+    Mock::given(path("/oauth/token"))
+        .respond_with(move |_: &wiremock::Request| {
+            notify.notify_one();
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(60))
+                .set_body_json(json!({"access_token": "late", "refresh_token": "late-refresh"}))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let refreshing = Arc::clone(&manager);
+    let task = tokio::spawn(async move { refreshing.refresh_token_from_authority().await });
+    received.notified().await;
+    assert!(manager.is_chatgpt_refresh_unsettled(&initial)?);
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(manager.is_chatgpt_refresh_unsettled(&initial)?);
+
+    // A later known failure cannot resolve an earlier cancelled exchange.
+    server.reset().await;
+    Mock::given(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert!(manager.refresh_token_from_authority().await.is_err());
+    assert!(manager.is_chatgpt_refresh_unsettled(&initial)?);
+
+    // A replacement is usable, and a completed refresh settles its own generation.
+    server.reset().await;
+    Mock::given(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "completed", "refresh_token": "completed-refresh",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tokens = stored.tokens.as_mut().context("replacement tokens")?;
+    tokens.access_token = "replacement".into();
+    tokens.refresh_token = "replacement-refresh".into();
+    storage.save(&stored)?;
+    manager.reload().await;
+    let replacement = manager.auth_cached().context("replacement auth")?;
+    assert!(!manager.is_chatgpt_refresh_unsettled(&replacement)?);
+    manager.refresh_token_from_authority().await?;
+    assert!(!manager.is_chatgpt_refresh_unsettled(&replacement)?);
+    assert_eq!(
+        manager
+            .auth_cached()
+            .context("refreshed auth")?
+            .get_token()?,
+        "completed"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn refresh_without_id_token() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let fake_jwt = write_auth_file(

@@ -3,9 +3,9 @@
 //! ChatGPT credentials may rotate while an executor is idle. Reload them for
 //! registry requests while retaining the identity that registered the executor.
 //! Failed credential reads block headers until revalidation, without counting as logout.
+//! Quarantine begins with the OAuth exchange, after credential reads and refresh-guard waits.
 
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -55,7 +55,6 @@ pub(super) fn chatgpt_auth_provider(
         fedramp_account: expected_auth.is_fedramp_account(),
         unidentified_headers,
         resolution_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
-        uncertain_refresh: Arc::new(Mutex::new(None)),
         headers_valid: Arc::new(AtomicBool::new(true)),
     }))
 }
@@ -70,7 +69,6 @@ struct ReloadingChatgptAuthProvider {
     fedramp_account: bool,
     unidentified_headers: Option<HeaderMap>,
     resolution_lock: Arc<Semaphore>,
-    uncertain_refresh: Arc<Mutex<Option<codex_login::TokenData>>>,
     headers_valid: Arc<AtomicBool>,
 }
 
@@ -93,13 +91,13 @@ impl ReloadingChatgptAuthProvider {
                 "executor credential has an empty bearer".to_string(),
             ));
         }
-        let uncertain = self.uncertain_refresh.lock().map_err(|_| {
-            AuthError::Transient("executor authentication is unavailable".to_string())
-        })?;
-        if uncertain
-            .as_ref()
-            .is_some_and(|previous| auth.get_token_data().as_ref().ok() == Some(previous))
-        {
+        let uncertain = self
+            .auth_manager
+            .is_chatgpt_refresh_unsettled(&auth)
+            .map_err(|_| {
+                AuthError::Transient("executor authentication is unavailable".to_string())
+            })?;
+        if uncertain {
             return Err(AuthError::Transient(
                 "executor refresh outcome is unknown; replace or renew stored credentials"
                     .to_string(),
@@ -171,7 +169,6 @@ impl ReloadingChatgptAuthProvider {
         // that generation until another login/refresh supplies different credentials.
         tokio::spawn(async move {
             let _guard = guard;
-            let mut attempted_refresh = None;
             let result = tokio::time::timeout(Duration::from_secs(30), async {
                 provider
                     .auth_manager
@@ -182,12 +179,10 @@ impl ReloadingChatgptAuthProvider {
                             "executor credential storage or hydration is unavailable".to_string(),
                         )
                     })?;
-                let auth = provider.auth_manager.auth_cached();
-                let current = provider.checked_headers(auth.clone())?;
+                let current = provider.checked_headers(provider.auth_manager.auth_cached())?;
                 if provider.unidentified_headers.is_some() {
                     return Ok(current);
                 }
-                attempted_refresh = auth.as_ref().and_then(|auth| auth.get_token_data().ok());
                 if let Some(rejected) = rejected_headers {
                     if !current
                         .iter()
@@ -198,8 +193,6 @@ impl ReloadingChatgptAuthProvider {
                 } else {
                     provider.auth_manager.auth().await;
                 }
-                // A later storage timeout is not an interrupted OAuth exchange.
-                attempted_refresh = None;
                 // auth() deliberately falls back to a snapshot on refresh errors.
                 // Re-read the selected source before dispatch: logout, replacement,
                 // or failed hydration must never authorize that fallback snapshot.
@@ -217,19 +210,14 @@ impl ReloadingChatgptAuthProvider {
             .await;
             let result = match result {
                 Ok(result) => result,
-                Err(_) => {
-                    if let Some(attempted) = attempted_refresh
-                        && let Ok(mut uncertain) = provider.uncertain_refresh.lock()
-                    {
-                        *uncertain = Some(attempted);
-                    }
-                    Err(AuthError::Transient(
-                        "executor credential resolution timed out; retry after repairing credentials"
-                            .to_string(),
-                    ))
-                }
+                Err(_) => Err(AuthError::Transient(
+                    "executor credential resolution timed out; retry after repairing credentials"
+                        .to_string(),
+                )),
             };
-            provider.headers_valid.store(result.is_ok(), Ordering::Release);
+            provider
+                .headers_valid
+                .store(result.is_ok(), Ordering::Release);
             result
         })
         .await
