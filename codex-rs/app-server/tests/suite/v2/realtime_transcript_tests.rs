@@ -128,10 +128,9 @@ async fn websocket_v3_retains_both_speakers_from_same_frame_at_handoff() -> Resu
         RealtimeTestVersion::V1,
         main_loop_responses(vec![create_final_assistant_message_sse_response("Done.")?]),
         realtime_sideband(vec![open_realtime_sideband_connection(vec![vec![
-            session_started("bounded-transcript"),
+            session_started("interleaved-transcript"),
             json!({"type": "input_transcript.added", "start_ms": 0, "end_ms": 200, "item": {"text": old_user}}),
             json!({"type": "output_transcript.added", "start_ms": 200, "end_ms": 400, "item": {"text": assistant}}),
-            // Input alone crosses the cap before output receives the same frame age.
             json!({"type": "input_transcript.added", "start_ms": 400, "end_ms": 600, "item": {"text": newest_user}}),
             json!({"type": "output_transcript.added", "start_ms": 400, "end_ms": 600, "item": {"text": assistant_suffix}}),
             json!({"type": "turn.done", "turn": {"role": "assistant", "transcript": assistant_final}}),
@@ -196,9 +195,8 @@ async fn websocket_v3_retains_both_speakers_from_same_frame_at_handoff() -> Resu
                 "item_id": "handoff",
                 "input_transcript": user,
                 "active_transcript": [
-                    {"role": "user", "text": format!("…{}{newest_user}", "u".repeat(3874))},
-                    {"role": "assistant", "text": format!("…{}{assistant_suffix}", "a".repeat(3870))},
                     {"role": "user", "text": user},
+                    {"role": "assistant", "text": assistant_final},
                 ],
             }),
         },
@@ -208,11 +206,9 @@ async fn websocket_v3_retains_both_speakers_from_same_frame_at_handoff() -> Resu
         .await?;
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
-    // The 4 KiB input prefix omits the latest instruction. It must survive the transcript tail,
-    // even when the preceding assistant entry alone fills that field's 4 KiB cap.
     assert!(response_request_contains_text(
         &requests[0],
-        &format!("{newest_user}</transcript_delta>\n</realtime_delegation>"),
+        &format!("<transcript_delta>user: {user}\nassistant: {assistant_final}</transcript_delta>"),
     ));
     harness.shutdown().await;
     Ok(())

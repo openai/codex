@@ -107,7 +107,7 @@ pub(super) fn spawn_webrtc_sideband_input_task(
                         "failed to connect realtime sideband: {mapped_error}"
                     );
                     let _ = events_tx
-                        .send(RealtimeEvent::Error(mapped_error.to_string()))
+                        .send((RealtimeEvent::Error(mapped_error.to_string()), None))
                         .await;
                     break;
                 }

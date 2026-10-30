@@ -319,3 +319,87 @@ async fn failed_attachment_leaves_core_disconnected() -> Result<()> {
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
+
+#[test_case::test_case(true; "record unfinished tail")]
+#[test_case::test_case(false; "drop unfinished tail")]
+#[tokio::test]
+async fn completed_turns_reach_history_before_the_next_handoff(flush_tail: bool) -> Result<()> {
+    use codex_protocol::protocol::RealtimeEvent;
+    use core_test_support::responses;
+    use core_test_support::wait_for_event;
+
+    let api = start_mock_server().await;
+    let replies = ["handoff", "text"].map(|id| {
+        responses::sse(vec![
+            responses::ev_response_created(id),
+            responses::ev_completed(id),
+        ])
+    });
+    let model = responses::mount_sse_sequence(&api, replies.into()).await;
+    let test = test_codex().build_with_auto_env(&api).await?;
+    let mut sideband = Sideband::new().await?;
+    let mut params = params("transcript", &sideband.url);
+    params.flush_transcript_tail_on_session_end = flush_tail;
+    let (reply, attached) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttach { params, reply })
+        .await?;
+    let connection = sideband.connected().await;
+    connection
+        .accept
+        .send(/*value*/ true)
+        .expect("pending handshake");
+    timeout(Duration::from_secs(10), attached).await???;
+    let send = |event| connection.events.send(event);
+
+    let speech = format!("{}&", "u".repeat(12 * 1024));
+    let final_text = format!("{speech}!");
+    send(json!({"type":"input_transcript.added", "item":{"text":speech}}))?;
+    send(json!({"type":"turn.done", "turn":{"role":"assistant","transcript":"yes"}}))?;
+    send(json!({"type":"turn.done", "turn":{"role":"user","transcript":final_text}}))?;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::RealtimeConversationRealtime(event) if matches!(event.payload, RealtimeEvent::InputTranscriptDone(_)))).await;
+    assert!(model.requests().is_empty());
+
+    // The handoff repeats the user input. Only the new partial belongs in its transcript.
+    let partial = "p".repeat(12 * 1024);
+    send(json!({"type":"output_transcript.added", "item":{"text":partial}}))?;
+    send(
+        json!({"type":"delegation.created","item":{"id":"handoff","type":"delegation","target":"client","content":[{"type":"input_text","text":final_text}]}}),
+    )?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let transcript = |request: ResponsesRequest| {
+        request
+            .message_input_texts("user")
+            .into_iter()
+            .filter(|text| text.contains("<transcript_delta>"))
+            .collect::<Vec<_>>()
+    };
+    let completed = transcript(model.single_request());
+    assert_eq!(completed.len(), 2);
+    let expected = format!(
+        "<transcript_delta>user: {}\nassistant: yes</transcript_delta>",
+        final_text.replace('&', "&amp;")
+    );
+    assert!(completed[0].contains("<input></input>") && completed[0].contains(&expected));
+    assert!(completed[1].contains(&format!(
+        "<transcript_delta>assistant: {partial}</transcript_delta>"
+    )));
+
+    let unfinished = "a".repeat(12 * 1024);
+    send(json!({"type":"output_transcript.added", "item":{"text":unfinished}}))?;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::RealtimeConversationRealtime(event) if matches!(event.payload, RealtimeEvent::OutputTranscriptDelta(_)))).await;
+    detach(&test, "transcript").await?;
+    test.submit_text_turn("continue").await?;
+    let after_close = transcript(model.last_request().expect("text turn"));
+    assert_eq!(after_close.len(), completed.len() + usize::from(flush_tail));
+    assert_eq!(&after_close[..completed.len()], completed.as_slice());
+    if flush_tail {
+        assert!(after_close[completed.len()].contains(&format!(
+            "<transcript_delta>assistant: {unfinished}</transcript_delta>"
+        )));
+    }
+    Ok(())
+}

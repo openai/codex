@@ -307,7 +307,7 @@ fn wraps_handoff_with_transcript_delta() {
         ],
     };
     assert_eq!(
-        realtime_delegation_from_handoff(&handoff),
+        realtime_delegation_from_handoff(&handoff, /*preserve_transcript*/ false),
         Some(
             "<realtime_delegation>\n  <input>delegate this</input>\n  <transcript_delta>user: hello\nassistant: hi there</transcript_delta>\n</realtime_delegation>"
                 .to_string()
@@ -347,6 +347,7 @@ fn wraps_realtime_delegation_input() {
             "hello",
             /*transcript_delta*/ None,
             RealtimeDelegationSource::Handoff,
+            /*preserve_transcript*/ false,
         ),
         "<realtime_delegation>\n  <input>hello</input>\n</realtime_delegation>"
     );
@@ -359,6 +360,7 @@ fn wraps_realtime_delegation_input_with_xml_escaping() {
             "use a < b && c > d",
             Some("saw <that>"),
             RealtimeDelegationSource::Handoff,
+            /*preserve_transcript*/ false,
         ),
         "<realtime_delegation>\n  <input>use a &lt; b &amp;&amp; c &gt; d</input>\n  <transcript_delta>saw &lt;that&gt;</transcript_delta>\n</realtime_delegation>"
     );
@@ -371,6 +373,7 @@ fn wraps_realtime_delegation_input_with_xml_escaping_without_transcript() {
             "use a < b && c > d",
             /*transcript_delta*/ None,
             RealtimeDelegationSource::Handoff,
+            /*preserve_transcript*/ false,
         ),
         "<realtime_delegation>\n  <input>use a &lt; b &amp;&amp; c &gt; d</input>\n</realtime_delegation>"
     );
@@ -384,6 +387,7 @@ fn bounds_realtime_delegation_fields_and_keeps_latest_transcript() {
         &input,
         Some(&transcript),
         RealtimeDelegationSource::Handoff,
+        /*preserve_transcript*/ false,
     );
 
     assert!(rendered.len() < 9 * 1024);

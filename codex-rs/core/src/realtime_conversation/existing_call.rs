@@ -1,5 +1,6 @@
 use super::RealtimeHandoffState;
 use super::RealtimeInputChannels;
+use super::RealtimeOutput;
 use super::RealtimeSessionKind;
 use super::RealtimeSidebandSessionInitialization;
 use super::RealtimeTranscriptTailFlush;
@@ -7,7 +8,6 @@ use super::RealtimeWebrtcSidebandInputTask;
 use super::spawn_webrtc_sideband_input_task;
 use crate::client::ModelClient;
 use async_channel::Sender;
-use codex_api::RealtimeEvent;
 use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeTranscriptState;
@@ -28,7 +28,7 @@ pub(super) struct ExistingCallAttachment {
     pub(super) call_id: String,
     pub(super) extra_headers: HeaderMap,
     pub(super) input_channels: RealtimeInputChannels,
-    pub(super) events_tx: Sender<RealtimeEvent>,
+    pub(super) events_tx: Sender<RealtimeOutput>,
     pub(super) handoff_state: RealtimeHandoffState,
     pub(super) session_kind: RealtimeSessionKind,
     pub(super) event_parser: RealtimeEventParser,

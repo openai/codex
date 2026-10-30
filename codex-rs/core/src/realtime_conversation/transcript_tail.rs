@@ -1,4 +1,4 @@
-//! Saves terminal speech in model and client history before realtime closure, without inference.
+//! Records realtime transcript chunks in model and client history without inference.
 
 use crate::session::new_submission_id;
 use crate::session::session::Session;
