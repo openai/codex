@@ -679,6 +679,7 @@ crate.annotation(
 # The musl CLI's allocator needs declared native tools and consistent header flags.
 crate.annotation(
     build_script_env = {
+        "JEMALLOC_SYS_WITH_MALLOC_CONF": "narenas_ratio:0.25",
         "MAKE": "$${pwd}/$(MAKE)",
         "NM": "$${pwd}/$(execpath @llvm//tools:llvm-nm)",
         "RANLIB": "$${pwd}/$(execpath @llvm//tools:llvm-ranlib)",
