@@ -663,6 +663,7 @@ fn validate_cli_overrides_strictly(
 ) -> io::Result<()> {
     let _guard = AbsolutePathBufGuard::new(base_dir);
     let ignored_path = ignored_toml_value_fields::<ConfigToml>(cli_overrides_layer.clone())
+        .unwrap_or_default()
         .into_iter()
         .chain(unknown_tui_toml_value_path(cli_overrides_layer))
         .next()
@@ -1634,7 +1635,7 @@ pub fn resolve_relative_paths_in_config_toml(
     }
     // The typed round trip resolves AbsolutePathBuf fields against this layer's directory.
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    let Ok(resolved) = value_from_config_toml.clone().try_into::<ConfigToml>() else {
+    let Ok(resolved) = ConfigToml::try_from(value_from_config_toml.clone()) else {
         return Ok(value_from_config_toml);
     };
     drop(_guard);

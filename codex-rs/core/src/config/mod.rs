@@ -1634,7 +1634,7 @@ impl ConfigBuilder {
 
 async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<ConfigToml> {
     // The loader resolves paths relative to each layer's file before deserialization.
-    match layers.effective_config().try_into() {
+    match ConfigToml::try_from(layers.effective_config()) {
         Ok(config_toml) => Ok(config_toml),
         Err(err) => {
             if let Some(config_error) = codex_config::first_layer_config_error::<ConfigToml>(
@@ -2240,8 +2240,7 @@ pub fn deserialize_config_toml_with_base(
     // This guard ensures that any relative paths that is deserialized into an
     // [AbsolutePathBuf] is resolved against `config_base_dir`.
     let _guard = AbsolutePathBufGuard::new(config_base_dir);
-    root_value
-        .try_into()
+    ConfigToml::try_from(root_value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
@@ -4924,11 +4923,8 @@ impl Config {
         &self,
         profile_name: &str,
     ) -> std::io::Result<PermissionProfileToml> {
-        let cfg: ConfigToml = self
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .map_err(|err| {
+        let cfg =
+            ConfigToml::try_from(self.config_layer_stack.effective_config()).map_err(|err| {
                 std::io::Error::new(
                     ErrorKind::InvalidInput,
                     format!(
@@ -4952,11 +4948,8 @@ impl Config {
     ) -> std::io::Result<Option<NetworkProxySpec>> {
         let profile_allows_network_proxy =
             profile_allows_configured_network_proxy(permission_profile);
-        let cfg: ConfigToml = self
-            .config_layer_stack
-            .effective_config()
-            .try_into()
-            .map_err(|err| {
+        let cfg =
+            ConfigToml::try_from(self.config_layer_stack.effective_config()).map_err(|err| {
                 std::io::Error::new(
                     ErrorKind::InvalidInput,
                     format!(

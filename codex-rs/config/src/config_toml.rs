@@ -846,6 +846,16 @@ pub fn effective_sandbox_mode(
     }
 }
 
+impl TryFrom<toml::Value> for ConfigToml {
+    type Error = toml::de::Error;
+
+    // Keep the generated TOML deserializer in this crate, shared by all callers.
+    #[inline(never)]
+    fn try_from(value: toml::Value) -> Result<Self, Self::Error> {
+        value.try_into()
+    }
+}
+
 impl ConfigToml {
     /// Derive the effective permission profile from sandbox config.
     ///

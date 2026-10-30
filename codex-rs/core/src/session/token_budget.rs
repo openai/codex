@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::config::TokenBudgetConfig;
 use crate::config::resolve_token_budget_config;
 use crate::context::ContextualUserFragment;
+use codex_config::config_toml::ConfigToml;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::account::PlanType;
@@ -42,10 +43,7 @@ pub(super) fn apply_experimental_context(
     }
 
     if config.token_budget.is_none() {
-        let config_toml = config
-            .config_layer_stack
-            .effective_config()
-            .try_into()
+        let config_toml = ConfigToml::try_from(config.config_layer_stack.effective_config())
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
         config.token_budget = resolve_token_budget_config(&config_toml, &config.features)?;
     }

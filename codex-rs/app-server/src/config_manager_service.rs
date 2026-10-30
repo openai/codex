@@ -145,9 +145,7 @@ impl ConfigManager {
             })?,
         };
 
-        let effective = layers.effective_config();
-        let mut effective_config_toml: ConfigToml = effective
-            .try_into()
+        let mut effective_config_toml = ConfigToml::try_from(layers.effective_config())
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
         layers
             .requirements_toml()
@@ -861,7 +859,7 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
 }
 
 fn validate_config(value: &TomlValue) -> anyhow::Result<()> {
-    let config: ConfigToml = value.clone().try_into()?;
+    let config = ConfigToml::try_from(value.clone())?;
     if config.approval_policy == Some(AskForApproval::UnlessTrusted) {
         anyhow::bail!(
             "approval_policy = \"untrusted\" is no longer supported; remove this setting"
