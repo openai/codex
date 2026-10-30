@@ -8,6 +8,7 @@ use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::tools::approvals::ApprovalAction;
 use crate::tools::approvals::ApprovalContext;
+use crate::tools::approvals::ApprovalResolution;
 use crate::tools::events::truncate_rejection_message;
 use crate::tools::sandboxing::ToolError;
 use codex_features::Feature;
@@ -47,12 +48,15 @@ use std::sync::OnceLock as SyncOnceLock;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::warn;
 use uuid::Uuid;
 
+const REASON_NOT_ALLOWED: &str = "not_allowed";
 const ABANDONED_NETWORK_APPROVAL_MESSAGE: &str =
     "network approval was cancelled before a decision was returned";
 
@@ -204,7 +208,7 @@ impl PendingApprovalDecision {
     fn to_network_decision(self) -> NetworkDecision {
         match self {
             Self::AllowOnce | Self::AllowForSession => NetworkDecision::Allow,
-            Self::Deny => NetworkDecision::deny("not_allowed"),
+            Self::Deny => NetworkDecision::deny(REASON_NOT_ALLOWED),
         }
     }
 }
@@ -268,11 +272,17 @@ struct NetworkApprovalCallState {
     call_outcomes: HashMap<String, String>,
 }
 
+#[derive(Default)]
+struct PendingNetworkApprovals {
+    executions: HashMap<PendingHostApprovalKey, Arc<PendingHostApproval>>,
+    manual_prompts: HashMap<HostApprovalKey, Arc<Semaphore>>,
+}
+
 pub(crate) struct NetworkApprovalService {
     // Pending-request cleanup must publish a tool outcome synchronously before cancelling it.
     calls: SyncMutex<NetworkApprovalCallState>,
     // Owner cleanup runs from Drop, so this lock cannot require an async task.
-    pending_host_approvals: SyncMutex<HashMap<PendingHostApprovalKey, Arc<PendingHostApproval>>>,
+    pending_host_approvals: SyncMutex<PendingNetworkApprovals>,
     // Keep persisted session policy and the in-memory approval caches in the same order.
     session_policy_commit_lock: Mutex<()>,
     session_approved_hosts: Mutex<HashSet<HostApprovalKey>>,
@@ -291,6 +301,7 @@ struct PendingHostApprovalOwner<'a> {
     disconnect: Option<NetworkRequestDisconnect>,
     cancellation: Option<NetworkRequestCancellation>,
     decision_on_drop: PendingApprovalDecision,
+    prompt_permit: Option<OwnedSemaphorePermit>,
     completed: bool,
 }
 
@@ -309,7 +320,59 @@ impl<'a> PendingHostApprovalOwner<'a> {
             disconnect: None,
             cancellation: None,
             decision_on_drop: PendingApprovalDecision::Deny,
+            prompt_permit: None,
             completed: false,
+        }
+    }
+
+    /// Keep the endpoint's prompt until this execution commits or abandons its decision.
+    async fn review_user_prompt(
+        &mut self,
+        session: &Session,
+        turn: &TurnContext,
+        timing_call_id: Option<&str>,
+        policy_denial: &str,
+        prompt: impl Future<Output = ApprovalResolution>,
+    ) -> ApprovalResolution {
+        let queued = {
+            let mut approvals = self
+                .service
+                .pending_host_approvals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let queue = approvals
+                .manual_prompts
+                .entry(self.key.host.clone())
+                .or_insert_with(|| Arc::new(Semaphore::new(/*permits*/ 1)));
+            if let Ok(permit) = Arc::clone(queue).try_acquire_owned() {
+                self.prompt_permit = Some(permit);
+                None
+            } else {
+                Some((
+                    Arc::clone(queue),
+                    session.hold_queued_network_approval(turn, timing_call_id),
+                ))
+            }
+        };
+        // Keep the queue's elicitation and timing guards through any handoff to the visible prompt.
+        if let Some((queue, _hold)) = &queued {
+            tracing::debug!(
+                name: "codex.network_approval.queued",
+                execution_id = self.key.execution_id.as_deref(),
+                "waiting for the current endpoint approval"
+            );
+            let Ok(permit) = Arc::clone(queue).acquire_owned().await else {
+                // The prompt owner closes the queue when it commits a session grant.
+                return ApprovalResolution::user(ReviewDecision::Approved);
+            };
+            self.prompt_permit = Some(permit);
+        }
+        match self.service.session_host_decision(&self.key.host).await {
+            Some(NetworkDecision::Allow) => ApprovalResolution::user(ReviewDecision::Approved),
+            Some(NetworkDecision::Deny { .. }) => {
+                ApprovalResolution::user(ReviewDecision::denied(policy_denial))
+            }
+            None => prompt.await,
         }
     }
 
@@ -331,7 +394,7 @@ impl<'a> PendingHostApprovalOwner<'a> {
         }
     }
 
-    fn publish_and_remove(&self, decision: PendingApprovalDecision) {
+    fn publish_and_remove(&mut self, decision: PendingApprovalDecision) {
         // Remove this generation before waking its waiters so a concurrent retry
         // cannot attach to an already-completed approval.
         let mut approvals = self
@@ -339,11 +402,24 @@ impl<'a> PendingHostApprovalOwner<'a> {
             .pending_host_approvals
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(queue) = approvals.manual_prompts.get(&self.key.host) {
+            let permit = self.prompt_permit.take();
+            if permit.is_some() && decision == PendingApprovalDecision::AllowForSession {
+                queue.close();
+            }
+            // Returning the permit lets one waiter take over the prompt.
+            drop(permit);
+            // Each queued or active execution holds a reference in addition to this map.
+            if queue.is_closed() || Arc::strong_count(queue) == 1 {
+                approvals.manual_prompts.remove(&self.key.host);
+            }
+        }
         if approvals
+            .executions
             .get(&self.key)
             .is_some_and(|current| Arc::ptr_eq(current, &self.pending))
         {
-            approvals.remove(&self.key);
+            approvals.executions.remove(&self.key);
         }
         drop(approvals);
         self.pending.set_decision(decision);
@@ -386,7 +462,7 @@ impl Default for NetworkApprovalService {
     fn default() -> Self {
         Self {
             calls: SyncMutex::new(NetworkApprovalCallState::default()),
-            pending_host_approvals: SyncMutex::new(HashMap::new()),
+            pending_host_approvals: SyncMutex::default(),
             session_policy_commit_lock: Mutex::new(()),
             session_approved_hosts: Mutex::new(HashSet::new()),
             session_denied_hosts: Mutex::new(HashSet::new()),
@@ -520,13 +596,29 @@ impl NetworkApprovalService {
             .pending_host_approvals
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(existing) = pending.get(&key).cloned() {
+        if let Some(existing) = pending.executions.get(&key).cloned() {
             return (existing, false);
         }
 
         let created = Arc::new(PendingHostApproval::new());
-        pending.insert(key, Arc::clone(&created));
+        pending.executions.insert(key, Arc::clone(&created));
         (created, true)
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "read both host caches under the session policy commit lock"
+    )]
+    async fn session_host_decision(&self, key: &HostApprovalKey) -> Option<NetworkDecision> {
+        let _commit_guard = self.session_policy_commit_lock.lock().await;
+        if self.session_denied_hosts.lock().await.contains(key) {
+            return Some(NetworkDecision::deny(REASON_NOT_ALLOWED));
+        }
+        self.session_approved_hosts
+            .lock()
+            .await
+            .contains(key)
+            .then_some(NetworkDecision::Allow)
     }
 
     #[cfg(test)]
@@ -622,17 +714,11 @@ impl NetworkApprovalService {
         )
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "persisted session policy and its in-memory caches must commit atomically"
-    )]
     pub(crate) async fn handle_inline_policy_request(
         &self,
         session: Arc<Session>,
         request: NetworkPolicyRequest,
     ) -> NetworkDecision {
-        const REASON_NOT_ALLOWED: &str = "not_allowed";
-
         let protocol = match request.protocol {
             NetworkProtocol::Http => NetworkApprovalProtocol::Http,
             NetworkProtocol::HttpsConnect => NetworkApprovalProtocol::Https,
@@ -663,19 +749,8 @@ impl NetworkApprovalService {
         };
         let key = HostApprovalKey::from_request(&request, protocol, environment_id.clone());
 
-        {
-            let _commit_guard = self.session_policy_commit_lock.lock().await;
-            {
-                let denied_hosts = self.session_denied_hosts.lock().await;
-                if denied_hosts.contains(&key) {
-                    return NetworkDecision::deny(REASON_NOT_ALLOWED);
-                }
-            }
-
-            let approved_hosts = self.session_approved_hosts.lock().await;
-            if approved_hosts.contains(&key) {
-                return NetworkDecision::Allow;
-            }
+        if let Some(decision) = self.session_host_decision(&key).await {
+            return decision;
         }
 
         let target = Self::format_network_target(key.protocol, request.host.as_str(), key.port);
@@ -809,7 +884,17 @@ impl NetworkApprovalService {
             retry_reason: Some(policy_denial_message.clone()),
             network_approval_context: Some(network_approval_context.clone()),
         };
-        let approval = session.request_approval(action, approval_context);
+        let user_prompt = pending_owner.review_user_prompt(
+            &session,
+            &turn_context,
+            owner_call
+                .as_ref()
+                .map(|call| call.trigger.call_id.as_str()),
+            &policy_denial_message,
+            session.request_user_approval(&action, &approval_context),
+        );
+        let approval =
+            session.request_approval_with_user_prompt(&action, &approval_context, user_prompt);
         let approval_result = if let Some(owner_call) = &owner_call {
             // A ready review result takes precedence over concurrent cancellation.
             let Some(result) = owner_call

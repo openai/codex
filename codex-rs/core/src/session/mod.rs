@@ -3070,6 +3070,22 @@ impl Session {
         timing
     }
 
+    /// Keep tool results paused and attribute a queued network prompt to its triggering call.
+    pub(crate) fn hold_queued_network_approval(
+        &self,
+        turn: &TurnContext,
+        call_id: Option<&str>,
+    ) -> (
+        crate::elicitation::ElicitationRegistration,
+        Option<codex_direct_tool_timing::ToolBlockingTimingGuard>,
+    ) {
+        let owner = self.user_wait_timing_owner(turn, call_id);
+        (
+            self.services.elicitations.register(),
+            self.start_user_wait_timing(turn, owner.as_deref()),
+        )
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `call_id` + `approval_id` so matching responses

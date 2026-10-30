@@ -1,15 +1,18 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
+use codex_direct_tool_timing::ToolBatchTiming;
 use codex_network_proxy::BlockedRequestArgs;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_utils_critical_path::CriticalPath;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::test_path_buf;
 use futures::poll;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
+use std::time::Instant;
 use test_case::test_case;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -60,7 +63,7 @@ async fn execution_cancellation_respects_network_approval_boundary(
     }
 
     let (session, _, events) = make_session_and_context_with_rx().await;
-    let (turn, _) = session
+    let (mut turn, _) = session
         .new_turn_with_sub_id(
             "active-turn".to_string(),
             crate::session::SessionSettingsUpdate {
@@ -75,9 +78,17 @@ async fn execution_cancellation_respects_network_approval_boundary(
         )
         .await
         .unwrap();
+    Arc::make_mut(&mut Arc::get_mut(&mut turn).expect("unique test turn").config)
+        .features
+        .enable(Feature::CriticalPathTiming)
+        .unwrap();
     let finish_turn = CancellationToken::new();
     session
-        .start_task(turn, Vec::new(), PendingTask(finish_turn.clone()))
+        .start_task(
+            Arc::clone(&turn),
+            Vec::new(),
+            PendingTask(finish_turn.clone()),
+        )
         .await;
     let service = &session.services.network_approval;
     register_call_with_default_shell_trigger(service, "execution-1").await;
@@ -110,6 +121,7 @@ async fn execution_cancellation_respects_network_approval_boundary(
     })
     .await
     .unwrap();
+    let mut queued = None;
     let expected_decision = match timing {
         ExecutionCancellationTiming::TurnFinished => {
             finish_turn.cancel();
@@ -127,6 +139,33 @@ async fn execution_cancellation_respects_network_approval_boundary(
             NetworkDecision::deny("not_allowed")
         }
         ExecutionCancellationTiming::AcceptedReview => {
+            let mut queue_events = core_test_support::tracing::NamedTraceEvents::subscribe(
+                "codex.network_approval.queued",
+            );
+            let started = Instant::now();
+            let timing = turn
+                .turn_timing_state
+                .direct_tool_timings
+                .start_turn_direct_call(
+                    "execution-2",
+                    &turn.sub_id,
+                    ToolBatchTiming::default(),
+                    started,
+                    Some(CriticalPath::default()),
+                );
+            register_call_with_default_shell_trigger(service, "execution-2").await;
+            let mut waiter = Box::pin(service.handle_inline_policy_request(
+                Arc::clone(&session),
+                NetworkPolicyRequest {
+                    execution_id: Some("execution-2".to_string()),
+                    ..request.clone()
+                },
+            ));
+            tokio::select! {
+                result = waiter.as_mut() => panic!("expected queued request, got {result:?}"),
+                event = queue_events.next() => event.expect("execution joins the queue"),
+            }
+            queued = Some((waiter, timing, started));
             let commit_guard = service.session_policy_commit_lock.lock().await;
             session
                 .notify_approval(
@@ -136,6 +175,8 @@ async fn execution_cancellation_respects_network_approval_boundary(
                 .await;
             // Consume the approval and stop at the held policy commit lock.
             assert!(poll!(decision.as_mut()).is_pending());
+            // The visible prompt closed, but the queued execution still holds tool results.
+            assert!(*session.subscribe_elicitation_pause_state().borrow());
             service.record_call_outcome("execution-1", "original execution denial".to_string());
             assert!(poll!(decision.as_mut()).is_pending());
             drop(commit_guard);
@@ -148,6 +189,21 @@ async fn execution_cancellation_respects_network_approval_boundary(
             .expect("finish cancelled or accepted review"),
         expected_decision,
     );
+    if let Some((queued, timing, started)) = queued {
+        assert_eq!(
+            timeout(Duration::from_secs(5), queued).await.unwrap(),
+            NetworkDecision::Allow
+        );
+        assert!(!*session.subscribe_elicitation_pause_state().borrow());
+        let work = timing.finish().unwrap();
+        assert!(
+            work.path
+                .unwrap()
+                .durations(started, work.ended_at)
+                .user_wait
+                > Duration::ZERO
+        );
+    }
     let key =
         HostApprovalKey::from_request(&request, NetworkApprovalProtocol::Http, "local".to_string());
     assert_eq!(
@@ -166,7 +222,11 @@ async fn execution_cancellation_respects_network_approval_boundary(
         service.take_call_outcome("execution-1").await,
         Some("original execution denial".to_string())
     );
-    assert!(service.pending_host_approvals.lock().unwrap().is_empty());
+    {
+        let pending = service.pending_host_approvals.lock().unwrap();
+        assert!(pending.executions.is_empty());
+        assert!(pending.manual_prompts.is_empty());
+    }
     let mut resolved = Vec::new();
     while let Ok(event) = events.try_recv() {
         match event.msg {
@@ -438,19 +498,67 @@ async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
     );
 }
 
+#[test_case(PendingApprovalDecision::AllowOnce, 1; "approve once wakes one waiter")]
+#[test_case(PendingApprovalDecision::Deny, 1; "denial wakes one waiter")]
+#[test_case(PendingApprovalDecision::AllowForSession, 3; "session grant wakes all waiters")]
 #[tokio::test]
-async fn pending_waiters_receive_owner_decision() {
-    let pending = Arc::new(PendingHostApproval::new());
+async fn manual_prompt_wakeups(decision: PendingApprovalDecision, expected: usize) {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::task::Context;
+    use std::task::Wake;
+    use std::task::Waker;
 
-    let waiter = {
-        let pending = Arc::clone(&pending);
-        tokio::spawn(async move { pending.wait_for_decision().await })
+    #[derive(Default)]
+    struct WakeCount(AtomicUsize);
+    impl Wake for WakeCount {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let (session, turn, _events) = crate::session::tests::make_session_and_context_with_rx().await;
+    let service = &session.services.network_approval;
+    let owner = |id: &str| {
+        let host = HostApprovalKey {
+            environment_id: "local".to_string(),
+            host: "example.com".to_string(),
+            protocol: "https",
+            port: 443,
+        };
+        let key = pending_key(host, &turn.sub_id, id);
+        let (pending, _) = service.get_or_create_pending_approval(key.clone());
+        PendingHostApprovalOwner::new(service, key, pending, /*execution_cancellation*/ None)
     };
+    let mut first = owner("first");
+    first
+        .review_user_prompt(
+            &session,
+            &turn,
+            /*timing_call_id*/ None,
+            "denied",
+            std::future::ready(ApprovalResolution::user(ReviewDecision::Approved)),
+        )
+        .await;
+    let mut owners = ["second", "third", "fourth"].map(owner);
+    let mut waiters = owners.each_mut().map(|owner| {
+        Box::pin(owner.review_user_prompt(
+            &session,
+            &turn,
+            /*timing_call_id*/ None,
+            "denied",
+            std::future::pending(),
+        ))
+    });
+    let wakes = Arc::new(WakeCount::default());
+    let waker = Waker::from(Arc::clone(&wakes));
+    let mut cx = Context::from_waker(&waker);
+    for waiter in &mut waiters {
+        assert!(waiter.as_mut().poll(&mut cx).is_pending());
+    }
 
-    pending.set_decision(PendingApprovalDecision::AllowOnce);
-
-    let decision = waiter.await.expect("waiter should complete");
-    assert_eq!(decision, PendingApprovalDecision::AllowOnce);
+    first.complete(decision);
+    assert_eq!(wakes.0.load(Ordering::Relaxed), expected);
 }
 
 #[tokio::test]
@@ -659,7 +767,7 @@ async fn register_call_with_default_shell_trigger(
             turn_id: "turn-1".to_string(),
             tool_name: ToolName::plain("exec_command"),
             trigger: GuardianNetworkAccessTrigger {
-                call_id: "call-1".to_string(),
+                call_id: registration_id.to_string(),
                 tool_name: "exec_command".to_string(),
                 command: vec!["curl".to_string(), "https://example.com".to_string()],
                 cwd: PathUri::from_abs_path(&test_path_buf("/tmp").abs()),

@@ -474,6 +474,14 @@ pub(crate) struct ApprovalResolution {
 }
 
 impl ApprovalResolution {
+    pub(super) fn user(decision: ReviewDecision) -> Self {
+        Self {
+            decision,
+            source: ApprovalResolutionSource::User,
+            cancellation_reason: None,
+        }
+    }
+
     fn into_tool_result(self, model_info: &ModelInfo) -> Result<ReviewDecision, ToolError> {
         let source = self.source;
         match self.decision {
@@ -538,7 +546,21 @@ impl Session {
         action: ApprovalAction,
         ctx: ApprovalContext,
     ) -> ApprovalResult {
-        if let Err(err) = self.check_approval_requirement(&ctx).await {
+        self.request_approval_with_user_prompt(
+            &action,
+            &ctx,
+            self.request_user_approval(&action, &ctx),
+        )
+        .await
+    }
+
+    pub(super) async fn request_approval_with_user_prompt(
+        self: &Arc<Self>,
+        action: &ApprovalAction,
+        ctx: &ApprovalContext,
+        user_prompt: impl Future<Output = ApprovalResolution>,
+    ) -> ApprovalResult {
+        if let Err(err) = self.check_approval_requirement(ctx).await {
             return ApprovalResult {
                 result: Err(err),
                 source: None,
@@ -548,7 +570,7 @@ impl Session {
         // Retained authority outside current grants needs a new sandbox approval.
         // Current grants permit review of the input; they never approve the input itself.
         let policy = ctx.review_context.turn().approval_policy();
-        if matches!(&action, ApprovalAction::WriteStdin { sandbox_permissions, additional_permissions_preapproved, .. }
+        if matches!(action, ApprovalAction::WriteStdin { sandbox_permissions, additional_permissions_preapproved, .. }
             if sandbox_permissions.requests_sandbox_override()
                 && (!additional_permissions_preapproved || matches!(policy, AskForApproval::Never)))
             && !(ctx.strict_auto_review && matches!(policy, AskForApproval::Never))
@@ -561,9 +583,9 @@ impl Session {
                 cancellation_reason: None,
             };
         }
-        let is_mcp_tool_call = matches!(&action, ApprovalAction::McpToolCall { .. });
-        let is_network_approval = matches!(&action, ApprovalAction::NetworkAccess { .. });
-        let permission_request_run_id = match &action {
+        let is_mcp_tool_call = matches!(action, ApprovalAction::McpToolCall { .. });
+        let is_network_approval = matches!(action, ApprovalAction::NetworkAccess { .. });
+        let permission_request_run_id = match action {
             ApprovalAction::NetworkAccess { hook_run_id, .. } => hook_run_id.clone(),
             _ if ctx.retry_reason.is_some() => format!("{}:retry", ctx.call_id),
             _ => ctx.call_id.clone(),
@@ -593,11 +615,12 @@ impl Session {
                 cancellation_reason: None,
             },
             Some(PermissionRequestDecision::Allow) | None => {
-                self.request_reviewer_approval(action, &ctx).await
+                self.request_reviewer_approval(action, ctx, user_prompt)
+                    .await
             }
         };
         if resolution.decision == ReviewDecision::Approved {
-            if let Err(ToolError::Rejected(reason)) = self.check_approval_requirement(&ctx).await {
+            if let Err(ToolError::Rejected(reason)) = self.check_approval_requirement(ctx).await {
                 resolution.decision = ReviewDecision::denied(reason);
             }
             if ctx.requires_human_approval()
@@ -611,7 +634,7 @@ impl Session {
         }
         // Network approvals record their final telemetry after validation and persistence.
         if !is_network_approval {
-            record_resolution(&ctx, &resolution);
+            record_resolution(ctx, &resolution);
         }
         let source = Some(resolution.source);
         let cancellation_reason = resolution.cancellation_reason;
@@ -657,11 +680,12 @@ impl Session {
 
     async fn request_reviewer_approval(
         self: &Arc<Self>,
-        action: ApprovalAction,
+        action: &ApprovalAction,
         ctx: &ApprovalContext,
+        user_prompt: impl Future<Output = ApprovalResolution>,
     ) -> ApprovalResolution {
         if ctx.requires_human_approval() {
-            self.request_user_approval(&action, ctx).await
+            user_prompt.await
         } else if let Some(decision) = self.request_guardian_approval(action.clone(), ctx).await {
             ApprovalResolution {
                 cancellation_reason: (decision == ReviewDecision::Abort)
@@ -670,7 +694,7 @@ impl Session {
                 source: ApprovalResolutionSource::Guardian,
             }
         } else {
-            self.request_user_approval(&action, ctx).await
+            user_prompt.await
         }
     }
 
@@ -754,7 +778,7 @@ impl Session {
         }
     }
 
-    async fn request_user_approval(
+    pub(super) async fn request_user_approval(
         &self,
         action: &ApprovalAction,
         ctx: &ApprovalContext,
@@ -948,11 +972,7 @@ impl Session {
                 unreachable!("permission requests are routed directly to Guardian")
             }
         };
-        ApprovalResolution {
-            decision,
-            source: ApprovalResolutionSource::User,
-            cancellation_reason: None,
-        }
+        ApprovalResolution::user(decision)
     }
 }
 

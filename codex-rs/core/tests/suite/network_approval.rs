@@ -11,10 +11,8 @@ use codex_core::config::NetworkProxySpec;
 use codex_core::shell::ShellType;
 use codex_core::shell::get_shell;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
-use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
-use codex_exec_server::RemoveOptions;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
@@ -70,7 +68,6 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
-use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::managed_network_requirements_loader;
@@ -89,6 +86,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_no_remote_env;
+use core_test_support::skip_if_remote;
 use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_target_windows;
 use core_test_support::test_codex::TestCodex;
@@ -97,17 +95,18 @@ use core_test_support::test_codex::local;
 use core_test_support::test_codex::local_request;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::tracing::NamedTraceEvents;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
 use test_case::test_case;
 use tokio::io::AsyncReadExt;
@@ -1143,7 +1142,7 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
 #[test_case("experimental_network"; "legacy_requirements")]
 #[test_case("network_proxy"; "proxy_requirements")]
 #[test_case("permissions.network"; "canonical_requirements")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 #[cfg_attr(
     not(target_os = "linux"),
     ignore = "requires the trusted Linux proxy bridge"
@@ -1151,50 +1150,52 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
 async fn user_network_approval_once_session_and_denial_semantics(
     requirements_table: &str,
 ) -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "remote executors forward network decisions only to Guardian"
+    );
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let test = managed_network_unified_exec_builder(&[])?
-        .with_cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
-                "[{requirements_table}]\nenabled = true\nallow_local_binding = true\n"
-            )),
-        )
-        .build_with_remote_and_local_env(&server)
-        .await?;
+    // Keep the test's trace subscriber installed until the queued tool tasks finish.
+    let mut queued = NamedTraceEvents::subscribe("codex.network_approval.queued");
+    let requirements = CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+        "[{requirements_table}]\nenabled = true\nallow_local_binding = true\n"
+    ));
+    let matching_calls = ["network-first", "network-second", "network-third"];
+    let (test, responses, mut prompts) = start_concurrent_network_requests(
+        managed_network_unified_exec_builder(&[])?.with_cloud_config_bundle(requirements),
+        &server,
+        &[
+            (matching_calls[0], 80),
+            (matching_calls[1], 80),
+            (matching_calls[2], 80),
+            ("user-network-port", 81),
+        ],
+        &mut queued,
+    )
+    .await?;
     assert!(test.config.managed_network_requirements_enabled());
     assert!(test.config.permissions.network.is_some());
     assert!(test.session_configured.network_proxy.is_some());
-    let environments = vec![local(test.config.cwd.clone())];
-
-    mount_exec_network_turn(
-        &server,
-        "resp-user-network-once-1",
-        "user-network-once-1",
-        network_fetch_args(LOCAL_ENVIRONMENT_ID),
-    )
-    .await?;
-    submit_managed_network_turn(
-        &test,
-        "approve this network request once",
-        environments.clone(),
-        ApprovalsReviewer::User,
-        AskForApproval::OnRequest,
-    )
-    .await?;
-    let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
-    assert!(
-        approval
-            .call_id
-            .starts_with("network#local#http#codex-network-test.invalid#80#")
-    );
+    let environment = test.executor_environment().selection();
+    let approval = prompts
+        .remove(NETWORK_TEST_TARGET)
+        .context("missing matching-host prompt")?;
+    let other_port = prompts
+        .remove(&format!("http://{NETWORK_TEST_HOST}:81"))
+        .context("missing independent port prompt")?;
+    assert!(approval.call_id.starts_with(&format!(
+        "network#{}#http#{NETWORK_TEST_HOST}#80#",
+        environment.environment_id
+    )));
     assert_eq!(approval.approval_id.as_deref(), None);
     let first_approval_call_id = approval.call_id.clone();
     assert!(!approval.turn_id.is_empty());
-    assert_eq!(approval.cwd, test.config.cwd.clone().into());
+    assert_eq!(approval.cwd, environment.cwd.clone().into());
     assert_eq!(
         approval.reason.as_deref(),
         Some("Network access to codex-network-test.invalid requires approval")
@@ -1206,93 +1207,85 @@ async fn user_network_approval_once_session_and_denial_semantics(
             decision: ReviewDecision::Approved,
         })
         .await?;
-    wait_for_turn_complete(&test).await;
-
-    mount_exec_network_turn(
-        &server,
-        "resp-user-network-once-2",
-        "user-network-once-2",
-        network_fetch_args(LOCAL_ENVIRONMENT_ID),
-    )
-    .await?;
-    submit_managed_network_turn(
-        &test,
-        "the once decision must prompt again",
-        environments.clone(),
-        ApprovalsReviewer::User,
-        AskForApproval::OnRequest,
-    )
-    .await?;
-    let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
-    assert_eq!(approval.approval_id.as_deref(), None);
-    assert_ne!(approval.call_id, first_approval_call_id);
+    // The first execution may finish before or after the next manual prompt arrives.
+    let mut pending = HashSet::from(matching_calls);
+    let mut granted_for_session = false;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !pending.is_empty() {
+            match test.codex.next_event().await?.msg {
+                EventMsg::ExecApprovalRequest(approval) => {
+                    assert!(!granted_for_session, "duplicate prompt after session grant");
+                    assert_eq!(approval.command, ["network-access", NETWORK_TEST_TARGET]);
+                    assert_eq!(
+                        approval.environment_id.as_ref(),
+                        Some(&environment.environment_id)
+                    );
+                    assert_eq!(approval.approval_id, None);
+                    assert_ne!(approval.call_id, first_approval_call_id);
+                    test.codex
+                        .submit(Op::ExecApproval {
+                            id: approval.effective_approval_id(),
+                            turn_id: Some(approval.turn_id),
+                            decision: ReviewDecision::ApprovedForSession,
+                        })
+                        .await?;
+                    granted_for_session = true;
+                }
+                EventMsg::ExecCommandEnd(end) => {
+                    assert!(
+                        pending.remove(end.call_id.as_str()),
+                        "unexpected completion: {end:?}"
+                    );
+                    assert_eq!(end.exit_code, 0);
+                }
+                EventMsg::TurnComplete(_) => {
+                    anyhow::bail!("turn completed with port 81 still pending")
+                }
+                _ => {}
+            }
+        }
+        anyhow::Ok(())
+    })
+    .await
+    .context("matching executions did not finish while port 81 was pending")??;
+    assert!(granted_for_session);
     test.codex
         .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: Some(approval.turn_id),
-            decision: ReviewDecision::ApprovedForSession,
+            id: other_port.effective_approval_id(),
+            turn_id: Some(other_port.turn_id),
+            decision: ReviewDecision::denied("rejected by user"),
         })
         .await?;
-    wait_for_turn_complete(&test).await;
+    wait_for_completion_without_network_prompt(&test).await;
+    for id in matching_calls {
+        assert_network_probe_allowed(&responses, id);
+    }
+    let denied_output = responses
+        .function_call_output_text("user-network-port")
+        .context("expected user-denied network output")?;
+    assert!(denied_output.contains("rejected by user"));
+    assert!(!denied_output.contains("blocked by policy"));
 
-    mount_exec_network_turn(
+    let session_probe = mount_exec_network_turn(
         &server,
         "resp-user-network-session",
         "user-network-session",
-        network_fetch_args(LOCAL_ENVIRONMENT_ID),
+        network_probe_args(
+            &remote_network_proxy_request_command("PROXY"),
+            &environment.environment_id,
+        ),
     )
     .await?;
     submit_managed_network_turn(
         &test,
         "the session decision must bypass another prompt",
-        environments.clone(),
+        vec![environment.clone()],
         ApprovalsReviewer::User,
         AskForApproval::OnRequest,
     )
     .await?;
     wait_for_completion_without_network_prompt(&test).await;
-
-    let different_port_target = format!("http://{NETWORK_TEST_HOST}:81");
-    let different_port_command = format!(
-        "python3 -c \"import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler()).open('{different_port_target}', timeout=2).read()\""
-    );
-    let denied_responses = mount_exec_network_turn(
-        &server,
-        "resp-user-network-port",
-        "user-network-port",
-        network_exec_args(&different_port_command),
-    )
-    .await?;
-    submit_managed_network_turn(
-        &test,
-        "a different port must prompt",
-        environments,
-        ApprovalsReviewer::User,
-        AskForApproval::OnRequest,
-    )
-    .await?;
-    let approval = expect_network_approval_target(
-        &test,
-        LOCAL_ENVIRONMENT_ID,
-        &different_port_target,
-        NetworkApprovalProtocol::Http,
-    )
-    .await?;
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: Some(approval.turn_id),
-            decision: ReviewDecision::denied("rejected by user"),
-        })
-        .await?;
-    wait_for_turn_complete(&test).await;
-    let denied_output = denied_responses
-        .requests()
-        .iter()
-        .find_map(|request| request.function_call_output_text("user-network-port"))
-        .context("expected user-denied network output")?;
-    assert!(denied_output.contains("rejected by user"));
-    assert!(!denied_output.contains("blocked by policy"));
+    assert_network_probe_allowed(&session_probe, "user-network-session");
 
     let socks_target = format!("socks5-tcp://{NETWORK_TEST_HOST}:443");
     let socks_command = format!(
@@ -1305,7 +1298,10 @@ async fn user_network_approval_once_session_and_denial_semantics(
             ev_function_call(
                 "user-network-abort",
                 "exec_command",
-                &serde_json::to_string(&network_exec_args(&socks_command))?,
+                &serde_json::to_string(&network_probe_args(
+                    &socks_command,
+                    &environment.environment_id,
+                ))?,
             ),
             ev_completed("resp-user-network-abort"),
         ]),
@@ -1314,14 +1310,14 @@ async fn user_network_approval_once_session_and_denial_semantics(
     submit_managed_network_turn(
         &test,
         "a different protocol must prompt and the user abort must stay a user outcome",
-        vec![local(test.config.cwd.clone())],
+        vec![environment.clone()],
         ApprovalsReviewer::User,
         AskForApproval::OnRequest,
     )
     .await?;
     let approval = expect_network_approval_target(
         &test,
-        LOCAL_ENVIRONMENT_ID,
+        &environment.environment_id,
         &socks_target,
         NetworkApprovalProtocol::Socks5Tcp,
     )
@@ -1525,7 +1521,10 @@ PY"#
             &server,
             "network-session-grant-probe",
             probe_call_id,
-            network_exec_args(&remote_network_proxy_request_command("REUSED-GRANT")),
+            network_probe_args(
+                &remote_network_proxy_request_command("PROXY"),
+                LOCAL_ENVIRONMENT_ID,
+            ),
         )
         .await?;
         submit_managed_network_turn(
@@ -1537,14 +1536,7 @@ PY"#
         )
         .await?;
         wait_for_completion_without_network_prompt(&test).await;
-        let output = probe
-            .function_call_output_text(probe_call_id)
-            .context("expected network output from the new execution")?;
-        assert!(
-            output.contains("REUSED-GRANT:HTTP/1.1 200")
-                || output.contains("REUSED-GRANT:HTTP/1.1 502"),
-            "{output}",
-        );
+        assert_network_probe_allowed(&probe, probe_call_id);
     }
 
     Ok(())
@@ -1637,35 +1629,33 @@ async fn allowing_network_policy_amendment_persists_context_and_bypasses_prompt(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 #[cfg_attr(
     not(target_os = "linux"),
     ignore = "requires the trusted Linux proxy bridge"
 )]
 async fn denying_network_policy_amendment_persists_and_blocks_request() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "remote executors forward network decisions only to Guardian"
+    );
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let test = managed_network_unified_exec_test(&server).await?;
-    let responses = mount_exec_network_turn(
+    let mut queued = NamedTraceEvents::subscribe("codex.network_approval.queued");
+    let (test, responses, mut prompts) = start_concurrent_network_requests(
+        managed_network_unified_exec_builder(&[])?,
         &server,
-        "resp-network-deny-amendment",
-        "network-deny-amendment",
-        network_fetch_args(LOCAL_ENVIRONMENT_ID),
+        &[("network-deny-first", 80), ("network-deny-second", 80)],
+        &mut queued,
     )
     .await?;
-    submit_managed_network_turn(
-        &test,
-        "persist a deny rule for this host",
-        vec![local(test.config.cwd.clone())],
-        ApprovalsReviewer::User,
-        AskForApproval::OnRequest,
-    )
-    .await?;
-    let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
+    let approval = prompts
+        .remove(NETWORK_TEST_TARGET)
+        .context("missing prompt")?;
     test.codex
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
@@ -1678,18 +1668,30 @@ async fn denying_network_policy_amendment_persists_and_blocks_request() -> Resul
             },
         })
         .await?;
-    wait_for_turn_complete(&test).await;
+    wait_for_completion_without_network_prompt(&test).await;
 
     let policy = fs::read_to_string(test.home.path().join("rules/default.rules"))?;
     assert!(policy.contains(
         r#"network_rule(host="codex-network-test.invalid", protocol="http", decision="deny""#
     ));
-    let output = responses
-        .requests()
-        .iter()
-        .find_map(|request| request.function_call_output_text("network-deny-amendment"))
-        .context("expected denied network tool output")?;
-    assert!(output.contains("rejected by user"));
+    let outputs = ["network-deny-first", "network-deny-second"].map(|id| {
+        responses
+            .function_call_output_text(id)
+            .expect("denied network tool output")
+    });
+    assert!(
+        outputs
+            .iter()
+            .any(|output| output.contains("rejected by user")),
+        "{outputs:?}"
+    );
+    assert!(
+        outputs
+            .iter()
+            .any(|output| output.contains(NETWORK_TEST_TARGET)
+                && output.contains("was blocked by policy.")),
+        "{outputs:?}"
+    );
     Ok(())
 }
 
@@ -3130,7 +3132,7 @@ async fn escalated_owner_network_terminal_requires_stdin_approval(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approved_network_host_for_one_environment_still_prompts_in_another() -> Result<()> {
+async fn local_session_grant_does_not_allow_the_same_host_on_a_remote_executor() -> Result<()> {
     skip_if_target_windows!(Ok(()), "uses the POSIX/Python network fixture");
     skip_if_host_windows!(Ok(()));
     skip_if_no_network!(Ok(()));
@@ -3140,38 +3142,16 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
     let server = start_mock_server().await;
     let test = managed_network_unified_exec_test(&server).await?;
     let local_cwd = TempDir::new()?;
-    let remote_cwd = PathBuf::from(format!(
-        "/tmp/codex-network-approval-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
-    ))
-    .abs();
-    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
-    test.fs()
-        .create_directory(
-            &remote_cwd_uri,
-            CreateDirectoryOptions {
-                recursive: true,
-                follow_symlinks: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await?;
     let environments = vec![
         local(local_cwd.path().abs()),
-        TurnEnvironmentSelection {
-            selected_capability_roots: Default::default(),
-            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            cwd: PathUri::from_abs_path(&remote_cwd),
-            workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
-            config: EnvironmentConfigState::FromThread,
-        },
+        test.executor_environment().selection().clone(),
     ];
-
-    mount_exec_network_turn(
+    let command = remote_network_proxy_request_command("PROXY");
+    let local_responses = mount_exec_network_turn(
         &server,
         "resp-network-local",
         "exec-network-local",
-        network_fetch_args(LOCAL_ENVIRONMENT_ID),
+        network_probe_args(&command, LOCAL_ENVIRONMENT_ID),
     )
     .await?;
     submit_managed_network_turn(
@@ -3179,7 +3159,7 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
         "fetch from the local environment",
         environments.clone(),
         ApprovalsReviewer::User,
-        AskForApproval::UnlessTrusted,
+        AskForApproval::OnRequest,
     )
     .await?;
     let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
@@ -3190,49 +3170,30 @@ async fn approved_network_host_for_one_environment_still_prompts_in_another() ->
             decision: ReviewDecision::ApprovedForSession,
         })
         .await?;
-    wait_for_turn_complete(&test).await;
+    wait_for_completion_without_network_prompt(&test).await;
+    assert_network_probe_allowed(&local_responses, "exec-network-local");
 
     let remote_responses = mount_exec_network_turn(
         &server,
         "resp-network-remote",
         "exec-network-remote",
-        network_fetch_args(REMOTE_ENVIRONMENT_ID),
+        network_probe_args(&command, REMOTE_ENVIRONMENT_ID),
     )
     .await?;
     submit_managed_network_turn(
         &test,
         "fetch from the remote environment",
-        environments.clone(),
+        environments,
         ApprovalsReviewer::User,
-        AskForApproval::UnlessTrusted,
+        AskForApproval::OnRequest,
     )
     .await?;
-    let approval = expect_network_approval(&test, REMOTE_ENVIRONMENT_ID).await?;
-    let rejection = "approval request failed because the client disconnected";
-    test.codex
-        .submit(Op::ExecApproval {
-            id: approval.effective_approval_id(),
-            turn_id: None,
-            decision: ReviewDecision::denied(rejection),
-        })
-        .await?;
-    wait_for_turn_complete(&test).await;
-    assert_eq!(
-        remote_responses.function_call_output_text("exec-network-remote"),
-        Some(rejection.to_string())
-    );
-
-    test.fs()
-        .remove(
-            &remote_cwd_uri,
-            RemoveOptions {
-                recursive: true,
-                force: true,
-                follow_symlinks: true,
-            },
-            /*sandbox*/ None,
-        )
-        .await?;
+    // Remote executors do not forward manual prompts. The proxy must deny this request.
+    wait_for_completion_without_network_prompt(&test).await;
+    let output = remote_responses
+        .function_call_output_text("exec-network-remote")
+        .context("missing remote proxy response")?;
+    assert!(output.contains("PROXY:HTTP/1.1 403 Forbidden"), "{output}");
 
     Ok(())
 }
@@ -3403,6 +3364,69 @@ pub(super) fn guardian_parent_catalog() -> ModelsResponse {
     }
 }
 
+async fn start_concurrent_network_requests(
+    mut builder: TestCodexBuilder,
+    server: &wiremock::MockServer,
+    requests: &[(&str, u16)],
+    queued: &mut NamedTraceEvents,
+) -> Result<(
+    TestCodex,
+    ResponseMock,
+    HashMap<String, ExecApprovalRequestEvent>,
+)> {
+    let test = builder.build_with_auto_env(server).await?;
+    let environment = test.executor_environment().selection();
+    let mut calls = Vec::new();
+    for &(id, port) in requests {
+        let command =
+            network_proxy_request_command(&format!("{NETWORK_TEST_HOST}:{port}"), "PROXY");
+        let args = network_probe_args(&command, &environment.environment_id);
+        calls.push(ev_function_call(id, "exec_command", &args.to_string()));
+    }
+    calls.push(ev_completed("network-requests"));
+    let responses = mount_sse_sequence(
+        server,
+        vec![sse(calls), sse(vec![ev_completed("network-done")])],
+    )
+    .await;
+    submit_managed_network_turn(
+        &test,
+        "review these concurrent network requests",
+        vec![environment.clone()],
+        ApprovalsReviewer::User,
+        AskForApproval::OnRequest,
+    )
+    .await?;
+
+    let ports: HashSet<_> = requests.iter().map(|(_, port)| port).collect();
+    let mut prompts = HashMap::new();
+    wait_for_event(&test.codex, |event| {
+        match event {
+            EventMsg::ExecApprovalRequest(approval) => {
+                assert!(
+                    prompts
+                        .insert(approval.command[1].clone(), approval.clone())
+                        .is_none(),
+                    "duplicate prompt for {:?}",
+                    approval.command
+                );
+            }
+            EventMsg::TurnComplete(_) => panic!(
+                "turn completed before network approval: {:?}",
+                responses.function_call_output_text(requests[0].0)
+            ),
+            _ => {}
+        }
+        prompts.len() == ports.len()
+    })
+    .await;
+    // Every matching execution has joined its endpoint queue before the first decision.
+    for _ in ports.len()..requests.len() {
+        queued.next().await?;
+    }
+    Ok((test, responses, prompts))
+}
+
 async fn managed_network_unified_exec_test(server: &wiremock::MockServer) -> Result<TestCodex> {
     managed_network_unified_exec_test_with_features(server, &[]).await
 }
@@ -3422,18 +3446,26 @@ async fn managed_network_unified_exec_test_with_features(
 
 fn managed_network_unified_exec_builder(features: &[Feature]) -> Result<TestCodexBuilder> {
     let home = Arc::new(TempDir::new()?);
+    // Limited mode uses TLS interception, which remote executors cannot enforce.
+    let mode = if core_test_support::is_remote_test_environment() {
+        "full"
+    } else {
+        "limited"
+    };
     fs::write(
         home.path().join("config.toml"),
-        r#"default_permissions = "workspace"
+        format!(
+            r#"default_permissions = "workspace"
 
 [permissions.workspace.filesystem]
 ":minimal" = "read"
 
 [permissions.workspace.network]
 enabled = true
-mode = "limited"
+mode = "{mode}"
 allow_local_binding = true
-"#,
+"#
+        ),
     )?;
     let approval_policy = AskForApproval::OnRequest;
     let permission_profile = PermissionProfile::workspace_write_with(
@@ -3501,8 +3533,27 @@ fn network_exec_args(command: &str) -> Value {
     })
 }
 
+fn network_probe_args(command: &str, environment_id: &str) -> Value {
+    // Remote executors accept only their configured shell.
+    json!({ "cmd": command, "environment_id": environment_id, "login": false, "yield_time_ms": 10_000 })
+}
+
+fn assert_network_probe_allowed(responses: &ResponseMock, id: &str) {
+    let output = responses
+        .function_call_output_text(id)
+        .unwrap_or_else(|| panic!("missing network output for {id}"));
+    // The fixture host need not resolve. A gateway error still means the proxy allowed it.
+    assert!(
+        output.contains("PROXY:HTTP/1.1 502") || output.contains("PROXY:HTTP/1.1 200"),
+        "{id}: {output}"
+    );
+}
+
 fn remote_network_proxy_request_command(marker: &str) -> String {
-    let host = NETWORK_TEST_HOST;
+    network_proxy_request_command(NETWORK_TEST_HOST, marker)
+}
+
+fn network_proxy_request_command(host: &str, marker: &str) -> String {
     format!(
         "python3 -c \"import os,socket,urllib.parse; proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY']); sock = socket.create_connection((proxy.hostname, proxy.port), timeout=10); sock.sendall(b'GET http://{host} HTTP/1.1\\r\\nHost: {host}\\r\\nConnection: close\\r\\n\\r\\n'); print('{marker}:' + sock.makefile('rb').readline().decode(errors='replace'))\""
     )
