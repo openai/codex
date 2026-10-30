@@ -376,16 +376,22 @@ async fn initial_bearer_aged_during_validation_is_renewed_before_dispatch() -> a
             .mount(&server)
             .await;
         let (client, source, params) = fixture(&format!("{}/mcp", server.uri()));
+        // Age the token by advancing time: backdating an Instant can underflow
+        // on a Windows runner that has only recently booted.
+        tokio::time::pause();
+        let received_at = Instant::now();
+        tokio::time::advance(Duration::from_secs(301)).await;
         let client = EmaAuthenticatedHttpClient::new(
             client.inner,
             Arc::clone(&source),
             EmaAccessToken {
                 access_token: "aged-in-validation".to_string(),
                 expires_in: Some(Duration::from_secs(300)),
-                received_at: Instant::now() - Duration::from_secs(301),
+                received_at,
             },
             client.authority,
         );
+        tokio::time::resume();
         if streaming {
             client.http_request_stream(params).await?;
         } else {

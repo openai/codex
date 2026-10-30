@@ -11,6 +11,15 @@ use super::RegistryAuthMode;
 use super::current_trace_context_headers;
 use crate::ExecServerError;
 
+pub(super) fn registry_auth_error(error: codex_api::AuthError) -> ExecServerError {
+    match error {
+        codex_api::AuthError::Transient(_) => ExecServerError::RequestNotSent(
+            "environment registry credential resolution is temporarily unavailable".to_string(),
+        ),
+        error => super::direct::direct_auth_error(error),
+    }
+}
+
 impl EnvironmentRegistryClient {
     pub(super) async fn send_authenticated(
         &self,
@@ -32,7 +41,7 @@ impl EnvironmentRegistryClient {
                         self.auth_provider
                             .apply_auth(request.clone())
                             .await
-                            .map_err(super::direct::direct_auth_error)?,
+                            .map_err(registry_auth_error)?,
                         None,
                     )
                 };

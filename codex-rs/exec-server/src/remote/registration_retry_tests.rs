@@ -40,6 +40,7 @@ const SUCCESS_BODY: &str = r#"{"environment_id":"registration-retry-test","url":
 #[derive(Debug, Default)]
 struct RegistrationAuthProvider {
     calls: AtomicUsize,
+    fail_first: bool,
 }
 
 impl AuthProvider for RegistrationAuthProvider {
@@ -48,9 +49,44 @@ impl AuthProvider for RegistrationAuthProvider {
     }
 
     fn apply_auth_headers(&self, headers: HeaderMap) -> codex_api::AuthHeadersFuture<'_> {
-        self.calls.fetch_add(1, Ordering::Relaxed);
+        if self.calls.fetch_add(1, Ordering::Relaxed) == 0 && self.fail_first {
+            return Box::pin(async {
+                Err(codex_api::AuthError::Transient(
+                    "metadata unavailable".to_string(),
+                ))
+            });
+        }
         Box::pin(async move { Ok(headers) })
     }
+}
+
+#[tokio::test]
+async fn transient_credential_failure_retries_before_sending_registration() -> anyhow::Result<()> {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::any())
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_raw(SUCCESS_BODY, "application/json"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = Arc::new(RegistrationAuthProvider {
+        fail_first: true,
+        ..Default::default()
+    });
+    let client = EnvironmentRegistryClient::new(server.uri(), provider.clone())?;
+    let response = timeout(
+        Duration::from_secs(10),
+        client.register_environment_with_retry(
+            ENVIRONMENT_ID,
+            &NoiseChannelIdentity::generate()?.public_key(),
+        ),
+    )
+    .await??;
+    assert_eq!(response.environment_id, ENVIRONMENT_ID);
+    assert_eq!(provider.calls.load(Ordering::Relaxed), 2);
+    server.verify().await;
+    Ok(())
 }
 
 struct RetryObserved(Arc<Notify>);
@@ -198,7 +234,7 @@ async fn registration_requires_a_confirmed_pre_write_failure_before_replay(
                 assert_eq!(message, "registration unavailable");
             }
         }
-        _ => anyhow::bail!("unexpected registration failure kind"),
+        error => anyhow::bail!("unexpected registration failure kind: {error:?}"),
     }
     Ok(())
 }

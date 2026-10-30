@@ -302,10 +302,19 @@ fn auto_auth_storage_load_falls_back_when_keyring_errors() -> anyhow::Result<()>
     assert_eq!(loaded, Some(expected.clone()));
     mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
     assert!(storage.load_account_grant().is_err());
+    assert_eq!(storage.load()?, Some(encrypted.clone()));
+    assert_eq!(storage.file_storage.load()?, Some(expected.clone()));
+    mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+    assert!(
+        storage
+            .compare_and_save(&expected, &auth_with_prefix("must-not-save"))
+            .is_err()
+    );
     assert_eq!(storage.load()?, Some(encrypted));
     assert_eq!(storage.file_storage.load()?, Some(expected));
 
-    // Preserve rotated tokens whether the keyring recovers before or during persistence.
+    // A recovered keyring may contain a newer generation than the fallback.
+    // Never overwrite it with a response obtained using the fallback token.
     let mut previous = auth_with_prefix("same-login");
     previous.auth_mode = Some(AuthMode::Chatgpt);
     previous.openai_api_key = None;
@@ -330,21 +339,40 @@ fn auto_auth_storage_load_falls_back_when_keyring_errors() -> anyhow::Result<()>
             /*id_token*/ None,
             Some("rotated-access".into()),
             Some("rotated-refresh".into()),
-        )?;
-        let tokens = refreshed
-            .tokens
-            .as_ref()
-            .context("refreshed account tokens")?;
-        assert_eq!(tokens.access_token, "rotated-access");
-        assert_eq!(tokens.refresh_token, "rotated-refresh");
-        assert_eq!(storage.load()?, Some(refreshed.clone()));
-        assert_keyring_saved_auth_and_removed_fallback(
-            &mock_keyring,
-            codex_home.path(),
-            &refreshed,
-        )?;
+        );
+        if recover_before_persist {
+            assert!(refreshed.is_err());
+            assert_eq!(storage.load()?, Some(previous.clone()));
+            assert_eq!(storage.file_storage.load()?, Some(cached));
+        } else {
+            // Matching keyring and fallback generations can safely commit.
+            let refreshed = refreshed?;
+            assert_eq!(storage.load()?, Some(refreshed.clone()));
+            assert_keyring_saved_auth_and_removed_fallback(
+                &mock_keyring,
+                codex_home.path(),
+                &refreshed,
+            )?;
+        }
     }
 
+    // Once the selected source is stable, a fresh exchange can commit normally.
+    let refreshed = crate::auth::manager::persist_tokens(
+        &backend,
+        previous.tokens.as_ref().context("stored account tokens")?,
+        /*provenance*/ None,
+        /*id_token*/ None,
+        Some("rotated-access".into()),
+        Some("rotated-refresh".into()),
+    )?;
+    let tokens = refreshed
+        .tokens
+        .as_ref()
+        .context("refreshed account tokens")?;
+    assert_eq!(tokens.access_token, "rotated-access");
+    assert_eq!(tokens.refresh_token, "rotated-refresh");
+    assert_eq!(storage.load()?, Some(refreshed.clone()));
+    assert_keyring_saved_auth_and_removed_fallback(&mock_keyring, codex_home.path(), &refreshed)?;
     // An absent fallback must not select a plaintext destination for cached credentials.
     storage.file_storage.delete()?;
     mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));

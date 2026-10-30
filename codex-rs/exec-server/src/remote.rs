@@ -307,11 +307,7 @@ impl EnvironmentRegistryClient {
             .auth_provider
             .apply_auth_headers(HeaderMap::new())
             .await
-            .map_err(|error| {
-                ExecServerError::EnvironmentRegistryAuth(format!(
-                    "failed to resolve environment registry authentication: {error}"
-                ))
-            })?;
+            .map_err(auth::registry_auth_error)?;
         let executor_credential = if self.auth_mode == RegistryAuthMode::ExecutorCredential {
             // Scoped mode sends exactly one bearer and never accompanying account credentials.
             let token = (headers.len() == 1)

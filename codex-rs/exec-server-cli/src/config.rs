@@ -1,7 +1,7 @@
 //! Loads executor startup configuration and remote authentication without changing CLI policy.
 
 use codex_app_server::in_process::EmbeddedNetworkPolicy;
-use codex_cloud_config::chatgpt_config_bundle_loader_for_storage;
+use codex_cloud_config::chatgpt_config_bundle_loader;
 use codex_config::LoaderOverrides;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigLoadOptions;
@@ -11,9 +11,19 @@ use codex_core::config::load_config_toml_with_layer_stack;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::read_codex_access_token_from_env;
+use codex_protocol::auth::AuthMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use std::sync::Arc;
+
+use crate::exec_server_auth;
+
+const REMOTE_AUTH_MODES: &[AuthMode] = &[
+    AuthMode::ApiKey,
+    AuthMode::Chatgpt,
+    AuthMode::ChatgptAuthTokens,
+    AuthMode::PersonalAccessToken,
+];
 
 pub(super) async fn load_exec_server_remote_auth_provider(
     config: &codex_core::config::Config,
@@ -53,11 +63,16 @@ pub(super) async fn load_exec_server_remote_auth_provider(
         validate_api_key_remote_host(base_url)?;
     }
 
-    if auth.is_chatgpt_auth() || auth_manager.is_workload_identity_selected() {
+    if auth_manager.is_workload_identity_selected() {
         Ok(codex_model_provider::auth_provider_from_auth_manager(
             auth_manager,
             &auth,
         ))
+    } else if auth.is_chatgpt_auth() {
+        Ok(exec_server_auth::chatgpt_auth_provider(
+            auth_manager,
+            &auth,
+        )?)
     } else {
         Ok(codex_model_provider::auth_provider_from_auth(&auth))
     }
@@ -129,12 +144,25 @@ pub(super) async fn load_exec_server_config(
             },
         )
         .await?;
-        let bootstrap_auth_config = bootstrap_auth_config(&codex_home, &bootstrap_config)?;
-        let cloud_config_bundle = chatgpt_config_bundle_loader_for_storage(
-            network_policy.bind_bootstrap_auth(bootstrap_auth_config),
+        let bootstrap_auth_config = network_policy
+            .bind_bootstrap_auth(bootstrap_auth_config(&codex_home, &bootstrap_config)?);
+        let auth_manager = AuthManager::shared_from_auth_config_with_auth_modes(
+            bootstrap_auth_config.clone(),
             /*enable_codex_api_key_env*/ true,
+            REMOTE_AUTH_MODES.to_vec(),
         )
         .await?;
+        let cloud_config_bundle = chatgpt_config_bundle_loader(
+            auth_manager,
+            bootstrap_auth_config
+                .chatgpt_base_url
+                .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string()),
+            bootstrap_auth_config.codex_home,
+            bootstrap_auth_config
+                .auth_route_config
+                .http_client_factory()
+                .clone(),
+        );
         builder = builder.cloud_config_bundle(cloud_config_bundle);
     }
     let mut config = builder.build().await?;
@@ -146,8 +174,12 @@ async fn load_exec_server_remote_auth(
     config: &codex_core::config::Config,
     missing_auth_error: &'static str,
 ) -> anyhow::Result<(Arc<AuthManager>, codex_login::CodexAuth)> {
-    let auth_manager =
-        AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await?;
+    let auth_manager = AuthManager::shared_from_config_with_auth_modes(
+        config,
+        /*enable_codex_api_key_env*/ true,
+        REMOTE_AUTH_MODES.to_vec(),
+    )
+    .await?;
 
     let auth = match auth_manager.auth().await {
         Some(auth) => auth,

@@ -37,6 +37,7 @@ use codex_exec_server::ProcessId;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_utils_cargo_bin::copy_executable;
+use codex_utils_path_uri::PathUri;
 use futures::SinkExt;
 use futures::StreamExt;
 use predicates::prelude::PredicateBooleanExt;
@@ -56,6 +57,7 @@ use tokio_tungstenite::tungstenite::handshake::server::Response;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -205,6 +207,235 @@ fn local_exec_server_allows_disabled_parent_lifetime_environment_variable() -> R
     Ok(())
 }
 
+enum PatCredentialChange {
+    Rotate,
+    SwitchAccount,
+    Logout,
+    Unchanged,
+    UnavailableReplacement,
+}
+
+async fn assert_pat_registry_reload(change: PatCredentialChange) -> Result<()> {
+    let home = TempDir::new()?;
+    let config_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .and(header("authorization", "Bearer at-synthetic-executor-pat"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .expect(1)
+        .mount(&config_server)
+        .await;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = 'file'\nchatgpt_base_url = '{}/backend-api'\n",
+            config_server.uri(),
+        ),
+    )?;
+    let auth_path = home.path().join("auth.json");
+    std::fs::write(
+        &auth_path,
+        serde_json::to_vec(&serde_json::json!({
+            "personal_access_token": "at-synthetic-executor-pat",
+        }))?,
+    )?;
+    let auth_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-synthetic-executor-pat"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "chatgpt_user_id": "user-pat-test",
+            "chatgpt_account_id": "account-pat-test",
+            "chatgpt_plan_type": "enterprise",
+            "chatgpt_account_is_fedramp": false,
+        })))
+        // Cloud-config bootstrap and executor startup each hydrate once.
+        // Later registry requests must reuse metadata for the unchanged PAT.
+        .with_priority(1)
+        .up_to_n_times(2)
+        .expect(2)
+        .mount(&auth_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(503))
+        .with_priority(10)
+        .expect(0)
+        .mount(&auth_server)
+        .await;
+    if !matches!(
+        change,
+        PatCredentialChange::Logout | PatCredentialChange::Unchanged
+    ) {
+        let account = match change {
+            PatCredentialChange::Rotate | PatCredentialChange::UnavailableReplacement => {
+                "account-pat-test"
+            }
+            PatCredentialChange::SwitchAccount => "another-account",
+            PatCredentialChange::Logout | PatCredentialChange::Unchanged => unreachable!(),
+        };
+        if matches!(change, PatCredentialChange::UnavailableReplacement) {
+            Mock::given(method("GET"))
+                .and(path("/v1/user-auth-credential/whoami"))
+                .and(header(
+                    "authorization",
+                    "Bearer at-synthetic-replacement-pat",
+                ))
+                .respond_with(ResponseTemplate::new(503))
+                .with_priority(1)
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&auth_server)
+                .await;
+        }
+        let response = ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "chatgpt_user_id": "user-pat-test",
+            "chatgpt_account_id": account,
+            "chatgpt_plan_type": "enterprise",
+            "chatgpt_account_is_fedramp": false,
+        }));
+        Mock::given(method("GET"))
+            .and(path("/v1/user-auth-credential/whoami"))
+            .and(header(
+                "authorization",
+                "Bearer at-synthetic-replacement-pat",
+            ))
+            .respond_with(response)
+            .with_priority(2)
+            .expect(1)
+            .mount(&auth_server)
+            .await;
+    }
+    let expected_registry_requests = match change {
+        PatCredentialChange::Rotate
+        | PatCredentialChange::Unchanged
+        | PatCredentialChange::UnavailableReplacement => 2,
+        PatCredentialChange::SwitchAccount | PatCredentialChange::Logout => 1,
+    };
+    let second_bearer = if matches!(change, PatCredentialChange::Unchanged) {
+        "Bearer at-synthetic-executor-pat"
+    } else {
+        "Bearer at-synthetic-replacement-pat"
+    };
+    let registry = MockServer::start().await;
+    let registration_path = "/cloud/environment/environment-pat-test/register";
+    let (credential_change_tx, mut credential_change_rx) = tokio::sync::mpsc::unbounded_channel();
+    Mock::given(method("POST"))
+        .and(path(registration_path))
+        .and(header("authorization", "Bearer at-synthetic-executor-pat"))
+        .and(header("chatgpt-account-id", "account-pat-test"))
+        .respond_with(move |_: &wiremock::Request| {
+            let result = match change {
+                PatCredentialChange::Rotate
+                | PatCredentialChange::SwitchAccount
+                | PatCredentialChange::UnavailableReplacement => std::fs::write(
+                    &auth_path,
+                    r#"{"personal_access_token":"at-synthetic-replacement-pat"}"#,
+                ),
+                PatCredentialChange::Logout => std::fs::remove_file(&auth_path),
+                PatCredentialChange::Unchanged => Ok(()),
+            };
+            let _ = credential_change_tx.send(result);
+            ResponseTemplate::new(502).set_body_json(serde_json::json!({
+                "detail": {"code": "authentication_service_unavailable"},
+            }))
+        })
+        .with_priority(1)
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&registry)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(registration_path))
+        .and(header("authorization", second_bearer))
+        .and(header("chatgpt-account-id", "account-pat-test"))
+        .respond_with(ResponseTemplate::new(403))
+        .with_priority(2)
+        .expect(expected_registry_requests - 1)
+        .mount(&registry)
+        .await;
+
+    let mut command = tokio::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?);
+    command
+        .current_dir(home.path())
+        .env("CODEX_HOME", home.path())
+        .env_remove("CODEX_ACCESS_TOKEN")
+        .env("CODEX_AUTHAPI_BASE_URL", auth_server.uri())
+        .env_remove("CODEX_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .args([
+            "exec-server",
+            "--remote",
+            &registry.uri(),
+            "--environment-id",
+            "environment-pat-test",
+        ])
+        .kill_on_drop(true);
+    // A same-owner replacement reaches the second registry request, whose denial
+    // stops the executor. Logout or a different owner must fail before that request.
+    let result = tokio::time::timeout(Duration::from_secs(30), command.output()).await;
+    assert!(
+        result.is_ok(),
+        "executor timed out (AuthAPI request count: {:?})",
+        auth_server
+            .received_requests()
+            .await
+            .map(|requests| requests.len()),
+    );
+    let output = result??;
+    let credential_update = credential_change_rx.try_recv();
+    assert!(
+        credential_update.is_ok(),
+        "registration did not update the credential fixture ({}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    credential_update?.context("update the stored PAT fixture")?;
+    assert!(!output.status.success());
+    registry.verify().await;
+    auth_server.verify().await;
+    config_server.verify().await;
+    assert_eq!(
+        registry
+            .received_requests()
+            .await
+            .context("registry request recording is disabled")?
+            .len(),
+        expected_registry_requests as usize
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_exec_server_pat_follows_stored_rotation() -> Result<()> {
+    assert_pat_registry_reload(PatCredentialChange::Rotate).await
+}
+
+#[tokio::test]
+async fn remote_exec_server_pat_rejects_account_switch() -> Result<()> {
+    assert_pat_registry_reload(PatCredentialChange::SwitchAccount).await
+}
+
+#[tokio::test]
+async fn remote_exec_server_pat_stops_using_removed_credentials() -> Result<()> {
+    assert_pat_registry_reload(PatCredentialChange::Logout).await
+}
+
+#[tokio::test]
+async fn remote_exec_server_pat_reuses_metadata_during_authapi_outage() -> Result<()> {
+    assert_pat_registry_reload(PatCredentialChange::Unchanged).await
+}
+
+#[tokio::test]
+async fn remote_exec_server_pat_recovers_after_replacement_metadata_outage() -> Result<()> {
+    assert_pat_registry_reload(PatCredentialChange::UnavailableReplacement).await
+}
+
 #[tokio::test]
 async fn remote_exec_server_gracefully_stops_when_parent_stdin_closes() -> Result<()> {
     const ENVIRONMENT_ID: &str = "environment-parent-lifetime";
@@ -248,6 +479,8 @@ async fn remote_exec_server_gracefully_stops_when_parent_stdin_closes() -> Resul
         codex_home.path().join("config.toml"),
         format!(
             r#"
+cli_auth_credentials_store = "file"
+
 [analytics]
 enabled = true
 
@@ -267,10 +500,14 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
     let manifest = package.path().join("codex-package.json");
     std::fs::write(&manifest, r#"{"version":"1.2.3-alpha.4"}"#)?;
 
+    let stderr_path = codex_home.path().join("executor-stderr.log");
+    let stderr = std::fs::File::create(&stderr_path)?;
     let mut command = tokio::process::Command::new(executable);
     command
+        .current_dir(codex_home.path())
         .env("CODEX_HOME", codex_home.path())
         .env("CODEX_API_KEY", "test-api-key")
+        .env_remove("CODEX_ACCESS_TOKEN")
         .env(
             codex_exec_server::CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE_ENV_VAR,
             "true",
@@ -288,7 +525,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
             "2",
         ])
         .stdin(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::from(stderr))
         .kill_on_drop(true);
 
     let mut child = command.spawn()?;
@@ -315,10 +552,11 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
                     .filter(|request| request.url.path().ends_with("/register"))
                     .count()
             });
-            // Inspect only the stage reached, not request headers or bodies containing auth.
+            // Keep registry request headers and bodies out of the failure report.
             let child_status = child.try_wait();
+            let stderr = std::fs::read_to_string(&stderr_path)?;
             return Err(error.context(format!(
-                "remote executor failed to attach (registration requests: {registration_requests:?}, child status: {child_status:?})"
+                "remote executor failed to attach (registration requests: {registration_requests:?}, child status: {child_status:?}); stderr: {stderr}"
             )));
         }
     };
@@ -364,6 +602,9 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
     );
     let expected_info = EnvironmentInfo {
         executor_version: "1.2.3-alpha.4".to_string(),
+        cwd: Some(PathUri::from_host_native_path(
+            codex_home.path().canonicalize()?,
+        )?),
         // The build identity belongs to the spawned CLI, not this test process.
         provider_id: environment_info.provider_id.clone(),
         prepend_path_dirs: environment_info.prepend_path_dirs.clone(),

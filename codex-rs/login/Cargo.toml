@@ -31,6 +31,7 @@ rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
@@ -45,6 +46,9 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
@@ -54,7 +58,6 @@ keyring = { workspace = true }
 pretty_assertions = { workspace = true }
 regex-lite = { workspace = true }
 serial_test = { workspace = true }
-tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 wiremock = { workspace = true }
 

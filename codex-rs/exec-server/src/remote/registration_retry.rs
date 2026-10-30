@@ -27,6 +27,20 @@ impl EnvironmentRegistryClient {
                 .await
             {
                 Ok(response) => return Ok(response),
+                // Credential resolution failed before any registration was sent.
+                // Keep the executor alive without replaying an ambiguous write.
+                Err(ExecServerError::RequestNotSent(_)) => {
+                    let delay = registry_recovery_retry_delay(&retry_key, attempt);
+                    attempt = attempt.saturating_add(1);
+                    warn!(
+                        noise_event = "registration",
+                        noise_outcome = "retry",
+                        retry_attempt = attempt,
+                        retry_delay_ms = delay.as_millis() as u64,
+                        "Noise executor retrying unavailable credential resolution"
+                    );
+                    sleep(delay).await;
+                }
                 Err(ExecServerError::EnvironmentRegistryHttp { status, code, .. })
                     if matches!(
                         (status, code.as_deref()),

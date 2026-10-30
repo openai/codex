@@ -17,6 +17,62 @@ use wiremock::matchers::header;
 use wiremock::matchers::path;
 
 #[tokio::test]
+async fn executor_startup_rejects_agent_identity_before_cloud_config() -> Result<()> {
+    let home = TempDir::new()?;
+    let server = MockServer::start().await;
+    Mock::given(wiremock::matchers::any())
+        .respond_with(ResponseTemplate::new(503))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let manager = codex_login::test_support::auth_manager_with_agent_identity().await?;
+    let Some(codex_login::CodexAuth::AgentIdentity(agent)) = manager.auth_cached() else {
+        anyhow::bail!("expected Agent Identity fixture");
+    };
+    let mut record = agent.record().clone();
+    record.task_id = None;
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "auth_mode": codex_protocol::auth::AuthMode::AgentIdentity,
+            "agent_identity": record,
+        }))?,
+    )?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "cli_auth_credentials_store = 'file'\n",
+    )?;
+    let mut command = tokio::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?);
+    command
+        .current_dir(home.path())
+        .env("CODEX_HOME", home.path())
+        .env_remove("CODEX_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("CODEX_ACCESS_TOKEN")
+        .env("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL", server.uri())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .args([
+            "exec-server",
+            "--remote",
+            &server.uri(),
+            "--environment-id",
+            "env",
+        ])
+        .kill_on_drop(true);
+    let output =
+        tokio::time::timeout(std::time::Duration::from_secs(20), command.output()).await??;
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires ChatGPT authentication or API key authentication"),
+        "{stderr}"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn noise_executor_refreshes_on_401_and_reloads_rotated_credentials() -> Result<()> {
     let home = TempDir::new()?;
     let registry = MockServer::start().await;
@@ -58,12 +114,12 @@ async fn noise_executor_refreshes_on_401_and_reloads_rotated_credentials() -> Re
             .mount(&registry)
             .await;
     }
-    // A later registry rejection reloads the rotated token from storage, without
-    // another OAuth refresh or unconditional reloads on ordinary requests.
+    // The later registration sees the stored rotation before sending a stale
+    // request. The initial 401 above still exercises bounded auth recovery.
     Mock::given(path("/cloud/environment/env/register"))
         .and(header("authorization", "Bearer refreshed-token"))
         .respond_with(ResponseTemplate::new(401))
-        .expect(1)
+        .expect(0)
         .mount(&registry)
         .await;
     let mut child = tokio::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)

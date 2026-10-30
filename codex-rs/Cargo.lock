@@ -3323,6 +3323,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "chrono",
  "clap",
  "codex-api",
  "codex-app-server",
@@ -3343,8 +3344,10 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-process",
  "codex-websocket-auth",
+ "futures",
  "http 1.4.0",
  "insta",
+ "jsonwebtoken",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3355,6 +3358,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wiremock",
 ]
 
 [[package]]
@@ -3992,6 +3996,7 @@ dependencies = [
  "url",
  "urlencoding",
  "webbrowser",
+ "windows-sys 0.61.2",
  "wiremock",
 ]
 
