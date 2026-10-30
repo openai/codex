@@ -300,10 +300,10 @@ fn candidate_filenames<'a>(config: &'a Config, cwd: &PathUri) -> Vec<&'a str> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LoadedAgentsMd {
     /// Account- or home-scoped instructions supplied by the host.
-    user_instructions: Option<Instructions>,
+    pub(crate) user_instructions: Option<Instructions>,
 
     /// Thread-scoped instructions supplied by the host.
-    thread_instructions: Option<Instructions>,
+    pub(crate) thread_instructions: Option<Instructions>,
 
     /// Ordered instructions and their provenance.
     entries: Vec<InstructionEntry>,

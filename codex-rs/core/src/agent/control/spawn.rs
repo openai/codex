@@ -87,14 +87,24 @@ pub(in crate::agent) async fn fresh_child_history_and_tools(
         ThreadHistoryMode::Paginated
     )
     .then_some(ThreadHistoryMode::Paginated);
-    let tools = if version == MultiAgentVersion::V2
+    (
+        history_mode,
+        inherited_dynamic_tools(parent, config, version).await,
+    )
+}
+
+pub(in crate::agent) async fn inherited_dynamic_tools(
+    parent: &CodexThread,
+    config: &Config,
+    version: MultiAgentVersion,
+) -> Vec<DynamicToolSpec> {
+    if version == MultiAgentVersion::V2
         && config.features.enabled(Feature::MultiAgentV2DynamicTools)
     {
         parent.session.dynamic_tools().await.to_vec()
     } else {
         Vec::new()
-    };
-    (history_mode, tools)
+    }
 }
 
 impl LocalAgentControl {

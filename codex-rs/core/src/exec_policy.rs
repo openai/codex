@@ -277,6 +277,7 @@ pub enum ExecPolicyUpdateError {
 
 pub(crate) struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
+    source_requirements: Option<Arc<RequirementsExecPolicy>>,
     update_lock: Semaphore,
 }
 
@@ -295,8 +296,16 @@ pub(crate) struct ExecApprovalRequest<'a> {
 
 impl ExecPolicyManager {
     pub(crate) fn new(policy: Arc<Policy>) -> Self {
+        Self::from_snapshot(policy, /*source_requirements*/ None)
+    }
+
+    pub(crate) fn from_snapshot(
+        policy: Arc<Policy>,
+        source_requirements: Option<Arc<RequirementsExecPolicy>>,
+    ) -> Self {
         Self {
             policy: ArcSwap::from(policy),
+            source_requirements,
             update_lock: Semaphore::new(/*permits*/ 1),
         }
     }
@@ -307,11 +316,19 @@ impl ExecPolicyManager {
         if let Some(err) = warning.as_ref() {
             tracing::warn!("failed to parse rules: {err}");
         }
-        Ok(Self::new(Arc::new(policy)))
+        let source_requirements = config_stack.requirements().exec_policy.as_deref().cloned();
+        Ok(Self::from_snapshot(
+            Arc::new(policy),
+            source_requirements.map(Arc::new),
+        ))
     }
 
     pub(crate) fn current(&self) -> Arc<Policy> {
         self.policy.load_full()
+    }
+
+    pub(crate) fn snapshot(&self) -> (Arc<Policy>, Option<Arc<RequirementsExecPolicy>>) {
+        (self.current(), self.source_requirements.clone())
     }
 
     #[cfg(test)]

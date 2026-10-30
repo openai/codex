@@ -284,7 +284,8 @@ impl CodexThread {
     /// Creates an idle V2 child here with the invoking step's environments and live application
     /// bindings. Compatible children share the parent's exec policy.
     /// Ending the invocation or dropping this future aborts pending startup.
-    /// [`crate::ThreadManager::create_prepared_child`] defines acceptance and cleanup.
+    /// Success publishes the idle child and transfers ownership to the host. An error or dropped
+    /// future schedules cleanup of any provisional child. Already-durable history may remain.
     pub async fn create_child(
         &self,
         invocation: &crate::ToolInvocationContext,
@@ -294,15 +295,13 @@ impl CodexThread {
         crate::agent::host::create(self, invocation, request, reservation).await
     }
 
-    /// Captures inputs from a live invocation for [`crate::ThreadManager::create_prepared_child`].
-    /// The host owns cancellation and snapshot freshness after this returns. Detached preparation
-    /// rejects managed application network, auth, and cloud config bindings.
+    /// Reads the parent settings for this live tool invocation, including the dynamic tools
+    /// currently inheritable by a fresh child. The host chooses the child's name, role, and history.
     pub async fn prepare_child(
         &self,
         invocation: &crate::ToolInvocationContext,
-        request: crate::ThreadCreateRequest,
-    ) -> Result<crate::PreparedThreadSpawn, crate::ThreadSpawnError> {
-        crate::agent::host::prepare(self, invocation, request).await
+    ) -> Result<crate::PreparedChildContext, crate::ThreadSpawnError> {
+        crate::agent::host::prepare(self, invocation).await
     }
 
     /// Returns extension-owned data attached to this thread runtime.

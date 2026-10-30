@@ -10,7 +10,6 @@ pub(crate) use invocation::create;
 pub(crate) use invocation::prepare;
 pub(crate) use invocation::tool_invocation;
 pub use mcp_metadata::AgentMcpMetadataRecipient;
-pub(crate) use spawn::start_prepared;
 pub use types::HostThreadSpawnReservation;
+pub use types::PreparedChildContext;
 pub(crate) use types::PreparedChildInheritance;
-pub use types::PreparedThreadSpawn;

@@ -1,15 +1,13 @@
 #![cfg(test)]
 
-//! Tests live child bindings and the capture boundary for detached child authority.
+//! Tests same-manager child bindings and invocation lifetime.
 
-use super::SpawnDestination;
-use super::prepare_spawn;
+use crate::CodexThread;
+use crate::ConfigRefreshOutcome;
 use crate::HostThreadSpawnReservation;
 use crate::HostToolInvocationLookup;
 use crate::ThreadManager;
 use crate::agent::host::InvocationReservation;
-use crate::agent::types::SpawnAgentForkMode;
-use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::thread_manager::StartThreadOptions;
 use crate::thread_spawn::ThreadCreateRequest;
@@ -18,8 +16,10 @@ use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use codex_config::ScopedSkillsConfig;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::RemoteEnvironmentOptions;
+use codex_execpolicy::Decision;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
@@ -27,16 +27,106 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_tools::ToolName;
 use pretty_assertions::assert_eq;
-use std::future::poll_fn;
 use std::net::TcpListener;
 use std::sync::Arc;
-use std::task::Poll;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-async fn spawn_fixture() -> anyhow::Result<(tempfile::TempDir, Config, ThreadManager)> {
+async fn spawn_call(parent: &CodexThread) -> anyhow::Result<ToolInvocation> {
+    parent
+        .thread_extension_data()
+        .insert(HostToolInvocationLookup);
+    let session = &parent.session;
+    let step = session
+        .capture_step_context(session.new_default_turn().await, &CancellationToken::new())
+        .await?;
+    Ok(ToolInvocation {
+        session: Arc::clone(session),
+        turn: Arc::clone(&step.turn),
+        step_context: step,
+        cancellation_token: CancellationToken::new(),
+        tracker: Default::default(),
+        call_id: "spawn-call".into(),
+        tool_name: ToolName::plain("host_spawn"),
+        source: ToolCallSource::Direct,
+        payload: ToolPayload::Function {
+            arguments: "{}".into(),
+        },
+        native_call: None,
+        environments: Default::default(),
+    })
+}
+
+#[tokio::test]
+async fn prepare_child_retains_loaded_exec_policy_requirements_after_mcp_refresh()
+-> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
-    let config = ConfigBuilder::without_managed_config_for_tests()
+    let builder =
+        || ConfigBuilder::without_managed_config_for_tests().codex_home(home.path().to_path_buf());
+    let mut config = builder()
+        .cloud_config_bundle(CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            "[[rules.prefix_rules]]\npattern = [{ token = 'managed-command' }]\ndecision = 'forbidden'",
+        ))
+        .build()
+        .await?;
+    config.features.enable(Feature::MultiAgentV2)?;
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        home.path().to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let parent = manager
+        .start_thread(StartThreadOptions::new(config))
+        .await?
+        .thread;
+    let startup = parent.config().await;
+    let loaded = startup
+        .config_layer_stack
+        .requirements()
+        .exec_policy
+        .as_deref()
+        .expect("startup has a managed exec policy");
+    assert_eq!(
+        parent
+            .refresh_mcp_config(Arc::clone(&startup), builder().build().await?)
+            .await,
+        ConfigRefreshOutcome::Published
+    );
+    let call = spawn_call(&parent).await?;
+    assert_eq!(
+        call.turn
+            .config
+            .config_layer_stack
+            .requirements()
+            .exec_policy,
+        None
+    );
+    let reservation = InvocationReservation::default();
+    reservation.reserve(&parent.session, &call.turn, &call.call_id)?;
+    let _guard = reservation.activate(&call);
+    let invocation = parent.tool_invocation(&call.turn.sub_id, &call.call_id)?;
+    let prepared = parent.prepare_child(&invocation).await?;
+    assert_eq!(
+        prepared.exec_policy_source_requirements.as_deref(),
+        Some(loaded)
+    );
+    assert_eq!(
+        prepared
+            .exec_policy
+            .check(&["managed-command".into()], &|_| Decision::Allow)
+            .decision,
+        Decision::Forbidden
+    );
+    parent.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() -> anyhow::Result<()>
+{
+    let home = tempfile::tempdir()?;
+    let mut config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(home.path().to_path_buf())
         .build()
         .await?;
@@ -46,23 +136,6 @@ async fn spawn_fixture() -> anyhow::Result<(tempfile::TempDir, Config, ThreadMan
         home.path().to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
-    Ok((home, config, manager))
-}
-
-fn child_request(fork_mode: Option<SpawnAgentForkMode>) -> ThreadCreateRequest {
-    ThreadCreateRequest {
-        task_name: "worker".into(),
-        fork_mode,
-        agent_type: None,
-        model: None,
-        reasoning_effort: None,
-    }
-}
-
-#[tokio::test]
-async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() -> anyhow::Result<()>
-{
-    let (_home, mut config, manager) = spawn_fixture().await?;
     config.features.enable(Feature::MultiAgentV2)?;
     config.features.enable(Feature::DeferredExecutor)?;
     let environments = manager.environment_manager();
@@ -93,28 +166,8 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
         })
         .await?
         .thread;
-    parent
-        .thread_extension_data()
-        .insert(HostToolInvocationLookup);
     let session = &parent.session;
-    let step = session
-        .capture_step_context(session.new_default_turn().await, &CancellationToken::new())
-        .await?;
-    let call = ToolInvocation {
-        session: Arc::clone(session),
-        turn: Arc::clone(&step.turn),
-        step_context: step,
-        cancellation_token: CancellationToken::new(),
-        tracker: Default::default(),
-        call_id: "spawn-call".into(),
-        tool_name: ToolName::plain("host_spawn"),
-        source: ToolCallSource::Direct,
-        payload: ToolPayload::Function {
-            arguments: "{}".into(),
-        },
-        native_call: None,
-        environments: Default::default(),
-    };
+    let call = spawn_call(&parent).await?;
     let reservation = InvocationReservation::default();
     reservation.reserve(session, &call.turn, &call.call_id)?;
     assert!(
@@ -124,16 +177,24 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
     );
     let guard = reservation.activate(&call);
     let invocation = parent.tool_invocation(&call.turn.sub_id, &call.call_id)?;
+    let before = parent.prepare_child(&invocation).await?.exec_policy;
+    let amendment = ExecPolicyAmendment::new(vec!["snapshot-tool".into(), "check".into()]);
+    session.persist_execpolicy_amendment(&amendment).await?;
+    let after = parent.prepare_child(&invocation).await?.exec_policy;
+    assert!(!before.get_allowed_prefixes().contains(&amendment.command));
+    assert!(after.get_allowed_prefixes().contains(&amendment.command));
     environments.upsert_environment("workspace".into(), url, /*connect_timeout*/ None)?;
-    assert!(matches!(
-        parent.prepare_child(&invocation, child_request(/*fork_mode*/ None)).await,
-        Err(ThreadSpawnError::Backend(error)) if error.to_string().contains("resolved environment configuration")
-    ));
     let child_id = ThreadId::new();
     parent
         .create_child(
             &invocation,
-            child_request(/*fork_mode*/ None),
+            ThreadCreateRequest {
+                task_name: "worker".into(),
+                fork_mode: None,
+                agent_type: None,
+                model: None,
+                reasoning_effort: None,
+            },
             HostThreadSpawnReservation {
                 thread_id: child_id,
                 control: Arc::clone(&session.services.agent_control),
@@ -184,72 +245,10 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
     let _next_guard = next.activate(&call);
     parent.tool_invocation(&call.turn.sub_id, &call.call_id)?;
     assert!(matches!(
-        parent.prepare_child(&invocation, child_request(/*fork_mode*/ None)).await,
+        parent.prepare_child(&invocation).await,
         Err(ThreadSpawnError::Preparation(message)) if message == "spawning tool call finished"
     ));
     child.shutdown_and_wait().await?;
-    parent.shutdown_and_wait().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn prepared_spawn_captures_policy_after_fork_history() -> anyhow::Result<()> {
-    let (home, config, manager) = spawn_fixture().await?;
-    let parent = manager
-        .start_thread(StartThreadOptions::new(config))
-        .await?
-        .thread;
-    let session = &parent.session;
-    let step = session
-        .capture_step_context(session.new_default_turn().await, &CancellationToken::new())
-        .await?;
-    let (request, path) = crate::thread_spawn::prepare(
-        session,
-        &step,
-        "fork-call",
-        child_request(Some(SpawnAgentForkMode::FullHistory)),
-    )
-    .await?;
-    let rollout = parent
-        .rollout_path()
-        .expect("local parent has a rollout path");
-    assert!(!rollout.try_exists()?);
-    let mut preparation = std::pin::pin!(prepare_spawn(
-        &parent,
-        request,
-        path,
-        SpawnDestination::Detached,
-    ));
-    // Pause the fork as soon as it materializes the parent's rollout, then amend the policy.
-    let materialized = poll_fn(|cx| {
-        if rollout.exists() {
-            return Poll::Ready(());
-        }
-        assert!(
-            preparation.as_mut().poll(cx).is_pending(),
-            "fork finished before materializing history"
-        );
-        Poll::Pending
-    });
-    tokio::time::timeout(Duration::from_secs(10), materialized).await?;
-    let command = vec!["late_fork_policy_test".to_owned()];
-    let parent_policy = &session.services.exec_policy;
-    parent_policy
-        .append_amendment_and_update(home.path(), &ExecPolicyAmendment::new(command.clone()))
-        .await?;
-    let prepared = tokio::time::timeout(Duration::from_secs(10), preparation).await??;
-    let later = vec!["after_prepare_policy_test".to_owned()];
-    parent_policy
-        .append_amendment_and_update(home.path(), &ExecPolicyAmendment::new(later.clone()))
-        .await?;
-    let prefixes = prepared
-        .inheritance
-        .exec_policy
-        .expect("detached policy")
-        .current()
-        .get_allowed_prefixes();
-    assert!(prefixes.contains(&command));
-    assert!(!prefixes.contains(&later));
     parent.shutdown_and_wait().await?;
     Ok(())
 }

@@ -3,43 +3,47 @@
 use crate::agent::api::AgentControl;
 use crate::agents_md_manager::SessionInstructions;
 use crate::exec_policy::ExecPolicyManager;
-use crate::session::session::AppServerClientMetadata;
-use crate::thread_manager::StartThreadOptions;
-use codex_protocol::AgentPath;
-use codex_protocol::SessionId;
+use codex_execpolicy::Policy;
+use codex_execpolicy::RequirementsExecPolicy;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::TurnEnvironmentRequest;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::sync::Arc;
 
 /// A fresh child ID reserved in the host's tree.
 /// The host commits membership, serializes startup attempts and deduplicates retries.
-/// Core derives parent, session and path from [`PreparedThreadSpawn`]; the controller
-/// supplies runtime coordination, and its `spawn` method is not called.
+/// Core derives the parent, session and path from the invocation and child request.
+/// The controller supplies runtime coordination.
 pub struct HostThreadSpawnReservation {
     pub thread_id: ThreadId,
     pub control: Arc<dyn AgentControl>,
 }
 
-/// Opaque, in-process snapshot for starting a child without its source runtime.
-/// Settings and authority reflect preparation time. The destination must supply compatible
-/// services and register the captured environment IDs with matching working directories and
-/// capability mappings. Detached preparation rejects thread attachments, live instruction providers,
-/// enabled EMA-authenticated MCP servers, and unresolved environment configuration.
-/// The child inherits user and thread instructions and discovers repository instructions
-/// in its destination environment.
-pub struct PreparedThreadSpawn {
-    pub(super) caller: ThreadId,
-    pub(super) session_id: SessionId,
-    pub(super) agent_path: AgentPath,
-    pub(super) client_metadata: AppServerClientMetadata,
-    pub(super) thread_options: StartThreadOptions,
-    pub(super) inheritance: PreparedChildInheritance,
-}
-
-impl PreparedThreadSpawn {
-    /// Canonical path of the child in the agent tree.
-    pub fn agent_path(&self) -> &AgentPath {
-        &self.agent_path
-    }
+/// Parent inputs captured from the tool invocation for a host starting or forking a child.
+/// The host binds the destination's services and applies the requested child settings.
+/// Repository instructions are discovered at the destination.
+pub struct PreparedChildContext {
+    pub originator: String,
+    pub user_instructions: Option<String>,
+    pub thread_instructions: Option<String>,
+    pub cwd: AbsolutePathBuf,
+    pub environments: Vec<TurnEnvironmentRequest>,
+    pub selected_capability_roots: Vec<SelectedCapabilityRoot>,
+    pub resolved_permission_profile: PermissionProfile,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    /// Parent exec policy at preparation time. Inherit it only for compatible policy sources.
+    pub exec_policy: Arc<Policy>,
+    /// Managed requirements used to load the policy, before any session amendments.
+    pub exec_policy_source_requirements: Option<Arc<RequirementsExecPolicy>>,
+    /// Current tool declarations a fresh child can inherit. The host supplies their execution route.
+    pub dynamic_tools: Vec<DynamicToolSpec>,
+    pub disabled_plugin_ids: Vec<String>,
 }
 
 pub(crate) struct PreparedChildInheritance {

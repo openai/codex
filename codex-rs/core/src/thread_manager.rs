@@ -1197,27 +1197,6 @@ impl ThreadManager {
         .await
     }
 
-    /// Creates a [prepared child](crate::PreparedThreadSpawn) using this manager's services.
-    ///
-    /// On `Ok`, the child is loaded and idle, its creation has been published, and the host
-    /// owns it. The host chooses whether to submit work and handles any later delivery failure.
-    ///
-    /// An error or a dropped future schedules asynchronous cleanup of any provisional child.
-    /// Already-durable history may remain.
-    pub async fn create_prepared_child(
-        &self,
-        prepared: crate::agent::host::PreparedThreadSpawn,
-        reservation: crate::agent::host::HostThreadSpawnReservation,
-    ) -> Result<crate::ThreadSpawnResult, crate::ThreadSpawnError> {
-        crate::agent::host::start_prepared(
-            &self.agent_control().runtime,
-            prepared,
-            reservation,
-            /*invocation*/ None,
-        )
-        .await
-    }
-
     /// Starts a fresh internal session associated with an existing parent thread.
     pub async fn spawn_internal_session(
         &self,
@@ -2138,22 +2117,14 @@ impl ThreadManagerState {
         Box::pin(self.spawn_thread(request)).await
     }
 
-    /// Starts from captured inheritance without requiring a live parent runtime.
-    pub(crate) async fn spawn_prepared_child_thread(
+    /// Starts a host-reserved child using inheritance captured from this manager's parent.
+    pub(crate) async fn spawn_host_child_thread(
         &self,
         options: StartThreadOptions,
         agent_control: AgentControlInit,
         parent_thread_id: ThreadId,
         inheritance: crate::agent::host::PreparedChildInheritance,
     ) -> CodexResult<NewThread> {
-        if let Some(environments) = &options.environments {
-            crate::environment_selection::validate_environment_ids_and_cwds(
-                &self.environment_manager,
-                environments
-                    .iter()
-                    .map(|environment| (environment.environment_id.as_str(), &environment.cwd)),
-            )?;
-        }
         options.reserved_thread_id.ok_or_else(|| {
             CodexErr::InvalidRequest("prepared child startup requires a reserved thread ID".into())
         })?;

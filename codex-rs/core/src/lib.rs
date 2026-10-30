@@ -156,7 +156,7 @@ mod thread_spawn;
 pub use agent::host::AgentMcpMetadataRecipient;
 pub use agent::host::HostThreadSpawnReservation;
 pub use agent::host::HostToolInvocationLookup;
-pub use agent::host::PreparedThreadSpawn;
+pub use agent::host::PreparedChildContext;
 pub use agent::host::ToolInvocationContext;
 pub use thread_spawn::ThreadCreateRequest;
 pub use thread_spawn::ThreadSpawnError;
