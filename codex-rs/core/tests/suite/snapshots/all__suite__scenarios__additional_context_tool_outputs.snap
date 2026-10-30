@@ -8,8 +8,12 @@ Scenario: Named context changes are appended before the user; unchanged values a
 -- request 1 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 02:message/developer:
     <application>Keep the answer brief.</application>
 03:function_call_output/agent.browser:The launch is on Monday.

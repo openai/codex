@@ -15,13 +15,13 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (7; hash=c7eaf521f176989a):
+  tools (7; hash=f47d2e65b8d3bd06):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=7c8f464569dbaa9c
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
     - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
-    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
 00:message/developer:
@@ -29,8 +29,12 @@ Settings:
 01:compaction:encrypted=true; chars=17; hash=3733598f92aa081a
 02:message/user:
     Keep the working tree unchanged.
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -59,8 +63,12 @@ Settings: relative to window 1
     <MODEL_INSTRUCTIONS>
 02:message/user:
     Keep the working tree unchanged.
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -186,8 +194,12 @@ Settings: same as window 2
     <MODEL_INSTRUCTIONS>
 02:message/user:
     Keep the working tree unchanged.
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -218,8 +230,12 @@ Settings: same as window 2
     Confirm where publishing is allowed.
 04:message/user:
     Continue with the new model.
-05:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+05:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 06:message/user:
     <ENVIRONMENT_CONTEXT>
 07:message/user:
@@ -342,8 +358,12 @@ Settings: same as window 2
     Confirm where publishing is allowed.
 04:message/user:
     Continue with the new model.
-05:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+05:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 06:message/user:
     <ENVIRONMENT_CONTEXT>
 07:message/user:

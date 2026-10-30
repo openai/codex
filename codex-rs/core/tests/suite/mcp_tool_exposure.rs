@@ -241,13 +241,9 @@ fn format_labeled_requests_snapshot(
     )
 }
 
-fn enable_deferred_tool_world_state_without_agents(config: &mut Config) {
+fn configure_deferred_tool_world_state_without_agents(config: &mut Config) {
     config.update_plan_enabled = true;
     config.agents_enabled = false;
-    config
-        .features
-        .enable(Feature::DeferredToolWorldState)
-        .expect("test config should allow feature update");
 }
 
 fn tools_state_sections(request: &ResponsesRequest) -> Vec<String> {
@@ -1004,20 +1000,18 @@ async fn elevated_apps_catalog_limit_requires_host_owned_registration() -> Resul
         .await;
         test.submit_turn("inspect the large Apps tool catalog")
             .await?;
-        let body = response.single_request().body_json();
-        let description = body["tools"]
-            .as_array()
-            .and_then(|tools| {
-                tools.iter().find_map(|tool| {
-                    (tool.get("type").and_then(Value::as_str) == Some("tool_search"))
-                        .then(|| tool.get("description").and_then(Value::as_str))
-                        .flatten()
-                })
-            })
-            .expect("large Apps catalogs should remain discoverable through tool_search");
+        let request = response.single_request();
         assert!(
-            description.contains("Calendar"),
-            "the accepted Apps catalog should remain model-discoverable: {description}"
+            request.body_json()["tools"]
+                .as_array()
+                .is_some_and(|tools| { tools.iter().any(|tool| tool["type"] == "tool_search") }),
+            "large Apps catalogs should remain discoverable through tool_search"
+        );
+        assert!(
+            tools_state_sections(&request)
+                .iter()
+                .any(|text| text.contains("mcp__codex_apps__calendar")),
+            "the accepted Apps catalog should remain model-discoverable in world state"
         );
         test.codex.shutdown_and_wait().await?;
     }
@@ -1092,48 +1086,6 @@ async fn code_mode_only_exposes_direct_model_only_mcp_namespaces() -> Result<()>
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_tool_world_state_is_disabled_by_default() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let apps_server = AppsTestServer::mount_searchable(&server).await?;
-    let response = responses::mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-
-    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone());
-    let test = builder.build(&server).await?;
-    test.submit_turn("inspect deferred MCP tools").await?;
-
-    let request = response.single_request();
-    assert!(
-        request
-            .message_input_texts("developer")
-            .into_iter()
-            .all(|text| !text.contains("<tools>")),
-        "deferred tool world state should not be injected unless its feature is enabled"
-    );
-    assert!(
-        request.body_json()["tools"]
-            .as_array()
-            .is_some_and(|tools| {
-                tools
-                    .iter()
-                    .any(|tool| tool.get("type").and_then(Value::as_str) == Some("tool_search"))
-            }),
-        "disabling tool world state must not disable deferred tool discovery"
-    );
-
-    Ok(())
-}
-
 // Keep spawned tasks on the thread with the scoped tracing subscriber.
 #[tokio::test(flavor = "current_thread")]
 async fn deferred_tool_world_state_tracks_initial_unchanged_and_removed_namespaces() -> Result<()> {
@@ -1150,7 +1102,7 @@ async fn deferred_tool_world_state_tracks_initial_unchanged_and_removed_namespac
     let apps_server = AppsTestServer::mount_searchable(&server).await?;
     let response = mount_sse_sequence(&server, completed_response_sequence(/*count*/ 3)).await;
     let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
-        .with_config(enable_deferred_tool_world_state_without_agents);
+        .with_config(configure_deferred_tool_world_state_without_agents);
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
 
@@ -1240,7 +1192,7 @@ async fn initially_empty_deferred_tool_world_state_is_not_rendered_or_persisted(
     let server = responses::start_mock_server().await;
     let response = mount_sse_sequence(&server, completed_response_sequence(/*count*/ 1)).await;
     let mut builder = core_test_support::test_codex::test_codex()
-        .with_config(enable_deferred_tool_world_state_without_agents);
+        .with_config(configure_deferred_tool_world_state_without_agents);
     let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn("inspect empty deferred tools").await?;
 
@@ -1278,7 +1230,7 @@ async fn deferred_tool_world_state_survives_resume_without_duplicate_updates() -
     let apps_server = AppsTestServer::mount_searchable(&server).await?;
     let response = mount_sse_sequence(&server, completed_response_sequence(/*count*/ 2)).await;
     let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
-        .with_config(enable_deferred_tool_world_state_without_agents);
+        .with_config(configure_deferred_tool_world_state_without_agents);
     let initial = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&initial.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
     initial
@@ -1311,7 +1263,7 @@ async fn deferred_tool_world_state_survives_resume_without_duplicate_updates() -
         })
     );
     let mut resume_builder = search_capable_apps_builder(apps_server.chatgpt_base_url)
-        .with_config(enable_deferred_tool_world_state_without_agents);
+        .with_config(configure_deferred_tool_world_state_without_agents);
     let resumed = resume_builder.restart(&server, &initial).await?;
     drop(initial);
     wait_for_mcp_server(&resumed.codex, CODEX_APPS_MCP_SERVER_NAME).await?;

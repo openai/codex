@@ -15,13 +15,13 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (7; hash=9ca29162272b7d54):
+  tools (7; hash=994c9baf5d9a36a0):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
     - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
-    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
 00:message/developer:
@@ -46,24 +46,28 @@ Settings:
     <codex_internal_context source="user_goal">
     User set the goal: "Inspect the workspace; do not run commands outside the sandbox."
     </codex_internal_context>
-02:message/developer:
-    <permissions instructions>
-    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
-    # Escalation Requests
+02:message/developer[2]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
 
-    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
 
-    - Pipes: |
-    - Logical operators: &&, ||
-    <OMITTED 47 LINES; ~812 TOKENS; hash=035ff6687b0303fa>
-    Good examples of prefixes:
-    - ["npm", "run", "dev"]
-    - ["gh", "pr", "check"]
-    - ["cargo", "test"]
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 47 LINES; ~812 TOKENS; hash=035ff6687b0303fa>
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
 
 
-    `approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for c...he risk and send a final message to ask for approval. [hash=c592d119d24cd2d6]
-    </permissions instructions>
+        `approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for c...he risk and send a final message to ask for approval. [hash=c592d119d24cd2d6]
+        </permissions instructions>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 03:message/user:
     <environment_context>
       <cwd><CWD></cwd>
@@ -206,24 +210,28 @@ Settings: same as window 1
     <codex_internal_context source="user_goal">
     User set the goal: "Inspect the workspace; do not run commands outside the sandbox."
     </codex_internal_context>
-02:message/developer:
-    <permissions instructions>
-    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
-    # Escalation Requests
+02:message/developer[2]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
 
-    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
 
-    - Pipes: |
-    - Logical operators: &&, ||
-    <OMITTED 47 LINES; ~812 TOKENS; hash=035ff6687b0303fa>
-    Good examples of prefixes:
-    - ["npm", "run", "dev"]
-    - ["gh", "pr", "check"]
-    - ["cargo", "test"]
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 47 LINES; ~812 TOKENS; hash=035ff6687b0303fa>
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
 
 
-    `approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for c...he risk and send a final message to ask for approval. [hash=c592d119d24cd2d6]
-    </permissions instructions>
+        `approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for c...he risk and send a final message to ask for approval. [hash=c592d119d24cd2d6]
+        </permissions instructions>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 03:message/user:
     <environment_context>
       <cwd><CWD></cwd>

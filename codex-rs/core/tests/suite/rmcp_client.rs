@@ -1426,23 +1426,17 @@ async fn stdio_server_round_trip(server_name: &'static str, namespace: &str) -> 
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let search_request = search_mock.single_request().body_json();
-    let search_description = search_request
-        .get("tools")
-        .and_then(Value::as_array)
-        .and_then(|tools| {
-            tools
-                .iter()
-                .find(|tool| tool.get("type").and_then(Value::as_str) == Some("tool_search"))
-        })
-        .and_then(|tool| tool.get("description").and_then(Value::as_str))
-        .expect("the model should receive a tool search description");
+    let search_request = search_mock.single_request();
+    let tools_state = search_request
+        .message_input_texts("developer")
+        .into_iter()
+        .find(|text| text.starts_with("<tools>"))
+        .expect("the model should receive the deferred tools block");
     assert!(
-        search_description.len() < 513 * 1024,
-        "the complete tool search description must remain bounded"
+        tools_state.len() <= 4 * 1024,
+        "the deferred tools block must remain bounded"
     );
-    assert!(search_description.contains(&format!("- {server_name}: {expected_description}")));
-    assert!(search_description.contains("🦀keep the complete MCP metadata"));
+    assert!(tools_state.contains(&format!("- {namespace}: ")));
 
     let search_output = call_mock
         .single_request()

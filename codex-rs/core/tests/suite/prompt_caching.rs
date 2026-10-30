@@ -864,6 +864,14 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     expected_body2.push(expected_settings_update_msg);
     expected_body2.push(expected_permissions_update_msg);
     expected_body2.push(expected_env_msg_2);
+    expected_body2.push(serde_json::json!({
+        "type": "message",
+        "role": "developer",
+        "content": [{
+            "type": "input_text",
+            "text": "<tools>\nRemoved deferred tool namespaces:\n- multi_agent_v1: Tools for spawning and managing sub-agents.\nNo deferred tool namespaces remain.\n</tools>"
+        }]
+    }));
     expected_body2.push(expected_user_message_2);
     assert_eq_without_metadata_or_item_ids(
         body2["input"].clone(),
@@ -1175,6 +1183,14 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         expected_settings_update_msg,
         expected_permissions_update_msg,
         expected_env_update_msg,
+        serde_json::json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": "<tools>\nRemoved deferred tool namespaces:\n- multi_agent_v1: Tools for spawning and managing sub-agents.\nNo deferred tool namespaces remain.\n</tools>"
+            }]
+        }),
         expected_user_message_2,
     ]);
     assert_eq_without_metadata_or_item_ids(body2["input"].clone(), expected_input_2);

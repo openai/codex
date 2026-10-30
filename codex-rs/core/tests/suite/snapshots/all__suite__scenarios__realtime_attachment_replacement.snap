@@ -7,7 +7,7 @@ Scenario: A replacement fences an older pending connection and stale stops; only
 
 ## Window 1
 -- request 1 (turn) --
-00:message/developer[2]:
+00:message/developer[3]:
     [01] <realtime_conversation>
         Realtime conversation started.
 
@@ -20,6 +20,10 @@ Scenario: A replacement fences an older pending connection and stale stops; only
         - Keep responses concise and action-oriented. Your updates should help the intermediary respond to the user.
         </realtime_conversation>
     [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 01:message/user:
     <ENVIRONMENT_CONTEXT>
 02:message/user:

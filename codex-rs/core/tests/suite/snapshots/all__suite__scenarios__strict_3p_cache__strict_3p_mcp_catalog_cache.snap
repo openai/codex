@@ -58,47 +58,58 @@ Settings:
     Output:
      | []
 -- request 3 (turn; turn 2: register MCP with lookup; omit-all, direct-only and excluded) --
-10:message/user:
+10:message/developer:
+    <tools>
+    Deferred tool namespaces:
+    - mcp__environment
+    </tools>
+11:message/user:
     List and call the tools provided by the environment MCP server.
 -- request 4 (turn; turn 2: exec discovery and call results) --
-11:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+12:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
     const results = [];
     for (const t of available) {
       const result = await tools[t.name]({});
       results.push({name: t.name, result: result.content[0].text});
     }
     text(JSON.stringify(results));
-12:custom_tool_call_output:Script completed
+13:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | [{"name":"mcp__environment__lookup","result":"called lookup for  at  with "}]
 -- request 5 (turn; turn 3: same MCP name, new endpoint; replace lookup with resolve and search) --
-13:message/user:
+14:message/user:
     List and call the tools provided by the environment MCP server.
 -- request 6 (turn; turn 3: exec discovery and call results) --
-14:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+15:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
     const results = [];
     for (const t of available) {
       const result = await tools[t.name]({});
       results.push({name: t.name, result: result.content[0].text});
     }
     text(JSON.stringify(results));
-15:custom_tool_call_output:Script completed
+16:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | [{"name":"mcp__environment__resolve","result":"called resolve for  at  with "},{"name":"mcp__environment__search","result":"called search for  at  with "}]
 -- request 7 (turn; turn 4: remove MCP server from config) --
-16:message/user:
+17:message/developer:
+    <tools>
+    Removed deferred tool namespaces:
+    - mcp__environment
+    No deferred tool namespaces remain.
+    </tools>
+18:message/user:
     List and call the tools provided by the environment MCP server.
 -- request 8 (turn; turn 4: exec discovery and call results) --
-17:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
+19:custom_tool_call/exec:const available = ALL_TOOLS.filter(t => t.name.startsWith("mcp__environment__")).sort((a, b) => a.name.localeCompare(b.name));
     const results = [];
     for (const t of available) {
       const result = await tools[t.name]({});
       results.push({name: t.name, result: result.content[0].text});
     }
     text(JSON.stringify(results));
-18:custom_tool_call_output:Script completed
+20:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | []

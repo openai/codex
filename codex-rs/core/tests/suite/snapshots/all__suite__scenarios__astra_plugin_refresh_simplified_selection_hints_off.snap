@@ -110,15 +110,19 @@ Settings:
 -- request 3 (turn) --
 10:message/assistant:
     The Notes tool is not installed yet.
-11:message/developer:
-    <skills_instructions>
-    ## Skills
-    A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
-    ### Skill roots
-    - `r0` = `<PLUGINS_CACHE>/test`
-    ### Available skills
-    - notes:summarize: Summarize team notes (file: r0/notes/local/skills/summarize/SKILL.md)
-    </skills_instructions>
+11:message/developer[2]:
+    [01] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<PLUGINS_CACHE>/test`
+        ### Available skills
+        - notes:summarize: Summarize team notes (file: r0/notes/local/skills/summarize/SKILL.md)
+        </skills_instructions>
+    [02] <tools>
+        Deferred tool namespaces:
+        - mcp__notes: Use these tools to exercise the rmcp test server.
+        </tools>
 12:message/user:
     I installed Notes. Use $notes:summarize and the Notes tool to check that Mira owns the kickoff.
 13:message/user:

@@ -16,7 +16,7 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=49f981f03ae5c5ce):
+00:additional_tools/developer (2; hash=b07492b5514a41d0):
         - namespace/functions; hash=cc6e8cf0e5405f3a
           - custom/exec
           - function/wait
@@ -25,11 +25,15 @@ Settings:
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
-        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 03:message/user:
     <ENVIRONMENT_CONTEXT>
 04:message/user:
@@ -45,7 +49,7 @@ Settings:
 ## Window 2 (after request 3: input diverged at item 02)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=49f981f03ae5c5ce):
+00:additional_tools/developer (2; hash=b07492b5514a41d0):
         - namespace/functions; hash=cc6e8cf0e5405f3a
           - custom/exec
           - function/wait
@@ -54,13 +58,17 @@ Settings: same as window 1
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
-        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
 01:message/developer:
     <MODEL_INSTRUCTIONS>
 02:message/user:
     Begin with the legacy tool prefix.
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:

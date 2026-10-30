@@ -2246,6 +2246,11 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let cache = ToolSearchHandlerCache::default();
 
     let (_session, mut first_turn) = make_session_and_context().await;
+    set_feature(
+        &mut first_turn,
+        Feature::DeferredToolWorldState,
+        /*enabled*/ false,
+    );
     update_turn_settings_for_test(&mut first_turn, |settings| {
         Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
     });
@@ -2275,6 +2280,11 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let first_plan = ToolPlanProbe::from_router(first_router);
 
     let (_session, mut second_turn) = make_session_and_context().await;
+    set_feature(
+        &mut second_turn,
+        Feature::DeferredToolWorldState,
+        /*enabled*/ false,
+    );
     update_turn_settings_for_test(&mut second_turn, |settings| {
         Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
     });
@@ -2941,6 +2951,11 @@ async fn tool_mode_selector_overrides_feature_flags() {
 #[tokio::test]
 async fn v1_multi_agent_tools_defer_when_tool_search_available() {
     let plan = probe(|turn| {
+        set_feature(
+            turn,
+            Feature::DeferredToolWorldState,
+            /*enabled*/ false,
+        );
         update_turn_settings_for_test(turn, |settings| {
             Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
         });

@@ -8,8 +8,12 @@ Scenario: additional context is inserted before the user turn input.
 -- request 1 (turn; Request) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 02:message/developer:
     <automation_info>run one</automation_info>
 03:message/user:

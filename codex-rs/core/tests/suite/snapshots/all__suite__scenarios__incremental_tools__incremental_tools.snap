@@ -16,7 +16,7 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=49f981f03ae5c5ce):
+00:additional_tools/developer (2; hash=b07492b5514a41d0):
         - namespace/functions; hash=cc6e8cf0e5405f3a
           - custom/exec
           - function/wait
@@ -25,11 +25,15 @@ Settings:
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
-        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 03:message/user:
     <ENVIRONMENT_CONTEXT>
 04:message/user:
@@ -42,7 +46,7 @@ Settings:
 Settings: relative to window 1
   model: "updated-tools-model"
 -- request 3 (turn) --
-00:additional_tools/developer (2; hash=49f981f03ae5c5ce):
+00:additional_tools/developer (2; hash=b07492b5514a41d0):
         - namespace/functions; hash=cc6e8cf0e5405f3a
           - custom/exec
           - function/wait
@@ -51,11 +55,15 @@ Settings: relative to window 1
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
-        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 03:message/user:
     <ENVIRONMENT_CONTEXT>
 04:message/user:
@@ -85,7 +93,7 @@ Settings: relative to window 1
 ## Window 3 (after request 5: input diverged at item 00)
 Settings: same as window 2
 -- request 6 (turn) --
-00:additional_tools/developer (2; hash=1322c3a339378659):
+00:additional_tools/developer (2; hash=f9f0840b2e42f7f5):
         - namespace/functions; hash=9d5d7a0adab05fef
           - custom/exec
           - function/wait
@@ -94,7 +102,7 @@ Settings: same as window 2
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
-        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
 01:message/developer:
     <MODEL_INSTRUCTIONS>
 02:message/user:
@@ -103,8 +111,12 @@ Settings: same as window 2
     Continue with the same tools.
 04:message/user:
     Continue with the updated execution instructions.
-05:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+05:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 06:message/user:
     <ENVIRONMENT_CONTEXT>
 07:message/user:

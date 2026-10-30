@@ -16,14 +16,14 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=44f4cad2ce4ab17d):
+00:additional_tools/developer (2; hash=7b4c6a992fd91f91):
         - namespace/functions; hash=101d32aa59ea258b
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
-        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
 01:message/developer:
     You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to c...rate with them until their goal is genuinely handled. [hash=2a3efec66e7f8963]
 
@@ -42,24 +42,28 @@ Settings:
     - Before performing file edits of any kind, you provide updates explaining what edits you are making.
     - Tone of your updates must match your personality.
 
-02:message/developer:
-    <permissions instructions>
-    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
-    # Escalation Requests
+02:message/developer[2]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
 
-    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
 
-    - Pipes: |
-    - Logical operators: &&, ||
-    <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
-    NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
 
-    ### Examples
-    Good examples of prefixes:
-    - ["npm", "run", "dev"]
-    - ["gh", "pr", "check"]
-    - ["cargo", "test"]
-    </permissions instructions>
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 03:message/user:
     <environment_context>
       <cwd><CWD></cwd>
@@ -89,14 +93,14 @@ Settings:
 ## Window 2 (after request 3: input repeated)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=44f4cad2ce4ab17d):
+00:additional_tools/developer (2; hash=7b4c6a992fd91f91):
         - namespace/functions; hash=101d32aa59ea258b
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
           - custom/apply_patch
           - function/view_image
-        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
 01:message/developer:
     You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to c...rate with them until their goal is genuinely handled. [hash=2a3efec66e7f8963]
 
@@ -115,24 +119,28 @@ Settings: same as window 1
     - Before performing file edits of any kind, you provide updates explaining what edits you are making.
     - Tone of your updates must match your personality.
 
-02:message/developer:
-    <permissions instructions>
-    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
-    # Escalation Requests
+02:message/developer[2]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
 
-    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
 
-    - Pipes: |
-    - Logical operators: &&, ||
-    <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
-    NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
 
-    ### Examples
-    Good examples of prefixes:
-    - ["npm", "run", "dev"]
-    - ["gh", "pr", "check"]
-    - ["cargo", "test"]
-    </permissions instructions>
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 03:message/user:
     <environment_context>
       <cwd><CWD></cwd>

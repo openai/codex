@@ -8,11 +8,16 @@ Scenario: Mid-turn auth refresh preserves skill context and executor access. Rev
 -- request 1 (request) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[4]:
+01:message/developer[5]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
     [03] <PLUGINS_INSTRUCTIONS>
-    [04] <SKILLS_INSTRUCTIONS>
+    [04] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+    [05] <SKILLS_INSTRUCTIONS>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/user:
