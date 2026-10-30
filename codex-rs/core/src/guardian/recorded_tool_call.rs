@@ -20,12 +20,16 @@ use crate::context_manager::ContextManager;
 use crate::guardian_review::GuardianReviewResult;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ToolEnvironmentArgs;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::unified_exec::preparation::ExecCommandLifetime;
 use crate::tools::handlers::unified_exec::preparation::ParsedExecCommand;
 use crate::tools::handlers::unified_exec::preparation::PreparedExecCommand;
+use crate::tools::registry::PreToolUseError;
+use crate::tools::registry::apply_pre_tool_use;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 
 pub(crate) async fn review_tool_call(
@@ -53,8 +57,55 @@ pub(crate) async fn review_tool_call(
         let step = session
             .capture_speculative_step_context(turn, cancellation)
             .await?;
-        let prepared = call.prepare(session, &step)?;
-        let requirement = prepared.approval_requirement(session, &step).await;
+        let parsed_call = step
+            .tool_router
+            .build_tool_call(tool_call.clone())
+            .map_err(tool_error)?
+            .ok_or_else(|| CodexErr::InvalidRequest("expected an exec_command call".into()))?;
+        let tool = step
+            .tool_router
+            .registered_tool(&parsed_call.tool_name)
+            .filter(|_| step.tool_router.exposes_tool(&parsed_call.tool_name))
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest("exec_command is unavailable on this thread".into())
+            })?;
+        let source = parsed_call.direct_source();
+        let mut invocation = ToolInvocation {
+            session: Arc::clone(session),
+            turn: Arc::clone(&step.turn),
+            step_context: Arc::clone(&step),
+            cancellation_token: cancellation.clone(),
+            tracker: Default::default(),
+            call_id: parsed_call.call_id,
+            tool_name: parsed_call.tool_name,
+            source,
+            payload: parsed_call.payload,
+            native_call: parsed_call.native_call,
+            environments: Default::default(),
+        };
+        invocation.environments = tool
+            .runtime
+            .environments_for_input(&invocation)
+            .map_err(tool_error)?;
+        apply_pre_tool_use(tool.runtime.as_ref(), &mut invocation)
+            .await
+            .map_err(|err| match err {
+                PreToolUseError::Blocked(reason) => CodexErr::InvalidRequest(reason),
+                PreToolUseError::Failed(err) => tool_error(err),
+                PreToolUseError::Cancelled(_) => CodexErr::TurnAborted,
+            })?;
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return Err(CodexErr::Fatal(
+                "exec_command hook produced an unsupported payload".into(),
+            ));
+        };
+        let effective_call = RecordedExecCall {
+            call_id: call.call_id,
+            arguments,
+        };
+        let step = &invocation.step_context;
+        let prepared = effective_call.prepare(session, step)?;
+        let requirement = prepared.approval_requirement(session, step).await;
         let approval = match &requirement {
             ExecApprovalRequirement::Skip { .. } => return Ok(None),
             ExecApprovalRequirement::NeedsApproval { reason, .. } => reason.clone(),
@@ -68,7 +119,7 @@ pub(crate) async fn review_tool_call(
             }
         };
         let action = prepared.approval_action(call.call_id, &requirement);
-        let context = GuardianReviewContext::from(&step);
+        let context = GuardianReviewContext::from(step);
         let request = from_approval_action(action, &context)
             .request
             .map_err(CodexErr::InvalidRequest)?;
@@ -134,14 +185,6 @@ impl<'a> RecordedExecCall<'a> {
     }
 
     fn prepare(&self, session: &Arc<Session>, step: &StepContext) -> Result<PreparedExecCommand> {
-        if !step
-            .tool_router
-            .exposes_tool(&ToolName::plain("exec_command"))
-        {
-            return Err(CodexErr::InvalidRequest(
-                "exec_command is unavailable on this thread".into(),
-            ));
-        }
         let args: ToolEnvironmentArgs = parse_arguments(self.arguments).map_err(tool_error)?;
         let environment =
             resolve_tool_environment(&step.environments, args.environment_id.as_deref())

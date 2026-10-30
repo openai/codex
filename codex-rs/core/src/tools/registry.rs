@@ -1077,13 +1077,13 @@ async fn handle_any_tool(
     Ok(result)
 }
 
-enum PreToolUseError {
+pub(crate) enum PreToolUseError {
     Blocked(String),
     Failed(FunctionCallError),
     Cancelled(FunctionCallError),
 }
 
-async fn apply_pre_tool_use(
+pub(crate) async fn apply_pre_tool_use(
     tool: &dyn CoreToolRuntime,
     invocation: &mut ToolInvocation,
 ) -> Result<(), PreToolUseError> {
