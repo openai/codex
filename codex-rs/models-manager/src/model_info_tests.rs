@@ -3,6 +3,7 @@ use crate::ModelsManagerConfig;
 use codex_prompts::render_model_instructions;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ApprovalMessages;
+use codex_protocol::openai_models::AppsMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::ConfirmationPolicies;
@@ -90,6 +91,9 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         computer_use: Some("  # Native policy\r\n\n${native_markdown}\n".to_string()),
     };
     let mut messages = ModelMessages {
+        apps: Some(AppsMessages {
+            usage_instructions: Some("Catalog Apps instructions.".to_string()),
+        }),
         content_filter_guidance: None,
         persistent_instructions: Some(persistent_instructions.to_string()),
         tools: Some(ToolMessages {

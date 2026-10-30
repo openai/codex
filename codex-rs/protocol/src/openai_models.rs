@@ -580,6 +580,9 @@ impl ModelInfo {
 /// retained for model catalog compatibility.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelMessages {
+    /// Optional model-owned Apps wording, transported without runtime interpretation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps: Option<AppsMessages>,
     /// Developer guidance after a content-filter block. Missing, null, blank, or values over
     /// 512 UTF-8 bytes use the bundled guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -603,6 +606,15 @@ pub struct ModelMessages {
     /// Replacement confirmation-policy documents forwarded in actor MCP request metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmation_policies: Option<ConfirmationPolicies>,
+}
+
+/// Optional Apps wording from the model catalog, preserved for future runtime consumption.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct AppsMessages {
+    /// Missing and null deserialize as `None`; all strings preserve their exact bytes.
+    /// Rendering, size limits, and empty-string behavior are defined by consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_instructions: Option<String>,
 }
 
 /// Model-owned confirmation-policy Markdown, forwarded unchanged to actor tools.
@@ -1226,6 +1238,32 @@ mod tests {
     }
 
     #[test]
+    fn apps_messages_preserve_nullable_and_literal_wire_values() {
+        for apps in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"usage_instructions": null}),
+            serde_json::json!({"usage_instructions": ""}),
+            serde_json::json!({"usage_instructions": " \r\n\t"}),
+            serde_json::json!({"usage_instructions": "  {{literal}}\r\n"}),
+            serde_json::json!({"usage_instructions": "é".repeat(501)}),
+        ] {
+            let messages: ModelMessages =
+                serde_json::from_value(serde_json::json!({"apps": apps})).unwrap();
+            let serialized = serde_json::to_value(messages).unwrap();
+            let mut expected = serde_json::to_value(ModelMessages::default()).unwrap();
+            if !apps.is_null() {
+                expected["apps"] = if apps["usage_instructions"].is_null() {
+                    serde_json::json!({})
+                } else {
+                    apps
+                };
+            }
+            assert_eq!(serialized, expected);
+        }
+    }
+
+    #[test]
     fn send_user_message_async_description_preserves_missing_null_and_empty_values() {
         for (value, expected) in [
             (serde_json::json!({}), None),
@@ -1723,6 +1761,9 @@ mod tests {
     #[test]
     fn models_response_prefers_template_and_preserves_message_siblings() {
         let messages = ModelMessages {
+            apps: Some(AppsMessages {
+                usage_instructions: Some("Literal Apps {{guidance}}".to_string()),
+            }),
             content_filter_guidance: Some("Offer a permitted alternative.".to_string()),
             persistent_instructions: Some("Persistent catalog instructions".to_string()),
             tools: Some(ToolMessages {
