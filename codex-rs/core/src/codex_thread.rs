@@ -460,6 +460,20 @@ impl CodexThread {
             .await
     }
 
+    /// Waits for input activity without consuming input, following native `wait_agent` behavior.
+    ///
+    /// The named turn supplies any already-buffered steering input. Subsequent activity is
+    /// thread-wide: ending or replacing that turn does not end this wait. Mailbox input
+    /// already pending is also observed. Callers own cancellation; dropping this future
+    /// does not consume input or affect execution. Each call observes independently.
+    pub async fn wait_for_input_activity(
+        &self,
+        turn_id: &str,
+        timeout: std::time::Duration,
+    ) -> crate::InputWaitOutcome {
+        crate::thread_input::wait_for_input_activity(&self.session, turn_id, timeout).await
+    }
+
     /// Submits turn input without requiring the caller to inspect thread state.
     ///
     /// The result describes whether Core started a turn, steered an active

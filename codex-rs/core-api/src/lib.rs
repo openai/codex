@@ -39,6 +39,7 @@ pub use codex_core::EnvironmentConfig;
 pub use codex_core::EnvironmentMcpPolicy;
 pub use codex_core::EnvironmentNetworkPolicy;
 pub use codex_core::ForkSnapshot;
+pub use codex_core::InputWaitOutcome;
 pub use codex_core::LoadedAgentsMd;
 pub use codex_core::McpManager;
 pub use codex_core::NetworkDomainPermission;

@@ -1,7 +1,9 @@
 use core_test_support::test_codex::local_requests;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_core::CodexThread;
+use codex_core::InputWaitOutcome;
 use codex_core::StartIfIdleSubmission;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInput;
@@ -32,6 +34,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::turn_input::CyberAccessProgram;
@@ -784,6 +787,281 @@ async fn input_interrupts_wait_agent_and_is_sent_in_follow_up_request(input: Wai
     );
 
     server.shutdown().await;
+}
+
+#[test_case(true, InputWaitOutcome::Steered; "already_pending")]
+#[test_case(false, InputWaitOutcome::Steered; "arrives_while_waiting")]
+#[test_case(false, InputWaitOutcome::MailboxActivity; "agent_message_while_waiting")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_wait_wakes_on_turn_input(
+    queue_before_wait: bool,
+    injection_outcome: InputWaitOutcome,
+) -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.agents_enabled = false;
+            config
+                .features
+                .disable(Feature::MultiAgentV2)
+                .expect("disable native MA");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    // The host owns this plugin tool; the thread has no native MA tools or runtime.
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "plugin_wait".to_string(),
+                description: "Wait for worker results or new input.".to_string(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?
+        .thread;
+    let first = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("plugin-wait"),
+            ev_function_call("wait-call", "plugin_wait", "{}"),
+            ev_completed("plugin-wait"),
+        ]),
+    )
+    .await;
+    let TurnInputSubmission::Started { turn_id, .. } = thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "wait for the workers".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?
+    else {
+        panic!("initial input should start a turn");
+    };
+    let (notification, wait_message) = if injection_outcome == InputWaitOutcome::MailboxActivity {
+        (
+            json!({
+                "type": "agent_message", "author": "/root/worker", "recipient": "/root",
+                "content": [{"type": "input_text", "text": "worker is done"}],
+            }),
+            "Wait completed.",
+        )
+    } else {
+        (
+            json!({
+                "type": "function_call_output", "namespace": "local_ma",
+                "name": "worker_result", "output": "worker is done",
+            }),
+            "Wait interrupted by new input.",
+        )
+    };
+    let mut followups = Vec::new();
+    // Exercise injection and user steering in the same turn. The second wait
+    // must start clean after the model consumes the first delivery.
+    for (call_id, injected_input) in [
+        (
+            "wait-call",
+            Some(serde_json::from_value(notification.clone())?),
+        ),
+        ("wait-after-injection", None),
+    ] {
+        wait_for_event(&thread, |event| {
+            matches!(event, EventMsg::DynamicToolCallRequest(request) if request.call_id == call_id)
+        })
+        .await;
+        assert_eq!(
+            thread.multi_agent_version(),
+            Some(MultiAgentVersion::Disabled)
+        );
+        let response = if injected_input.is_some() {
+            responses::sse(vec![
+                ev_response_created("after-injection"),
+                ev_function_call("wait-after-injection", "plugin_wait", "{}"),
+                ev_completed("after-injection"),
+            ])
+        } else {
+            responses::sse_completed("followup")
+        };
+        followups.push(responses::mount_sse_once(&server, response).await);
+
+        // Dropping a wait must leave both the turn and its input untouched.
+        let mut cancelled_wait = Box::pin(thread.wait_for_input_activity(&turn_id, Duration::MAX));
+        assert!(futures::poll!(cancelled_wait.as_mut()).is_pending());
+        drop(cancelled_wait);
+        let wait = thread.wait_for_input_activity(&turn_id, Duration::from_secs(10));
+        let deliver = async {
+            if let Some(item) = injected_input {
+                thread.inject_response_items(vec![item]).await?;
+                anyhow::Ok((injection_outcome, wait_message))
+            } else {
+                steer_user_input(&thread, "stop waiting and work on X").await;
+                Ok((InputWaitOutcome::Steered, "Wait interrupted by new input."))
+            }
+        };
+        let (observed, (expected, message)) = if queue_before_wait {
+            let delivered = deliver.await?;
+            (wait.await, delivered)
+        } else {
+            tokio::try_join!(biased; async { anyhow::Ok(wait.await) }, deliver)?
+        };
+        assert_eq!(observed, expected);
+        // Another observer sees the same input: waiting never consumes it.
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                thread.wait_for_input_activity(&turn_id, Duration::MAX),
+            )
+            .await?,
+            expected
+        );
+        thread
+            .submit(Op::DynamicToolResponse {
+                id: call_id.to_string(),
+                response: DynamicToolResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                        text: message.to_string(),
+                    }],
+                    success: true,
+                },
+            })
+            .await?;
+    }
+    wait_for_turn_complete(&thread).await;
+    first.single_request();
+    let requests = followups
+        .iter()
+        .map(responses::ResponseMock::single_request)
+        .collect::<Vec<_>>();
+    for request in &requests {
+        assert_eq!(
+            request
+                .inputs_of_type(notification["type"].as_str().expect("item type"))
+                .into_iter()
+                .filter(|item| item["name"] == notification["name"])
+                .map(responses::strip_metadata_from_json)
+                .map(responses::strip_response_item_ids_from_json)
+                .collect::<Vec<_>>(),
+            vec![notification.clone()],
+        );
+    }
+    let request = requests.last().expect("final model request");
+    assert_eq!(
+        request
+            .message_input_texts("user")
+            .into_iter()
+            .filter(|text| matches!(
+                text.as_str(),
+                "wait for the workers" | "stop waiting and work on X"
+            ))
+            .collect::<Vec<_>>(),
+        vec!["wait for the workers", "stop waiting and work on X"],
+    );
+    assert!(
+        request.function_call_output("wait-call")["output"]
+            .as_str()
+            .expect("plugin output is text")
+            .contains(wait_message)
+    );
+    assert_eq!(
+        thread
+            .wait_for_input_activity(&turn_id, Duration::ZERO)
+            .await,
+        InputWaitOutcome::TimedOut
+    );
+    Ok(())
+}
+
+#[test_case(true; "interrupted")]
+#[test_case(false; "completed")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_input_wait_observes_activity_after_original_turn_ends(
+    interrupt: bool,
+) -> anyhow::Result<()> {
+    let (release_first, first_gate) = oneshot::channel();
+    let (release_second, second_gate) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![
+        vec![gated_chunk(
+            first_gate,
+            vec![ev_response_created("first"), ev_completed("first")],
+        )],
+        vec![gated_chunk(
+            second_gate,
+            vec![ev_response_created("second"), ev_completed("second")],
+        )],
+    ])
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.agents_enabled = false;
+            config
+                .features
+                .disable(Feature::MultiAgentV2)
+                .expect("disable native MA");
+            config
+                .features
+                .disable(Feature::InstantInterrupt)
+                .expect("keep the held response active");
+        })
+        .build_with_streaming_server(&server)
+        .await?;
+    let TurnInputSubmission::Started { turn_id, .. } = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "first task".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?
+    else {
+        panic!("initial input should start a turn");
+    };
+    server.wait_for_request_count(/*count*/ 1).await;
+    let wait = test
+        .codex
+        .wait_for_input_activity(&turn_id, Duration::from_secs(10));
+    tokio::pin!(wait);
+    let end_original_turn = async {
+        if interrupt {
+            test.codex.submit(Op::Interrupt).await?;
+            wait_for_event(&test.codex, |event| {
+                matches!(event, EventMsg::TurnAborted(_))
+            })
+            .await;
+        }
+        let _ = release_first.send(());
+        if !interrupt {
+            wait_for_turn_complete(&test.codex).await;
+        }
+        anyhow::Ok(())
+    };
+    tokio::select! {
+        biased;
+        outcome = &mut wait => panic!("wait ended before replacement input: {outcome:?}"),
+        result = end_original_turn => result?,
+    }
+
+    // Poll both observers before driving the replacement and while it acquires the turn lock.
+    let (original, late, ()) = tokio::join!(
+        biased;
+        wait,
+        test.codex.wait_for_input_activity(&turn_id, Duration::from_secs(10)),
+        async {
+            submit_user_input(&test.codex, "replacement task").await;
+            server.wait_for_request_count(/*count*/ 2).await;
+            steer_user_input(&test.codex, "input for the replacement").await;
+        },
+    );
+    assert_eq!(original, InputWaitOutcome::Steered);
+    assert_eq!(late, InputWaitOutcome::Steered);
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    let _ = release_second.send(());
+    server.shutdown().await;
+    Ok(())
 }
 
 #[test_case(WaitInput::UserSteer; "user_steer")]

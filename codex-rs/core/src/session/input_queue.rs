@@ -82,18 +82,34 @@ mod turn_input_response_item {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Steering takes precedence when several kinds of input are pending together.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum InputQueueActivity {
     Mailbox,
     Steer,
+}
+
+impl TurnInput {
+    fn wait_activity(&self) -> InputQueueActivity {
+        match self {
+            Self::InterAgentCommunication(_)
+            | Self::ResponseItem(ResponseItemEnvelope {
+                item: ResponseItem::AgentMessage { .. },
+                ..
+            }) => InputQueueActivity::Mailbox,
+            Self::UserInput { .. } | Self::FunctionCallOutput(_) | Self::ResponseItem(_) => {
+                InputQueueActivity::Steer
+            }
+        }
+    }
 }
 
 /// Turn-local pending input storage owned by the input queue flow.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
     items: Vec<TurnInput>,
-    /// Response items queued through a notifying injection, unlike passive context.
-    has_pending_injection: bool,
+    /// Activity from notifying writes. Passive response items do not wake a wait.
+    notified_activity: Option<InputQueueActivity>,
 }
 
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
@@ -378,15 +394,16 @@ impl InputQueue {
         turn_state: &Mutex<TurnState>,
         input: Vec<TurnInput>,
     ) {
+        let activity = input.iter().map(TurnInput::wait_activity).max();
         {
             let mut turn_state = turn_state.lock().await;
-            turn_state.pending_input.has_pending_injection |= input
-                .iter()
-                .any(|input| matches!(input, TurnInput::ResponseItem(_)));
+            turn_state.pending_input.notified_activity =
+                turn_state.pending_input.notified_activity.max(activity);
             turn_state.pending_input.items.extend(input);
             turn_state.accept_mailbox_delivery_for_current_turn();
         }
-        self.activity_tx.send_replace(InputQueueActivity::Steer);
+        self.activity_tx
+            .send_replace(activity.unwrap_or(InputQueueActivity::Steer));
     }
 
     pub(crate) async fn extend_pending_input_for_turn_state(
@@ -482,24 +499,15 @@ impl TurnInputQueue {
     }
 
     fn pending_activity(&self) -> Option<InputQueueActivity> {
-        if self.has_pending_injection
-            || self.items.iter().any(|input| {
-                matches!(
-                    input,
-                    TurnInput::UserInput { .. } | TurnInput::FunctionCallOutput(_)
-                )
-            })
-        {
-            Some(InputQueueActivity::Steer)
-        } else if self
-            .items
-            .iter()
-            .any(|input| matches!(input, TurnInput::InterAgentCommunication(_)))
-        {
-            Some(InputQueueActivity::Mailbox)
-        } else {
-            None
+        if self.notified_activity == Some(InputQueueActivity::Steer) {
+            return self.notified_activity;
         }
+        self.items
+            .iter()
+            .filter(|input| !matches!(input, TurnInput::ResponseItem(_)))
+            .map(TurnInput::wait_activity)
+            .chain(self.notified_activity)
+            .max()
     }
 }
 
@@ -612,7 +620,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn input_queue_notifies_steer_subscribers() {
+    async fn input_queue_distinguishes_new_agent_input_from_pending_steering() {
         let input_queue = InputQueue::new();
         let turn_state = Mutex::new(TurnState::default());
         let (mut activity_rx, pending_activity) =
@@ -635,6 +643,28 @@ mod tests {
 
         activity_rx.changed().await.expect("steer update");
         assert_eq!(*activity_rx.borrow_and_update(), InputQueueActivity::Steer);
+
+        let mail = make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "follow-up",
+            /*trigger_turn*/ true,
+        );
+        input_queue
+            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                &turn_state,
+                vec![TurnInput::InterAgentCommunication(mail.into())],
+            )
+            .await;
+        activity_rx.changed().await.expect("mailbox update");
+        assert_eq!(
+            *activity_rx.borrow_and_update(),
+            InputQueueActivity::Mailbox
+        );
+        assert_eq!(
+            input_queue.subscribe_activity(Some(&turn_state)).await.1,
+            Some(InputQueueActivity::Steer)
+        );
     }
 
     #[tokio::test]
