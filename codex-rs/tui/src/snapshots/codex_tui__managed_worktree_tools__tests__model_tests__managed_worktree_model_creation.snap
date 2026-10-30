@@ -1,8 +1,8 @@
 ---
 source: tui/src/managed_worktree_model_tests.rs
-expression: "context_snapshot::format_context_snapshot(\"Model request history for creating, polling and listing a task-attached checkout through MCP, without a separate creation confirmation. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.\",\n&entries,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_context_snapshot(\"Model request history for creating, polling and listing a task-attached checkout, then renaming another task through MCP. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.\",\n&entries,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
-Scenario: Model request history for creating, polling and listing a task-attached checkout through MCP, without a separate creation confirmation. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.
+Scenario: Model request history for creating, polling and listing a task-attached checkout, then renaming another task through MCP. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.
 
 ## Window 1
 Settings:
@@ -14,11 +14,20 @@ Settings:
   store: false
   stream: true
   tool_choice: "auto"
-  tools (1; hash=291b147361c7e927):
-    - namespace/mcp__codex_worktrees: Tools in the mcp__codex_worktrees namespace.; hash=51011289080f7067
+  tools (1; hash=15eb2d52053e3a44):
+    - namespace/mcp__codex_tui: Tools in the mcp__codex_tui namespace.; hash=cb0a288754c9546e
+      - function/create_thread
       - function/create_worktree
+      - function/fork_thread
       - function/get_worktree_creation_status
+      - function/list_archived_threads
+      - function/list_threads
       - function/list_worktrees
+      - function/read_thread
+      - function/send_message_to_thread
+      - function/set_thread_archived
+      - function/set_thread_title
+      - function/wait_threads
 -- request 1 (request) --
 00:message/developer:
     You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open...I. You are expected to be precise, safe, and helpful. [hash=5125daec1ed78d99]
@@ -46,7 +55,7 @@ Settings:
 03:message/user:
     Run create_worktree.
 -- request 2 (request) --
-04:function_call/mcp__codex_worktrees.create_worktree:{"allowAsync":true}
+04:function_call/mcp__codex_tui.create_worktree:{"allowAsync":true}
 05:function_call_output:Wall time: <DURATION> seconds
     Output: | {"type":"pending","operationId":"<UUID 1>","message":"Creation is running. Poll status; do not repeat creation. Work on independent tasks while waiting."}
 -- request 3 (request) --
@@ -55,7 +64,7 @@ Settings:
 07:message/user:
     Run get_worktree_creation_status.
 -- request 4 (request) --
-08:function_call/mcp__codex_worktrees.get_worktree_creation_status:{"operationId":"<UUID 1>"}
+08:function_call/mcp__codex_tui.get_worktree_creation_status:{"operationId":"<UUID 1>"}
 09:function_call_output:Wall time: <DURATION> seconds
     Output: | {"type":"created","worktree":{"root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"},...citly and request filesystem permissions if needed."} [hash=b855a2f161fd3a36]
 -- request 5 (request) --
@@ -64,6 +73,15 @@ Settings:
 11:message/user:
     Run list_worktrees.
 -- request 6 (request) --
-12:function_call/mcp__codex_worktrees.list_worktrees:{}
+12:function_call/mcp__codex_tui.list_worktrees:{}
 13:function_call_output:Wall time: <DURATION> seconds
     Output: | {"data":[{"id":"<UUID 2>","type":"worktree","root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"}],"nextCursor":null}
+-- request 7 (request) --
+14:message/assistant:
+    Done.
+15:message/user:
+    Run set_thread_title.
+-- request 8 (request) --
+16:function_call/mcp__codex_tui.set_thread_title:{"threadId":"<UUID 3>","title":"Checkout preparation"}
+17:function_call_output:Wall time: <DURATION> seconds
+    Output: | {"threadId":"<UUID 3>","title":"Checkout preparation"}

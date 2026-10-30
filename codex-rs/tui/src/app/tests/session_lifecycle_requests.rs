@@ -1925,36 +1925,39 @@ async fn older_external_server_starts_without_unsupported_dynamic_tools_or_histo
 }
 
 #[tokio::test]
-async fn embedded_server_rejects_unowned_dynamic_tool_calls() -> Result<()> {
+async fn embedded_server_dispatches_only_its_own_dynamic_tools() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
     let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-    app.handle_app_server_event(
-        &app_server,
-        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
-            ServerRequest::DynamicToolCall {
-                request_id: AppServerRequestId::Integer(100),
-                params: codex_app_server_protocol::DynamicToolCallParams {
-                    thread_id: "thread-1".to_string(),
-                    turn_id: "turn-1".to_string(),
-                    call_id: "call-1".to_string(),
-                    namespace: Some("codex_app".to_string()),
-                    tool: "list_threads".to_string(),
-                    arguments: serde_json::json!({}),
+    for (id, namespace, expected_success) in [(100, "codex_app", false), (101, "codex_tui", true)] {
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerRequest(Box::new(
+                ServerRequest::DynamicToolCall {
+                    request_id: AppServerRequestId::Integer(id),
+                    params: codex_app_server_protocol::DynamicToolCallParams {
+                        thread_id: "thread-1".to_string(),
+                        turn_id: "turn-1".to_string(),
+                        call_id: "call-1".to_string(),
+                        namespace: Some(namespace.to_string()),
+                        tool: "list_threads".to_string(),
+                        arguments: serde_json::json!({}),
+                    },
                 },
-            },
-        )),
-    )
-    .await;
-    let AppEvent::DynamicToolCallCompleted { response, .. } = events
-        .try_recv()
-        .expect("embedded dynamic calls must receive a response")
-    else {
-        panic!("expected a dynamic tool failure response")
-    };
-    assert!(!response.success);
+            )),
+        )
+        .await;
+        let AppEvent::DynamicToolCallCompleted { response, .. } =
+            tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await?
+                .expect("embedded dynamic calls must receive a response")
+        else {
+            panic!("expected a dynamic tool response")
+        };
+        assert_eq!(response.success, expected_success);
+    }
     app_server.shutdown().await?;
     Ok(())
 }

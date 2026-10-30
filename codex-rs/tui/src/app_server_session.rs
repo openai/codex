@@ -552,14 +552,11 @@ impl AppServerSession {
         } else {
             None
         };
-        let services = crate::dynamic_tools_mcp::ToolServices {
-            task_tools: !self.uses_embedded_app_server(),
-            worktrees,
-        };
-        if !services.task_tools && services.worktrees.is_none() {
-            return Ok(());
-        }
-        if config.mcp_servers.get().contains_key(services.namespace()) {
+        if config
+            .mcp_servers
+            .get()
+            .contains_key(crate::dynamic_tools::NAMESPACE)
+        {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "a user-configured MCP server already owns the TUI tools namespace",
@@ -571,12 +568,15 @@ impl AppServerSession {
             .mcp_servers
             .as_ref()
             .map(|requirements| {
-                requirements.value.get(services.namespace()).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "managed MCP requirements do not permit the TUI task-tools server",
-                    )
-                })
+                requirements
+                    .value
+                    .get(crate::dynamic_tools::NAMESPACE)
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "managed MCP requirements do not permit the TUI task-tools server",
+                        )
+                    })
             })
             .transpose()?;
         let mut thread_start_params = thread_start_params_from_config(
@@ -609,7 +609,7 @@ impl AppServerSession {
                 app_event_tx,
                 status_updates,
                 managed_requirement,
-                services,
+                worktrees,
             )
             .await?,
         ));
@@ -619,8 +619,6 @@ impl AppServerSession {
     pub(crate) fn thread_tool_transport(&self) -> ThreadToolTransport {
         if let Some(server) = self.dynamic_tool_mcp.as_ref() {
             ThreadToolTransport::Mcp(Arc::clone(server))
-        } else if self.uses_embedded_app_server() {
-            ThreadToolTransport::Disabled
         } else {
             ThreadToolTransport::Dynamic
         }
