@@ -40,6 +40,8 @@ pub enum TerminalName {
     AppleTerminal,
     /// Ghostty terminal emulator.
     Ghostty,
+    /// Rex terminal emulator.
+    Rex,
     /// iTerm2 terminal emulator.
     Iterm2,
     /// Warp terminal emulator.
@@ -138,6 +140,7 @@ impl TerminalInfo {
         let name = match term.as_str() {
             "dumb" => TerminalName::Dumb,
             "xterm-ghostty" => TerminalName::Ghostty,
+            "xterm-rex" => TerminalName::Rex,
             "wezterm" | "wezterm-mux" => TerminalName::WezTerm,
             _ => TerminalName::Unknown,
         };
@@ -176,6 +179,7 @@ impl TerminalInfo {
                     format_terminal_version("Apple_Terminal", &self.version)
                 }
                 TerminalName::Ghostty => format_terminal_version("Ghostty", &self.version),
+                TerminalName::Rex => format_terminal_version("rex", &self.version),
                 TerminalName::Iterm2 => format_terminal_version("iTerm.app", &self.version),
                 TerminalName::WarpTerminal => {
                     format_terminal_version("WarpTerminal", &self.version)
@@ -416,6 +420,7 @@ fn terminal_name_from_term_program(value: &str) -> Option<TerminalName> {
     match normalized.as_str() {
         "appleterminal" => Some(TerminalName::AppleTerminal),
         "ghostty" => Some(TerminalName::Ghostty),
+        "rex" => Some(TerminalName::Rex),
         "iterm" | "iterm2" | "itermapp" => Some(TerminalName::Iterm2),
         "warp" | "warpterminal" => Some(TerminalName::WarpTerminal),
         "vscode" => Some(TerminalName::VsCode),

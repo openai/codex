@@ -91,6 +91,7 @@ fn supporting_terminals_render_only_the_styled_label_and_keep_its_target() {
         TerminalName::Ghostty,
         TerminalName::Iterm2,
         TerminalName::WezTerm,
+        TerminalName::Rex,
         TerminalName::Kitty,
         TerminalName::VsCode,
         TerminalName::Alacritty,
@@ -141,21 +142,6 @@ fn supporting_terminals_render_only_the_styled_label_and_keep_its_target() {
             );
         }
     }
-}
-
-#[test]
-fn rex_renders_only_the_label() {
-    let mut rex = terminal(TerminalName::Unknown);
-    rex.term_program = Some("rex".to_string());
-    let markdown = "[label](https://example.com)";
-    assert_eq!(
-        render(
-            markdown,
-            /*width*/ 80,
-            WebLinkDisplay::for_terminal(&rex, /*term*/ None),
-        ),
-        render(markdown, /*width*/ 80, WebLinkDisplay::LabelOnly),
-    );
 }
 
 #[test]

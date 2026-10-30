@@ -178,7 +178,7 @@ fn is_iterm2_terminal(info: &TerminalInfo) -> bool {
 fn supports_kitty_graphics(info: &TerminalInfo) -> bool {
     matches!(
         info.name,
-        TerminalName::Ghostty | TerminalName::Kitty | TerminalName::WezTerm
+        TerminalName::Ghostty | TerminalName::Kitty | TerminalName::Rex | TerminalName::WezTerm
     ) || terminal_field_contains(info.term.as_deref(), "kitty")
         || terminal_field_contains(info.term.as_deref(), "ghostty")
         || terminal_field_contains(info.term.as_deref(), "wezterm")
@@ -514,6 +514,12 @@ mod tests {
                 TerminalName::Kitty,
                 /*multiplexer*/ None,
                 Some("kitty"),
+                /*term*/ None,
+            ),
+            terminal_info_for_test(
+                TerminalName::Rex,
+                /*multiplexer*/ None,
+                Some("rex"),
                 /*term*/ None,
             ),
             terminal_info_for_test(

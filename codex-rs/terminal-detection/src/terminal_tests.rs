@@ -219,6 +219,14 @@ fn detects_ghostty() {
 }
 
 #[test]
+fn detects_rex() {
+    for (key, value) in [("TERM_PROGRAM", "rex"), ("TERM", "xterm-rex")] {
+        let env = FakeEnvironment::new().with_var(key, value);
+        assert_eq!(detect_terminal_info_from_env(&env).name, TerminalName::Rex);
+    }
+}
+
+#[test]
 fn detects_vscode() {
     let env = FakeEnvironment::new()
         .with_var("TERM_PROGRAM", "vscode")
