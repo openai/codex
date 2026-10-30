@@ -37,6 +37,8 @@ pub use sandbox_metadata::MCP_SANDBOX_STATE_CAPABILITY;
 pub use sandbox_metadata::MCP_SANDBOX_STATE_META_CAPABILITY;
 pub use sandbox_metadata::SandboxState;
 pub use tool_catalog_cache::McpToolCatalogCache;
+pub use tool_request_meta::McpToolRequestMetaHook;
+pub use tool_request_meta::McpToolRequestMetaProvider;
 pub use tools::ToolInfo;
 pub use trusted_access::TrustedAccessContext;
 
@@ -139,5 +141,6 @@ mod sandbox_executable;
 mod sandbox_metadata;
 pub(crate) mod server;
 mod tool_catalog_cache;
+mod tool_request_meta;
 pub(crate) mod tools;
 mod trusted_access;
