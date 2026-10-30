@@ -332,7 +332,11 @@ async fn live_center_columns() {
     ));
     crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, child);
     app.agents_overview.pinned_thread_ids = Some(vec![current, ThreadId::from_u128(/*value*/ 44)]);
+    app.agents_overview
+        .unread
+        .insert(ThreadId::from_u128(/*value*/ 47));
     let mut view = app.agents_overview_view(threads, Some(current));
+    assert!(screen(&view, /*width*/ 50, /*height*/ 24).contains("● Error: Failed task"));
     insta::assert_snapshot!(screen(&view, /*width*/ 160, /*height*/ 22));
     view.pinned_thread_ranks = None;
     let mut selected_status_styles = Vec::new();
@@ -351,10 +355,6 @@ async fn live_center_columns() {
             .iter()
             .position(|cell| cell.symbol() == "›")
             .unwrap();
-        assert_eq!(
-            selected_row[marker + 2].style(),
-            selected_row[marker].style()
-        );
         selected_status_styles.push(format!(
             "{} | {:?}",
             selected_row[marker + 2].symbol(),

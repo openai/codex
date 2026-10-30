@@ -451,6 +451,9 @@ impl App {
                 // `thread/read` can seed replay state, but it does not attach the app-server
                 // listener that `thread/resume` establishes, so treat this path as replay-only.
                 session.model.clear();
+                if was_external_writer {
+                    app_server.freeze_viewed_receipt(thread_id);
+                }
                 (session, turns, false)
             }
         };

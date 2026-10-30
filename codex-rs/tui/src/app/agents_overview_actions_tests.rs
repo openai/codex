@@ -48,7 +48,7 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
         assert_eq!(
             threads
                 .iter()
-                .any(|thread| thread.id == started.session.thread_id.to_string()),
+                .any(|(thread, _)| thread.id == started.session.thread_id.to_string()),
             pinned
         );
     }
@@ -654,7 +654,8 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
-            threads: HashMap::from([(id, Some(thread.clone()))]),
+            cleared_unread: Vec::new(),
+            threads: HashMap::from([(id, Some((thread.clone(), false)))]),
             last_messages: HashMap::new(),
             recent_seed_complete: true,
             discovery: None,
@@ -935,7 +936,11 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             &app_server,
             request_id,
             Ok(AgentsOverviewThreadRefresh {
-                threads: stale_threads,
+                cleared_unread: Vec::new(),
+                threads: stale_threads
+                    .into_iter()
+                    .map(|(id, thread)| (id, thread.map(|thread| (thread, false))))
+                    .collect(),
                 last_messages: HashMap::new(),
                 recent_seed_complete: true,
                 discovery: None,
@@ -1038,6 +1043,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             .send(AppEvent::AgentsOverviewThreadsLoaded {
                 request_id,
                 result: Ok(AgentsOverviewThreadRefresh {
+                    cleared_unread: Vec::new(),
                     threads: HashMap::new(),
                     last_messages: HashMap::new(),
                     recent_seed_complete: true,

@@ -2976,6 +2976,13 @@ impl App {
             }
             AppEvent::OpenAgentsOverview => self.open_agents_overview(app_server),
             AppEvent::ShowMoreAgentsOverview => self.show_more_agents_overview(app_server),
+            AppEvent::RefreshViewedThread { backend_id, thread_id, revision } => {
+                if app_server.backend_id() == backend_id {
+                    app_server.frozen_receipt.take_if(|(id, rev)| *id == thread_id && *rev == revision);
+                    self.agents_overview.refresh_thread_ids.insert(thread_id);
+                    self.refresh_changed_agents_overview_threads(app_server);
+                }
+            }
             AppEvent::NewAgentsOverviewSession { cwd } => {
                 return Box::pin(self.new_agents_overview_session(tui, app_server, cwd)).await;
             }

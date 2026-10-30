@@ -1109,6 +1109,7 @@ impl App {
 
         match &event {
             TuiEvent::FocusLost => {
+                app_server.focused_conversation = None;
                 self.chat_widget
                     .set_sparkle_terminal_focus(/*focused*/ false);
                 let now = Instant::now();
@@ -1126,6 +1127,10 @@ impl App {
             _ => {}
         }
 
+        let draws_history = matches!(
+            event,
+            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained
+        );
         if self.overlay.is_some() {
             let _ = self
                 .handle_backtrack_overlay_event(tui, app_server, event)
@@ -1228,6 +1233,46 @@ impl App {
                 }
                 TuiEvent::Mouse(mouse) => self.start_right_click_paste(tui, mouse),
                 TuiEvent::FocusLost => {}
+            }
+        }
+        if draws_history {
+            let frozen = self.chat_widget.is_external_writer_view();
+            let visible = self.current_displayed_thread_id().filter(|&id| {
+                tui.is_terminal_focused()
+                    && matches!(self.overlay, None | Some(Overlay::Transcript(_)))
+                    && self.chat_widget.no_modal_or_popup_active()
+                    && self.initial_history_replay_buffer.is_none()
+                    && (!self.thread_unavailable(id) || frozen)
+            });
+            let previous = std::mem::replace(&mut app_server.focused_conversation, visible);
+            if previous != visible {
+                app_server.attempted_revision = None;
+            }
+            // Opening a full view counts immediately. Within the same view a new result's
+            // receipt can arrive just before the terminal event that finishes rendering it.
+            if let Some(id) = visible
+                && (previous != visible || !self.chat_widget.is_agent_turn_running())
+                && let Some(revision) = app_server.viewed_revision(id, frozen)
+            {
+                // A read-only snapshot does not subscribe to receipt notifications.
+                let refresh = frozen.then(|| {
+                    (
+                        self.app_event_tx.clone(),
+                        AppEvent::RefreshViewedThread {
+                            backend_id: app_server.backend_id(),
+                            thread_id: id,
+                            revision: revision.clone(),
+                        },
+                    )
+                });
+                let update = app_server.acknowledge_read(id, revision);
+                tokio::spawn(async move {
+                    if let Err(error) = update.await {
+                        tracing::warn!(%id, %error, "Could not acknowledge viewed conversation");
+                    } else if let Some((tx, event)) = refresh {
+                        tx.send(event);
+                    }
+                });
             }
         }
         // Both transcript owners must consume completions before automatic work advances.

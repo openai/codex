@@ -414,7 +414,7 @@ async fn rollout_maintenance_contention_disables_cached_legacy_resume_shortcut()
         )
         .await?;
 
-    assert_eq!(app_server.next_request_id, next_request_id + 3);
+    assert_eq!(app_server.next_request_id, next_request_id + 4);
     assert_eq!(resumed.session.thread_id, thread_id);
     assert_eq!(
         app_server

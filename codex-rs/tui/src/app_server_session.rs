@@ -13,6 +13,7 @@ pub(crate) mod provider_selection;
 #[cfg(test)]
 #[path = "app_server_session/provider_selection_tests.rs"]
 mod provider_selection_tests;
+mod read_state;
 mod realtime;
 mod rollout_history;
 mod startup_launch;
@@ -328,6 +329,10 @@ pub(crate) struct AppServerSession {
     client: AppServerClient,
     next_request_id: i64,
     history_pagination: HashMap<ThreadId, history::ThreadHistoryPagination>,
+    pub(crate) focused_conversation: Option<ThreadId>,
+    pub(crate) attempted_revision: Option<String>,
+    pub(crate) frozen_receipt: Option<(ThreadId, String)>,
+    pub(crate) unread_revisions: HashMap<ThreadId, String>,
     task_tool_threads: HashSet<ThreadId>,
     task_tool_capabilities_dir: Option<AbsolutePathBuf>,
     task_search_generation: Arc<AtomicU64>,
@@ -484,6 +489,10 @@ impl AppServerSession {
             client,
             next_request_id: 1,
             history_pagination: HashMap::new(),
+            focused_conversation: None,
+            attempted_revision: None,
+            frozen_receipt: None,
+            unread_revisions: HashMap::new(),
             task_tool_threads: HashSet::new(),
             task_tool_capabilities_dir: None,
             task_search_generation: Arc::new(AtomicU64::new(0)),
@@ -930,13 +939,18 @@ impl AppServerSession {
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerSessionEvent> {
-        self.client
-            .next_event()
-            .await
-            .map(|event| AppServerSessionEvent {
-                backend_id: self.backend_id,
-                event,
-            })
+        let event = self.client.next_event().await?;
+        if let codex_app_server_client::AppServerEvent::ServerNotification(notification) = &event
+            && let codex_app_server_protocol::ServerNotification::ThreadReadStateChanged(change) =
+                notification.as_ref()
+            && let Ok(id) = ThreadId::from_string(&change.thread_id)
+        {
+            self.remember_read_state(id, Some(change.read_state.clone()));
+        }
+        Some(AppServerSessionEvent {
+            backend_id: self.backend_id,
+            event,
+        })
     }
 
     #[cfg(test)]
@@ -1370,7 +1384,13 @@ impl AppServerSession {
             })
             .await;
         let mut response: ThreadReadResponse = match response {
-            Ok(response) => return Ok(response.thread),
+            Ok(response) => {
+                // Freeze the metadata revision observed before history hydration.
+                if !include_turns {
+                    self.remember_read_state(thread_id, response.read_state);
+                }
+                return Ok(response.thread);
+            }
             Err(TypedRequestError::Server { source, .. })
                 if include_turns
                     && source.message

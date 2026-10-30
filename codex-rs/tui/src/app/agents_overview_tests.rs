@@ -42,6 +42,8 @@ async fn overview_worktree_creation_busy_state() {
 async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
     let mut app = make_test_app().await;
     let id = ThreadId::from_u128(/*value*/ 42);
+    let selected_id = ThreadId::from_u128(/*value*/ 43);
+    app.agents_overview.unread.extend([id, selected_id]);
     let mut snapshot = Vec::new();
     for enabled in [true, false] {
         app.local_settings.tui.status_line_use_colors = enabled;
@@ -53,12 +55,9 @@ async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
         );
         thread.name = Some("Named task".into());
         let mut selected = thread.clone();
-        selected.id = ThreadId::from_u128(/*value*/ 43).to_string();
+        selected.id = selected_id.to_string();
         selected.name = Some("Selected task".into());
-        let view = app.agents_overview_view(
-            vec![thread, selected],
-            Some(ThreadId::from_u128(/*value*/ 43)),
-        );
+        let view = app.agents_overview_view(vec![thread, selected], Some(selected_id));
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal
             .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
@@ -66,15 +65,20 @@ async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
         let buffer = terminal.backend().buffer();
         for row in buffer.content.chunks(100) {
             let text: String = row.iter().map(ratatui::buffer::Cell::symbol).collect();
+            if let Some(x) = text.find("● Selected task") {
+                let x = text[..x].chars().count();
+                snapshot.push(format!(
+                    "selected dot {:?} | title {:?}",
+                    row[x].style(),
+                    row[x + 2].style(),
+                ));
+            }
             if let Some(x) = text.find("Named task") {
                 let x = text[..x].chars().count();
-                let dot = row.iter().find(|cell| cell.symbol() == "○").unwrap();
-                let mut expected = ratatui::buffer::Cell::default();
-                expected.set_symbol("○").set_style(Style::default().cyan());
-                assert_eq!(dot, &expected);
                 snapshot.push(format!(
-                    "{} | title style: {:?}",
+                    "{} | unread: {:?} | title style: {:?}",
                     normalize_agent_center_snapshot(&text),
+                    row[x - 2].fg,
                     row[x].style()
                 ));
             }
@@ -158,7 +162,6 @@ use pretty_assertions::assert_eq;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 
 static OVERVIEW_TIMESTAMP: std::sync::LazyLock<i64> =
     std::sync::LazyLock::new(|| chrono::Utc::now().timestamp() - 120);
@@ -371,11 +374,12 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
             last_messages: HashMap::new(),
             threads: HashMap::from([
-                (retained, Some(retained_thread.clone())),
-                (archived, Some(archived_thread)),
-                (deleted, Some(deleted_thread)),
+                (retained, Some((retained_thread.clone(), false))),
+                (archived, Some((archived_thread, false))),
+                (deleted, Some((deleted_thread, false))),
             ]),
             recent_seed_complete: true,
             discovery: None,
@@ -396,6 +400,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
             last_messages: HashMap::new(),
             threads: HashMap::from([(retained, None)]),
             recent_seed_complete: true,
@@ -446,6 +451,7 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
                 &app_server,
                 request_id,
                 Ok(AgentsOverviewThreadRefresh {
+                    cleared_unread: Vec::new(),
                     threads: HashMap::new(),
                     last_messages,
                     recent_seed_complete: true,
@@ -2737,6 +2743,7 @@ async fn command_center_refresh_failure_is_inline_and_clears_on_success() -> Res
     for result in [
         Err("unavailable".into()),
         Ok(AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
             threads: HashMap::new(),
             last_messages: HashMap::new(),
             recent_seed_complete: false,
@@ -2769,6 +2776,7 @@ async fn command_center_refresh_failure_is_inline_and_clears_on_success() -> Res
         &server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
+            cleared_unread: Vec::new(),
             threads: HashMap::new(),
             last_messages: HashMap::new(),
             recent_seed_complete: true,

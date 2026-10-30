@@ -202,7 +202,13 @@ impl AgentsOverviewView {
                 style,
             );
             let (status, mut dot) = Self::status(task);
-            if index == self.selected {
+            let idle = matches!(
+                task.group,
+                AgentsOverviewGroup::Ready | AgentsOverviewGroup::Finished
+            );
+            if task.unread || idle {
+                dot = crate::style::task_marker(task.unread, style);
+            } else if index == self.selected {
                 dot.style = style;
             }
             line(
@@ -236,11 +242,14 @@ impl AgentsOverviewView {
             } else {
                 self.title_style(task.thread_id)
             };
-            line(
-                Line::from(display_title(&task.thread).to_owned()).style(title_style),
-                title,
-                buf,
-            );
+            let task_title = display_title(&task.thread);
+            // On narrow rows the result dot shares the only slot for the working or alert icon.
+            let task_title = if task.unread && !idle && status_area.is_empty() {
+                format!("{status}: {task_title}")
+            } else {
+                task_title.to_owned()
+            };
+            line(Line::from(task_title).style(title_style), title, buf);
             line(Line::from(status).style(style), status_area, buf);
             if !updated.is_empty() {
                 let age = format_relative_time(

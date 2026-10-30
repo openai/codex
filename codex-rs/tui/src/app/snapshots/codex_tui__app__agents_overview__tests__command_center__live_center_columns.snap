@@ -12,7 +12,7 @@ expression: "screen(&view, 160, 22)"
                                                                                                                       │
   /tmp/project  4                                                                                                     │ Model: Unknown
     ○ A longer task title that uses the available column                              voice   Ready           5m ago  │ Reasoning: Unknown
-    ! Failed task                                                                             Error           1h ago  │
+    ● Failed task                                                                             Error           1h ago  │
     ● Working task                                                                            Working         1d ago  │ Project
     ○ Unloaded task                                                                           Inactive        2d ago  │ /tmp/project
                                                                                                                       │

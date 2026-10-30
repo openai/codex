@@ -42,6 +42,7 @@ pub(super) struct AgentsOverviewState {
     pub(super) removed_threads: HashSet<ThreadId>,
     /// Local visibility only; activity and metadata refreshes never reveal hidden roots.
     pub(super) hidden_threads: HashSet<ThreadId>,
+    pub(super) unread: HashSet<ThreadId>,
     pub(super) last_messages: HashMap<ThreadId, String>,
     pub(super) usage: HashMap<ThreadId, super::agents_overview_usage::AgentsOverviewUsage>,
     pub(super) pending_usage: Option<(ThreadId, Uuid)>,
@@ -145,6 +146,9 @@ impl App {
         }
         match result {
             Ok(refresh) => {
+                for id in refresh.cleared_unread {
+                    self.agents_overview.unread.remove(&id);
+                }
                 if let Some(pinned_thread_ids) = refresh.pinned_thread_ids {
                     self.agents_overview.pinned_thread_ids = pinned_thread_ids;
                 }
@@ -169,7 +173,12 @@ impl App {
                     if self.agents_overview.removed_threads.contains(&thread_id) {
                         continue;
                     }
-                    if let Some(mut thread) = thread {
+                    if let Some((mut thread, unread)) = thread {
+                        if unread {
+                            self.agents_overview.unread.insert(thread_id);
+                        } else {
+                            self.agents_overview.unread.remove(&thread_id);
+                        }
                         if thread.ephemeral {
                             self.agents_overview.threads.remove(&thread_id);
                             self.agents_overview.last_messages.remove(&thread_id);
@@ -340,6 +349,7 @@ impl App {
                 continue;
             }
             rows.push(AgentsOverviewRow {
+                unread: self.agents_overview.unread.contains(&thread_id),
                 details: self.agents_overview_details(root, &children),
                 thread: root.clone(),
                 thread_id,

@@ -27,6 +27,7 @@ use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SubAgentSource;
+use futures::StreamExt;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -57,6 +58,7 @@ impl App {
     pub(super) fn remove_agents_overview_thread(&mut self, thread_id: ThreadId) {
         self.prepare_agents_overview_removal(&std::collections::HashSet::from([thread_id]));
         self.agents_overview.removed_threads.insert(thread_id);
+        self.agents_overview.unread.remove(&thread_id);
         if let Some(Some(thread)) = self.agents_overview.threads.remove(&thread_id)
             && !thread.ephemeral
             && thread.parent_thread_id.is_none()
@@ -100,6 +102,14 @@ impl App {
             .get_mut(&thread_id)
             .and_then(Option::as_mut);
         match notification {
+            ServerNotification::ThreadReadStateChanged(change) => {
+                if change.read_state.first_unread.is_some() {
+                    self.agents_overview.unread.insert(thread_id);
+                } else {
+                    self.agents_overview.unread.remove(&thread_id);
+                }
+                self.repaint_agents_overview();
+            }
             ServerNotification::ThreadTokenUsageUpdated(usage) => {
                 if self.agents_overview.threads.contains_key(&thread_id) {
                     self.agents_overview
@@ -197,7 +207,9 @@ impl App {
         }
         if !matches!(
             notification,
-            ServerNotification::ThreadReverted(_) | ServerNotification::ThreadTokenUsageUpdated(_)
+            ServerNotification::ThreadReverted(_)
+                | ServerNotification::ThreadTokenUsageUpdated(_)
+                | ServerNotification::ThreadReadStateChanged(_)
         ) && self.agents_overview.threads.contains_key(&thread_id)
         {
             self.agents_overview.refresh_thread_ids.insert(thread_id);
@@ -269,7 +281,16 @@ impl App {
             return;
         }
 
-        self.agents_overview.pin_refresh_requested = false;
+        let mut unread_rows = Vec::new();
+        if std::mem::take(&mut self.agents_overview.pin_refresh_requested) {
+            unread_rows.extend(
+                self.agents_overview
+                    .visible_thread_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| self.agents_overview.unread.contains(id)),
+            );
+        }
         let request_id = Uuid::new_v4();
         self.agents_overview.request_id = Some(request_id);
         let initialized = self.agents_overview.initialized;
@@ -309,10 +330,10 @@ impl App {
                 let pinned_thread_ids = match list_pinned_threads(&request_handle).await {
                     Ok(Some(pinned_threads)) => {
                         let mut ids = Vec::with_capacity(pinned_threads.len());
-                        for thread in pinned_threads {
+                        for (thread, is_unread) in pinned_threads {
                             if let Ok(thread_id) = ThreadId::from_string(&thread.id) {
                                 ids.push(thread_id);
-                                threads.insert(thread_id, Some(thread));
+                                threads.insert(thread_id, Some((thread, is_unread)));
                             }
                         }
                         Some(Some(ids))
@@ -353,14 +374,34 @@ impl App {
                             .into_iter()
                             .filter_map(|id| ThreadId::from_string(&id).ok()),
                     );
-                    thread_ids.extend(detail_thread_ids(recent.iter()));
-                    for thread in recent {
+                    thread_ids.extend(detail_thread_ids(recent.iter().map(|(thread, _)| thread)));
+                    for (thread, is_unread) in recent {
                         if let Ok(thread_id) = ThreadId::from_string(&thread.id) {
-                            threads.insert(thread_id, Some(thread));
+                            threads.insert(thread_id, Some((thread, is_unread)));
                         }
                     }
                 }
 
+                // Recheck dots on older rows without fetching their transcript previews.
+                unread_rows.retain(|id| !threads.contains_key(id) && !thread_ids.contains(id));
+                let cleared_unread = futures::stream::iter(unread_rows)
+                    .map(async |id| {
+                        let response: ThreadReadResponse = request_handle
+                            .request_typed(ClientRequest::ThreadRead {
+                                request_id: RequestId::String(Uuid::new_v4().to_string()),
+                                params: ThreadReadParams {
+                                    thread_id: id.to_string(),
+                                    include_turns: false,
+                                },
+                            })
+                            .await
+                            .ok()?;
+                        response.read_state?.first_unread.is_none().then_some(id)
+                    })
+                    .buffer_unordered(16)
+                    .filter_map(std::future::ready)
+                    .collect()
+                    .await;
                 let mut reads = tokio::task::JoinSet::new();
                 for thread_id in thread_ids {
                     threads.entry(thread_id).or_default();
@@ -412,7 +453,10 @@ impl App {
                                             _ => None,
                                         });
                                 }
-                                Some((thread_id, response.thread, last_message))
+                                let unread = response
+                                    .read_state
+                                    .is_some_and(|state| state.first_unread.is_some());
+                                Some((thread_id, (response.thread, unread), last_message))
                             }
                             Err(error) => {
                                 tracing::warn!(%thread_id, %error, "failed to read agent thread");
@@ -439,6 +483,7 @@ impl App {
                     }
                 }
                 Ok(AgentsOverviewThreadRefresh {
+                    cleared_unread,
                     threads,
                     last_messages,
                     recent_seed_complete,
