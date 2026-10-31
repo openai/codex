@@ -109,6 +109,8 @@ common:remote --jobs=800
 common:ci --remote_download_minimal
 common:ci --keep_going
 common:ci --verbose_failures
+# A failed snapshot assertion should print its diff without leaving a .snap.new after a passing retry.
+test:ci --test_env=INSTA_UPDATE=no
 common:ci --build_metadata=REPO_URL=https://github.com/openai/codex.git
 common:ci --build_metadata=ROLE=CI
 common:ci --build_metadata=VISIBILITY=PUBLIC
