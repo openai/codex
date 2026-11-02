@@ -12,6 +12,23 @@ pub enum TurnCriticalPath {
     Complete(TurnCriticalPathDurations),
 }
 
+impl TurnCriticalPath {
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Incomplete => "incomplete",
+            Self::Complete(_) => "complete",
+        }
+    }
+
+    pub fn durations(&self) -> Option<&TurnCriticalPathDurations> {
+        match self {
+            Self::Complete(durations) => Some(durations),
+            Self::Disabled | Self::Incomplete => None,
+        }
+    }
+}
+
 /// Category totals over the server turn interval, truncated to milliseconds.
 /// Sampling and compaction both contribute to inference. Independent truncation
 /// can leave the category sum up to five milliseconds below duration_ms.
@@ -40,20 +57,16 @@ pub(crate) struct CriticalPathEventParams {
 
 impl From<TurnCriticalPath> for CriticalPathEventParams {
     fn from(path: TurnCriticalPath) -> Self {
-        let (status, durations) = match path {
-            TurnCriticalPath::Disabled => ("disabled", None),
-            TurnCriticalPath::Incomplete => ("incomplete", None),
-            TurnCriticalPath::Complete(durations) => ("complete", Some(durations)),
-        };
+        let durations = path.durations();
         Self {
-            critical_path_status: status,
-            critical_path_duration_ms: durations.as_ref().map(|value| value.duration_ms),
-            critical_path_inference_ms: durations.as_ref().map(|value| value.inference_ms),
-            critical_path_auto_review_ms: durations.as_ref().map(|value| value.auto_review_ms),
-            critical_path_user_wait_ms: durations.as_ref().map(|value| value.user_wait_ms),
-            critical_path_tools_ms: durations.as_ref().map(|value| value.tools_ms),
-            critical_path_overhead_ms: durations.as_ref().map(|value| value.overhead_ms),
-            critical_path_unknown_ms: durations.as_ref().map(|value| value.unknown_ms),
+            critical_path_status: path.status(),
+            critical_path_duration_ms: durations.map(|value| value.duration_ms),
+            critical_path_inference_ms: durations.map(|value| value.inference_ms),
+            critical_path_auto_review_ms: durations.map(|value| value.auto_review_ms),
+            critical_path_user_wait_ms: durations.map(|value| value.user_wait_ms),
+            critical_path_tools_ms: durations.map(|value| value.tools_ms),
+            critical_path_overhead_ms: durations.map(|value| value.overhead_ms),
+            critical_path_unknown_ms: durations.map(|value| value.unknown_ms),
         }
     }
 }

@@ -24,7 +24,23 @@ use codex_utils_critical_path::WorkKind;
 // Reuse the finalized analytics counters instead of counting sampled child spans.
 // Recovery can complete the same turn ID again, so consumers must retain the
 // completion event's trace and timestamp rather than deduplicating by turn alone.
-pub(crate) fn record_turn_profile_trace(thread_id: ThreadId, turn_id: &str, profile: &TurnProfile) {
+pub(crate) fn record_terminal_turn_profile(
+    thread_id: ThreadId,
+    turn: &TurnContext,
+    profile: &TurnProfile,
+) {
+    if !matches!(
+        profile.critical_path,
+        codex_analytics::TurnCriticalPath::Disabled
+    ) {
+        turn.turn_timing_state
+            .critical_path_metrics
+            .get_or_init(|| {
+                report::record_turn_profile_metrics(turn, profile);
+            });
+    }
+    let times = profile.critical_path.durations();
+    let turn_id = turn.sub_id.as_str();
     tracing::event!(
         name: "codex.turn_profile",
         target: "codex_otel.trace_safe",
@@ -32,6 +48,14 @@ pub(crate) fn record_turn_profile_trace(thread_id: ThreadId, turn_id: &str, prof
         event.name = "codex.turn_profile",
         conversation.id = %thread_id,
         turn_id,
+        critical_path_status = profile.critical_path.status(),
+        critical_path_duration_ms = times.map(|t| t.duration_ms),
+        critical_path_inference_ms = times.map(|t| t.inference_ms),
+        critical_path_tools_ms = times.map(|t| t.tools_ms),
+        critical_path_auto_review_ms = times.map(|t| t.auto_review_ms),
+        critical_path_user_wait_ms = times.map(|t| t.user_wait_ms),
+        critical_path_overhead_ms = times.map(|t| t.overhead_ms),
+        critical_path_unknown_ms = times.map(|t| t.unknown_ms),
         sampling_request_count = profile.sampling_request_count,
         sampling_retry_count = profile.sampling_retry_count,
     );
@@ -66,6 +90,7 @@ pub(crate) struct TurnTimingState {
     pub(crate) direct_tool_timings: DirectToolTimings,
     state: Mutex<TurnTimingStateInner>,
     profile: StdMutex<TurnProfileState>,
+    critical_path_metrics: std::sync::OnceLock<()>,
 }
 
 #[derive(Debug, Default)]
