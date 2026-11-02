@@ -142,7 +142,7 @@ impl LocalThreadStore {
                     .await?;
                 if matches!(mode, LineageResolutionMode::HistoryPage) {
                     bounds
-                        .read_history_page_bounds(&path, requested_thread_id, /*cutoff*/ None)
+                        .read_history_page_bounds(&path, requested_thread_id)
                         .await?;
                 }
                 (rollout_id, (path, bounds))
@@ -262,6 +262,20 @@ async fn existing_regular_rollout_path(path: &Path) -> Option<PathBuf> {
     metadata.is_file().then_some(path)
 }
 
+/// Resolve the representation the reader will open and check its immutable ID inside managed storage.
+async fn managed_ancestor_path(
+    store: &LocalThreadStore,
+    path: &Path,
+    rollout_id: ThreadId,
+) -> Option<PathBuf> {
+    if codex_rollout::rollout_id_from_path(path) != Some(rollout_id) {
+        return None;
+    }
+    let path = existing_regular_rollout_path(path).await?;
+    let path = managed_rollout_path(store, &path).await?;
+    (codex_rollout::rollout_id_from_path(&path) == Some(rollout_id)).then_some(path)
+}
+
 struct RolloutBounds {
     owner: ThreadId,
     start_ordinal: u64,
@@ -294,7 +308,7 @@ async fn resolve_ancestor_rollout(
     .await?;
     if matches!(mode, LineageResolutionMode::HistoryPage)
         && let Err(error) = bounds
-            .read_history_page_bounds(&path, requested_thread_id, Some(end))
+            .read_history_page_bounds(&path, requested_thread_id)
             .await
     {
         let failed = FailedAncestor {
@@ -313,7 +327,7 @@ async fn resolve_ancestor_rollout(
         .await
         .map_err(|_| failed.error.clone())?;
         bounds
-            .read_history_page_bounds(&path, requested_thread_id, Some(end))
+            .read_history_page_bounds(&path, requested_thread_id)
             .await
             .map_err(|_| failed.error)?;
         return Ok((path, bounds));
@@ -329,30 +343,47 @@ async fn resolve_ancestor_candidate(
     prefetched_path: Option<PathBuf>,
     excluded: Option<&FailedAncestor>,
 ) -> ThreadStoreResult<(PathBuf, RolloutBounds)> {
+    let mut rejected = None;
     let path = if excluded.is_none()
         && let Some(path) = prefetched_path
         && let Some(path) = existing_regular_rollout_path(&path).await
     {
         path
     } else {
+        // SQLite records the current path by thread ID. An original rollout shares its owner's
+        // ID, but the current path can also name a later rollout created by a revert.
+        if excluded.is_none()
+            && let Some(state_db) = store.state_db().await
+            && let Ok(Some(path)) = state_db
+                .find_rollout_path_by_id(rollout_id, /*archived_only*/ None)
+                .await
+            && let Some(path) = managed_ancestor_path(store, &path, rollout_id).await
+        {
+            match RolloutBounds::read(&path, requested_thread_id, Some(rollout_id)).await {
+                Ok(bounds) => return Ok((path, bounds)),
+                Err(error) => rejected = Some((path, error)),
+            }
+        }
+        let excluded_path = excluded
+            .map(|failed| failed.path.as_path())
+            .or_else(|| rejected.as_ref().map(|(path, _)| path.as_path()));
         codex_rollout::find_rollout_path_by_rollout_id_excluding(
             &store.config.codex_home,
             rollout_id,
-            excluded.map(|failed| failed.path.as_path()),
+            excluded_path,
         )
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to locate rollout {rollout_id}: {err}"),
-        })?
-        .ok_or_else(|| malformed_lineage(rollout_id, "missing source rollout"))?
+        })
+        .and_then(|path| {
+            path.ok_or_else(|| malformed_lineage(rollout_id, "missing source rollout"))
+        })
+        .map_err(|scan_error| rejected.take().map_or(scan_error, |(_, error)| error))?
     };
     if let Some(failed) = excluded {
-        let path = existing_regular_rollout_path(&path)
+        let path = managed_ancestor_path(store, &path, rollout_id)
             .await
-            .ok_or_else(|| malformed_lineage(rollout_id, "missing source rollout"))?;
-        let path = managed_rollout_path(store, &path)
-            .await
-            .filter(|path| codex_rollout::rollout_id_from_path(path) == Some(rollout_id))
             .ok_or_else(|| malformed_lineage(rollout_id, "invalid replacement rollout path"))?;
         // A revert can give a rollout a new ID without changing the thread that owns its history.
         let bounds = RolloutBounds::read(&path, requested_thread_id, Some(failed.owner)).await?;
@@ -362,9 +393,10 @@ async fn resolve_ancestor_candidate(
         store,
         path,
         requested_thread_id,
-        /*expected_owner*/ None,
+        rejected.is_some().then_some(rollout_id),
     )
     .await
+    .map_err(|scan_error| rejected.map_or(scan_error, |(_, error)| error))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -451,11 +483,7 @@ impl RolloutBounds {
         &mut self,
         path: &Path,
         requested_thread_id: ThreadId,
-        cutoff: Option<HistoryPosition>,
     ) -> ThreadStoreResult<()> {
-        if let Some(end) = cutoff {
-            validate_cutoff_byte_offset(requested_thread_id, path, &end).await?;
-        }
         if self.hides_parent {
             self.start_ordinal = attached_history_start(path, self.start_ordinal)
                 .await

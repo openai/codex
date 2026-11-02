@@ -176,7 +176,7 @@ async fn unreadable_ancestor_recovers_from_another_copy_of_the_same_rollout() {
         .split_inclusive('\n')
         .next()
         .expect("session header");
-    write_unfinished_frame(&compressed, header, header.len());
+    write_unfinished_frame(&compressed, header);
     fs::remove_file(&active).expect("remove plain rollout");
 
     let assert_original_error = async || {
@@ -188,10 +188,12 @@ async fn unreadable_ancestor_recovers_from_another_copy_of_the_same_rollout() {
         );
     };
     assert_original_error().await;
-    let page_error = store
+    // History pages read projected rows and only need the ancestor header for its bounds.
+    let page = store
         .resolve_rollout_lineage_for_history_page(child)
         .await
-        .expect_err("the active copy cannot supply the inherited prefix");
+        .expect("page with only the short active copy");
+    assert_eq!(page.segments[0].rollout_path, compressed);
     let child_contents = fs::read_to_string(&child_path).expect("read child");
     let checkpoint = serde_json::json!({
         "timestamp": "2026-07-16T00:00:00.000Z", "ordinal": 5, "type": "compacted",
@@ -212,19 +214,9 @@ async fn unreadable_ancestor_recovers_from_another_copy_of_the_same_rollout() {
     )
     .expect("stage another owner's history");
     assert_original_error().await;
-    let err = store
-        .resolve_rollout_lineage_for_history_page(child)
-        .await
-        .expect_err("history pages must reject a replacement from another owner");
-    assert_eq!(err.to_string(), page_error.to_string());
 
     let archive = contents.split_inclusive('\n').take(4).collect::<String>();
     fs::write(&archived, archive).expect("restore matching archived copy");
-    let page = store
-        .resolve_rollout_lineage_for_history_page(child)
-        .await
-        .expect("page from archive");
-    assert_eq!(page.segments[0].rollout_path, archived);
     let context = load_context().await.expect("resume from archive").items;
     assert_eq!(
         serde_json::to_value(context).expect("serialize resumed context"),
@@ -285,16 +277,154 @@ async fn store_with_state(home: &Path) -> LocalThreadStore {
     LocalThreadStore::new(config, Some(state))
 }
 
-fn write_unfinished_frame(path: &Path, contents: &str, prefix_len: usize) {
+fn write_unfinished_frame(path: &Path, prefix: &str) {
     let mut encoder = zstd::Encoder::new(Vec::new(), /*level*/ 0).expect("create encoder");
     encoder
-        .set_pledged_src_size(Some(contents.len() as u64))
-        .expect("advertise full size");
-    encoder
-        .write_all(&contents.as_bytes()[..prefix_len])
-        .expect("write prefix");
+        .set_pledged_src_size(Some(prefix.len() as u64))
+        .expect("set frame size");
+    encoder.write_all(prefix.as_bytes()).expect("write prefix");
     encoder.flush().expect("flush unfinished frame");
     fs::write(path, encoder.get_ref()).expect("write unfinished frame");
+}
+
+#[tokio::test]
+async fn indexed_ancestor_must_be_managed_and_owned_by_the_indexed_thread() {
+    let temp = TempDir::new().expect("temp dir");
+    let home = temp.path().canonicalize().expect("canonical home");
+    let external_home = TempDir::new().expect("external home");
+    let store = store_with_state(&home).await;
+    let state = store.state_db().await.expect("SQLite store");
+    let root = ThreadId::new();
+    let child = ThreadId::new();
+    let active = write_rollout(
+        &home, root, /*history_base*/ None, /*next_ordinal*/ 3,
+    );
+    let archived = write_rollout_under(
+        home.join("archived_sessions"),
+        root,
+        /*history_base*/ None,
+        /*next_ordinal*/ 4,
+    );
+    let external = write_rollout(
+        external_home.path(),
+        root,
+        /*history_base*/ None,
+        /*next_ordinal*/ 3,
+    );
+    let end = history_position(&active, root, /*end_ordinal_exclusive*/ 3);
+    write_rollout(&home, child, Some(end), /*next_ordinal*/ 2);
+    let assert_lookup = async |indexed: &Path, expected: &Path| {
+        let mut metadata = codex_state::ThreadMetadataBuilder::new(
+            root,
+            indexed.to_owned(),
+            chrono::Utc::now(),
+            codex_protocol::protocol::SessionSource::Cli,
+        );
+        metadata.history_mode = ThreadHistoryMode::Paginated;
+        state
+            .upsert_thread(&metadata.build("test-provider"))
+            .await
+            .expect("index ancestor");
+        let existing = store
+            .resolve_rollout_lineage(child, /*initial_path*/ None)
+            .await
+            .expect("resolve ancestor");
+        let reference = store
+            .resolve_rollout_lineage_for_reference(child)
+            .await
+            .expect("resolve reference");
+        for lineage in [existing, reference] {
+            assert_eq!(lineage.segments[0].rollout_path, expected);
+        }
+    };
+    assert_lookup(&archived, &archived).await;
+    assert_lookup(&external, &active).await;
+    let contents = fs::read_to_string(&archived).expect("read archive");
+    let (header, events) = contents.split_once('\n').expect("header and events");
+    let legacy = header.replace("\"paginated\"", "\"legacy\"");
+    fs::write(&archived, header).expect("shorten indexed archive");
+    assert_lookup(&archived, &archived).await;
+    fs::write(&archived, format!("{legacy}\n{events}")).expect("write legacy archive");
+    assert_lookup(&archived, &active).await;
+    let compressed = archived.with_extension("jsonl.zst");
+    fs::write(
+        &compressed,
+        zstd::encode_all(contents.as_bytes(), /*level*/ 0).expect("compress archive"),
+    )
+    .expect("write complete compressed copy");
+    fs::remove_file(&archived).expect("remove plain archive");
+    assert_lookup(&compressed, &compressed).await;
+    let load_context = || {
+        store.load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: child,
+            include_archived: false,
+        })
+    };
+    let items = async || {
+        serde_json::to_value(load_context().await.expect("load context").items)
+            .expect("serialize context")
+    };
+    let expected = items().await;
+    for prefix in [contents.as_str(), &contents[..header.len() + 1]] {
+        write_unfinished_frame(&compressed, prefix);
+        assert_lookup(&compressed, &compressed).await;
+        assert_eq!(items().await, expected);
+        let fork = store
+            .prepare_fork(PrepareForkParams {
+                thread_id: child,
+                boundary: ForkBoundary::Latest,
+            })
+            .await
+            .expect("fork using the intact active copy");
+        assert_eq!(
+            serde_json::to_value(fork.model_context.as_ref()).expect("serialize fork"),
+            expected
+        );
+        let page = store
+            .resolve_rollout_lineage_for_history_page(child)
+            .await
+            .expect("resolve page");
+        assert_eq!(page.segments[0].rollout_path, compressed);
+    }
+    let wrong_owner = contents.replace(&root.to_string(), &ThreadId::new().to_string());
+    fs::write(&active, &wrong_owner).expect("substitute another thread's history");
+    let error = load_context()
+        .await
+        .expect_err("reject wrong owner on retry");
+    assert!(
+        error
+            .to_string()
+            .ends_with(&format!("{}: incomplete frame", compressed.display())),
+        "{error}"
+    );
+    fs::remove_file(&compressed).expect("remove truncated archive");
+    fs::write(&archived, &contents).expect("restore archive");
+    assert_lookup(&active, &archived).await;
+    fs::write(&active, []).expect("empty indexed rollout");
+    assert_lookup(&active, &archived).await;
+    fs::remove_file(&archived).expect("remove fallback");
+    assert_invalid_lineage(
+        &store,
+        child,
+        &format!("rollout at {} is empty", active.display()),
+    )
+    .await;
+
+    #[cfg(unix)]
+    {
+        fs::copy(&external, &active).expect("restore active rollout");
+        fs::write(
+            &compressed,
+            zstd::encode_all(contents.as_bytes(), /*level*/ 0).expect("compress archive"),
+        )
+        .expect("restore compressed archive");
+        std::os::unix::fs::symlink(&external, &archived).expect("link plain sibling outside home");
+        let alias = home
+            .join("sessions")
+            .join(compressed.file_name().expect("filename"));
+        std::os::unix::fs::symlink(&compressed, &alias).expect("link indexed compressed rollout");
+        assert_lookup(&alias, &active).await;
+    }
 }
 
 #[tokio::test]
