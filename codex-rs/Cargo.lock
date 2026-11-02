@@ -4185,13 +4185,27 @@ dependencies = [
 name = "codex-message-board-mcp"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "clap",
  "codex-attachment-store",
  "codex-message-board",
  "codex-protocol",
+ "codex-state",
  "codex-tools",
+ "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "codex-utils-output-truncation",
+ "codex-utils-process",
+ "futures",
  "rmcp",
+ "serde",
  "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
  "uuid",
 ]
 

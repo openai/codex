@@ -1,6 +1,10 @@
-//! MCP transport adapter for the shared board's existing schemas and handlers.
-//! The host binds board access and caller identity before serving a connection.
+//! MCP adapters and HTTP transport for existing board tools.
+//! Bound adapters fix caller identity; HTTP validates it against the configured host.
 //! Storage, permissions and notification delivery remain owned by the board.
+
+mod http;
+
+pub use http::serve_http;
 
 use codex_attachment_store::InlineAttachmentStore;
 use codex_message_board::AgentMessageBoard;
@@ -71,9 +75,7 @@ impl MessageBoardMcpServer {
 
 impl ServerHandler for MessageBoardMcpServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-            Implementation::new("codex-message-board", env!("CARGO_PKG_VERSION")),
-        )
+        server_info()
     }
 
     async fn list_tools(
@@ -81,34 +83,7 @@ impl ServerHandler for MessageBoardMcpServer {
         request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        if request.is_some_and(|request| request.cursor.is_some()) {
-            return Err(ErrorData::invalid_params(
-                "Message-board tools do not use pagination cursors",
-                /*data*/ None,
-            ));
-        }
-        let tools = self
-            .tools
-            .iter()
-            .map(|executor| {
-                let ToolSpec::Function(spec) = executor.spec() else {
-                    return Err(ErrorData::internal_error(
-                        "Message-board tool is not a function",
-                        /*data*/ None,
-                    ));
-                };
-                let schema = serde_json::to_value(spec.parameters)
-                    .and_then(serde_json::from_value)
-                    .map_err(|_| {
-                        ErrorData::internal_error(
-                            "Invalid message-board schema",
-                            /*data*/ None,
-                        )
-                    })?;
-                Ok(Tool::new(spec.name, spec.description, Arc::new(schema)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(ListToolsResult::with_all_items(tools))
+        list_tools_result(request, self.tools.iter().map(|executor| executor.spec()))
     }
 
     async fn call_tool(
@@ -170,4 +145,39 @@ impl ServerHandler for MessageBoardMcpServer {
         };
         Ok(result.into())
     }
+}
+
+fn server_info() -> ServerConfig {
+    ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+        Implementation::new("codex-message-board", env!("CARGO_PKG_VERSION")),
+    )
+}
+
+fn list_tools_result(
+    request: Option<PaginatedRequestParams>,
+    specs: impl Iterator<Item = ToolSpec>,
+) -> Result<ListToolsResult, ErrorData> {
+    if request.is_some_and(|request| request.cursor.is_some()) {
+        return Err(ErrorData::invalid_params(
+            "Message-board tools do not use pagination cursors",
+            /*data*/ None,
+        ));
+    }
+    let tools = specs
+        .map(|spec| {
+            let ToolSpec::Function(spec) = spec else {
+                return Err(ErrorData::internal_error(
+                    "Message-board tool is not a function",
+                    /*data*/ None,
+                ));
+            };
+            let schema = serde_json::to_value(spec.parameters)
+                .and_then(serde_json::from_value)
+                .map_err(|_| {
+                    ErrorData::internal_error("Invalid message-board schema", /*data*/ None)
+                })?;
+            Ok(Tool::new(spec.name, spec.description, Arc::new(schema)))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ListToolsResult::with_all_items(tools))
 }

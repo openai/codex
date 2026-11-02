@@ -10,15 +10,36 @@ path = "src/lib.rs"
 test = false
 doctest = false
 
+[[bin]]
+name = "codex-message-board-mcp"
+path = "src/main.rs"
+test = false
+
 [lints]
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true, features = ["http1", "tokio"] }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 codex-attachment-store = { workspace = true }
 codex-message-board = { workspace = true }
 codex-protocol = { workspace = true }
+codex-state = { workspace = true }
 codex-tools = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
-rmcp = { workspace = true, features = ["server"] }
+futures = { workspace = true }
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt", "signal"] }
+tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
+codex-utils-process = { workspace = true }
+tempfile = { workspace = true }

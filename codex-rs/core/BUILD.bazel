@@ -11,6 +11,7 @@ codex_rust_crate(
         "//codex-rs/bwrap:bwrap",
         "//codex-rs/code-mode-host:codex-code-mode-host",
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
+        "//codex-rs/message-board-mcp:codex-message-board-mcp",
         "//codex-rs/rmcp-client:test_stdio_server",
         "//codex-rs/rmcp-client:test_streamable_http_server",
         "//codex-rs/cli:codex",
