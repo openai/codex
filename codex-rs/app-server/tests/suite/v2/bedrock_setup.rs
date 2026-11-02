@@ -5,7 +5,10 @@ use codex_app_server_protocol::BedrockDiscoverResponse;
 use codex_app_server_protocol::BedrockSetupParams;
 use codex_app_server_protocol::BedrockSetupResponse;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadStartParams;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::login_with_bedrock_api_key;
@@ -114,6 +117,21 @@ async fn discover_bedrock_profiles_and_environment_credentials() -> Result<()> {
         .into()
     );
     assert!(!codex_home.path().join(".env").exists());
+
+    // The same server must route both the picker and the first thread to Bedrock.
+    let models: ModelListResponse = app_server
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams::default(),
+        })
+        .await?;
+    let default_model = models.data.iter().find(|model| model.is_default).unwrap();
+    assert!(default_model.model.starts_with("openai."));
+    let thread = app_server
+        .start_thread(ThreadStartParams::default())
+        .await?;
+    assert_eq!(thread.model_provider, "amazon-bedrock");
+    assert_eq!(thread.model, default_model.model);
 
     Ok(())
 }

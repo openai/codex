@@ -10,6 +10,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadStartParams;
 use codex_protocol::openai_models::ModelVisibility;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -105,6 +106,8 @@ async fn setup_gcp_saves_overrides_restores_adc_and_refreshes_catalog() -> Resul
     model.supported_in_api = true;
     let mut unsupported_model = model.clone();
     unsupported_model.slug = "test-non-vertex-model".to_string();
+    // Make the startup catalog's default distinguishable from the GCP default.
+    unsupported_model.priority = model.priority - 1;
     catalog.models.push(unsupported_model);
     let catalog_path = home.join("models.json");
     std::fs::write(&catalog_path, serde_json::to_vec(&catalog)?)?;
@@ -191,6 +194,10 @@ async fn setup_gcp_saves_overrides_restores_adc_and_refreshes_catalog() -> Resul
             .collect::<Vec<_>>(),
         [selected.as_path(), ambient.as_path()]
     );
+    let thread = app_server
+        .start_thread(ThreadStartParams::default())
+        .await?;
+    assert_eq!(thread.model, after.data[0].model);
     Ok(())
 }
 

@@ -134,6 +134,7 @@ impl AccountRequestProcessor {
             .commit_provider_config(write)
             .await
             .map_err(map_config_error)?;
+        self.model_catalog.invalidate().await;
 
         Ok(Some(BedrockSetupResponse {}.into()))
     }

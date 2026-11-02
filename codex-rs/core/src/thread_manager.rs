@@ -526,6 +526,7 @@ pub(crate) struct ThreadManagerState {
     agent_control_factory: Option<AgentControlFactory>,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    models_manager_provider: ModelProviderInfo,
     git_root_discovery: Arc<GitRootDiscovery>,
     environment_manager: Arc<EnvironmentManager>,
     starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
@@ -697,6 +698,7 @@ impl ThreadManager {
                 thread_id_generator: default_thread_id_generator(),
                 agent_control_factory: None,
                 models_manager,
+                models_manager_provider: config.model_provider.clone(),
                 git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -905,6 +907,7 @@ impl ThreadManager {
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 agent_control_factory: None,
+                models_manager_provider: provider.clone(),
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
                     .models_manager(codex_home, /*config_model_catalog*/ None),
                 git_root_discovery: Arc::default(),
@@ -2584,6 +2587,14 @@ impl ThreadManagerState {
         } else {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
+        let models_manager = if config.model_provider == self.models_manager_provider {
+            Arc::clone(&self.models_manager)
+        } else {
+            build_models_manager(&config, Arc::clone(&auth_manager))
+        };
+        let models_manager = models_manager
+            .for_originator(&startup_context.originator)
+            .unwrap_or(models_manager);
         let spawn_result = Session::spawn(SessionSpawnArgs {
             attached_thread,
             startup,
@@ -2593,10 +2604,7 @@ impl ThreadManagerState {
             instructions: startup_context.instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
-            models_manager: self
-                .models_manager
-                .for_originator(&startup_context.originator)
-                .unwrap_or_else(|| Arc::clone(&self.models_manager)),
+            models_manager,
             git_root_discovery: Arc::clone(&self.git_root_discovery),
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),
