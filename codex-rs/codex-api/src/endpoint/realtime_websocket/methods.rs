@@ -63,11 +63,13 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use url::Url;
 
 const REALTIME_WIRE_LOG_TARGET: &str = "codex_api::realtime_websocket::wire";
+mod sideband;
 const OPENAI_REALTIME_API_BASE_URL: &str = "https://api.openai.com/v1";
 
 struct WsStream {
     tx_command: mpsc::Sender<WsCommand>,
-    pump_task: tokio::task::JoinHandle<()>,
+    transport_task: tokio::task::JoinHandle<()>,
+    sideband_input_stop: Option<tokio::sync::watch::Sender<bool>>,
     terminal_policy_error: tokio::sync::watch::Receiver<Option<NetworkPolicyDenied>>,
 }
 
@@ -90,7 +92,7 @@ impl WsStream {
         let (tx_message, rx_message) = async_channel::unbounded::<Result<Message, WsError>>();
 
         let (terminal_policy_tx, terminal_policy_error) = tokio::sync::watch::channel(None);
-        let pump_task = tokio::spawn(async move {
+        let transport_task = tokio::spawn(async move {
             let mut inner = inner;
             let report_write_policy_error = |error: &WsError| {
                 if let Some(denied) = codex_websocket_client::network_policy_denial(error) {
@@ -191,7 +193,8 @@ impl WsStream {
         (
             Self {
                 tx_command,
-                pump_task,
+                transport_task,
+                sideband_input_stop: None,
                 terminal_policy_error,
             },
             rx_message,
@@ -238,7 +241,7 @@ impl WsStream {
 
 impl Drop for WsStream {
     fn drop(&mut self) {
-        self.pump_task.abort();
+        self.transport_task.abort();
     }
 }
 

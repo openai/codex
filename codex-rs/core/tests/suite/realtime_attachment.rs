@@ -1,6 +1,7 @@
 //! Exercises attachment races through Core submissions and real sideband sockets.
 
 use anyhow::Result;
+use codex_api::RealtimeEvent;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
@@ -9,11 +10,13 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::protocol::RealtimeSidebandTransport;
 use codex_protocol::protocol::ThreadHistoryMode;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -30,6 +33,202 @@ struct Sideband {
     url: String,
     connections: mpsc::UnboundedReceiver<Connection>,
     task: tokio::task::JoinHandle<()>,
+}
+
+/// A caller-owned stream drives a real Core delegation and returns context without any callback socket.
+#[tokio::test]
+async fn initiated_sideband_delegates_without_callback() -> Result<()> {
+    let api = start_mock_server().await;
+    let response = core_test_support::responses::mount_sse_once(
+        &api,
+        core_test_support::responses::sse(vec![
+            core_test_support::responses::ev_response_created("stream-handoff"),
+            core_test_support::responses::ev_assistant_message(
+                "answer",
+                "Stream delegation completed",
+            ),
+            core_test_support::responses::ev_completed("stream-handoff"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_model_info_override("gpt-5.5", |model| model.use_responses_lite = false)
+        .with_config(|config| config.base_instructions = Some(String::new()))
+        .build_with_auto_env(&api)
+        .await?;
+    // Any regression to the existing-call WebSocket path is both observed and fails attachment.
+    let callback = TcpListener::bind("127.0.0.1:0").await?;
+    let callback_url = format!("ws://{}", callback.local_addr()?);
+    let (events, incoming) = mpsc::channel(32);
+    let (outgoing, mut commands) = mpsc::channel(32);
+    let (reply, ready) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttachStream {
+            params: params("stream", &callback_url),
+            transport: RealtimeSidebandTransport { incoming, outgoing },
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(10), ready).await???;
+    events
+        .send(
+            json!({
+                "type": "delegation.created",
+                "offset_ms": 0,
+                "item": {
+                    "id": "stream-handoff",
+                    "type": "delegation",
+                    "target": "client",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "complete the stream delegation"
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .await?;
+    timeout(Duration::from_secs(20), async {
+        while let Some(command) = commands.recv().await {
+            let command: Value = serde_json::from_str(&command)?;
+            if command["type"] == "delegation.context.append"
+                && command.to_string().contains("Stream delegation completed")
+            {
+                assert_eq!(command["delegation_item_id"], "stream-handoff");
+                return anyhow::Ok(());
+            }
+        }
+        anyhow::bail!("Core closed before returning delegation context")
+    })
+    .await??;
+    assert_eq!(response.requests().len(), 1);
+    assert!(
+        timeout(Duration::from_millis(100), callback.accept())
+            .await
+            .is_err()
+    );
+    drop(events);
+    timeout(Duration::from_secs(10), async {
+        while commands.recv().await.is_some() {}
+    })
+    .await?;
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// Inbound events, replacement, and detach stay live even when the host never drains output.
+#[tokio::test]
+async fn initiated_sideband_backpressure_keeps_events_and_lifecycle_live() -> Result<()> {
+    let api = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&api).await?;
+    let mut transports = Vec::new();
+    for session in ["original", "replacement"] {
+        let (events, incoming) = mpsc::channel(/*buffer*/ 1);
+        let (outgoing, commands) = mpsc::channel(/*buffer*/ 1);
+        // Occupy the host's queue before attaching, and retain its receiver until after detach.
+        outgoing.send("occupied".to_owned()).await?;
+        let (reply, ready) = oneshot::channel();
+        test.codex
+            .submit(Op::RealtimeConversationAttachStream {
+                params: params(session, "ws://unused.invalid"),
+                transport: RealtimeSidebandTransport { incoming, outgoing },
+                reply,
+            })
+            .await?;
+        timeout(Duration::from_secs(/*secs*/ 10), ready).await???;
+
+        // Core's text queue holds 64 items. Accepting 65 submissions before the
+        // barrier below proves that the writer has dequeued text into a blocked send.
+        for _ in 0..65 {
+            test.codex
+                .submit(Op::RealtimeConversationText(ConversationTextParams {
+                    text: "blocked output".to_owned(),
+                    role: ConversationTextRole::User,
+                }))
+                .await?;
+        }
+        // A mismatched detach is an acknowledged no-op on the submission loop.
+        detach(&test, "not-selected").await?;
+        events
+            .send(json!({"type":"session.started", "session":{"id":session}}).to_string())
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::RealtimeConversationRealtime(event)
+                if matches!(&event.payload, RealtimeEvent::SessionUpdated { realtime_session_id, .. }
+                    if realtime_session_id == session))
+        })
+        .await;
+        transports.push((events, commands));
+    }
+    detach(&test, "replacement").await?;
+    for (events, mut commands) in transports {
+        timeout(Duration::from_secs(/*secs*/ 10), events.closed()).await?;
+        assert_eq!(commands.recv().await, Some("occupied".to_owned()));
+        assert_eq!(commands.recv().await, None);
+    }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// Detach is a history barrier for accepted final speech, including when both caller halves disappear.
+#[tokio::test(flavor = "current_thread")]
+async fn initiated_sideband_detach_preserves_queued_transcript_in_history() -> Result<()> {
+    let api = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&api).await?;
+    test.codex.ensure_rollout_materialized().await;
+    for index in 0..8 {
+        let session = format!("hangup-{index}");
+        let completed_turn = index % 2 == 1;
+        let text = if completed_turn {
+            format!(
+                "{}final words before hangup {index}",
+                "completed words ".repeat(800)
+            )
+        } else {
+            format!("final words before hangup {index}")
+        };
+        let (events, incoming) = mpsc::channel(32);
+        let (outgoing, commands) = mpsc::channel(32);
+        let (reply, ready) = oneshot::channel();
+        let mut start_params = params(&session, "ws://unused.invalid");
+        // Completed turns must persist even when the optional unfinished-tail flush is off.
+        start_params.flush_transcript_tail_on_session_end = !completed_turn;
+        test.codex
+            .submit(Op::RealtimeConversationAttachStream {
+                params: start_params,
+                transport: RealtimeSidebandTransport { incoming, outgoing },
+                reply,
+            })
+            .await?;
+        timeout(Duration::from_secs(10), ready).await???;
+        let event = if completed_turn {
+            json!({"type": "turn.done", "turn": {"role": "user", "transcript": text}})
+        } else {
+            json!({"type": "input_transcript.added", "item": {"text": text}})
+        };
+        events.try_send(event.to_string())?;
+        drop(events);
+        drop(commands);
+        detach(&test, &session).await?;
+        let history = test.codex.load_history(/*include_archived*/ false).await?;
+        let tails = history.items.iter().filter(|item| {
+            matches!(item,
+                codex_history::RolloutItem::ResponseItem(codex_history::ResponseItemEnvelope {
+                    item: codex_protocol::models::ResponseItem::Message { role, content, .. }, ..
+                }) if role == "user" && content.iter().any(|item| matches!(item,
+                    codex_protocol::models::ContentItem::InputText { text: recorded }
+                        if recorded.contains(&text)
+                ))
+            )
+        }).count();
+        assert_eq!(
+            tails, 1,
+            "detach must persist the accepted final transcript exactly once"
+        );
+    }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
 }
 
 struct Connection {

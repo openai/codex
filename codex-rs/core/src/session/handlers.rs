@@ -546,6 +546,18 @@ pub(super) async fn submission_loop(
                     let _ = reply.send(result);
                     false
                 }
+                Op::RealtimeConversationAttachStream {
+                    params,
+                    transport,
+                    reply,
+                } => {
+                    let result = crate::realtime_conversation::handle_attach_stream(
+                        &sess, sub.id, params, transport,
+                    )
+                    .await;
+                    let _ = reply.send(result);
+                    false
+                }
                 Op::RealtimeConversationDetach {
                     realtime_session_id,
                     reply,
