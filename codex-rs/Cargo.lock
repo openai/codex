@@ -1960,8 +1960,11 @@ dependencies = [
 name = "codex-agent-message-board-extension"
 version = "0.0.0"
 dependencies = [
+ "codex-agent-message-board-client",
  "codex-config",
  "codex-extension-api",
+ "codex-features",
+ "codex-http-client",
  "codex-message-board",
  "codex-message-board-mcp",
  "codex-protocol",

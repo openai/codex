@@ -1,6 +1,7 @@
 //! Bridges the board extension to the selected controller, clock and active-turn services.
 //!
-//! The shared board library owns storage; the extension owns tools. This adapter never starts or restores
+//! The extension owns backend construction, storage and tool registration. This adapter
+//! selects configuration and supplies host capabilities. It never starts or restores
 //! recipients and never queues a notification for an idle agent.
 
 use crate::CodexThread;
@@ -11,16 +12,11 @@ use crate::context::ContextualUserFragment;
 use crate::tools::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
 use chrono::DateTime;
 use chrono::Utc;
-use codex_agent_message_board_client::AccessToken;
 use codex_agent_message_board_client::RemoteAgentMessageBoard;
-use codex_agent_message_board_extension::local_board_options;
+use codex_agent_message_board_extension::BoardBackend;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
-use codex_http_client::ClientRouteClass;
-use codex_message_board::AgentMessageBoard;
-use codex_message_board::InMemoryMessageBoards;
-use codex_message_board::LocalAgentMessageBoard;
 use codex_message_board::LocalBoardConnection;
 use codex_message_board::MessageBoardHost;
 use codex_message_board::NotificationDelivery;
@@ -53,8 +49,6 @@ pub fn install_agent_message_board(
             }),
         ))
     });
-    let in_memory_boards = Arc::new(InMemoryMessageBoards::default());
-    let mcp_boards = codex_agent_message_board_extension::install_mcp(registry);
     codex_agent_message_board_extension::install(
         registry,
         MULTI_AGENT_V2_NAMESPACE_DESCRIPTION,
@@ -75,64 +69,32 @@ pub fn install_agent_message_board(
                         && !in_memory
                         && config.multi_agent_v2.message_board_remote.is_none()))
             {
-                return Box::pin(async { Ok(None) });
+                return None;
             }
-            let in_memory_boards = Arc::clone(&in_memory_boards);
-            let mcp_boards = Arc::clone(&mcp_boards);
-            let host = Arc::new(LocalBoardHost {
-                manager: manager.clone(),
-                tree,
-                caller,
-                expected_turn_id: None,
-                connection: connection.clone(),
-            });
-            Box::pin(async move {
-                if mcp {
-                    mcp_boards
-                        .open(input.thread_store, tree, caller, host)
-                        .await?;
-                    return Ok(None);
+            let backend = if mcp {
+                BoardBackend::Mcp
+            } else if let Some(connection) = &connection {
+                BoardBackend::Connected(connection.clone())
+            } else if let Some(remote) = config.multi_agent_v2.message_board_remote.clone() {
+                BoardBackend::Remote {
+                    config: remote,
+                    http: config.http_client_factory(),
                 }
-                let board: Arc<dyn AgentMessageBoard> = if let Some(connection) = connection {
-                    Arc::new(connection.open(host).await?)
-                } else if let Some(remote) = config.multi_agent_v2.message_board_remote.clone() {
-                    let token = match remote.bearer_token_env_var {
-                        Some(name) => std::env::var(name).map_err(|_| CodexErr::InvalidRequest(
-                            "message-board credential environment variable is missing or invalid".into(),
-                        ))?,
-                        None => remote.bearer_token.ok_or_else(|| CodexErr::InvalidRequest(
-                            "remote message board requires a credential".into(),
-                        ))?.into_inner(),
-                    };
-                    let token = AccessToken::new(token)
-                        .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-                    let http = config
-                        .http_client_factory()
-                        .build_client(&remote.url, ClientRouteClass::Api)
-                        .map_err(|err| CodexErr::Io(std::io::Error::other(err)))?;
-                    input.thread_store.insert(host.as_ref().clone());
-                    let board = RemoteAgentMessageBoard::new(http, &remote.url, tree, token)
-                        .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?
-                        .with_clock(move |caller| {
-                            let host = host.clone();
-                            Box::pin(async move { host.current_time(caller).await })
-                        });
-                    input.thread_store.get_or_init(|| board)
-                } else if in_memory {
-                    Arc::new(in_memory_boards.open(tree, host).await)
-                } else {
-                    Arc::new(
-                        LocalAgentMessageBoard::open(
-                            config.sqlite_config(),
-                            &local_board_options(),
-                            tree,
-                            host,
-                        )
-                        .await?,
-                    )
-                };
-                Ok(Some(board))
-            })
+            } else if in_memory {
+                BoardBackend::InMemory
+            } else {
+                BoardBackend::Local(config.sqlite_config().clone())
+            };
+            Some((
+                backend,
+                LocalBoardHost {
+                    manager: manager.clone(),
+                    tree,
+                    caller,
+                    expected_turn_id: None,
+                    connection,
+                },
+            ))
         },
     );
 }

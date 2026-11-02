@@ -14,16 +14,19 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-agent-message-board-client = { workspace = true }
 codex-config = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-features = { workspace = true }
+codex-http-client = { workspace = true }
 codex-message-board = { workspace = true }
 codex-message-board-mcp = { workspace = true }
 codex-protocol = { workspace = true }
+codex-state = { workspace = true }
 codex-tools = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
-codex-state = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread"] }
