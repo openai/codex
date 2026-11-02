@@ -105,6 +105,7 @@ mod model_auto_review;
 mod model_list;
 mod model_list_requirements_tests;
 mod model_provider_capabilities_read;
+mod model_provider_config_tests;
 #[path = "model_provider_enforcement_tests.rs"]
 mod model_provider_enforcement;
 mod model_provider_list_tests;

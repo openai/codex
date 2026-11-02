@@ -53,6 +53,8 @@ mod credential_edits;
 mod model_providers;
 #[path = "config_manager_service_provider_setup.rs"]
 mod provider_setup;
+#[path = "config_manager_service_provider_write.rs"]
+mod provider_write;
 
 use credential_edits::CredentialProviderEdits;
 

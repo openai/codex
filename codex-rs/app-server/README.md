@@ -646,8 +646,8 @@ Status notifications include `providerId`. During browser sign-in, inference
 requests fail promptly and can be retried when sign-in succeeds.
 
 `model/list` also checks gateway authentication before returning cached models.
-If authentication fails after the provider configuration changes, it asks the client
-to restart Codex so the retained catalog and gateway sign-in use the same provider.
+If authentication fails and the catalog's provider differs from the current configuration,
+it asks the client to restart Codex so the catalog and gateway sign-in use the same provider.
 
 ## Application network policy
 
@@ -762,6 +762,67 @@ configuration is ignored. The flag does not establish credential validity or
 whether a setup flow that also selects a default provider will succeed.
 `account/bedrock/setup` targets `amazon-bedrock`; edits to `amazon-bedrock-runtime`
 must use that provider's configuration paths instead.
+
+Use `modelProvider/config/write` with a tagged `settings` patch. To create a
+custom gateway, send `type: "customGateway"`, `name`, and `baseUrl`. Omit
+`providerId` or pass null to allocate an ID. To edit an existing gateway,
+include its ID inside `settings`.
+
+```json
+{
+  "settings": {
+    "type": "customGateway",
+    "providerId": "team",
+    "name": "New name",
+    "envKey": null
+  }
+}
+```
+
+The Bedrock branch requires `amazon-bedrock` or `amazon-bedrock-runtime` and
+accepts `profile` and `region`. This patch changes only the runtime region.
+
+```json
+{
+  "settings": {
+    "type": "bedrock",
+    "providerId": "amazon-bedrock-runtime",
+    "region": "us-east-1"
+  }
+}
+```
+
+The GCP branch requires `gcp` and accepts `projectId`, `location`, and
+`credentialFile`. This patch clears the credential-file override.
+
+```json
+{ "settings": { "type": "gcp", "providerId": "gcp", "credentialFile": null } }
+```
+
+Omitted patch fields preserve their values. Setting a nullable field such as
+`region` to `null` removes its user-level override, so any inherited value takes effect.
+A supplied name must be a string. A supported built-in can receive its first
+override even when absent from the list. Custom gateways can share a display
+name with a built-in, except for names that select built-in behavior
+(`OpenAI`, `Amazon Bedrock`, `Amazon Bedrock Runtime`, and `Google Cloud Vertex AI`).
+Built-in provider IDs remain reserved.
+
+Send only edited configuration fields. A null `baseUrl` in a summary can mean
+that the endpoint was redacted. When `settings.auth.mode` is `externallyConfigured`,
+including for an endpoint with embedded credentials, writes to `envKey` are rejected. Other edits preserve unexposed authentication,
+headers, query parameters, and commands, including when changing the endpoint.
+Each supplied field must be writable. A new user-layer custom override retains the
+inherited name because custom provider tables require a name.
+
+The response is `{ "provider": ModelProviderSummary }`, using the same safe summary
+as list. There are no public version tokens. Provider, value, and batch writes in
+one app-server share the config queue: the last write to a field wins while omitted
+siblings are preserved. Patches apply without an expected-version check. The
+response summarizes the saved configuration.
+
+Saving does not select a default, authenticate, or contact the provider. Use setup
+RPCs for authentication and selection. Saving the provider used by `model/list`
+invalidates its catalog for the next access. Existing threads keep their configuration.
 
 # GCP provider account
 

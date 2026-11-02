@@ -65,6 +65,13 @@ impl ModelCatalog {
         self.state.lock().await.needs_reload = true;
     }
 
+    pub(crate) async fn invalidate_if_current_provider(&self, provider_id: &str) {
+        let mut state = self.state.lock().await;
+        if state.config.model_provider_id == provider_id {
+            state.needs_reload = true;
+        }
+    }
+
     pub(crate) async fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
         self.state
             .lock()

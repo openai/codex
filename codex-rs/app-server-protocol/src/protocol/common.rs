@@ -1179,6 +1179,11 @@ client_request_definitions! {
         serialization: global_shared_read("config"),
         response: v2::ModelProviderListResponse,
     },
+    ModelProviderConfigWrite => "modelProvider/config/write" {
+        params: v2::ModelProviderConfigWriteParams,
+        serialization: global("config"),
+        response: v2::ModelProviderConfigWriteResponse,
+    },
     ModelProviderCapabilitiesRead => "modelProvider/capabilities/read" {
         params: v2::ModelProviderCapabilitiesReadParams,
         serialization: None,

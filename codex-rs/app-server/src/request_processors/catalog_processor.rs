@@ -204,7 +204,7 @@ impl CatalogRequestProcessor {
                     .load_latest_config(/*fallback_cwd*/ None)
                     .await
                     .map_err(|err| config_load_error(&err))?;
-                // Configuration edits without an account transition still require a restart to refresh the model catalog.
+                // A direct config file edit can leave the catalog using the previous gateway.
                 if current.model_provider_id != config.model_provider_id
                     || current.model_provider != config.model_provider
                 {

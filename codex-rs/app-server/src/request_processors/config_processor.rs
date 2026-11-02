@@ -221,6 +221,23 @@ impl ConfigRequestProcessor {
             .map_err(map_error)
     }
 
+    pub(crate) async fn model_provider_config_write(
+        &self,
+        params: codex_app_server_protocol::ModelProviderConfigWriteParams,
+    ) -> Result<codex_app_server_protocol::ModelProviderConfigWriteResponse, JSONRPCErrorError>
+    {
+        let result = self
+            .config_manager
+            .model_provider_config_write(params)
+            .await
+            .map_err(map_error);
+        let response = self.handle_config_mutation_result(result).await?;
+        self.model_catalog
+            .invalidate_if_current_provider(&response.provider.id)
+            .await;
+        Ok(response)
+    }
+
     pub(crate) async fn model_provider_capabilities_read(
         &self,
     ) -> Result<ModelProviderCapabilitiesReadResponse, JSONRPCErrorError> {

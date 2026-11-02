@@ -7,6 +7,7 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ModelProviderConfigWriteResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::openai_models::ModelInfo;
@@ -19,6 +20,7 @@ use test_case::test_case;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
@@ -209,6 +211,85 @@ requires_openai_auth = true
     std::fs::remove_file(requirements_path)?;
     sign_in(&mut server).await?;
     assert_eq!(list_models(&mut server).await?, initial);
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_list_follows_active_provider_auth_edit() -> Result<()> {
+    let gateway = MockServer::start().await;
+    for (token, model) in [("initial-key", "first-model"), ("saved-key", "saved-model")] {
+        Mock::given(header("authorization", format!("Bearer {token}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(catalog(model)?))
+            .mount(&gateway)
+            .await;
+    }
+    let home = TempDir::new()?;
+    let path = home.path().join("config.toml");
+    let config = format!(
+        r#"model_provider = 'gateway'
+[features]
+api_key_model_discovery = true
+[model_providers.gateway]
+name = 'Gateway'
+base_url = '{0}'
+model_catalog_url = '{0}/models'
+env_key = 'GATEWAY_KEY'
+[model_providers.other]
+name = 'Other'
+"#,
+        gateway.uri(),
+    );
+    std::fs::write(&path, &config)?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_managed_config()
+        .with_env_overrides(&[
+            ("GATEWAY_KEY", Some("initial-key")),
+            ("NEW_GATEWAY_KEY", Some("saved-key")),
+            ("OPENAI_API_KEY", None),
+            ("CODEX_API_KEY", None),
+            ("CODEX_ACCESS_TOKEN", None),
+            ("OPENAI_FEDERATION_RULE_ID", None),
+            ("OPENAI_IDENTITY_TOKEN_FILE", None),
+            ("OPENAI_WORKLOAD_IDENTITY_CONTEXT", None),
+        ])
+        .build_initialized()
+        .await?;
+    let initial = list_models(&mut server).await?;
+    assert_eq!(initial.data[0].id, "first-model");
+
+    // Neither an unrelated save nor a rejected edit should pick up this manual change.
+    std::fs::write(&path, config.replace("env_key = 'GATEWAY_KEY'", ""))?;
+    let id = server
+        .send_request(
+            "modelProvider/config/write",
+            Some(json!({
+                "settings": {"type":"customGateway", "providerId": "other", "name": "Renamed"}
+            })),
+        )
+        .await?;
+    let _: ModelProviderConfigWriteResponse = server.read_response(id).await?;
+    let id = server
+        .send_request(
+            "modelProvider/config/write",
+            Some(json!({
+                "settings": {"type":"customGateway", "providerId": "gateway", "baseUrl": "invalid"}
+            })),
+        )
+        .await?;
+    server
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert_eq!(list_models(&mut server).await?, initial);
+
+    let id = server
+        .send_request(
+            "modelProvider/config/write",
+            Some(json!({"settings": {"type":"customGateway", "providerId": "gateway", "envKey": "NEW_GATEWAY_KEY"}})),
+        )
+        .await?;
+    let _: ModelProviderConfigWriteResponse = server.read_response(id).await?;
+    assert_eq!(list_models(&mut server).await?.data[0].id, "saved-model");
     Ok(())
 }
 

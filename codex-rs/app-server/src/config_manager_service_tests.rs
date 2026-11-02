@@ -1189,7 +1189,7 @@ async fn write_value_reports_override() {
 }
 
 #[tokio::test]
-async fn provider_setup_rejects_config_changed_after_preview() -> Result<()> {
+async fn provider_setup_checks_versions_and_provider_write_uses_last_write_wins() -> Result<()> {
     let tmp = tempdir()?;
     let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
     let layers = service.load_config_layers(/*cwd*/ None).await?;
@@ -1208,6 +1208,47 @@ async fn provider_setup_rejects_config_changed_after_preview() -> Result<()> {
         Some(ConfigWriteErrorCode::ConfigVersionConflict)
     );
     assert_eq!(std::fs::read_to_string(user_path)?, newer_config);
+    // An intervening writer changes both the requested field and an omitted sibling.
+    // The patch wins for the requested field and preserves the newer sibling value.
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "model = 'before'\n[model_providers.gateway]\nname = 'Before'\nenv_key = 'BEFORE_KEY'",
+    )?;
+    let calls = std::sync::atomic::AtomicUsize::new(/*v*/ 0);
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    let loader = CloudConfigBundleLoader::from_getter(move || {
+        if calls.fetch_add(/*val*/ 1, std::sync::atomic::Ordering::SeqCst) == 1 {
+            std::fs::write(&config_path, "model = 'newer'\n[model_providers.gateway]\nname = 'Another writer'\nenv_key = 'OTHER_KEY'").expect("intervening config write");
+        }
+        std::future::ready(Ok(None))
+    });
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        loader,
+    );
+    let response = service
+        .model_provider_config_write(serde_json::from_value(serde_json::json!({
+            "settings":{"type":"customGateway","providerId":"gateway","name":"Gateway", "baseUrl":"https://gateway.example.test"}
+        }))?)
+        .await?;
+    assert_eq!(
+        serde_json::to_value(response)?,
+        serde_json::json!({"provider": {
+            "id":"gateway", "name":"Gateway", "canEdit":true,
+            "baseUrl":"https://gateway.example.test",
+            "settings":{"type":"customGateway", "auth":{"mode":"environmentVariable", "envKey":"OTHER_KEY"}}
+        }})
+    );
+    let saved: serde_json::Value =
+        toml::from_str(&std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE))?)?;
+    assert_eq!(
+        saved,
+        serde_json::json!({"model":"newer", "model_providers":{
+            "gateway":{"name":"Gateway", "base_url":"https://gateway.example.test", "env_key":"OTHER_KEY"}
+        }})
+    );
     Ok(())
 }
 
@@ -1257,6 +1298,142 @@ async fn write_value_defaults_to_user_config_path() {
         contents.contains("model = \"gpt-new\""),
         "config.toml should be updated even when file_path is omitted"
     );
+}
+
+#[tokio::test]
+async fn model_provider_settings_use_the_active_profile_layer() -> Result<()> {
+    use codex_app_server_protocol::CustomGatewaySettingsParams;
+    use codex_app_server_protocol::GatewayAuth;
+    use codex_app_server_protocol::ModelProviderConfigWriteParams;
+    use codex_app_server_protocol::ModelProviderListParams;
+    use codex_app_server_protocol::ProviderSettings;
+    use codex_app_server_protocol::ProviderSettingsPatch;
+
+    let home = tempdir()?;
+    let profile = home.path().join("work.config.toml");
+    let system = home.path().join("system.toml");
+    std::fs::write(
+        &system,
+        "model_provider = 'gcp'\n[model_providers.gateway]\nname = 'System'\nenv_key = 'SYSTEM_KEY'",
+    )?;
+    let overrides = LoaderOverrides {
+        system_config_path: Some(system.clone()),
+        user_config_path: Some(AbsolutePathBuf::from_absolute_path(&profile)?),
+        user_config_profile: Some("work".parse()?),
+        ..LoaderOverrides::without_managed_config_for_tests()
+    };
+    let service = |cli_overrides| {
+        ConfigManager::new_for_tests(
+            home.path().to_path_buf(),
+            cli_overrides,
+            overrides.clone(),
+            CloudConfigBundleLoader::default(),
+        )
+    };
+    let manager = service(vec![]);
+    let list = ModelProviderListParams {};
+    let initial = manager.model_provider_list(list.clone()).await?;
+    assert_eq!(initial.default_provider_id, "gcp");
+    assert!(initial.can_change_default);
+
+    std::fs::write(&profile, "model_provider = 'openai'")?;
+    let write = ModelProviderConfigWriteParams {
+        settings: ProviderSettingsPatch::CustomGateway(CustomGatewaySettingsParams {
+            name: Some("Gateway".to_owned()),
+            base_url: Some(Some("https://gateway.example.test".to_owned())),
+            ..Default::default()
+        }),
+    };
+    let created = manager.model_provider_config_write(write).await?;
+    let selected = manager.model_provider_list(list.clone()).await?;
+    assert_eq!(selected.default_provider_id, "openai");
+    assert!(selected.can_change_default);
+    assert!(selected.data[0].can_edit);
+
+    let write = ModelProviderConfigWriteParams {
+        settings: ProviderSettingsPatch::CustomGateway(CustomGatewaySettingsParams {
+            provider_id: Some(created.provider.id.clone()),
+            name: Some("Renamed".to_owned()),
+            ..Default::default()
+        }),
+    };
+    manager.model_provider_config_write(write).await?;
+    let saved: TomlValue = toml::from_str(&std::fs::read_to_string(&profile)?)?;
+    assert_eq!(
+        saved["model_providers"][&created.provider.id]["name"].as_str(),
+        Some("Renamed")
+    );
+    assert!(!home.path().join(CONFIG_TOML_FILE).exists());
+
+    let inherited = |mut settings: serde_json::Value| {
+        settings["type"] = "customGateway".into();
+        settings["providerId"] = "gateway".into();
+        serde_json::from_value(serde_json::json!({"settings":settings}))
+    };
+    let before = std::fs::read_to_string(&profile)?;
+    manager
+        .model_provider_config_write(inherited(serde_json::json!({"baseUrl":null}))?)
+        .await?;
+    assert_eq!(std::fs::read_to_string(&profile)?, before);
+
+    manager
+        .model_provider_config_write(inherited(serde_json::json!({"envKey":"USER_KEY"}))?)
+        .await?;
+    let cleared = manager
+        .model_provider_config_write(inherited(
+            serde_json::json!({"name":"Work", "envKey":null}),
+        )?)
+        .await?;
+    assert_eq!(
+        cleared.provider.settings,
+        ProviderSettings::CustomGateway {
+            auth: GatewayAuth::EnvironmentVariable {
+                env_key: "SYSTEM_KEY".to_owned()
+            }
+        }
+    );
+    let saved: serde_json::Value = toml::from_str(&std::fs::read_to_string(&profile)?)?;
+    assert_eq!(
+        saved["model_providers"]["gateway"],
+        serde_json::json!({"name":"Work"})
+    );
+    let pinned_manager = service(vec![(
+        "model_providers.gateway.env_key".to_owned(),
+        "CLI_KEY".into(),
+    )]);
+    let before = std::fs::read_to_string(&profile)?;
+    let err = pinned_manager
+        .model_provider_config_write(inherited(
+            serde_json::json!({"name":"Must not save", "envKey":"USER_KEY"}),
+        )?)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigLayerReadonly)
+    );
+    assert_eq!(std::fs::read_to_string(&profile)?, before);
+    let renamed = pinned_manager
+        .model_provider_config_write(inherited(serde_json::json!({"name":"Allowed"}))?)
+        .await?;
+    assert_eq!(
+        (renamed.provider.name.as_str(), renamed.provider.settings),
+        (
+            "Allowed",
+            ProviderSettings::CustomGateway {
+                auth: GatewayAuth::EnvironmentVariable {
+                    env_key: "CLI_KEY".to_owned()
+                }
+            }
+        )
+    );
+
+    let pinned = service(vec![("model_provider".to_owned(), "gcp".into())])
+        .model_provider_list(list)
+        .await?;
+    assert_eq!(pinned.default_provider_id, "gcp");
+    assert!(!pinned.can_change_default);
+    Ok(())
 }
 
 #[tokio::test]
