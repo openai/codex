@@ -13,6 +13,7 @@ mod ephemeral;
 mod hooks;
 mod mcp_required_exit;
 mod originator;
+mod output_last_message;
 mod output_schema;
 mod prompt_stdin;
 mod resume;

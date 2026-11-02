@@ -1025,6 +1025,16 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
+    // Bind before starting the agent. Sandbox activity cannot redirect the final write.
+    let bound_output = last_message_file
+        .as_deref()
+        .map(|path| {
+            codex_exec_server::BoundOutput::open(path).map_err(|error| {
+                anyhow::anyhow!("Failed to open last message file {path:?}: {error}")
+            })
+        })
+        .transpose()?;
+
     let mut request_ids = RequestIdSequencer::new();
     let mut client = InProcessAppServerClient::start(in_process_start_args)
         .await
@@ -1212,7 +1222,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 .shutdown()
                 .await
                 .map_err(|err| anyhow::anyhow!("in-process app-server shutdown failed: {err}"))?;
-            event_processor.print_final_output();
+            event_processor.print_final_output(bound_output)?;
             return Ok(());
         }
         InitialOperation::UserTurn {
@@ -1412,7 +1422,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     if let Err(err) = client.shutdown().await {
         warn!("in-process app-server shutdown failed: {err}");
     }
-    event_processor.print_final_output();
+    event_processor.print_final_output(bound_output)?;
     if error_seen {
         std::process::exit(1);
     }

@@ -16,6 +16,7 @@ pub(super) fn open_relative_to_volume(
     desired_access: u32,
     create_disposition: u32,
     create_options: u32,
+    share_access: u32,
 ) -> io::Result<OwnedHandle> {
     let mut root_name = name[..DOS_DRIVE_ROOT_LEN].to_vec();
     root_name.push(0);
@@ -27,6 +28,7 @@ pub(super) fn open_relative_to_volume(
         create_disposition,
         create_options,
         OBJ_DONT_REPARSE,
+        share_access,
     )?
     .ok_or_else(reparse_error)
 }
@@ -39,6 +41,7 @@ pub(super) fn open_volume_root(name: &mut [u16]) -> io::Result<OwnedHandle> {
         FILE_OPEN,
         FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
         /*attributes*/ 0,
+        SHARE_ALL,
     )?
     .ok_or_else(reparse_error)?;
     let root = std::fs::File::from(handle);

@@ -68,7 +68,7 @@ fn root() -> io::Result<OwnedFd> {
     .map_err(io::Error::from)
 }
 
-fn open_directory(parent: &OwnedFd, name: &OsString) -> io::Result<OwnedFd> {
+fn open_directory(parent: &OwnedFd, name: &std::ffi::OsStr) -> io::Result<OwnedFd> {
     openat(
         parent,
         name,
@@ -88,6 +88,124 @@ fn parent(path: &Path) -> io::Result<(OwnedFd, OsString)> {
         directory = open_directory(&directory, &component)?;
     }
     Ok((directory, leaf))
+}
+
+pub(super) fn inherited_output(path: &Path) -> io::Result<Option<super::BoundOutput>> {
+    use std::os::fd::FromRawFd;
+    let name = path.to_str().unwrap_or_default();
+    let fd = match name {
+        "/dev/stdout" => libc::STDOUT_FILENO,
+        "/dev/stderr" => libc::STDERR_FILENO,
+        _ => {
+            let number = name
+                .strip_prefix("/dev/fd/")
+                .or_else(|| name.strip_prefix("/proc/self/fd/"));
+            let Some(fd) = number
+                .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|s| s.parse().ok())
+            else {
+                return Ok(None);
+            };
+            fd
+        }
+    };
+    // Only caller-supplied descriptors may be selected, including shell process substitution.
+    // SAFETY: fcntl validates the integer descriptor; F_DUPFD_CLOEXEC returns a new owned fd.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::FD_CLOEXEC != 0 {
+        return Err(super::invalid_output("output descriptor is not inherited"));
+    }
+    let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if copy < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let file = unsafe { std::fs::File::from_raw_fd(copy) };
+    let access = rustix::fs::fcntl_getfl(&file)? & OFlags::ACCMODE;
+    if !matches!(access, OFlags::WRONLY | OFlags::RDWR) {
+        return Err(super::invalid_output("output descriptor is not writable"));
+    }
+    Ok(Some(super::BoundOutput {
+        file,
+        destination: super::Destination::Stream {
+            is_stdout: fd == libc::STDOUT_FILENO,
+        },
+    }))
+}
+
+pub(super) fn reject_multiple_links(file: &std::fs::File) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    if file.metadata()?.nlink() > 1 {
+        return Err(super::invalid_output("output has multiple hard links"));
+    }
+    Ok(())
+}
+
+pub(super) fn output_path(path: &Path) -> io::Result<PathBuf> {
+    // Resolve leading ".." against the caller's cwd, never against a movable directory fd.
+    let mut suffix = path.strip_prefix(".").unwrap_or(path);
+    let mut base = if suffix.is_absolute() {
+        PathBuf::new()
+    } else {
+        std::env::current_dir()?
+    };
+    while let Ok(rest) = suffix.strip_prefix("..") {
+        base.pop();
+        suffix = rest;
+    }
+    let path = base.join(suffix);
+    #[cfg(target_os = "macos")]
+    {
+        // Expand one known root link only. Never canonicalize its target or the caller's suffix.
+        if let Some(physical) = ["tmp", "var", "etc"].into_iter().find_map(|name| {
+            let root = Path::new("/").join(name);
+            let suffix = path.strip_prefix(&root).ok()?;
+            let expected = Path::new("private").join(name);
+            (std::fs::read_link(root).ok()? == expected)
+                .then(|| Path::new("/").join(expected).join(suffix))
+        }) {
+            return Ok(physical);
+        }
+    }
+    Ok(path)
+}
+
+pub(super) fn verify_output_path(file: &std::fs::File, path: &Path) -> io::Result<()> {
+    let (dir, leaf) = parent(path)?;
+    let named = statat(dir, leaf, AtFlags::SYMLINK_NOFOLLOW)?;
+    let bound = fstat(file)?;
+    if (named.st_dev, named.st_ino) != (bound.st_dev, bound.st_ino) {
+        return Err(super::invalid_output("output path was replaced"));
+    }
+    Ok(())
+}
+
+pub(super) fn open_output(path: &Path) -> io::Result<std::fs::File> {
+    let (directory, leaf) = parent(path)?;
+    let file = open_writable(&directory, &leaf)?;
+    if !file.metadata()?.is_file() {
+        let flags = rustix::fs::fcntl_getfl(&file)?;
+        rustix::fs::fcntl_setfl(&file, flags & !OFlags::NONBLOCK)?;
+    }
+    Ok(file)
+}
+
+// Opening the leaf must not truncate it or hang on a FIFO without a reader.
+fn open_writable(directory: &OwnedFd, leaf: &std::ffi::OsStr) -> io::Result<std::fs::File> {
+    let file = openat(
+        directory,
+        leaf,
+        OFlags::WRONLY
+            | OFlags::CREATE
+            | OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | OFlags::NOCTTY
+            | OFlags::NONBLOCK,
+        Mode::from_raw_mode(0o666),
+    )?;
+    Ok(std::fs::File::from(file))
 }
 
 fn open_entry_sync(path: &Path) -> io::Result<std::fs::File> {
@@ -115,17 +233,8 @@ pub(super) fn open_file_sync(path: &Path) -> io::Result<std::fs::File> {
 
 pub(super) async fn write_file(path: PathBuf, contents: Vec<u8>) -> io::Result<()> {
     tokio::task::spawn_blocking(move || {
-        let (parent, leaf) = parent(&path)?;
-        // Prevent FIFOs and devices from blocking during open before the
-        // descriptor can be validated as a regular file below.
-        let file = openat(
-            &parent,
-            leaf,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o666),
-        )
-        .map_err(io::Error::from)?;
-        let mut file = std::fs::File::from(file);
+        let (directory, leaf) = parent(&path)?;
+        let mut file = open_writable(&directory, &leaf)?;
         if !file.metadata()?.is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,

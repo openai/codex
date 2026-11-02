@@ -103,6 +103,9 @@ async fn file_system_operations_can_reject_junctions_in_any_path_component(
     std::fs::write(&removable, "keep")?;
     let directory_junction = tmp.path().join("directory-junction");
     create_directory_junction(&real, &directory_junction)?;
+    assert!(
+        codex_exec_server::BoundOutput::open(&directory_junction.join("existing.txt")).is_err()
+    );
 
     let no_follow_read = ReadFileOptions {
         follow_symlinks: false,

@@ -23,16 +23,22 @@ use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
 use windows_sys::Win32::Foundation::UNICODE_STRING;
 use windows_sys::Win32::Security::SECURITY_QUALITY_OF_SERVICE;
 use windows_sys::Win32::Security::SecurityIdentification;
+use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows_sys::Win32::Storage::FileSystem::FILE_DISPOSITION_INFO;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+use windows_sys::Win32::Storage::FileSystem::FILE_ID_INFO;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows_sys::Win32::Storage::FileSystem::FileDispositionInfo;
+use windows_sys::Win32::Storage::FileSystem::FileIdInfo;
+use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandleEx;
+use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationByHandleW;
 use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK_0;
@@ -40,6 +46,7 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK_0;
 #[path = "windows_volume_fallback.rs"]
 mod volume_fallback;
 
+const SHARE_ALL: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
 const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
 const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
 const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
@@ -129,6 +136,22 @@ fn open_handle(
     create_disposition: u32,
     create_options: u32,
 ) -> io::Result<OwnedHandle> {
+    open_handle_with_sharing(
+        path,
+        desired_access,
+        create_disposition,
+        create_options,
+        SHARE_ALL,
+    )
+}
+
+fn open_handle_with_sharing(
+    path: &Path,
+    desired_access: u32,
+    create_disposition: u32,
+    create_options: u32,
+    share_access: u32,
+) -> io::Result<OwnedHandle> {
     let mut name = nt_path(path)?;
     if let Some(handle) = open_nt_handle(
         &mut name,
@@ -137,6 +160,7 @@ fn open_handle(
         create_disposition,
         create_options,
         OBJ_DONT_REPARSE,
+        share_access,
     )? {
         return Ok(handle);
     }
@@ -151,6 +175,7 @@ fn open_handle(
             desired_access,
             create_disposition,
             create_options,
+            share_access,
         );
     }
     Err(reparse_error())
@@ -168,6 +193,7 @@ fn open_nt_handle(
     create_disposition: u32,
     create_options: u32,
     attributes: u32,
+    share_access: u32,
 ) -> io::Result<Option<OwnedHandle>> {
     let maximum_length = u16::try_from(size_of_val(path))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "filesystem path is too long"))?;
@@ -203,7 +229,7 @@ fn open_nt_handle(
             &mut io_status_block,
             ptr::null(),
             FILE_ATTRIBUTE_NORMAL,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            share_access,
             create_disposition,
             create_options | FILE_SYNCHRONOUS_IO_NONALERT,
             ptr::null(),
@@ -253,16 +279,164 @@ fn validate_regular_file(file: &std::fs::File, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn file_information(file: &std::fs::File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
+    let mut info = std::mem::MaybeUninit::uninit();
+    // SAFETY: the file owns the handle and a successful call initializes info.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { info.assume_init() })
+}
+
+pub(super) fn reject_multiple_links(file: &std::fs::File) -> io::Result<()> {
+    if file_information(file)?.nNumberOfLinks > 1 {
+        return Err(super::invalid_output("output has multiple hard links"));
+    }
+    Ok(())
+}
+
+fn file_identity(file: &std::fs::File) -> io::Result<(u64, [u8; 16])> {
+    // ReFS requires the full 128-bit identifier to distinguish files on the same volume.
+    let mut info = std::mem::MaybeUninit::<FILE_ID_INFO>::uninit();
+    // SAFETY: the open handle is valid and FileIdInfo fills this exact structure on success.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            info.as_mut_ptr().cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let info = unsafe { info.assume_init() };
+    // A filesystem may report success with an all-zero ID when it cannot identify the file.
+    if info.FileId.Identifier == [0; 16] {
+        return Err(super::invalid_output(
+            "filesystem did not provide an output file ID",
+        ));
+    }
+    Ok((info.VolumeSerialNumber, info.FileId.Identifier))
+}
+
+pub(super) fn verify_output_path(file: &std::fs::File, path: &Path) -> io::Result<()> {
+    verify_output_path_with(file, path, file_identity, filesystem_name)
+}
+
+pub(super) fn verify_output_path_with(
+    file: &std::fs::File,
+    path: &Path,
+    file_id: impl Fn(&std::fs::File) -> io::Result<(u64, [u8; 16])>,
+    volume_name: impl Fn(&std::fs::File) -> io::Result<String>,
+) -> io::Result<()> {
+    let current = open_entry(path)?;
+    let same = match file_id(file) {
+        Ok(id) => id == file_id(&current)?,
+        Err(error) => {
+            let is_fat = |name: String| {
+                ["FAT", "FAT32", "exFAT"]
+                    .iter()
+                    .any(|fs| name.eq_ignore_ascii_case(fs))
+            };
+            if !is_fat(volume_name(file)?) || !is_fat(volume_name(&current)?) {
+                return Err(error);
+            }
+            same_fat_file(file, &current)?
+        }
+    };
+    if !same {
+        return Err(super::invalid_output("output path was replaced"));
+    }
+    Ok(())
+}
+
+pub(super) fn filesystem_name(file: &std::fs::File) -> io::Result<String> {
+    let mut name = [0u16; 32];
+    // SAFETY: only the filesystem name is requested, in the supplied writable buffer.
+    if unsafe {
+        GetVolumeInformationByHandleW(
+            file.as_raw_handle(),
+            ptr::null_mut(),
+            /*nvolumenamesize*/ 0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let name = name.split(|unit| *unit == 0).next().unwrap_or_default();
+    Ok(String::from_utf16_lossy(name))
+}
+
+fn same_fat_file(file: &std::fs::File, current: &std::fs::File) -> io::Result<bool> {
+    // The bound output denies delete sharing, so its FAT directory slot cannot be recycled.
+    let id = |file| -> io::Result<_> {
+        let info = file_information(file)?;
+        if info.nFileIndexHigh == 0 && info.nFileIndexLow == 0 {
+            return Err(super::invalid_output(
+                "filesystem did not provide an output file ID",
+            ));
+        }
+        Ok((
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+        ))
+    };
+    Ok(id(file)? == id(current)?)
+}
+
+pub(super) fn open_null_output() -> io::Result<std::fs::File> {
+    // Use the kernel null device directly so no user-controlled DOS alias is followed.
+    let mut name: Vec<_> = r"\Device\Null".encode_utf16().chain([0]).collect();
+    let handle = open_nt_handle(
+        &mut name,
+        /*root_directory*/ None,
+        FILE_WRITE_DATA,
+        FILE_OPEN,
+        /*create_options*/ 0,
+        OBJ_DONT_REPARSE,
+        SHARE_ALL,
+    )?
+    .ok_or_else(reparse_error)?;
+    Ok(handle.into())
+}
+
+fn open_writable_regular_file(path: &Path, share_access: u32) -> io::Result<std::fs::File> {
+    let handle = open_handle_with_sharing(
+        path,
+        FILE_READ_ATTRIBUTES | FILE_WRITE_DATA,
+        FILE_OPEN_IF,
+        FILE_NON_DIRECTORY_FILE,
+        share_access,
+    )?;
+    let file = std::fs::File::from(handle);
+    validate_regular_file(&file, path)?;
+    Ok(file)
+}
+
+pub(super) fn open_output(path: &Path) -> io::Result<std::fs::File> {
+    if matches!(path.components().next(), Some(Component::Prefix(p)) if p.kind().is_verbatim())
+        && path.as_os_str().as_encoded_bytes().contains(&b'/')
+    {
+        return Err(super::invalid_output("invalid verbatim output path"));
+    }
+    // Full file IDs identify the base file, not a particular data stream. Keep the
+    // selected stream bound from the first open, including the unnamed default stream.
+    let file = open_writable_regular_file(path, FILE_SHARE_READ | FILE_SHARE_WRITE)?;
+    // Fail before starting a turn if this filesystem cannot verify the output.
+    verify_output_path(&file, path)?;
+    Ok(file)
+}
+
 pub(super) async fn write_file(path: PathBuf, contents: Vec<u8>) -> io::Result<()> {
     tokio::task::spawn_blocking(move || {
-        let handle = open_handle(
-            &path,
-            FILE_READ_ATTRIBUTES | FILE_WRITE_DATA,
-            FILE_OPEN_IF,
-            FILE_NON_DIRECTORY_FILE,
-        )?;
-        let mut file = std::fs::File::from(handle);
-        validate_regular_file(&file, &path)?;
+        let mut file = open_writable_regular_file(&path, SHARE_ALL)?;
         file.set_len(0)?;
         file.write_all(&contents)
     })

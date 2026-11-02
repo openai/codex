@@ -151,6 +151,7 @@ async fn file_system_operations_can_reject_symlinks_in_any_path_component(
     symlink(&real, &directory_link)?;
     let file_link = tmp_path.join("file-link");
     symlink(&existing, &file_link)?;
+    assert!(codex_exec_server::BoundOutput::open(&directory_link.join("existing.txt")).is_err());
 
     let no_follow_read = ReadFileOptions {
         follow_symlinks: false,

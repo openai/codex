@@ -15,7 +15,13 @@ fn relative_volume_opens_files_and_rejects_junctions() -> io::Result<()> {
     let temp = tempfile::tempdir()?;
     let real = std::fs::canonicalize(temp.path())?;
     let open = |path: &Path, access, disposition, options| {
-        volume_fallback::open_relative_to_volume(&mut nt_path(path)?, access, disposition, options)
+        volume_fallback::open_relative_to_volume(
+            &mut nt_path(path)?,
+            access,
+            disposition,
+            options,
+            SHARE_ALL,
+        )
     };
     let existing = real.join("existing.txt");
     std::fs::File::from(open(

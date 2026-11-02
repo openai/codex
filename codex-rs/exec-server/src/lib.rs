@@ -140,6 +140,7 @@ pub use fs_helper::CODEX_FS_HELPER_ARG1;
 pub use fs_helper_main::main as run_fs_helper_main;
 pub use local_file_system::LOCAL_FS;
 pub use local_file_system::LocalFileSystem;
+pub use no_follow::BoundOutput;
 pub use noise_channel::NoiseChannelError;
 pub use noise_channel::NoiseChannelIdentity;
 pub use noise_channel::NoiseChannelPublicKey;
