@@ -114,7 +114,7 @@ impl ChatWidget {
                     modifiers,
                     kind: KeyEventKind::Press,
                     ..
-                } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
+                } if modifiers == KeyModifiers::CONTROL && c.eq_ignore_ascii_case(&'c')
             )
             && (self.bottom_pane.warnings_active()
                 || (!key_hint::ctrl(KeyCode::Char('r')).is_press(key_event)

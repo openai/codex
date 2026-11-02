@@ -54,3 +54,30 @@ async fn selection_copy_cancels_a_pending_find_editor_chord() -> Result<()> {
     tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn keypress_inspector_distinguishes_ctrl_alt_c_from_ctrl_c() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    for (modifier, expected, cancel) in [
+        (KeyModifiers::ALT, "ctrl-alt-c", 'c'),
+        (KeyModifiers::SHIFT, "ctrl-shift-c", 'C'),
+    ] {
+        app.chat_widget.open_keymap_debug(&app.keymap);
+        let inspect = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL | modifier);
+        let inspect = app
+            .route_key_chord_event(&mut tui, inspect)
+            .expect("physical inspector key");
+        app.chat_widget.handle_key_event(inspect);
+        let screen =
+            crate::chatwidget::tests::render_bottom_popup(&app.chat_widget, /*width*/ 80);
+        assert!(
+            screen.contains(&format!("Config key: {expected}")),
+            "{screen}"
+        );
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char(cancel), KeyModifiers::CONTROL));
+        assert!(!app.chat_widget.has_active_view());
+    }
+    Ok(())
+}
