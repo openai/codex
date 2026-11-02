@@ -45,6 +45,8 @@ impl InitialBackendSessions {
 }
 
 struct SessionEntry {
+    // Stable, nonsecret name supplied by the registrar for this logical app-server.
+    preference_key: Option<String>,
     session: AppServerSession,
     listening: bool,
     pending_requests: VecDeque<AppServerSessionEvent>,
@@ -84,6 +86,7 @@ impl BackendSessions {
     pub(super) fn insert(&mut self, session: AppServerSession) {
         assert!(self.session(session.backend_id()).is_none());
         self.entries.push(SessionEntry {
+            preference_key: None,
             session,
             listening: true,
             pending_requests: VecDeque::new(),
@@ -118,25 +121,51 @@ impl BackendSessions {
             .collect()
     }
 
-    #[expect(dead_code, reason = "used by the next stack stage")]
     pub(super) fn displayed_name(&self) -> Option<String> {
         let slot = self.displayed.0;
         self.entries[slot].listening.then(|| match slot {
             0 => "Local".to_string(),
-            index => format!("Backend {}", index + 1),
+            index => format!("Connection {}", index + 1),
         })
     }
 
-    #[expect(dead_code, reason = "used by the next stack stage")]
-    pub(super) fn first_listening_backend(&self) -> Option<BackendId> {
-        self.entries
-            .iter()
-            .find(|entry| entry.listening)
+    pub(super) fn set_preference_key(&mut self, owner: BackendId, key: &str) {
+        let slot = self.slot(owner).expect("registered app-server");
+        assert!(
+            !key.is_empty()
+                && key
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        );
+        assert!(
+            self.entries
+                .iter()
+                .all(|entry| entry.preference_key.as_deref() != Some(key))
+        );
+        assert!(self.preference_key(slot).is_none());
+        self.entries[slot.0].preference_key = Some(key.to_owned());
+    }
+
+    pub(super) fn preference_key(&self, slot: SessionSlot) -> Option<&str> {
+        self.entries[slot.0].preference_key.as_deref()
+    }
+
+    pub(super) fn preferred_listening_backend(
+        &self,
+        preference: Option<&str>,
+    ) -> Option<BackendId> {
+        let mut listening = self.entries.iter().filter(|entry| entry.listening);
+        let preferred = preference.and_then(|key| {
+            listening
+                .clone()
+                .find(|entry| entry.preference_key.as_deref() == Some(key))
+        });
+        preferred
+            .or_else(|| listening.next())
             .map(|entry| entry.session.backend_id())
     }
 
     /// Cycle through listening connections in registration order, excluding the current one.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by the next stack stage"))]
     pub(super) fn next_listening_backend(&self, current: BackendId) -> Option<BackendId> {
         let index = self.slot(current)?.0;
         self.entries[index + 1..]

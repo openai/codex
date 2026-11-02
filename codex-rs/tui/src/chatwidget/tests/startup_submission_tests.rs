@@ -3,6 +3,22 @@ use crate::app_event::HistoryLookupResponse;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn host_switch_snapshot_preserves_buffered_typing() {
+    for typed in ["x", "several keys"] {
+        let (mut chat, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.bottom_pane.set_disable_paste_burst(/*disabled*/ false);
+        chat.insert_str("draft ");
+        for ch in typed.chars() {
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        assert_eq!(
+            chat.composer_draft_snapshot().text,
+            format!("draft {typed}")
+        );
+    }
+}
+
+#[tokio::test]
 async fn initial_prompt_recall_precedes_cross_session_history() {
     for submit_follow_up in [false, true] {
         let (mut chat, mut events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;

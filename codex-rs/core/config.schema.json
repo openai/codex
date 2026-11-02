@@ -5146,6 +5146,17 @@
           "description": "Deselect read-only transcript or footer text after Copy on select confirms delivery. Editable composer selections remain visible. Defaults to `false` and has no effect when Copy on select is off.",
           "type": "boolean"
         },
+        "default_hosts": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "default": {},
+          "description": "Preferred hosts for new conversations, indexed by project and local user identity. Read from the user configuration only; values are never endpoints or credentials.",
+          "type": "object"
+        },
         "disable_paste_burst": {
           "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts. Overrides the legacy top-level `disable_paste_burst` setting. Defaults to `false`.",
           "type": "boolean"
@@ -5242,6 +5253,7 @@
               "yank": null
             },
             "global": {
+              "change_host": null,
               "clear_terminal": null,
               "copy": null,
               "find_transcript": null,
@@ -6035,6 +6047,14 @@
       "additionalProperties": false,
       "description": "Global keybindings. These are used when a context does not define an override.",
       "properties": {
+        "change_host": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Change where a new conversation runs."
+        },
         "clear_terminal": {
           "allOf": [
             {
@@ -6275,6 +6295,7 @@
             }
           ],
           "default": {
+            "change_host": null,
             "clear_terminal": null,
             "copy": null,
             "find_transcript": null,

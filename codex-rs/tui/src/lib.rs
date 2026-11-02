@@ -984,6 +984,18 @@ fn uses_remote_workspace_or_environment(
             .is_some_and(|environment| environment.is_remote())
 }
 
+fn backend_preference_local_cwd(
+    config_cwd: &Path,
+    app_server_target: &AppServerTarget,
+    environment_manager: &EnvironmentManager,
+) -> Option<PathBuf> {
+    if uses_remote_workspace_or_environment(app_server_target, environment_manager) {
+        std::env::current_dir().ok()
+    } else {
+        Some(config_cwd.to_path_buf())
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "validate selection even after the picker connection is closed"
@@ -1235,6 +1247,15 @@ async fn run_ratatui_app(
     >,
     startup_draft: startup_draft::StartupDraft,
 ) -> color_eyre::Result<AppExitInfo> {
+    // Capture host credentials and project inputs before resume/fork reloads executor config.
+    let backend_preference_context = app::backend_selection::BackendPreferenceContext::new(
+        &initial_config,
+        backend_preference_local_cwd(
+            initial_config.cwd.as_path(),
+            &app_server_target,
+            &environment_manager,
+        ),
+    );
     let backend_id = crate::backend_id::BackendId::new();
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     let workload_identity_selected = is_workload_identity_selected();
@@ -2221,6 +2242,7 @@ async fn run_ratatui_app(
         crate::app::backend_sessions::InitialBackendSessions::singleton(app_server),
         config,
         current_cwd.to_path_buf(),
+        backend_preference_context,
         cli_kv_overrides.clone(),
         overrides.clone(),
         loader_overrides.clone(),

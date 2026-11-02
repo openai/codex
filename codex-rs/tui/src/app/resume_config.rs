@@ -239,7 +239,7 @@ impl App {
         clippy::too_many_arguments,
         reason = "The destination target is explicit alongside the existing trust interaction inputs."
     )]
-    async fn confirm_directory_trust_for_target(
+    pub(super) async fn confirm_directory_trust_for_target(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,

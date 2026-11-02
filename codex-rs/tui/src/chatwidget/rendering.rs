@@ -4,6 +4,7 @@ use super::provider_error::ProviderErrorNotice;
 use super::transcript::ActiveCellLayoutCache;
 use super::transcript::ActiveCellLayoutCacheKey;
 use super::*;
+use crate::keymap::KeymapContext;
 use crate::render::RectExt;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::wrapping::RtOptions;
@@ -296,6 +297,13 @@ impl ChatWidget {
                 && !self.bottom_pane.has_active_view()
             {
                 RenderableItem::Borrowed(&pending.notice)
+            } else if let Some(backend) = self.visible_new_backend_control() {
+                let mut spans = vec!["  ".into(), backend.into()];
+                let keymap = self.bottom_pane.keymap();
+                if let Some(key) = keymap.primary_hint(KeymapContext::Global, "change_host") {
+                    spans.extend(["  ".into(), key.into(), " to cycle".dim()]);
+                }
+                RenderableItem::Owned(Box::new(Paragraph::new(Line::from(spans))))
             } else {
                 return bottom_pane;
             };

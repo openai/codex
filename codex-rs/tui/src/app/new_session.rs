@@ -2,6 +2,7 @@
 //!
 //! Build the replacement configuration without replacing the active task's settings.
 
+use super::resume_preparation::BackendSettings;
 use super::*;
 use codex_config::ConfigLayerSource;
 use codex_protocol::config_types::ServiceTier;
@@ -64,7 +65,18 @@ impl App {
         &mut self,
         app_server: &AppServerSession,
     ) -> Result<(Config, crate::local_settings::LocalSettings)> {
+        let settings = self.backend_settings();
         let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+        self.load_new_session_config_from(app_server, &settings, cwd)
+            .await
+    }
+
+    pub(super) async fn load_new_session_config_from(
+        &mut self,
+        app_server: &AppServerSession,
+        settings: &BackendSettings,
+        cwd: PathBuf,
+    ) -> Result<(Config, crate::local_settings::LocalSettings)> {
         let defaults_cwd = match app_server.thread_params_mode() {
             crate::app_server_session::ThreadParamsMode::Embedded => cwd.as_path(),
             crate::app_server_session::ThreadParamsMode::Remote
@@ -78,14 +90,17 @@ impl App {
         )
         .await?;
         // Stage local preferences and permission carryover without changing the active task.
-        let (mut config, local_settings) = match self.rebuild_config_for_cwd(cwd).await {
+        let (mut config, local_settings) = match self
+            .rebuild_config_for_cwd_from(&settings.config, cwd)
+            .await
+        {
             Ok(config) => {
-                let settings = self.local_settings.reloaded(&config);
-                (config, settings)
+                let local_settings = settings.local_settings.reloaded(&config);
+                (config, local_settings)
             }
             Err(err) => {
                 tracing::warn!(%err, "failed to refresh local settings before a new thread");
-                (self.config.clone(), self.local_settings.clone())
+                (settings.config.clone(), settings.local_settings.clone())
             }
         };
         if let Some(defaults) = defaults.as_ref() {
@@ -97,7 +112,11 @@ impl App {
                 defaults,
             );
         }
-        self.apply_runtime_policy_overrides(&mut config, RuntimePolicyOverrideScope::ExplicitOnly)?;
+        self.apply_runtime_policy_overrides_with_reviewer(
+            &mut config,
+            RuntimePolicyOverrideScope::ExplicitOnly,
+            settings.config.approvals_reviewer,
+        )?;
         if let Some(defaults) = defaults.as_ref() {
             overlay_new_session_defaults(
                 &mut config,
@@ -106,6 +125,12 @@ impl App {
                 &self.harness_overrides,
             );
         }
+        apply_managed_new_thread_defaults(
+            &mut config,
+            app_server.managed_new_thread_defaults(),
+            &self.cli_kv_overrides,
+            &self.harness_overrides,
+        );
         Ok((config, local_settings))
     }
 }

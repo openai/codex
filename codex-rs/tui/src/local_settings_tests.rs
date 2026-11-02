@@ -119,9 +119,10 @@ async fn system_motion_suppresses_animations_without_changing_saved_preferences(
 
 #[tokio::test]
 async fn local_load_preserves_defaults_and_resolved_overrides() -> anyhow::Result<()> {
-    for config_text in [
-        "",
-        r#"
+    for (config_text, expected_server) in [
+        ("", None),
+        (
+            r#"
 [tui]
 animations = false
 show_tooltips = false
@@ -135,6 +136,8 @@ right_click_paste = "off"
 vim_mode_default = true
 terminal_resize_reflow_max_rows = 0
 session_picker_view = "comfortable"
+[tui.default_hosts.project_a]
+user_a = "remote.work"
 [tui.effects]
 shimmer = false
 [tui.rendering]
@@ -148,9 +151,23 @@ max_bytes = 4096
 [notice]
 fast_default_opt_out = true
 "#,
+            Some("remote.work"),
+        ),
     ] {
         let home = tempfile::tempdir()?;
         std::fs::write(home.path().join("config.toml"), config_text)?;
+        let project = tempfile::tempdir()?;
+        let project_cwd = AbsolutePathBuf::from_absolute_path(project.path())?;
+        std::fs::create_dir(project.path().join(".codex"))?;
+        std::fs::write(
+            project.path().join(".codex/config.toml"),
+            "[tui]\ntheme = 'project-theme'\n[tui.default_hosts.project_a]\nuser_a = 'project-override'\nuser_b = 'project-only'\n",
+        )?;
+        crate::legacy_core::config::set_project_trust_level(
+            home.path(),
+            project.path(),
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )?;
         let cli_overrides = vec![
             ("tui.disable_paste_burst".into(), true.into()),
             ("tui.right_click_paste".into(), "on".into()),
@@ -163,11 +180,9 @@ fast_default_opt_out = true
         ];
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
+            .fallback_cwd(Some(project.path().to_path_buf()))
             .strict_config(true)
-            .loader_overrides(LoaderOverrides {
-                ignore_project_config: true,
-                ..LoaderOverrides::without_managed_config_for_tests()
-            })
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
             .cli_overrides(cli_overrides.clone())
             .build()
             .await?;
@@ -176,13 +191,10 @@ fast_default_opt_out = true
         assert!(config.tui_fullscreen_transcript);
         let bootstrap = crate::legacy_core::config::load_config_toml_with_layer_stack(
             home.path(),
-            /*cwd*/ None,
+            Some(&project_cwd),
             cli_overrides,
             codex_config::ConfigLoadOptions {
-                loader_overrides: LoaderOverrides {
-                    ignore_project_config: true,
-                    ..LoaderOverrides::without_managed_config_for_tests()
-                },
+                loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
                 strict_config: true,
                 ..Default::default()
             },
@@ -193,6 +205,24 @@ fast_default_opt_out = true
             LocalSettings::from(&config),
         );
         assert_eq!(config.features.legacy_feature_usages().count(), 1);
+        assert_eq!(config.tui_theme.as_deref(), Some("project-theme"));
+        assert!(
+            LocalSettings::from(&config)
+                .tui
+                .default_hosts
+                .get("project_a")
+                .and_then(|users| users.get("user_b"))
+                .is_none()
+        );
+        assert_eq!(
+            LocalSettings::from(&config)
+                .tui
+                .default_hosts
+                .get("project_a")
+                .and_then(|users| users.get("user_a"))
+                .map(String::as_str),
+            expected_server,
+        );
     }
     Ok(())
 }

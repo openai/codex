@@ -24,6 +24,13 @@ pub(in crate::keymap) fn register(keymap: &TuiKeymap, resolved: &mut RuntimeKeym
     );
     for (configured, context, action, completion, spec) in [
         (
+            keymap.global.change_host.as_ref(),
+            KeymapContext::Global,
+            "change_host",
+            'b',
+            "leader b",
+        ),
+        (
             keymap.global.select_transcript.as_ref(),
             KeymapContext::Global,
             "select_transcript",

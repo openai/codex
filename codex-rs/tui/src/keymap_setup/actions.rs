@@ -35,11 +35,13 @@ pub(super) struct KeymapActionDescriptor {
 #[derive(Clone, Copy, Debug)]
 enum KeymapActionFeature {
     FastMode,
+    MultiBackend,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct KeymapActionFilter {
     pub(crate) fast_mode_enabled: bool,
+    pub(crate) multi_backend_enabled: bool,
 }
 
 impl KeymapActionDescriptor {
@@ -47,6 +49,7 @@ impl KeymapActionDescriptor {
         match self.required_feature {
             None => true,
             Some(KeymapActionFeature::FastMode) => filter.fast_mode_enabled,
+            Some(KeymapActionFeature::MultiBackend) => filter.multi_backend_enabled,
         }
     }
 }
@@ -111,6 +114,7 @@ macro_rules! define_keymap_actions {
 
 define_keymap_actions! {
     global "Global" {
+        change_host [MultiBackend] => "Change where a new conversation runs.",
         open_agents => "Open the agent command center.",
         open_transcript => "Open the transcript overlay.",
         find_transcript => "Find text in the full transcript.",
@@ -298,6 +302,9 @@ define_keymap_actions! {
 /// parsed back into an action name, because underscores and casing are part of
 /// the stable config contract.
 pub(super) fn action_label(action: &str) -> String {
+    if action == "change_host" {
+        return "Change Where to Run".to_string();
+    }
     action
         .split('_')
         .map(|word| {

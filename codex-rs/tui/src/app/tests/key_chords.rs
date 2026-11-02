@@ -1,4 +1,5 @@
 use super::App;
+use super::AppEvent;
 use super::AppServerSession;
 use super::Result;
 use super::RuntimeKeymap;
@@ -65,6 +66,61 @@ async fn press(
 
 fn ctrl(ch: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
+}
+
+#[tokio::test]
+async fn empty_thread_backend_chord_preserves_draft_until_first_submission() -> Result<()> {
+    let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+    let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    app.chat_widget.handle_thread_session(session);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.chat_widget
+        .apply_external_edit("first draft".to_string());
+    app.chat_widget
+        .set_new_backend_control(Some("Cloud".to_string()));
+    let screen = render_bottom_popup(&app.chat_widget, 80);
+    insta::assert_snapshot!(screen.lines().find(|line| line.trim_start().starts_with("Cloud")).unwrap().trim(), @"Cloud  ⌃x b to cycle");
+
+    // Cursor movement remains available while the backend selector is visible.
+    let key = app.route_key_chord_event(&mut tui, ctrl('b')).unwrap();
+    app.chat_widget.handle_key_event(key);
+    app.chat_widget.handle_paste("!".to_string());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "first draf!t");
+
+    assert_eq!(app.route_key_chord_event(&mut tui, ctrl('x')), None);
+    let key = app
+        .route_key_chord_event(&mut tui, KeyCode::Char('b').into())
+        .expect("backend chord dispatch");
+    app.chat_widget.handle_key_event(key);
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CycleNewConversationBackend))
+    );
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "first draf!t");
+
+    // A single-key remap takes precedence over cursor movement in the same draft.
+    let config = toml::from_str("[global]\nchange_host = 'ctrl-b'")?;
+    app.keymap = RuntimeKeymap::from_config(&config).unwrap();
+    app.chat_widget.apply_keymap_update(config, &app.keymap);
+    app.chat_widget.handle_key_event(ctrl('b'));
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CycleNewConversationBackend))
+    );
+
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    assert!(
+        !render_bottom_popup(&app.chat_widget, 80)
+            .lines()
+            .any(|line| line.trim_start().starts_with("Cloud"))
+    );
+
+    app.chat_widget.handle_key_event(ctrl('b'));
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CycleNewConversationBackend))
+    );
+    Ok(())
 }
 
 #[tokio::test]

@@ -102,6 +102,8 @@ pub(crate) struct RuntimeKeymap {
 
 #[derive(Clone, Debug)]
 pub(crate) struct AppKeymap {
+    /// Change where a new conversation runs.
+    pub(crate) change_host: Vec<KeyBinding>,
     /// Open the agent command center.
     pub(crate) open_agents: Vec<KeyBinding>,
     /// Open transcript overlay.
@@ -723,6 +725,11 @@ impl RuntimeKeymap {
             .collect();
 
         let app = AppKeymap {
+            change_host: resolve_bindings(
+                keymap.global.change_host.as_ref(),
+                &defaults.app.change_host,
+                "tui.keymap.global.change_host",
+            )?,
             open_agents: resolve_bindings(
                 keymap.global.open_agents.as_ref(),
                 &defaults.app.open_agents,
@@ -1697,6 +1704,7 @@ impl RuntimeKeymap {
     fn built_in_defaults() -> Self {
         Self {
             app: AppKeymap {
+                change_host: Vec::new(),
                 open_agents: default_bindings![],
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 find_transcript: default_bindings![plain(KeyCode::F(3))],
@@ -2023,15 +2031,16 @@ impl RuntimeKeymap {
     ///    backtracking, intentionally stay outside this configurable keymap.
     fn validate_conflicts(&self) -> Result<(), String> {
         for (action, bindings) in [
-            ("open_presets", &self.chat.open_presets),
-            ("toggle_voice", &self.chat.toggle_voice),
+            ("global.change_host", &self.app.change_host),
+            ("chat.open_presets", &self.chat.open_presets),
+            ("chat.toggle_voice", &self.chat.toggle_voice),
             (
-                "previous_permission_mode",
+                "chat.previous_permission_mode",
                 &self.chat.previous_permission_mode,
             ),
-            ("next_permission_mode", &self.chat.next_permission_mode),
-            ("prompt_stack_back", &self.chat.prompt_stack_back),
-            ("skip_question", &self.chat.skip_question),
+            ("chat.next_permission_mode", &self.chat.next_permission_mode),
+            ("chat.prompt_stack_back", &self.chat.prompt_stack_back),
+            ("chat.skip_question", &self.chat.skip_question),
         ] {
             if bindings.iter().any(|binding| {
                 let (code, modifiers) = binding.parts();
@@ -2039,12 +2048,13 @@ impl RuntimeKeymap {
                     || matches!(code, KeyCode::Char(_)) && crate::key_hint::is_altgr(modifiers)
             }) {
                 return Err(format!(
-                    "tui.keymap.chat.{action}: printable keys are reserved for text input"
+                    "tui.keymap.{action}: printable keys are reserved for text input"
                 ));
             }
         }
         #[cfg(unix)]
         for (action, bindings) in [
+            ("global.change_host", &self.app.change_host),
             ("global.open_agents", &self.app.open_agents),
             ("chat.open_presets", &self.chat.open_presets),
             ("chat.toggle_voice", &self.chat.toggle_voice),
@@ -2074,6 +2084,7 @@ impl RuntimeKeymap {
         }
 
         let main_bindings = [
+            ("change_host", self.app.change_host.as_slice()),
             ("open_agents", self.app.open_agents.as_slice()),
             ("open_transcript", self.app.open_transcript.as_slice()),
             ("find_transcript", self.app.find_transcript.as_slice()),

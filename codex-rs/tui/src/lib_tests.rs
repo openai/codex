@@ -1394,6 +1394,19 @@ async fn config_cwd_for_app_server_target_omits_cwd_for_remote_exec_server() -> 
     )
     .await;
 
+    assert_eq!(
+        backend_preference_local_cwd(remote_only_cwd, &target, &environment_manager),
+        std::env::current_dir().ok(),
+    );
+    assert_eq!(
+        backend_preference_local_cwd(
+            remote_only_cwd,
+            &target,
+            &EnvironmentManager::default_for_tests(),
+        ),
+        Some(remote_only_cwd.to_path_buf()),
+    );
+
     let config_cwd = config_cwd_for_app_server_target(
         Some(remote_only_cwd),
         &target,

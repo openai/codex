@@ -996,6 +996,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             mention: "figma".to_string(),
             path: user_skill_path.to_string_lossy().into_owned(),
         }],
+        crate::bottom_pane::ShellPrefixHandling::Interpret,
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1172,6 +1173,42 @@ async fn blocked_image_restore_with_remote_images_keeps_local_placeholder_mappin
     assert_eq!(chat.bottom_pane.composer_text_elements(), text_elements);
     assert_eq!(chat.bottom_pane.composer_local_images(), local_images);
     assert_eq!(chat.remote_image_urls(), remote_image_urls);
+}
+
+#[tokio::test]
+async fn startup_draft_handoff_preserves_literal_and_shell_bang() {
+    for text in [
+        "!echo literal",
+        "!echo literal\nsecond line",
+        "  !echo literal",
+    ] {
+        let (mut source, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        source.bottom_pane.insert_str(&format!("x{text}"));
+        source.bottom_pane.set_composer_cursor(0);
+        source.handle_key_event(KeyEvent::from(KeyCode::Delete));
+        let draft = source.composer_draft_snapshot();
+        assert_eq!(draft.text, text);
+        assert_eq!(draft.shell_mode, Some(false));
+
+        let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.restore_startup_draft(draft.clone());
+        assert_eq!(chat.bottom_pane.composer_draft_snapshot(), draft);
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_hidden_shell_payload_is_literal(ops.try_recv(), text.trim().to_string());
+    }
+
+    let (mut source, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    source
+        .bottom_pane
+        .set_composer_text("!pwd".into(), Vec::new(), Vec::new());
+    let draft = source.composer_draft_snapshot();
+    assert_eq!(draft.shell_mode, Some(true));
+    let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.restore_startup_draft(draft);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_matches!(ops.try_recv(), Ok(Op::RunUserShellCommand { command }) if command == "pwd");
 }
 
 #[tokio::test]
@@ -2679,6 +2716,7 @@ async fn image_preparation_failure_restores_full_input_without_submitting() {
                 mention: "file".into(),
                 path: "/tmp/skills/file/SKILL.md".into(),
             }],
+            crate::bottom_pane::ShellPrefixHandling::Interpret,
         );
         let draft = chat.bottom_pane.composer_draft_snapshot();
         if oversized {

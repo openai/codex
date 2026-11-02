@@ -284,6 +284,7 @@ macro_rules! define_runtime_action_bindings {
 
 define_runtime_action_bindings! {
     "global" => Global, app, global [
+        change_host,
         open_agents,
         open_transcript,
         find_transcript,

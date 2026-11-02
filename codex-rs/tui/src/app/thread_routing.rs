@@ -1534,6 +1534,7 @@ impl App {
         }
         match presentation {
             ThreadAttachPresentation::Fresh
+            | ThreadAttachPresentation::FreshAfterClear
             | ThreadAttachPresentation::FreshWithDraft
             | ThreadAttachPresentation::SessionLineage => {
                 self.chat_widget.handle_thread_session(session);

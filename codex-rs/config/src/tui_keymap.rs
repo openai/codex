@@ -135,6 +135,8 @@ impl KeybindingsSpec {
 pub struct TuiGlobalKeymap {
     /// Prefix for persistent, context-aware shortcut menus.
     pub leader: Option<KeybindingsSpec>,
+    /// Change where a new conversation runs.
+    pub change_host: Option<KeybindingsSpec>,
     /// Open the shared agent-session overview.
     pub open_agents: Option<KeybindingsSpec>,
     /// Open the transcript overlay.

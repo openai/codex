@@ -872,6 +872,11 @@ impl QuickDial {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct Tui {
+    /// Preferred hosts for new conversations, indexed by project and local user identity.
+    /// Read from the user configuration only; values are never endpoints or credentials.
+    #[serde(default)]
+    pub default_hosts: BTreeMap<String, BTreeMap<String, String>>,
+
     #[serde(default, flatten)]
     pub notification_settings: TuiNotificationSettings,
 

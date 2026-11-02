@@ -216,7 +216,7 @@ pub(crate) mod app_server_requests;
 mod app_server_thread_ownership;
 mod backend_banner_fallback;
 mod backend_events;
-mod backend_selection;
+pub(crate) mod backend_selection;
 pub(crate) mod backend_sessions;
 mod background_requests;
 mod composer_hints;
@@ -549,6 +549,7 @@ pub(crate) struct App {
     /// Legacy bootstrap and server-setting inputs; local preferences live in `local_settings`.
     pub(crate) config: Config,
     pub(crate) local_settings: crate::local_settings::LocalSettings,
+    backend_preference_context: backend_selection::BackendPreferenceContext,
     launch_cwd: PathBuf,
     /// Resume anchor selected by `/cd`; ordinary resumes retain the immutable launch cwd.
     runtime_working_directory_override: Option<PathBuf>,

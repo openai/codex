@@ -626,19 +626,36 @@ impl App {
         self.keymap = keymap;
         self.merge_startup_warnings(tui, &history_cell::StartupWarningsCell::default());
         self.restore_runtime_theme_from_config();
+        if !app_server.uses_remote_workspace()
+            && !crate::uses_remote_workspace_or_environment(
+                &self.app_server_target,
+                &self.environment_manager,
+            )
+        {
+            self.backend_preference_context.local_cwd = Some(cwd.to_path_buf());
+        }
         self.runtime_working_directory_override = Some(cwd.to_path_buf());
         if let Some(message) = project_config_warning(&self.config) {
             self.chat_widget.add_warning_message(message);
         }
         let message = format!("Working directory changed to: {}", cwd.display());
         self.chat_widget.add_info_message(message, /*hint*/ None);
+        self.review_folder_hooks_after_attach(app_server, cwd.to_path_buf())
+            .await;
+        tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) async fn review_folder_hooks_after_attach(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+    ) {
         if !self.config.bypass_hook_trust {
             let load_review = crate::startup_hooks_review::load_startup_hooks_review_entry;
-            let hooks = load_review(app_server.request_handle(), cwd.to_path_buf()).await;
+            let hooks = load_review(app_server.request_handle(), cwd).await;
             if hooks.hooks.iter().any(crate::hooks_rpc::hook_needs_review) {
                 self.chat_widget.open_hooks_browser(hooks);
             }
         }
-        tui.frame_requester().schedule_frame();
     }
 }

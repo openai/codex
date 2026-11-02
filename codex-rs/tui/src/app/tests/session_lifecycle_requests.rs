@@ -4663,7 +4663,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
 }
 
 #[test]
-fn fresh_session_applies_requested_name() -> Result<()> {
+fn fresh_session_keeps_its_name_and_draft_when_cycling_backends() -> Result<()> {
     const TEST_STACK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
     std::thread::Builder::new()
@@ -4678,6 +4678,43 @@ fn fresh_session_applies_requested_name() -> Result<()> {
                 let codex_home = tempdir()?;
                 app.config.codex_home = codex_home.path().to_path_buf().abs();
                 app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+                app.config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
+                app.local_settings.user_config_path = codex_home.path().join("config.toml").abs();
+                let local_project = tempdir()?;
+                std::fs::create_dir(local_project.path().join(".git"))?;
+                std::fs::write(local_project.path().join(".git/HEAD"), "ref: refs/heads/main\n")?;
+                app.launch_cwd = local_project.path().to_path_buf();
+                app.config.cwd = local_project.path().abs();
+                app.backend_preference_context =
+                    super::super::backend_selection::BackendPreferenceContext::new(&app.config, Some(app.launch_cwd.clone()));
+                let write_user = |user: &str| {
+                    app_test_support::write_chatgpt_auth(
+                        codex_home.path(),
+                        app_test_support::ChatGptAuthFixture::new("test-token")
+                            .chatgpt_user_id(user)
+                            .plan_type("plus"),
+                        codex_login::AuthCredentialsStoreMode::File,
+                    )
+                    .expect("write preference user")
+                };
+                write_user("user-a");
+                let project_key = codex_config::loader::project_trust_key(local_project.path());
+                let mut expected_defaults = std::collections::BTreeMap::from([
+                    (project_key.clone(), std::collections::BTreeMap::from([
+                        ("chatgpt:user-b".to_string(), "local".to_string()),
+                    ])),
+                    ("other-project".to_string(), std::collections::BTreeMap::from([
+                        ("chatgpt:user-a".to_string(), "remote.other".to_string()),
+                    ])),
+                ]);
+                app.local_settings.tui.default_hosts = expected_defaults.clone();
+                std::fs::write(
+                    &app.local_settings.user_config_path,
+                    toml::to_string(&serde_json::json!({
+                        "projects": { (project_key.clone()): { "trust_level": "trusted" } },
+                        "tui": { "default_hosts": expected_defaults },
+                    }))?,
+                )?;
                 let (mut app_server, requests, proxy) = start_recording_app_server(
                     &app.config,
                     /*blocked_thread_list*/ None,
@@ -4685,6 +4722,10 @@ fn fresh_session_applies_requested_name() -> Result<()> {
                 )
                 .await?;
                 let mut tui = crate::tui::test_support::make_test_tui()?;
+                let init = app.chatwidget_init_for_forked_or_resumed_thread(
+                    &mut tui, app.config.clone(), /*initial_user_message*/ None,
+                );
+                app.replace_chat_widget(ChatWidget::new_with_app_event(init));
 
                 app.start_fresh_session(
                     &mut tui,
@@ -4699,6 +4740,7 @@ fn fresh_session_applies_requested_name() -> Result<()> {
                     .chat_widget
                     .thread_id()
                     .expect("fresh session should have a thread id");
+                assert!(app.agents_overview.blank_sessions.contains_key(&thread_id));
                 assert_eq!(app.chat_widget.thread_name(), Some("Add User".to_string()));
                 assert!(
                     requests
@@ -4712,8 +4754,134 @@ fn fresh_session_applies_requested_name() -> Result<()> {
                     .thread_read(thread_id, /*include_turns*/ false)
                     .await?;
                 assert_eq!(thread.name.as_deref(), Some("Add User"));
+                // Deliver the metadata notification that populates Command Center.
+                app.track_agents_overview_notification(&ServerNotification::ThreadStarted(
+                    codex_app_server_protocol::ThreadStartedNotification { thread: thread.clone() },
+                ));
+                let retained_thread = ThreadId::new();
+                let mut retained = thread;
+                retained.id = retained_thread.to_string();
+                retained.name = Some("Other conversation".to_string());
+                app.agents_overview.threads.insert(retained_thread, Some(retained));
 
-                app_server.shutdown().await?;
+                app.chat_widget.insert_str("unsent draft");
+                app.agents_overview.pending_usage = Some((thread_id, uuid::Uuid::new_v4()));
+                app.agents_overview.usage_disabled = true;
+                let cwd = tempdir()?;
+                let mut settings = app.backend_settings();
+                settings.config.cwd = cwd.path().to_path_buf().abs();
+                let other = crate::start_embedded_app_server_for_picker(&settings.config).await?;
+                let destination = other.backend_id();
+                let source = app_server.backend_id();
+                let mut backends = crate::app::backend_sessions::BackendSessions::from_initial(
+                    app_server,
+                    vec![other],
+                );
+                backends.settings.insert(destination, settings);
+                backends.set_preference_key(source, "local");
+                backends.set_preference_key(destination, "remote.work");
+                assert_eq!(app.other_new_session_backend(&backends).await, None);
+                app.handle_event(
+                    &mut tui,
+                    backends.session_at_mut(backends.displayed),
+                    AppEvent::ChooseNewSessionCheckout { name: None },
+                ).await?;
+                assert!(render_bottom_popup(&app.chat_widget, 80).contains("Use current Git worktree"));
+                app.chat_widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                assert_eq!(app.current_displayed_thread_id(), Some(thread_id));
+                assert_eq!(recorded_params(&requests, "thread/start").len(), 1);
+                let preference_path = app.local_settings.user_config_path.clone();
+                let saved_defaults = || -> Result<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>> {
+                    let saved: toml::Value =
+                        toml::from_str(&std::fs::read_to_string(&preference_path)?)?;
+                    Ok(saved["tui"]["default_hosts"].clone().try_into()?)
+                };
+                assert!(app.can_cycle_conversation_backend());
+                app.start_new_session_on_other_backend(
+                    &mut tui,
+                    &mut backends,
+                    destination,
+                    crate::app::backend_selection::NewBackendSession::CarryDraft,
+                )
+                .await
+                .expect("switch the named conversation with its draft");
+                assert_eq!(backends.displayed_owner(), destination);
+                expected_defaults.get_mut(&project_key).unwrap().insert(
+                    "chatgpt:user-a".to_string(), "remote.work".to_string(),
+                );
+                assert_eq!(saved_defaults()?, expected_defaults);
+                assert_eq!(app.local_settings.tui.default_hosts, expected_defaults);
+                write_user("user-b");
+                assert_eq!(app.other_new_session_backend(&backends).await, Some(source));
+                write_user("user-a");
+                assert_eq!(app.other_new_session_backend(&backends).await, None);
+
+                assert_eq!(app.agents_overview.pending_usage, None);
+                assert!(!app.agents_overview.usage_disabled);
+                assert_eq!(app.config.cwd.as_path(), cwd.path());
+                assert_eq!(app.chat_widget.thread_name().as_deref(), Some("Add User"));
+                assert_eq!(app.chat_widget.composer_text_with_pending(), "unsent draft");
+                let destination_thread = app.chat_widget.thread_id().expect("destination thread");
+                assert_ne!(destination_thread, thread_id);
+                let view = app.agents_overview_view(
+                    app.agents_overview.threads.values().flatten().cloned().collect(),
+                    /*selected_thread_id*/ None,
+                );
+                assert_eq!(view.thread_ids(), vec![retained_thread]);
+                insta::assert_debug_snapshot!(view.thread_ids().into_iter().map(|id| {
+                    app.agents_overview.threads[&id].as_ref().unwrap().name.as_deref().unwrap()
+                }).collect::<Vec<_>>(), @r#"
+                [
+                    "Other conversation",
+                ]
+                "#);
+                assert!(!app.agents_overview.blank_sessions.contains_key(&thread_id));
+                assert!(!app.agents_overview.input_states.contains_key(&thread_id));
+                assert!(!app.thread_event_channels.contains_key(&thread_id));
+                assert_eq!(
+                    recorded_params(&requests, "thread/unsubscribe"),
+                    vec![serde_json::json!({"threadId": thread_id.to_string()})]
+                );
+                app.start_new_session_on_other_backend(
+                    &mut tui,
+                    &mut backends,
+                    source,
+                    crate::app::backend_selection::NewBackendSession::CarryDraft,
+                )
+                .await
+                .expect("switch back with the draft");
+                assert_eq!(backends.displayed_owner(), source);
+                expected_defaults.get_mut(&project_key).unwrap().insert(
+                    "chatgpt:user-a".to_string(), "local".to_string(),
+                );
+                assert_eq!(saved_defaults()?, expected_defaults);
+
+                assert_eq!(app.chat_widget.composer_text_with_pending(), "unsent draft");
+                assert!(
+                    !app.agents_overview
+                        .blank_sessions
+                        .contains_key(&destination_thread)
+                );
+                assert!(
+                    !app.agents_overview
+                        .input_states
+                        .contains_key(&destination_thread)
+                );
+                assert!(!app.thread_event_channels.contains_key(&destination_thread));
+                // An automatic fresh session may use another connection without changing
+                // the user's last explicit choice.
+                app.start_new_session_on_other_backend(
+                    &mut tui,
+                    &mut backends,
+                    destination,
+                    crate::app::backend_selection::NewBackendSession::Fresh { name: None },
+                )
+                .await
+                .expect("start without an explicit default change");
+                assert_eq!(saved_defaults()?, expected_defaults);
+                assert_eq!(app.local_settings.tui.default_hosts, expected_defaults);
+                assert_eq!(app.new_thread_host_preference().await, Some("local"));
+                backends.shutdown().await?;
                 proxy.await??;
                 Ok(())
             })

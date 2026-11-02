@@ -47,6 +47,7 @@ async fn backend_sessions_parked_request_does_not_hide_disconnect() -> Result<()
     let mut backends = BackendSessions::new(displayed);
     assert_eq!(backends.next_listening_backend(displayed_id), None);
     backends.insert(background);
+    backends.set_preference_key(background_id, "remote.work");
     let initial = backends.displayed;
     let thread_id = ThreadId::new();
 
@@ -157,6 +158,10 @@ async fn backend_sessions_parked_request_does_not_hide_disconnect() -> Result<()
     assert_eq!(owner, background_id);
     assert!(closed.is_none());
     assert!(!backends.is_listening(background_id));
+    assert_eq!(
+        backends.preferred_listening_backend(Some("remote.work")),
+        Some(displayed_id)
+    );
     Ok(())
 }
 
@@ -188,6 +193,22 @@ async fn backend_sessions_poll_three_sources_and_isolate_closed_or_paused_stream
     }
     let mut sessions = sessions.into_iter();
     let mut backends = BackendSessions::from_initial(sessions.next().unwrap(), sessions.collect());
+    backends.set_preference_key(owners[2], "remote.work");
+    backends.set_preference_key(owners[0], "local");
+    backends.set_preference_key(owners[1], "cloud");
+    assert_eq!(
+        backends.preferred_listening_backend(Some("remote.work")),
+        Some(owners[2])
+    );
+    assert_eq!(
+        backends.preferred_listening_backend(Some("cloud")),
+        Some(owners[1])
+    );
+    assert_eq!(
+        backends.preferred_listening_backend(Some("missing")),
+        Some(owners[0])
+    );
+
     assert_eq!(
         owners
             .iter()

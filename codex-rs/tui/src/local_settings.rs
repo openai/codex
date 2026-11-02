@@ -56,6 +56,7 @@ impl LocalSettings {
                 config.tui_alternate_screen != codex_config::types::AltScreenMode::Never,
             ),
             tui: Tui {
+                default_hosts: Default::default(),
                 notification_settings: config.tui_notifications.clone(),
                 animations: config.animations,
                 screen_reader_detection_done: None,
@@ -158,6 +159,15 @@ impl LocalSettings {
         system_motion: crate::motion::MotionMode,
         screen_reader_default: crate::motion::MotionMode,
     ) {
+        self.tui.default_hosts = layers
+            .effective_user_config()
+            .and_then(|config| {
+                config
+                    .get("tui")
+                    .and_then(|tui| tui.get("default_hosts"))
+                    .and_then(|value| value.clone().try_into().ok())
+            })
+            .unwrap_or_default();
         if screen_reader_default == crate::motion::MotionMode::Reduced {
             // Consult the current layers so preferences edited after startup still win.
             self.tui.animations &= layers

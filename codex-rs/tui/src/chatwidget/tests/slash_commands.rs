@@ -807,6 +807,7 @@ async fn goal_slash_command_uses_plain_text_for_mentions() {
             mention: "figma".to_string(),
             path: "app://figma".to_string(),
         }],
+        crate::bottom_pane::ShellPrefixHandling::Interpret,
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
@@ -1251,6 +1252,7 @@ async fn interrupted_merged_message_history_encodes_mentions_once() {
             mention: "figma".to_string(),
             path: "app://figma".to_string(),
         }],
+        crate::bottom_pane::ShellPrefixHandling::Interpret,
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

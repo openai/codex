@@ -36,12 +36,19 @@ async fn slash_new_and_fork_offer_checkout_choices_inside_local_git_repository()
     assert!(popup.contains("Create new Git worktree"), "popup: {popup}");
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.set_feature_enabled(Feature::TuiMultiBackend, /*enabled*/ true);
     chat.bottom_pane
         .set_composer_text("/new named".into(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
+    let Ok(AppEvent::ChooseNewSessionCheckout { name }) = rx.try_recv() else {
+        panic!("/new must resolve its host before offering checkout choices");
+    };
+    assert!(!chat.has_active_modal());
+    assert_eq!(name.as_deref(), Some("named"));
+    chat.open_session_checkout_picker(crate::app_event::ManagedWorktreeMode::New, name);
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession { name: Some(name) }) if name == "named");
+    assert_matches!(rx.try_recv(), Ok(AppEvent::NewSessionInCurrentWorktree { name: Some(name) }) if name == "named");
     chat.bottom_pane
         .set_composer_text("/fork named".into(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -51,6 +58,7 @@ async fn slash_new_and_fork_offer_checkout_choices_inside_local_git_repository()
         mode: crate::app_event::ManagedWorktreeMode::Fork,
         name: Some(name),
     }) if name == "named");
+    chat.set_feature_enabled(Feature::TuiMultiBackend, /*enabled*/ false);
     chat.set_local_worktree_operations(/*enabled*/ false);
     chat.dispatch_command(SlashCommand::New);
     assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession { name: None }));

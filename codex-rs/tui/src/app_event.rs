@@ -570,6 +570,19 @@ pub(crate) enum AppEvent {
         name: Option<String>,
     },
 
+    /// Resolve the /new host before offering choices about the displayed checkout.
+    ChooseNewSessionCheckout {
+        name: Option<String>,
+    },
+
+    /// Start on the current worktree's host, ignoring the saved new-thread host.
+    NewSessionInCurrentWorktree {
+        name: Option<String>,
+    },
+
+    /// Move an empty conversation to the next connected backend.
+    CycleNewConversationBackend,
+
     /// Continue a provider-locked conversation in a fresh chat using its saved history.
     ContinueProviderChat {
         thread_id: ThreadId,

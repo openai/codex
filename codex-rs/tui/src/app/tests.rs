@@ -6837,6 +6837,10 @@ async fn make_test_app() -> Box<App> {
         app_event_tx,
         chat_widget,
         workspace_command_runner: None,
+        backend_preference_context: backend_selection::BackendPreferenceContext::new(
+            &config,
+            Some(config.cwd.to_path_buf()),
+        ),
         launch_cwd: config.cwd.to_path_buf(),
         runtime_working_directory_override: None,
         local_settings: crate::local_settings::LocalSettings::from(&config),
@@ -6965,6 +6969,10 @@ pub(super) async fn make_test_app_with_channels() -> (
             app_event_tx,
             chat_widget,
             workspace_command_runner: None,
+            backend_preference_context: backend_selection::BackendPreferenceContext::new(
+                &config,
+                Some(config.cwd.to_path_buf()),
+            ),
             launch_cwd: config.cwd.to_path_buf(),
             runtime_working_directory_override: None,
             local_settings: crate::local_settings::LocalSettings::from(&config),

@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 fn snapshot(text: &str) -> ComposerDraftSnapshot {
     ComposerDraftSnapshot {
         text: text.to_string(),
+        shell_mode: None,
         cursor: text.len(),
         text_elements: Vec::new(),
         local_images: Vec::new(),
