@@ -1676,7 +1676,7 @@ async fn untraced_http_stream_releases_completed_output_before_response_ends() {
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
         test_model_provider(),
-        /*websocket*/ None,
+        /*last_response_tx*/ None,
     );
 
     assert!(matches!(
@@ -1718,7 +1718,7 @@ async fn incomplete_response_traces_attempted_call_without_streaming_it() -> any
             test_session_telemetry(),
             attempt,
             test_model_provider(),
-            /*websocket*/ None,
+            /*last_response_tx*/ None,
         );
         assert!(matches!(stream.next().await, Some(Err(_))));
         assert!(stream.next().await.is_none());
@@ -1763,7 +1763,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         test_session_telemetry(),
         attempt,
         test_model_provider(),
-        /*websocket*/ None,
+        /*last_response_tx*/ None,
     );
 
     let observed = stream
@@ -1820,7 +1820,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
         test_model_provider(),
-        /*websocket*/ None,
+        /*last_response_tx*/ None,
     );
 
     while stream.next().await.is_some() {}
@@ -2044,7 +2044,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         test_session_telemetry(),
         attempt,
         test_model_provider(),
-        /*websocket*/ None,
+        /*last_response_tx*/ None,
     );
 
     // Fill the mapper channel with non-terminal events, then yield one output
@@ -2347,10 +2347,7 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         attempt,
         test_model_provider(),
         vec![Box::new(ReplaceOutput)],
-        Some(super::WebsocketResponse {
-            last_response_tx,
-            recovery: None,
-        }),
+        Some(last_response_tx),
     );
     let mut delivered = Vec::new();
     while let Some(event) = stream.next().await {
@@ -2376,6 +2373,7 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
 async fn inference_tools_changes_follow_full_specs_across_turns() {
     let client = test_model_client(SessionSource::Cli);
     let telemetry = test_session_telemetry();
+    let model_info = test_model_info();
     let alpha = ResponsesApiTool {
         name: "alpha".into(),
         description: "Original".into(),
@@ -2407,8 +2405,7 @@ async fn inference_tools_changes_follow_full_specs_across_turns() {
     .enumerate()
     {
         if index == 4 {
-            session
-                .try_switch_fallback_transport(&telemetry, super::HttpFallbackPolicy::StayOnHttp);
+            session.try_switch_fallback_transport(&telemetry, &model_info);
             drop(session);
             session = client.new_session();
         }

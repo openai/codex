@@ -330,7 +330,7 @@ async fn run_remote_compaction_request_v2(
     let mut retry_state = ResponsesStreamRetryState::default();
     loop {
         let result = match client_session
-            .stream_attempt(
+            .stream(
                 prompt,
                 &settings.model_info,
                 &turn_context.session_telemetry,
@@ -340,7 +340,6 @@ async fn run_remote_compaction_request_v2(
                 step_context.settings.service_tier.clone(),
                 responses_metadata,
                 &InferenceTraceContext::disabled(),
-                &mut retry_state.transport,
             )
             .await
         {
