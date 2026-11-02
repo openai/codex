@@ -10,7 +10,7 @@ use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -42,15 +42,14 @@ use seccompiler::apply_filter;
 ///
 /// Filesystem restrictions are normally handled by bubblewrap. The legacy
 /// Landlock implementation is only selected by `apply_landlock_fs`.
-pub(crate) fn apply_permission_profile_to_current_thread(
-    permission_profile: &PermissionProfile,
+pub(crate) fn apply_sandbox_policies_to_current_thread(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     cwd: &Path,
     apply_landlock_fs: bool,
     managed_network: Option<&ManagedNetworkSandboxContext>,
     proxy_routing_active: bool,
 ) -> Result<()> {
-    let (file_system_sandbox_policy, network_sandbox_policy) =
-        permission_profile.to_runtime_permissions();
     let network_seccomp_mode = network_seccomp_mode(
         network_sandbox_policy,
         managed_network.is_some(),

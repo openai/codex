@@ -32,6 +32,7 @@ use std::process::Command;
 use crate::linux_run_main::synthetic_mount_registry_root;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::permissions::FileSystemPolicyProjection;
 use codex_protocol::permissions::is_protected_metadata_name;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
@@ -240,11 +241,13 @@ pub(crate) fn create_bwrap_command_args(
     command_cwd: &Path,
     options: BwrapOptions,
 ) -> Result<BwrapArgs> {
-    let unreadable_globs =
-        file_system_sandbox_policy.get_unreadable_globs_with_cwd(sandbox_policy_cwd);
     // Full disk write normally skips bwrap, but unreadable glob patterns still
     // need concrete bwrap masks for the matches expanded below.
-    if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
+    if file_system_sandbox_policy.has_full_disk_write_access()
+        && file_system_sandbox_policy
+            .get_unreadable_globs_with_cwd(sandbox_policy_cwd)
+            .is_empty()
+    {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
             Ok(BwrapArgs {
                 args: command,
@@ -418,18 +421,16 @@ fn create_filesystem_args(
             .mask_wslg_distro
             .then_some(Path::new(WSLG_DISTRO_ROOT)),
     )?;
-    let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
+    let resolved = file_system_sandbox_policy
+        .resolve_for_enforcement(cwd, FileSystemPolicyProjection::LinuxMounts)?;
     // Bubblewrap requires bind mount targets to exist. Skip missing writable
     // roots so mixed-platform configs can keep harmless paths for other
     // environments without breaking Linux command startup.
-    let mut writable_roots = file_system_sandbox_policy
-        .get_writable_roots_with_cwd_inheriting_root_metadata(cwd)
-        .into_iter()
-        .filter(|writable_root| writable_root.root.as_path().exists())
-        .collect::<Vec<_>>();
+    let mut writable_roots = resolved.writable_roots;
+    writable_roots.retain(|writable_root| writable_root.root.as_path().exists());
     if writable_roots.is_empty()
-        && file_system_sandbox_policy.has_full_disk_write_access()
-        && !unreadable_globs.is_empty()
+        && resolved.has_full_disk_write_access
+        && !resolved.unreadable_globs.is_empty()
     {
         writable_roots.push(WritableRoot {
             root: AbsolutePathBuf::from_absolute_path("/")?,
@@ -470,8 +471,8 @@ fn create_filesystem_args(
                 (!resolved.as_path().exists()).then(|| resolved.into_path_buf())
             })
             .collect();
-    let mut unreadable_roots = file_system_sandbox_policy
-        .get_unreadable_roots_with_cwd_preserving_symlinks(cwd)
+    let mut unreadable_roots = resolved
+        .unreadable_roots
         .into_iter()
         .map(AbsolutePathBuf::into_path_buf)
         .collect::<Vec<_>>();
@@ -480,7 +481,7 @@ fn create_filesystem_args(
     // core tool helpers still evaluate the original patterns directly at read time.
     unreadable_roots.extend(
         expand_unreadable_globs_with_ripgrep(
-            &unreadable_globs,
+            &resolved.unreadable_globs,
             cwd,
             || {
                 find_pre_sandbox_executable_in_path(
@@ -489,9 +490,7 @@ fn create_filesystem_args(
                     cwd,
                 )
             },
-            options
-                .glob_scan_max_depth
-                .or(file_system_sandbox_policy.glob_scan_max_depth),
+            options.glob_scan_max_depth.or(resolved.glob_scan_max_depth),
             |_| {},
         )?
         .into_iter()
@@ -500,7 +499,7 @@ fn create_filesystem_args(
     unreadable_roots.sort();
     unreadable_roots.dedup();
 
-    let mut args = if file_system_sandbox_policy.has_full_disk_read_access() {
+    let mut args = if resolved.has_full_disk_read_access {
         // Read-only root, then mount a minimal device tree.
         // In bubblewrap (`bubblewrap.c`, `SETUP_MOUNT_DEV`), `--dev /dev`
         // creates the standard minimal nodes: null, zero, full, random,
@@ -523,12 +522,12 @@ fn create_filesystem_args(
             "/dev".to_string(),
         ];
 
-        let mut readable_roots: BTreeSet<PathBuf> = file_system_sandbox_policy
-            .get_readable_roots_with_cwd(cwd)
+        let mut readable_roots: BTreeSet<PathBuf> = resolved
+            .readable_roots
             .into_iter()
             .map(PathBuf::from)
             .collect();
-        if file_system_sandbox_policy.include_platform_defaults() {
+        if resolved.include_platform_defaults {
             readable_roots.extend(
                 LINUX_PLATFORM_DEFAULT_READ_ROOTS
                     .iter()

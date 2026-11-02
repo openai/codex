@@ -117,7 +117,7 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
             permissions: &permissions,
             sandbox: SandboxType::None,
             enforce_managed_network: false,
-            environment_id: None,
+            environment_id: Some("remote"),
             network: None,
             sandbox_policy_cwd: &cwd_uri,
             sandbox_exe: None,
@@ -128,6 +128,10 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
 
     assert_eq!(exec_request.cwd, cwd_uri);
     assert_eq!(exec_request.sandbox_policy_cwd, cwd_uri);
+    assert_eq!(
+        exec_request.network_environment_id.as_deref(),
+        Some("remote")
+    );
     assert_eq!(
         exec_request.permission_profile.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::unrestricted()

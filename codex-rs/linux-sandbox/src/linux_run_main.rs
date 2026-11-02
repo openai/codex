@@ -24,7 +24,7 @@ use crate::launcher::initialize_bwrap_launcher;
 use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
-use crate::seccomp::apply_permission_profile_to_current_thread;
+use crate::seccomp::apply_sandbox_policies_to_current_thread;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
@@ -202,8 +202,9 @@ pub fn run_main() -> ! {
             }
         }
         let proxy_routing_active = allow_network_for_proxy;
-        if let Err(e) = apply_permission_profile_to_current_thread(
-            &permission_profile,
+        if let Err(e) = apply_sandbox_policies_to_current_thread(
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
             managed_network.as_ref(),
@@ -248,8 +249,9 @@ pub fn run_main() -> ! {
     }
 
     if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
-        if let Err(e) = apply_permission_profile_to_current_thread(
-            &permission_profile,
+        if let Err(e) = apply_sandbox_policies_to_current_thread(
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
             managed_network.as_ref(),
@@ -316,8 +318,9 @@ pub fn run_main() -> ! {
     }
 
     // Legacy pipeline: apply in-process restrictions without bubblewrap.
-    if let Err(e) = apply_permission_profile_to_current_thread(
-        &permission_profile,
+    if let Err(e) = apply_sandbox_policies_to_current_thread(
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
         &sandbox_policy_cwd,
         /*apply_landlock_fs*/ true,
         managed_network.as_ref(),

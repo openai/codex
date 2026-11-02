@@ -3,10 +3,11 @@
 
 use super::SeatbeltAccessRoot;
 use super::SeatbeltPreparationError;
-use super::protected_metadata_names_for_writable_root;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
+use codex_protocol::permissions::ResolvedFileSystemPermissions;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
@@ -14,19 +15,19 @@ use std::path::Path;
 pub(super) fn scratch_access_roots(
     policy: &FileSystemSandboxPolicy,
     cwd: &Path,
-    writable_roots: &[WritableRoot],
+    filesystem: &ResolvedFileSystemPermissions,
 ) -> Result<(Vec<SeatbeltAccessRoot>, Vec<WritableRoot>), SeatbeltPreparationError> {
-    let unreadable = policy.get_unreadable_roots_with_cwd(cwd);
-    let mut read_only = policy
-        .get_readable_roots_with_cwd(cwd)
-        .into_iter()
+    let mut read_only = filesystem
+        .readable_roots
+        .iter()
         .filter(|path| !policy.can_write_local_path_with_cwd(path.as_path(), cwd))
+        .cloned()
         .collect::<Vec<_>>();
-    read_only.extend(unreadable.iter().cloned());
-    for root in writable_roots {
+    read_only.extend(filesystem.unreadable_roots.iter().cloned());
+    for root in &filesystem.writable_roots {
         read_only.extend(root.read_only_subpaths.iter().cloned());
         read_only.extend(
-            protected_metadata_names_for_writable_root(policy, root, cwd)
+            root.protected_metadata_names
                 .iter()
                 .map(|name| root.root.join(name)),
         );
@@ -54,6 +55,16 @@ pub(super) fn scratch_access_roots(
             // Explicit restrictions at or above a scratch root, and metadata
             // belonging to narrower project roots, also constrain the default.
             root.read_only_subpaths.extend(read_only.iter().cloned());
+            for name in PROTECTED_METADATA_PATH_NAMES {
+                if !root
+                    .protected_metadata_names
+                    .iter()
+                    .any(|existing| existing == name)
+                    && !policy.can_write_local_path_with_cwd(root.root.join(*name).as_path(), cwd)
+                {
+                    root.protected_metadata_names.push((*name).to_string());
+                }
+            }
             root
         })
         .collect();
@@ -61,7 +72,7 @@ pub(super) fn scratch_access_roots(
         .into_iter()
         .map(|root| SeatbeltAccessRoot {
             root,
-            excluded_subpaths: unreadable.clone(),
+            excluded_subpaths: filesystem.unreadable_roots.clone(),
             protected_metadata_names: Vec::new(),
         })
         .collect();
