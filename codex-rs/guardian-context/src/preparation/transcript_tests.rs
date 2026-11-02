@@ -158,7 +158,7 @@ fn profiles_reserve_the_newest_five_tool_entries_for_aggregate_enforcement() {
                         SectionContent::Transcript(record) => {
                             Some((item.retention, record.text().to_owned()))
                         }
-                        SectionContent::Other(_) | SectionContent::Exact(_) => None,
+                        SectionContent::Other(_) => None,
                     })
                 })
                 .collect::<Vec<_>>();

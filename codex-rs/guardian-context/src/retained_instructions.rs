@@ -298,9 +298,9 @@ impl ComposedContext {
                     || (previous.assistant_context && !notices.assistant_context)
                 {
                     if items.is_empty() {
-                        items.extend([START, END].map(|text| Budgeted::required(ContentItem::InputText { text: format!("{text}\n") }.into())));
+                        items.extend([START, END].map(|text| Budgeted::protected(ContentItem::InputText { text: format!("{text}\n") }.into())));
                     }
-                    items.insert(/*index*/ 1.min(items.len()), Budgeted::required(ContentItem::InputText { text: format!("{AVAILABILITY_CHANGED}\n") }.into()));
+                    items.insert(/*index*/ 1.min(items.len()), Budgeted::protected(ContentItem::InputText { text: format!("{AVAILABILITY_CHANGED}\n") }.into()));
                 }
                 return true;
             }

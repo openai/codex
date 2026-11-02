@@ -76,8 +76,6 @@ impl SectionDelivery {
 #[derive(Clone, PartialEq)]
 pub(crate) enum SectionContent {
     Transcript(TranscriptRecord),
-    /// Exact action payload; admission accounts for it without shortening its bytes.
-    Exact(ContentItem),
     Other(ContentItem),
 }
 
@@ -106,7 +104,7 @@ impl SectionContent {
     pub(crate) fn evidence_bytes(&self) -> usize {
         match self {
             Self::Transcript(record) => record.rendered().text_bytes,
-            Self::Other(item) | Self::Exact(item) => match item {
+            Self::Other(item) => match item {
                 ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                     text.len()
                 }
@@ -141,7 +139,7 @@ impl SectionContent {
     fn into_content_item(self) -> ContentItem {
         match self {
             Self::Transcript(record) => record.into_content_item(),
-            Self::Other(item) | Self::Exact(item) => item,
+            Self::Other(item) => item,
         }
     }
 }
@@ -160,13 +158,19 @@ pub struct ComposedContext {
     pub truncations: Vec<TruncationObservation>,
 }
 
+const PERMISSIONS_SECTION_ORDER: usize = 5;
+
 impl CollectedContext {
     /// Reports captured images without preparing or copying their payloads.
     pub fn has_images(&self) -> bool {
-        let has_inline_image = |items: &[UserInput]| {
-            items.iter().any(|item| {
-                matches!(item, UserInput::Image { image, .. } if matches!(image, ImageReference::Inline { .. }))
-            })
+        let has_inline_image = |item: &UserInput| {
+            matches!(
+                item,
+                UserInput::Image {
+                    image: ImageReference::Inline { .. },
+                    ..
+                }
+            )
         };
         self.sections.iter().any(|section| match section {
             ContextSection::TranscriptImages(images) => !images.images.is_empty(),
@@ -177,10 +181,10 @@ impl CollectedContext {
                     *mode == crate::NodeReplReviewEvidenceMode::Multimodal
                         && responses
                             .iter()
-                            .any(|response| has_inline_image(&response.items))
+                            .any(|response| response.items.iter().any(has_inline_image))
                 }
                 crate::node_repl::NodeReplEvidenceContent::Prepared(items) => {
-                    has_inline_image(items)
+                    items.iter().any(|item| has_inline_image(&item.content))
                 }
             },
             ContextSection::ConversationTranscript { .. }
@@ -320,7 +324,7 @@ impl CollectedContext {
                             section: "root_conversation",
                         });
                     };
-                    (1, "root_conversation", text_content(items))
+                    (1, "root_conversation", SectionDelivery::user_content(items))
                 }
                 ContextSection::SenderUserMessages { items } => {
                     (1, "sender_user_messages", text_content(items))
@@ -356,7 +360,17 @@ impl CollectedContext {
                 ContextSection::TrustedUserAnswers { items } => (
                     3,
                     "trusted_user_answers",
-                    text_content(items.into_iter().map(|item| item.text).collect()),
+                    SectionDelivery::user_content(
+                        items
+                            .into_iter()
+                            .map(|item| {
+                                let mut output =
+                                    Budgeted::required(ContentItem::InputText { text: item.text });
+                                output.protected = item.protected;
+                                output
+                            })
+                            .collect(),
+                    ),
                 ),
                 ContextSection::ConversationTranscript { .. } => {
                     let transcript =
@@ -433,7 +447,22 @@ impl CollectedContext {
                     )
                 }
                 ContextSection::PermissionContext { items } => {
-                    (5, "permissions", text_content(items))
+                    let (start, end) = crate::PermissionContext::type_markers();
+                    let items = items
+                        .into_iter()
+                        .map(|text| {
+                            if text == start || text == end {
+                                Budgeted::protected(text.into())
+                            } else {
+                                Budgeted::required(text.into())
+                            }
+                        })
+                        .collect();
+                    (
+                        PERMISSIONS_SECTION_ORDER,
+                        "permissions",
+                        SectionDelivery::UserContent(items),
+                    )
                 }
                 ContextSection::TranscriptImages(images) => {
                     if images.omitted_bytes > 0 {
@@ -466,27 +495,38 @@ impl CollectedContext {
                     };
                     let items = items
                         .into_iter()
-                        .filter_map(|item| match item {
-                            UserInput::Text { text, .. } => {
-                                Some(Ok(Budgeted::required(ContentItem::InputText { text })))
-                            }
-                            UserInput::Image {
-                                image: ImageReference::Inline { image_url },
-                                detail,
-                            } => Some(Ok(Budgeted::optional(
-                                ContentItem::InputImage {
+                        .filter_map(|item| {
+                            let Budgeted {
+                                content,
+                                protected,
+                                source,
+                                retention,
+                            } = item;
+                            let content = match content {
+                                UserInput::Text { text, .. } => ContentItem::InputText { text },
+                                UserInput::Image {
+                                    image: ImageReference::Inline { image_url },
+                                    detail,
+                                } => ContentItem::InputImage {
                                     image: ImageReference::Inline { image_url },
                                     detail,
                                 },
-                                BudgetPriority::Image,
-                            ))),
-                            UserInput::Image {
-                                image: ImageReference::File { .. },
-                                ..
-                            } => None,
-                            _ => Some(Err(SectionError::UnsupportedDelivery {
-                                section: "node_repl_evidence",
-                            })),
+                                UserInput::Image {
+                                    image: ImageReference::File { .. },
+                                    ..
+                                } => return None,
+                                _ => {
+                                    return Some(Err(SectionError::UnsupportedDelivery {
+                                        section: "node_repl_evidence",
+                                    }));
+                                }
+                            };
+                            Some(Ok(Budgeted {
+                                content,
+                                protected,
+                                source,
+                                retention,
+                            }))
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     (
@@ -501,25 +541,23 @@ impl CollectedContext {
                             11,
                             SectionOutput {
                                 id: "planned_action",
-                                delivery: text_content(planned.render(action)),
+                                delivery: SectionDelivery::UserContent(
+                                    planned.render_content(action),
+                                ),
                             },
                         ));
                         sections.push((
                             11,
                             SectionOutput {
                                 id: "planned_action",
-                                delivery: SectionDelivery::Message(Budgeted::required(Box::new(
+                                delivery: SectionDelivery::Message(Budgeted::protected(Box::new(
                                     ResponseItemEnvelope::new(call.as_ref().clone()),
                                 ))),
                             },
                         ));
                         continue;
                     }
-                    let mut items = planned
-                        .render_content(action)
-                        .into_iter()
-                        .map(Budgeted::required)
-                        .collect::<Vec<_>>();
+                    let mut items = planned.render_content(action);
                     if let Some(descriptions) = planned.tool_descriptions {
                         if descriptions.text.is_empty() {
                             return Err(SectionError::UnsupportedDelivery {

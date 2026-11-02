@@ -68,7 +68,7 @@ pub(crate) enum NodeReplEvidenceContent {
         omitted_responses: u64,
         mode: NodeReplReviewEvidenceMode,
     },
-    Prepared(Vec<UserInput>),
+    Prepared(Vec<crate::Budgeted<UserInput>>),
 }
 
 impl std::fmt::Debug for RenderedNodeReplEvidence {
@@ -114,21 +114,25 @@ fn text_input(text: String) -> UserInput {
 
 impl NodeReplContext<'_> {
     /// Renders the existing text or multimodal layout without advancing host state.
-    pub fn render_inputs(&self) -> Vec<UserInput> {
-        if self.mode != NodeReplReviewEvidenceMode::Multimodal
-            || !self.responses.iter().any(|response| {
-                response.items.iter().any(|item| {
-                    matches!(
-                        item,
-                        Image {
-                            image: ImageReference::Inline { .. },
-                            ..
-                        }
-                    )
-                })
-            })
+    pub fn render_inputs(&self) -> Vec<crate::Budgeted<UserInput>> {
+        if (self.budgeting == crate::ContextBudgeting::Fixed
+            || self.mode == NodeReplReviewEvidenceMode::Disabled)
+            && (self.mode != NodeReplReviewEvidenceMode::Multimodal
+                || !self.responses.iter().any(|response| {
+                    response.items.iter().any(|item| {
+                        matches!(
+                            item,
+                            Image {
+                                image: ImageReference::Inline { .. },
+                                ..
+                            }
+                        )
+                    })
+                }))
         {
-            return vec![text_input(self.render().into_text().unwrap_or_default())];
+            return vec![crate::Budgeted::required(text_input(
+                self.render().into_text().unwrap_or_default(),
+            ))];
         }
 
         let (opening, closing) = Self::type_markers();
@@ -160,35 +164,46 @@ impl NodeReplContext<'_> {
         let omitted_responses = selected.omitted_responses;
 
         let mut seen_images = HashSet::new();
-        let mut inputs = vec![text_input(intro)];
+        let mut inputs = vec![crate::Budgeted::protected(text_input(intro))];
 
         for response in &self.responses[selected.first..] {
             let header = format!(
                 "[REPL response {} {}]\n",
                 response.sequence, response.provenance
             );
-            inputs.push(text_input(header));
+            inputs.push(crate::Budgeted::protected(text_input(header)));
             if response.items.is_empty() {
-                inputs.push(text_input("<completed without visible text>\n".to_string()));
+                inputs.push(crate::Budgeted::required(text_input(
+                    "<completed without visible text>\n".to_string(),
+                )));
             }
             for item in &response.items {
                 match item {
-                    Text { text, .. } => inputs.push(text_input(format!("{text}\n"))),
+                    Text { text, .. } => {
+                        inputs.push(crate::Budgeted::required(text_input(format!("{text}\n"))))
+                    }
                     Image {
                         image: ImageReference::Inline { image_url },
                         ..
-                    } if seen_images.insert(image_url) => inputs.push(item.clone()),
+                    } if self.mode == NodeReplReviewEvidenceMode::Multimodal
+                        && seen_images.insert(image_url) =>
+                    {
+                        inputs.push(crate::Budgeted::optional(
+                            item.clone(),
+                            crate::BudgetPriority::Image,
+                        ))
+                    }
                     _ => {}
                 }
             }
         }
 
         if omitted_responses > 0 {
-            inputs.push(text_input(format!(
+            inputs.push(crate::Budgeted::protected(text_input(format!(
                 "<omitted node_repl_responses=\"{omitted_responses}\" reason=\"resource_bounds\" />\n"
-            )));
+            ))));
         }
-        inputs.push(text_input(closing.to_string()));
+        inputs.push(crate::Budgeted::protected(text_input(closing.to_string())));
         inputs
     }
 }

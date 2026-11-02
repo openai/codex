@@ -383,9 +383,7 @@ impl ComposedContext {
                                 cost.text_bytes.saturating_add(text.rendered().text_bytes);
                             cost
                         }
-                        SectionContent::Other(item) | SectionContent::Exact(item) => {
-                            cost.add_content(item)
-                        }
+                        SectionContent::Other(item) => cost.add_content(item),
                     }),
                 SectionDelivery::Message(message) => match &message.content.item {
                     ResponseItem::Message { content, .. } => content
@@ -464,7 +462,7 @@ fn compaction_ciphertext(item: &ResponseItem) -> Option<&str> {
 pub(super) fn section_content_tokens(item: &SectionContent) -> usize {
     match item {
         SectionContent::Transcript(record) => record.rendered().tokens,
-        SectionContent::Other(item) | SectionContent::Exact(item) => content_tokens(item),
+        SectionContent::Other(item) => content_tokens(item),
     }
 }
 

@@ -98,6 +98,9 @@ fn elastic_repl_rendering_keeps_stored_text_images_and_omissions() {
                     budgeting,
                 }
                 .render_inputs()
+                .into_iter()
+                .map(|item| item.content)
+                .collect::<Vec<_>>()
             });
         let rendered = serde_json::to_string(&elastic).unwrap();
         assert!(!serde_json::to_string(&fixed).unwrap().contains(&text));

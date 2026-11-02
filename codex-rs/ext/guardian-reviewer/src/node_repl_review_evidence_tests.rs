@@ -35,9 +35,9 @@ fn file_image_input(file_id: &str) -> UserInput {
     }
 }
 
-fn rendered_text(items: &[UserInput]) -> String {
+fn rendered_text<'a>(items: impl IntoIterator<Item = &'a UserInput>) -> String {
     items
-        .iter()
+        .into_iter()
         .filter_map(|item| match item {
             UserInput::Text { text, .. } => Some(text.as_str()),
             _ => None,
@@ -111,7 +111,7 @@ fn evidence_bounds_visible_text_and_marks_empty_completed_responses() {
         .snapshot_since(/*reviewed_sequence*/ 0)
         .expect("completed responses should produce evidence");
     assert!(
-        rendered_text(&oversized.responses[2].items).len()
+        rendered_text(oversized.responses.last().unwrap().items.iter()).len()
             <= approx_bytes_for_tokens(GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS)
     );
     let rendered = oversized
@@ -140,7 +140,7 @@ fn evidence_preserves_tail_text_after_oversized_image_response() {
         .context(NodeReplReviewEvidenceMode::Multimodal)
         .render_inputs();
     assert_eq!(inputs.len(), 6);
-    assert!(rendered_text(&inputs).contains("FINAL IMPORTANT"));
+    assert!(rendered_text(inputs.iter().map(|item| &item.content)).contains("FINAL IMPORTANT"));
     let pressure = "a".repeat(NodeReplReviewEvidence::MAX_RETAINED_BYTES - 1_024);
     evidence.record(
         "browser",
@@ -180,10 +180,10 @@ fn file_backed_images_are_retained_but_omitted_from_guardian_views() {
     let rendered = snapshot
         .context(NodeReplReviewEvidenceMode::Multimodal)
         .render_inputs();
-    assert!(rendered_text(&rendered).contains("visible"));
+    assert!(rendered_text(rendered.iter().map(|item| &item.content)).contains("visible"));
     assert!(!rendered.iter().any(|item| {
         matches!(
-            item,
+            &item.content,
             UserInput::Image {
                 image: ImageReference::File { .. },
                 ..
@@ -234,9 +234,11 @@ fn mixed_evidence_bounds_headers_and_empty_response_placeholders() {
 
         let fragment = evidence.snapshot_since(/*reviewed_sequence*/ 0).unwrap();
         let text = rendered_text(
-            &fragment
+            fragment
                 .context(NodeReplReviewEvidenceMode::Multimodal)
-                .render_inputs(),
+                .render_inputs()
+                .iter()
+                .map(|item| &item.content),
         );
         assert!(text.len() <= MAX_RENDERED_BYTES);
         assert!(text.contains("node_repl_responses="));

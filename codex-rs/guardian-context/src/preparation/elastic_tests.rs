@@ -90,30 +90,6 @@ fn entry_caps_bound_required_and_optional_text_preserving_metadata_and_opaque_pa
         ]
         .into(),
     });
-    let tiny_limit = ElasticSectionLimits::new(
-        /*min_total_section_tokens*/ 1, /*max_section_entry_tokens*/ 1,
-    )
-    .unwrap();
-    let mut tiny_config = config.clone();
-    for limit in tiny_config.sections.values_mut() {
-        *limit = tiny_limit;
-    }
-    let minimal = context
-        .clone()
-        .prepare_elastic_entries(&tiny_config)
-        .unwrap()
-        .enforce_budget(
-            crate::RequestBudget {
-                max_input_tokens: ENTRY_TOKENS,
-                existing_context_tokens: 0,
-            },
-            "Evidence was shortened.".to_owned(),
-        )
-        .unwrap();
-    assert!(
-        matches!(&minimal.sections[0].delivery, SectionDelivery::UserContent(items)
-        if items.first().is_some_and(|item| item.retention == Retention::Required))
-    );
     let prepared = context.prepare_elastic_entries(&config).unwrap();
     let SectionDelivery::UserContent(items) = &prepared.context.sections[0].delivery else {
         panic!("transcript");
@@ -160,6 +136,9 @@ fn exact_actions_stay_whole_while_supporting_context_is_capped() {
     }})
     .to_string();
     let supporting = "supporting context ".repeat(REPEATS);
+    let (permission_start, permission_end) =
+        <crate::PermissionContext as codex_context_fragments::ContextualUserFragment>::type_markers(
+        );
     for kind in [
         crate::PlannedActionKind::Command { json: json.clone() },
         crate::PlannedActionKind::TerminalInput { json: json.clone() },
@@ -168,34 +147,52 @@ fn exact_actions_stay_whole_while_supporting_context_is_capped() {
             has_trigger: true,
         },
     ] {
-        let context = crate::CollectedContext {
-            sections: vec![crate::ContextSection::PlannedAction(crate::PlannedAction {
-                kind,
-                reason: Some(supporting.clone()),
-                tool_descriptions: crate::GuardianToolDescriptions::new(
-                    Some(&supporting),
-                    /*connector*/ None,
-                ),
-            })],
-        }
-        .compose(
-            crate::ContextPresentation::SyncFull {
-                session_id: "review",
-            },
-            crate::PreparedTranscript {
-                items: Vec::new(),
-                omission_note: None,
-                truncations: Vec::new(),
-            },
-        )
-        .unwrap();
-        let config = ElasticBudgetConfig {
-            sections: [(
-                ElasticSection::PlannedAction,
-                ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS).unwrap(),
-            )]
-            .into(),
+        let mut collected = crate::CollectedContext {
+            sections: vec![
+                crate::ContextSection::PermissionContext {
+                    items: vec![
+                        permission_start.into(),
+                        supporting.clone(),
+                        permission_end.into(),
+                    ],
+                },
+                crate::ContextSection::SenderUserMessages {
+                    items: vec![supporting.clone()],
+                },
+                crate::ContextSection::PlannedAction(crate::PlannedAction {
+                    kind,
+                    reason: Some(supporting.clone()),
+                    tool_descriptions: crate::GuardianToolDescriptions::new(
+                        Some(&supporting),
+                        /*connector*/ None,
+                    ),
+                }),
+            ],
         };
+        crate::preparation::prepare_sync_sections(&mut collected, crate::ContextBudgeting::Elastic)
+            .unwrap();
+        let context = collected
+            .compose_prepared(
+                crate::ContextPresentation::SyncFull {
+                    session_id: "review",
+                },
+                crate::PreparedTranscript {
+                    items: Vec::new(),
+                    omission_note: None,
+                    truncations: Vec::new(),
+                },
+            )
+            .unwrap();
+        let limits = ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS).unwrap();
+        let config = crate::budget::tests::complete_minimum_budget(ElasticBudgetConfig {
+            sections: [
+                ElasticSection::PlannedAction,
+                ElasticSection::PermissionContext,
+                ElasticSection::SenderUserMessages,
+            ]
+            .map(|section| (section, limits))
+            .into(),
+        });
         let prepared = context.prepare_elastic_entries(&config).unwrap();
         let SectionDelivery::UserContent(items) =
             &prepared.context.sections.last().unwrap().delivery
@@ -206,7 +203,7 @@ fn exact_actions_stay_whole_while_supporting_context_is_capped() {
             text: format!("{json}\n"),
         };
         for item in items {
-            if !matches!(&item.content, SectionContent::Exact(content) if content == &expected) {
+            if !item.protected {
                 assert!(
                     section_content_tokens(&item.content)
                         + content_framing_tokens(/*item_count*/ 1)
@@ -227,7 +224,7 @@ fn exact_actions_stay_whole_while_supporting_context_is_capped() {
                 .is_err()
         );
         let budget = crate::RequestBudget {
-            max_input_tokens: prepared.context.estimated_tokens(),
+            max_input_tokens: prepared.context.estimated_tokens() + ENTRY_TOKENS,
             existing_context_tokens: 0,
         };
         let messages = prepared
@@ -236,5 +233,23 @@ fn exact_actions_stay_whole_while_supporting_context_is_capped() {
             .into_messages();
         assert!(messages.iter().any(|message| matches!(message,
             ResponseItem::Message { content, .. } if content.contains(&expected))));
+        assert!(
+            !serde_json::to_string(&messages)
+                .unwrap()
+                .contains(&supporting)
+        );
+        for (start, end) in [
+            (permission_start, permission_end),
+            (
+                ">>> SENDER EVIDENCE CONTEXT START\nHost:",
+                ">>> SENDER EVIDENCE CONTEXT END\n",
+            ),
+        ] {
+            assert!(messages.iter().any(|message| matches!(message,
+                ResponseItem::Message { content, .. } if
+                    content.iter().any(|part| matches!(part, ContentItem::InputText { text } if text.starts_with(start))) &&
+                    content.iter().any(|part| matches!(part, ContentItem::InputText { text } if text == end)) &&
+                    content.iter().any(|part| matches!(part, ContentItem::InputText { text } if text.contains("supporting context"))))));
+        }
     }
 }
