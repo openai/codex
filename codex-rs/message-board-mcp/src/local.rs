@@ -20,7 +20,8 @@ use tokio_util::sync::CancellationToken;
 type BoardBinding = (Arc<dyn AgentMessageBoard>, Arc<dyn MessageBoardHost>);
 type Boards = Arc<RwLock<HashMap<SessionId, BoardBinding>>>;
 
-/// One runner-owned endpoint. Dropping it cancels HTTP and MCP sessions.
+/// One runner-owned endpoint. Dropping it initiates HTTP and MCP session cleanup.
+/// Call [`Self::shutdown`] to wait until that cleanup has finished.
 /// Credentials are deliberately excluded from Debug and startup output.
 pub struct LocalServer {
     url: String,
@@ -64,6 +65,7 @@ impl LocalServer {
         Ok(())
     }
 
+    /// Closes sessions, cancels pending bindings, and drains dispatched board operations.
     pub async fn shutdown(mut self) -> anyhow::Result<()> {
         self.cancellation.cancel();
         if let Some(task) = self.task.take() {

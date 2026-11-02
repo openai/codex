@@ -128,28 +128,28 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
     let child = root.thread_manager.get_thread(child_id).await?;
     wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
+    let mut host_state = None;
     if let Some(local) = &local {
-        local.add_board(
-            root_id.into(),
-            Arc::new(board_host::Host {
-                members: [
-                    (root_id, codex_protocol::AgentPath::root()),
-                    (
-                        child_id,
-                        codex_protocol::AgentPath::root()
-                            .join("worker")
-                            .expect("worker path"),
-                    ),
-                ]
-                .into(),
-                clock: Default::default(),
-                fail_clock: Default::default(),
-                agent_path_calls: Default::default(),
-                active: Default::default(),
-                fail_notifications: Default::default(),
-                notifications: Default::default(),
-            }),
-        )?;
+        let host = Arc::new(board_host::Host {
+            members: [
+                (root_id, codex_protocol::AgentPath::root()),
+                (
+                    child_id,
+                    codex_protocol::AgentPath::root()
+                        .join("worker")
+                        .expect("worker path"),
+                ),
+            ]
+            .into(),
+            clock: Default::default(),
+            fail_clock: Default::default(),
+            agent_path_calls: Default::default(),
+            active: Default::default(),
+            fail_notifications: Default::default(),
+            notifications: Default::default(),
+        });
+        host_state = Some(Arc::downgrade(&host));
+        local.add_board(root_id.into(), host)?;
     }
     let board_turn = |id: &str, name: &str, arguments: Value| {
         vec![
@@ -306,6 +306,7 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
         .context("authorization")?
         .strip_prefix("Bearer ")
         .context("bearer token")?;
+    let mut connected_client = None;
     for (token, host) in [
         ("wrong-token", host),
         (valid_token, "unlisted.example"),
@@ -325,7 +326,8 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
         .await?;
         let initialized = client
             .initialize(
-                Default::default(),
+                rmcp::model::InitializeRequestParams::default()
+                    .with_protocol_version(rmcp::model::ProtocolVersion::V_2025_11_25),
                 /*timeout*/ None,
                 Box::new(|_, _| Box::pin(async { anyhow::bail!("unexpected elicitation") })),
             )
@@ -353,7 +355,7 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
                 Some(rmcp::model::ErrorCode::INVALID_PARAMS)
             );
         }
-        client.shutdown().await;
+        connected_client = Some(client);
     }
     resumed.codex.shutdown_and_wait().await?;
     if let Some(local) = local {
@@ -365,11 +367,194 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
                 .join("agent_message_board_1.sqlite")
                 .exists()
         );
+        // The legacy client remains connected: shutdown must release the board
+        // without waiting for a client DELETE or the session idle timeout.
         local.shutdown().await?;
+        assert!(host_state.context("in-memory host")?.upgrade().is_none());
     }
     if let Some(mut process) = process {
         process.kill().await?;
         process.wait().await?;
+    }
+    if let Some(client) = connected_client {
+        client.shutdown().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_shutdown_releases_pending_binding() -> anyhow::Result<()> {
+    use codex_message_board::MessageBoardHost;
+    use codex_rmcp_client::RmcpClient;
+    use tokio_util::sync::CancellationToken;
+
+    let caller = codex_protocol::ThreadId::new();
+    let host = Arc::new(board_host::Host {
+        members: [(caller, codex_protocol::AgentPath::root())].into(),
+        clock: Default::default(),
+        fail_clock: Default::default(),
+        agent_path_calls: Default::default(),
+        active: Default::default(),
+        fail_notifications: Default::default(),
+        notifications: Default::default(),
+    });
+    let host_state = Arc::downgrade(&host);
+    let board = Arc::new(codex_message_board::InMemoryAgentMessageBoard::new(
+        caller.into(),
+        host.clone(),
+    ));
+    let binding_started = Arc::new(tokio::sync::Notify::new());
+    let resume_binding = Arc::new(tokio::sync::Notify::new());
+    let started = binding_started.clone();
+    let resume = resume_binding.clone();
+    let cancellation = CancellationToken::new();
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let url = format!("http://{}/mcp", listener.local_addr()?);
+    let serving = tokio::spawn(codex_message_board_mcp::serve_http(
+        listener,
+        "shutdown-test-token".into(),
+        rmcp::transport::StreamableHttpServerConfig::default()
+            .with_cancellation_token(cancellation.clone()),
+        move |caller, _session_id| {
+            let host = host.clone();
+            let board = board.clone();
+            let started = started.clone();
+            let resume = resume.clone();
+            async move {
+                // Pause the real board binding before it can dispatch a tool.
+                started.notify_one();
+                resume.notified().await;
+                let path = host.agent_path(caller).await.map_err(|error| {
+                    rmcp::ErrorData::invalid_params(error.to_string(), /*data*/ None)
+                })?;
+                Ok(codex_message_board_mcp::MessageBoardMcpServer::new(
+                    &codex_message_board::MessageBoardTool::DISCUSSION,
+                    board,
+                    caller,
+                    path,
+                ))
+            }
+        },
+    ));
+    let client = RmcpClient::new_streamable_http_client(
+        "board-shutdown-test",
+        &url,
+        Some("shutdown-test-token".into()),
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        codex_config::types::OAuthCredentialsStoreMode::File,
+        Default::default(),
+        codex_exec_server::Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+    client
+        .initialize(
+            rmcp::model::InitializeRequestParams::default()
+                .with_protocol_version(rmcp::model::ProtocolVersion::V_2025_11_25),
+            /*timeout*/ None,
+            Box::new(|_, _| Box::pin(async { anyhow::bail!("unexpected elicitation") })),
+        )
+        .await?;
+    {
+        let call = client.call_tool(
+            "post".into(),
+            Some(json!({"new_channel_name":"design", "text":"Must not be dispatched."})),
+            |_| Ok(Some(json!({"threadId":caller, "sessionId":caller}))),
+            /*timeout*/ None,
+        );
+        tokio::pin!(call);
+        tokio::select! {
+            _ = binding_started.notified() => {}
+            result = &mut call => panic!("call completed before binding resumed: {result:?}"),
+        }
+        cancellation.cancel();
+        serving.await??;
+        // Cleanup must drop the pending binding as well as the idle session's closure.
+        // Resuming it after shutdown must never dispatch the post.
+        assert!(host_state.upgrade().is_none());
+        resume_binding.notify_one();
+    }
+    client.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_shutdown_releases_factory_with_keep_alive_connection() -> anyhow::Result<()> {
+    use codex_message_board::MessageBoardHost;
+    use tokio::io::AsyncWriteExt;
+    use tokio_util::sync::CancellationToken;
+
+    // Exercise the cross-worker race between connection completion and service drop.
+    for iteration in 0..256 {
+        let caller = codex_protocol::ThreadId::new();
+        let host = Arc::new(board_host::Host {
+            members: [(caller, codex_protocol::AgentPath::root())].into(),
+            clock: Default::default(),
+            fail_clock: Default::default(),
+            agent_path_calls: Default::default(),
+            active: Default::default(),
+            fail_notifications: Default::default(),
+            notifications: Default::default(),
+        });
+        let host_state = Arc::downgrade(&host);
+        let board = Arc::new(codex_message_board::InMemoryAgentMessageBoard::new(
+            caller.into(),
+            host.clone(),
+        ));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let cancellation = CancellationToken::new();
+        let shutdown = cancellation.clone();
+        let connection = tokio::spawn(async move {
+            let _shutdown = shutdown.drop_guard();
+            let mut stream = tokio::net::TcpStream::connect(address).await?;
+            // An unauthenticated request retains the HTTP service without ever
+            // creating an MCP handler. HTTP/1.1 keeps this connection alive.
+            stream
+                .write_all(b"GET /mcp HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .await?;
+            let mut stream = tokio::io::BufReader::new(stream);
+            let mut line = String::new();
+            stream.read_line(&mut line).await?;
+            assert_eq!(line, "HTTP/1.1 401 Unauthorized\r\n");
+            while line != "\r\n" {
+                line.clear();
+                anyhow::ensure!(
+                    stream.read_line(&mut line).await? != 0,
+                    "incomplete response"
+                );
+            }
+            // The completed task retains the open socket until shutdown returns.
+            Ok::<_, anyhow::Error>(stream)
+        });
+        codex_message_board_mcp::serve_http(
+            listener,
+            "keep-alive-test-token".into(),
+            rmcp::transport::StreamableHttpServerConfig::default()
+                .with_cancellation_token(cancellation),
+            move |caller, _session_id| {
+                let host = host.clone();
+                let board = board.clone();
+                async move {
+                    let path = host.agent_path(caller).await.map_err(|error| {
+                        rmcp::ErrorData::invalid_params(error.to_string(), /*data*/ None)
+                    })?;
+                    Ok(codex_message_board_mcp::MessageBoardMcpServer::new(
+                        &codex_message_board::MessageBoardTool::DISCUSSION,
+                        board,
+                        caller,
+                        path,
+                    ))
+                }
+            },
+        )
+        .await?;
+        assert!(
+            host_state.upgrade().is_none(),
+            "factory retained the board on iteration {iteration}",
+        );
+        drop(connection.await??);
     }
     Ok(())
 }
