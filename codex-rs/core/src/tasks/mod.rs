@@ -31,6 +31,7 @@ use crate::context::ContextualUserFragment;
 use crate::hook_runtime::run_turn_interrupt_hooks;
 use crate::session::TurnInput;
 use crate::session::session::Session;
+use crate::session::turn::McpStartupRequirements;
 use crate::session::turn::run_hooks_and_record_inputs;
 use crate::session::turn_context::NewTurnContextOptions;
 use crate::session::turn_context::TurnContext;
@@ -73,7 +74,7 @@ pub(crate) const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TASK_COMPACT_METRIC: &str = "codex.task.compact";
 static ACTIVE_TURNS: Gauge = Gauge::new("core.turns.active");
 
-pub(crate) type SessionTaskResult = CodexResult<Option<String>>;
+pub(crate) type SessionTaskResult = CodexResult<Option<regular::RegularTaskOutput>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterruptedTurnHistoryMarker {
@@ -189,11 +190,11 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Executes the task until completion or cancellation.
     ///
     /// Implementations typically stream protocol events using `session` and
-    /// `ctx`, returning an optional final agent message when finished. The
+    /// `ctx`, returning the sampling state for a regular turn when finished. The
     /// provided `cancellation_token` is cancelled when the session requests an
     /// abort; implementers should watch for it and terminate quickly once it
-    /// fires. Returning [`Some`] yields a final message that
-    /// [`Session::on_task_finished`] will emit to the client. Returning
+    /// fires. Returning [`Some`] lets finalization continue sampling
+    /// if this regular turn accepted more input. Returning
     /// [`CodexErr::TurnAborted`] completes the task through the aborted-turn
     /// lifecycle instead.
     fn run(
@@ -384,7 +385,7 @@ impl Session {
         let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
         let task_future = async move {
             let ctx_for_finish = Arc::clone(&ctx);
-            let task_result = task_for_run
+            let mut task_result = task_for_run
                 .run(
                     Arc::clone(&session),
                     ctx,
@@ -393,29 +394,43 @@ impl Session {
                 )
                 .instrument(trace_span!("session_task.run"))
                 .await;
-            let sess = Arc::clone(&session);
-            // Private reviewers save their transcript together with the terminal event.
-            // Errors and cancellation retain their existing save path.
-            if (!sess.is_private_guardian_reviewer().await
-                || task_cancellation_token.is_cancelled()
-                || task_result.is_err())
-                && let Err(err) = sess.flush_rollout().await
-            {
-                warn!("failed to flush rollout before completing turn: {err}");
-                sess.send_event(
-                    ctx_for_finish.as_ref(),
-                    EventMsg::Warning(WarningEvent {
-                        message: format!(
-                            "Failed to save the conversation transcript; Codex will continue retrying. Error: {err}"
-                        ),
-                    }),
+            loop {
+                // Private reviewers save their transcript together with the terminal event.
+                // Errors and cancellation retain their existing save path.
+                if (!session.is_private_guardian_reviewer().await
+                    || task_cancellation_token.is_cancelled()
+                    || task_result.is_err())
+                    && let Err(err) = session.flush_rollout().await
+                {
+                    warn!("failed to flush rollout before completing turn: {err}");
+                    session.send_event(
+                        ctx_for_finish.as_ref(),
+                        EventMsg::Warning(WarningEvent {
+                            message: format!(
+                                "Failed to save the conversation transcript; Codex will continue retrying. Error: {err}"
+                            ),
+                        }),
+                    )
+                    .await;
+                }
+                if task_cancellation_token.is_cancelled() {
+                    break;
+                }
+                let Some(requirements) = session
+                    .on_task_finished(Arc::clone(&ctx_for_finish), task_result)
+                    .await
+                else {
+                    break;
+                };
+                task_result = RegularTask::run_turns(
+                    Arc::clone(&session),
+                    Arc::clone(&ctx_for_finish),
+                    Vec::new(),
+                    requirements,
+                    /*prewarmed_client_session*/ None,
+                    task_cancellation_token.child_token(),
                 )
                 .await;
-            }
-            if !task_cancellation_token.is_cancelled() {
-                // Finish uniformly from the spawn site so all tasks share the same lifecycle.
-                sess.on_task_finished(Arc::clone(&ctx_for_finish), task_result)
-                    .await;
             }
             done_clone.notify_waiters();
         }
@@ -652,13 +667,18 @@ impl Session {
         }
     }
 
-    pub async fn on_task_finished(
+    /// Closes admission, or returns the regular turn's sampling state if a steer won the race.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the final input check and task removal must be atomic with steer admission"
+    )]
+    pub(crate) async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         task_result: SessionTaskResult,
-    ) {
-        let (last_agent_message, abort_reason) = match task_result {
-            Ok(last_agent_message) => (last_agent_message, None),
+    ) -> Option<McpStartupRequirements> {
+        let (regular_output, abort_reason) = match task_result {
+            Ok(output) => (output, None),
             Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
                 (None, Some(TurnAbortReason::Interrupted))
             }
@@ -679,24 +699,33 @@ impl Session {
                 (None, None)
             }
         };
-        turn_context
-            .turn_metadata_state
-            .cancel_git_enrichment_task();
-
+        let can_continue =
+            regular_output.is_some() && turn_context.terminal_error.lock().await.is_none();
         let finishing = CancellationToken::new();
         let finish_recording = finishing.clone().drop_guard();
         let turn_state = {
             let mut active = self.active_turn.lock().await;
-            active.as_mut().and_then(|active_turn| {
-                let task = active_turn.task.take()?;
-                task.handle.detach();
-                active_turn.finishing = Some(finishing);
-                Some(Arc::clone(&active_turn.turn_state))
-            })
+            let active_turn = active.as_mut()?;
+            if !Arc::ptr_eq(&active_turn.task.as_ref()?.turn_context, &turn_context) {
+                return None;
+            }
+            if can_continue {
+                let state = active_turn.turn_state.lock().await;
+                if state.accepts_mailbox_delivery_for_current_turn()
+                    && !state.pending_input.is_empty()
+                {
+                    return regular_output.map(|output| output.mcp_startup_requirements);
+                }
+            }
+            let task = active_turn.task.take()?;
+            task.handle.detach();
+            active_turn.finishing = Some(finishing);
+            Arc::clone(&active_turn.turn_state)
         };
-        let Some(turn_state) = turn_state else {
-            return;
-        };
+        turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
+        let last_agent_message = regular_output.and_then(|output| output.last_agent_message);
         let pending_input = self
             .input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
@@ -935,6 +964,7 @@ impl Session {
         if cleared_active_turn {
             self.maybe_start_turn_for_pending_work().await;
         }
+        None
     }
 
     async fn take_active_turn(&self, reason: &TurnAbortReason) -> Option<ActiveTurn> {
