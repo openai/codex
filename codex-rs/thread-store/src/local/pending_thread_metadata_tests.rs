@@ -16,9 +16,134 @@ use tempfile::TempDir;
 use super::*;
 use crate::CreateThreadParams;
 use crate::LiveThread;
+use crate::PersistContext;
 use crate::ThreadPersistenceMetadata;
 use crate::UpdateThreadMetadataParams;
 use crate::local::test_support::test_config;
+
+#[tokio::test]
+async fn paginated_metadata_write_failure_stays_pending_until_retry() {
+    let (_home, store, runtime) = store_with_runtime().await;
+    let thread_id = ThreadId::new();
+    let mut params = create_thread_params(thread_id);
+    params.history_mode = ThreadHistoryMode::Paginated;
+    let live_thread = LiveThread::create(store.clone(), params)
+        .await
+        .expect("create live thread");
+    let pool = store
+        .config
+        .sqlite
+        .open_read_write_pool(&store.config.sqlite.state_db_path())
+        .await
+        .expect("open SQL observer");
+    sqlx::query(
+        "CREATE TRIGGER reject_metadata BEFORE INSERT ON threads BEGIN SELECT RAISE(ABORT, 'metadata write rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .expect("reject index writes");
+
+    let error = live_thread
+        .persist(PersistContext::Standard)
+        .await
+        .expect_err("failed index writes must remain pending");
+    assert!(error.to_string().contains("metadata write rejected"));
+    assert_eq!(
+        runtime.get_thread(thread_id).await.expect("read index"),
+        None
+    );
+
+    sqlx::query("DROP TRIGGER reject_metadata")
+        .execute(&pool)
+        .await
+        .expect("allow index writes");
+    live_thread
+        .persist(PersistContext::Standard)
+        .await
+        .expect("retry pending metadata");
+    let metadata = runtime
+        .get_thread(thread_id)
+        .await
+        .expect("read index")
+        .expect("pending metadata was indexed");
+    assert_eq!(
+        (metadata.id, metadata.history_mode, metadata.model_provider),
+        (
+            thread_id,
+            ThreadHistoryMode::Paginated,
+            "test-provider".to_string()
+        )
+    );
+    live_thread
+        .shutdown()
+        .await
+        .expect("shutdown indexed thread");
+}
+
+#[tokio::test]
+async fn metadata_patch_failure_does_not_partially_apply() {
+    let (_home, store, runtime) = store_with_runtime().await;
+    let thread_id = ThreadId::new();
+    let mut params = create_thread_params(thread_id);
+    params.history_mode = ThreadHistoryMode::Paginated;
+    let live_thread = LiveThread::create(store.clone(), params)
+        .await
+        .expect("create thread");
+    live_thread
+        .persist(PersistContext::Standard)
+        .await
+        .expect("persist thread");
+    let before = runtime.get_thread(thread_id).await.expect("read metadata");
+    let pool = store
+        .config
+        .sqlite
+        .open_read_write_pool(&store.config.sqlite.state_db_path())
+        .await
+        .expect("open SQL observer");
+    sqlx::query("CREATE TRIGGER reject_memory_mode BEFORE UPDATE OF memory_mode ON threads BEGIN SELECT RAISE(ABORT, 'memory mode rejected'); END")
+        .execute(&pool).await.expect("reject memory preference update");
+    let patch = ThreadMetadataPatch {
+        model: Some("changed-model".to_string()),
+        memory_mode: Some(ThreadMemoryMode::Disabled),
+        ..Default::default()
+    };
+    live_thread
+        .update_metadata(patch.clone(), /*include_archived*/ false)
+        .await
+        .expect_err("reject the entire patch");
+    assert_eq!(
+        runtime.get_thread(thread_id).await.expect("read metadata"),
+        before
+    );
+
+    sqlx::query("DROP TRIGGER reject_memory_mode")
+        .execute(&pool)
+        .await
+        .expect("allow update");
+    live_thread
+        .update_metadata(patch, /*include_archived*/ false)
+        .await
+        .expect("retry patch");
+    let metadata = runtime
+        .get_thread(thread_id)
+        .await
+        .expect("read metadata")
+        .expect("thread");
+    assert_eq!(
+        (
+            metadata.model,
+            runtime
+                .get_thread_memory_mode(thread_id)
+                .await
+                .expect("memory mode")
+        ),
+        (
+            Some("changed-model".to_string()),
+            Some("disabled".to_string())
+        )
+    );
+    live_thread.shutdown().await.expect("shutdown thread");
+}
 
 #[tokio::test]
 async fn naming_empty_paginated_thread_materializes_rollout() {
