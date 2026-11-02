@@ -115,7 +115,7 @@ pub struct RequestBudget {
 
 /// Section policies named for the source section that owns the evidence.
 /// The transcript has separate message and tool groups despite sharing one section.
-/// Entry caps apply to section text; minimum allocations reserve optional evidence.
+/// Entry caps apply to section text; minimum allocations include Required usage.
 #[derive(
     Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
 )]
@@ -207,24 +207,31 @@ impl ElasticBudgetConfig {
             ElasticSectionLimits {
                 min_total_section_tokens: tokens,
                 max_section_entry_tokens: tokens,
+                max_total_section_tokens: None,
             }
         })
     }
 }
 
-/// Demand-capped optional minimum allocation and per-entry text allowance for all evidence.
-/// The minimum is a reservation, not a maximum: a section may receive spare capacity.
+/// Section reservation, allocation ceiling and per-entry text allowance.
+/// The minimum funds Required supporting records; Optional candidates can grow the
+/// section up to its maximum.
 /// Preparation must cap text entries once, including framing and omission markers,
 /// before measuring demand. Entries that fit keep their original representation.
 /// Entry caps cannot exceed the existing text-part delivery allowance.
-/// Exact actions and opaque native payloads stay whole and use global allocation space.
-/// Images stay whole and use section/global space rather than the text entry cap.
-/// Minimum reservations scale down together to fit the available optional budget.
+/// Exact actions use protected global space. Opaque native payloads and images stay
+/// whole and use section/global space rather than the text entry cap.
+/// Required supporting records use only the minimum. Effective section minimums
+/// must sum to DEFAULT_MAX_INPUT_TOKENS. Unused Required reservations fund Optional
+/// evidence up to each section maximum; Optional items have no separate minimum.
+/// Actual request admission still accounts for history, framing and exact actions.
 /// These settings do not change storage bounds or activate elastic allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct ElasticSectionLimits {
     min_total_section_tokens: usize,
     max_section_entry_tokens: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_total_section_tokens: Option<usize>,
 }
 
 impl ElasticSectionLimits {
@@ -245,7 +252,25 @@ impl ElasticSectionLimits {
         Ok(Self {
             min_total_section_tokens,
             max_section_entry_tokens,
+            max_total_section_tokens: None,
         })
+    }
+
+    /// Sets the section's allocation ceiling.
+    /// Absence leaves the global request budget as the upper bound.
+    pub fn with_max_total_section_tokens(
+        mut self,
+        maximum: usize,
+    ) -> Result<Self, ElasticSectionLimitsError> {
+        if maximum < self.min_total_section_tokens {
+            return Err(ElasticSectionLimitsError::MaximumBelowMinimum);
+        }
+        self.max_total_section_tokens = Some(maximum);
+        Ok(self)
+    }
+
+    pub fn max_total_section_tokens(self) -> Option<usize> {
+        self.max_total_section_tokens
     }
 
     pub fn min_total_section_tokens(self) -> usize {
@@ -267,14 +292,21 @@ impl<'de> serde::Deserialize<'de> for ElasticSectionLimits {
         struct Fields {
             min_total_section_tokens: usize,
             max_section_entry_tokens: usize,
+            max_total_section_tokens: Option<usize>,
         }
 
         let fields = Fields::deserialize(deserializer)?;
-        Self::new(
+        let limits = Self::new(
             fields.min_total_section_tokens,
             fields.max_section_entry_tokens,
         )
-        .map_err(serde::de::Error::custom)
+        .map_err(serde::de::Error::custom)?;
+        fields
+            .max_total_section_tokens
+            .map_or(Ok(limits), |maximum| {
+                limits.with_max_total_section_tokens(maximum)
+            })
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -284,6 +316,7 @@ pub enum ElasticSectionLimitsError {
     ZeroTokens,
     EntryExceedsMinimum,
     EntryExceedsDeliveryLimit,
+    MaximumBelowMinimum,
 }
 
 impl std::fmt::Display for ElasticSectionLimitsError {
@@ -294,6 +327,8 @@ impl std::fmt::Display for ElasticSectionLimitsError {
             }
             Self::EntryExceedsMinimum => formatter
                 .write_str("min_total_section_tokens must be at least max_section_entry_tokens"),
+            Self::MaximumBelowMinimum => formatter
+                .write_str("max_total_section_tokens must be at least min_total_section_tokens"),
             Self::EntryExceedsDeliveryLimit => write!(
                 formatter,
                 "max_section_entry_tokens must not exceed {}",
