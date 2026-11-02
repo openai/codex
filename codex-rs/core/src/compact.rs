@@ -358,6 +358,7 @@ async fn run_compact_task_inner_impl(
                     e.details(),
                     CodexErrorDetails::SessionBudgetExceeded
                         | CodexErrorDetails::ResponseIncomplete(_)
+                        | CodexErrorDetails::Fatal(_)
                 ) =>
             {
                 return Err(e);

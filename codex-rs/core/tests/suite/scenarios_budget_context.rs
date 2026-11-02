@@ -1,5 +1,7 @@
 //! Host budget reminders use generic World State and refresh after compaction spending.
 
+use super::super::rollout_budget::HostAccounting;
+use super::super::rollout_budget::rollout_budget;
 use super::*;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionFuture;
@@ -107,10 +109,10 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    // This fixture supplies host-owned policy and controlled shared spending. It does
-    // not implement usage reporting or configure Local's native rollout budget.
+    // Host accounting and context must override the configured native budget.
     let remaining = Arc::new(AtomicI64::new(1_000));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.thread_lifecycle_contributor(Arc::new(HostAccounting::default()));
     extensions.prompt_contributor(Arc::new(HostBudgetContext {
         remaining: Arc::clone(&remaining),
     }));
@@ -121,7 +123,7 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
         .with_config(|config| {
             configure_scenario_catalog(config);
             config.workspace_roots = vec![config.cwd.clone()];
-            config.rollout_budget = None;
+            config.rollout_budget = Some(rollout_budget());
         })
         .build_with_auto_env(&server)
         .await?;
@@ -185,6 +187,9 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
 
     let requests = received_responses_requests(&server).await;
     assert_eq!(requests.len(), 6);
+    for request in &requests {
+        assert!(!request.has_content_kinds(&["rollout_budget.remaining_tokens"]));
+    }
     // Compare the actual wire input without normalization: both unchanged and
     // threshold-crossing reminders must only append within a context window.
     for (previous, next) in [(0, 1), (1, 2), (4, 5)] {

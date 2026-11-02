@@ -2,6 +2,7 @@
 
 use super::super::agent_control::TestAgentControl;
 use super::super::agents_md::RecordingThreadInstructionsProvider;
+use super::super::rollout_budget::HostAccounting;
 use super::*;
 use anyhow::Context;
 use codex_core::AgentControl;
@@ -181,7 +182,15 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
     let provider = Arc::new(RecordingThreadInstructionsProvider::with_text(INITIAL_RULE).shared());
     let (test, parent, controller) = host_spawn_fixture(
         &server,
-        test_codex().with_config(|config| config.allow_persistent_dynamic_tool_updates = true),
+        test_codex()
+            .with_extensions({
+                let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+                extensions.thread_lifecycle_contributor(Arc::new(
+                    super::super::agent_control::HostRuntime,
+                ));
+                Arc::new(extensions.build())
+            })
+            .with_config(|config| config.allow_persistent_dynamic_tool_updates = true),
         network_policy.clone(),
         Some(provider.clone()),
     )
@@ -226,10 +235,12 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
     );
     let child_id = ThreadId::new();
     let request = || create_request("worker", fork_history);
+    let accounting = Arc::new(HostAccounting::default());
     let reservation = || HostThreadSpawnReservation {
         thread_id: child_id,
         control: controller.clone(),
         turn_admission: None,
+        usage_accounting: Some(accounting.clone()),
     };
     let mut mismatched = reservation();
     mismatched.control = Arc::new(TestAgentControl::new(ThreadId::new()));
@@ -264,18 +275,29 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
     );
     // Once creation returns, ending the spawning invocation leaves the idle child available.
     finish_spawn_tool(&server, &parent, &invocation).await?;
-    let child_request =
-        responses::mount_sse_once(&server, responses::sse_completed("worker-done")).await;
+    let child_request = responses::mount_sse_once(
+        &server,
+        sse(vec![ev_completed_with_tokens(
+            "worker-done",
+            /*total_tokens*/ 42,
+        )]),
+    )
+    .await;
     let submission = worker
         .start_turn_if_idle(TurnInputRequest::user_input(vec![text(
             "Report your status.",
         )]))
         .await?;
-    assert!(
-        matches!(submission, StartIfIdleSubmission::Started { .. }),
-        "expected the new child to be idle, got {submission:?}"
-    );
+    let StartIfIdleSubmission::Started { turn_id, .. } = submission else {
+        panic!("expected the new child to be idle, got {submission:?}");
+    };
     wait_for_successful_turn(&worker).await;
+    assert!(matches!(
+        accounting.reports.lock().expect("usage reports").as_slice(),
+        [report] if report.thread_id == child_id
+            && report.turn_id == turn_id
+            && report.usage.total_tokens == 42
+    ));
     let child_request = child_request.single_request();
     assert!(child_request.body_contains_text(UPDATED_RULE));
     assert_eq!(
@@ -353,6 +375,7 @@ async fn cancelled_creation_cleans_registered_child() -> Result<()> {
                         thread_id: child_id,
                         control: controller,
                         turn_admission: None,
+                        usage_accounting: None,
                     },
                 )
                 .await

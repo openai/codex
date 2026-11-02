@@ -402,7 +402,9 @@ async fn collect_compaction_output(
                 CompactionRequestKind::Background(_) => {
                     if let Some(usage) = incomplete.token_usage.as_ref() {
                         // Match completed background requests without replacing the terminal error.
-                        let _ = sess.record_rollout_budget_usage(usage).await;
+                        let _ = sess
+                            .record_rollout_budget_usage(&turn_context.sub_id, usage)
+                            .await;
                     }
                 }
                 CompactionRequestKind::Foreground => {
@@ -435,7 +437,8 @@ async fn collect_compaction_output(
                 match request_kind {
                     CompactionRequestKind::Background(_) => {
                         if let Some(usage) = token_usage.as_ref() {
-                            sess.record_rollout_budget_usage(usage).await?;
+                            sess.record_rollout_budget_usage(&turn_context.sub_id, usage)
+                                .await?;
                         }
                     }
                     CompactionRequestKind::Foreground => {
@@ -773,13 +776,53 @@ fn truncate_message_text_to_token_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::host::AgentUsageAccounting;
+    use crate::agent::host::AgentUsageReport;
+    use crate::agent::host::UsageAccountingDecision;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ContentItemKind;
     use codex_protocol::models::InternalChatMessageMetadataPassthrough;
     use codex_protocol::models::MessagePhase;
     use pretty_assertions::assert_eq;
+    use std::sync::Mutex;
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
+
+    struct UsageRecorder {
+        reports: Mutex<Vec<AgentUsageReport>>,
+        decision: UsageAccountingDecision,
+    }
+
+    impl crate::AgentTurnAdmission for UsageRecorder {
+        fn admit_turn(
+            &self,
+            _: crate::AgentTurnAdmissionRequest,
+        ) -> futures::future::BoxFuture<'_, CodexResult<crate::AgentExecutionGuard>> {
+            Box::pin(async { Ok(crate::AgentExecutionGuard::new(())) })
+        }
+    }
+
+    impl UsageRecorder {
+        fn install(self: &Arc<Self>, session: &mut Arc<Session>) {
+            let data = &session.services.thread_extension_data;
+            data.insert(crate::AgentRuntimeOwnership::Host);
+            data.insert(self.clone() as Arc<dyn crate::AgentTurnAdmission>);
+            data.insert(self.clone() as Arc<dyn AgentUsageAccounting>);
+            let runtime = crate::agent::host::AgentRuntimeServices::from_extensions(data)
+                .expect("valid host providers");
+            Arc::get_mut(session).expect("unique session").agent_runtime = runtime;
+        }
+    }
+
+    impl AgentUsageAccounting for UsageRecorder {
+        fn report_usage(
+            &self,
+            report: AgentUsageReport,
+        ) -> futures::future::BoxFuture<'_, CodexResult<UsageAccountingDecision>> {
+            self.reports.lock().unwrap().push(report);
+            Box::pin(async { Ok(self.decision) })
+        }
+    }
 
     fn message(role: &str, text: &str, phase: Option<MessagePhase>) -> ResponseItem {
         ResponseItem::Message {
@@ -1244,23 +1287,29 @@ mod tests {
 
     #[tokio::test]
     async fn collect_background_incomplete_does_not_publish_foreground_usage() {
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            total_tokens: 120,
+            ..Default::default()
+        };
         let stream = response_stream(vec![Err(CodexErr::new(
             CodexErrorDetails::ResponseIncomplete(Box::new(
                 codex_protocol::error::ResponseIncompleteError {
                     partial_output: vec![],
                     reason: "max_output_tokens".to_string(),
                     response_id: Some("resp-background".to_string()),
-                    token_usage: Some(TokenUsage {
-                        input_tokens: 100,
-                        output_tokens: 20,
-                        total_tokens: 120,
-                        ..Default::default()
-                    }),
+                    token_usage: Some(usage.clone()),
                 },
             )),
         ))]);
-        let (sess, turn_context, rx) =
+        let (mut sess, turn_context, rx) =
             crate::session::tests::make_session_and_context_with_rx().await;
+        let accounting = Arc::new(UsageRecorder {
+            reports: Mutex::new(Vec::new()),
+            decision: UsageAccountingDecision::Exhausted,
+        });
+        accounting.install(&mut sess);
         let cancellation = CancellationToken::new();
         cancellation.cancel();
 
@@ -1276,6 +1325,53 @@ mod tests {
             if matches!(err.details(), CodexErrorDetails::ResponseIncomplete(_))));
         assert_eq!(sess.token_usage_info().await, None);
         assert!(rx.is_empty());
+        assert_eq!(
+            *accounting.reports.lock().unwrap(),
+            vec![AgentUsageReport {
+                thread_id: sess.thread_id(),
+                turn_id: turn_context.sub_id.clone(),
+                usage,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn background_compaction_charges_usage_even_if_output_is_missing() {
+        let (mut sess, turn, _) = crate::session::tests::make_session_and_context_with_rx().await;
+        let accounting = Arc::new(UsageRecorder {
+            reports: Mutex::new(Vec::new()),
+            decision: UsageAccountingDecision::Continue,
+        });
+        accounting.install(&mut sess);
+        let usage = TokenUsage {
+            output_tokens: 42,
+            ..Default::default()
+        };
+        let stream = response_stream(vec![Ok(ResponseEvent::Completed {
+            response_id: "resp-compact".into(),
+            token_usage: Some(usage.clone()),
+            usage_metadata: None,
+            end_turn: Some(true),
+        })]);
+        let result = collect_compaction_output(
+            &sess,
+            &turn,
+            stream,
+            CompactionRequestKind::Background(&CancellationToken::new()),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(error) if matches!(error.details(), CodexErrorDetails::Fatal(_)))
+        );
+        assert_eq!(
+            *accounting.reports.lock().unwrap(),
+            [AgentUsageReport {
+                thread_id: sess.thread_id(),
+                turn_id: turn.sub_id.clone(),
+                usage,
+            }]
+        );
     }
 
     #[tokio::test]

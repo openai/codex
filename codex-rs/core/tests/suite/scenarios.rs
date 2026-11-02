@@ -3672,7 +3672,9 @@ async fn async_compaction_reuses_pending_work(
     outcome: PendingCompactionOutcome,
     trigger: CompactionTrigger,
 ) -> Result<()> {
-    use core_test_support::responses::ev_completed_with_tokens;
+    use super::rollout_budget::HostAccounting;
+
+    const BACKGROUND_TOKENS: i64 = 3_001;
 
     skip_if_no_network!(Ok(()));
     let over_budget = outcome == PendingCompactionOutcome::SuccessOverBudget;
@@ -3716,7 +3718,7 @@ async fn async_compaction_reuses_pending_work(
                 } else {
                     ev_assistant_message("invalid", "missing compaction output")
                 },
-                /*tokens*/ 3_000,
+                BACKGROUND_TOKENS,
             ),
         )]);
     }
@@ -3740,8 +3742,16 @@ async fn async_compaction_reuses_pending_work(
         /*tokens*/ if over_budget { 10 } else { 3_000 },
     )));
     let (streaming, mut completions) = start_streaming_sse_server(responses).await;
+    let accounting =
+        (outcome == PendingCompactionOutcome::Success).then(|| Arc::new(HostAccounting::default()));
+    let mut builder = test_codex();
+    if let Some(accounting) = &accounting {
+        let mut extensions = ExtensionRegistryBuilder::new();
+        extensions.thread_lifecycle_contributor(accounting.clone());
+        builder = builder.with_extensions(Arc::new(extensions.build()));
+    }
     let (_config_server, test) = async_compaction_test(
-        test_codex(),
+        builder,
         streaming.uri(),
         if over_budget {
             vec![Feature::RetainClientToolOutputs]
@@ -3875,6 +3885,15 @@ async fn async_compaction_reuses_pending_work(
     assert!(history.items.iter().all(|item| !matches!(item,
         RolloutItem::TokenUsageRecord(record) if record.response_id == "background"
     )));
+    if let Some(accounting) = accounting {
+        let reports = accounting.reports.lock().expect("usage reports");
+        let charged_turns: Vec<_> = reports
+            .iter()
+            .filter(|report| report.usage.total_tokens == BACKGROUND_TOKENS)
+            .map(|report| &report.turn_id)
+            .collect();
+        assert_eq!(charged_turns, [&usage("seed").turn_id]);
+    }
     let continuation = usage("continuation");
     assert_eq!(
         (

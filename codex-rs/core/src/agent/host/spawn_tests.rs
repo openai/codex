@@ -199,6 +199,7 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
                 thread_id: child_id,
                 control: Arc::clone(&session.services.agent_control),
                 turn_admission: None,
+                usage_accounting: None,
             },
         )
         .await?;

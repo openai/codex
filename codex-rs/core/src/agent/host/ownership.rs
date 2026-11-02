@@ -1,6 +1,7 @@
 //! Captures coordination providers once, after the thread's startup contributors finish.
 
 use super::AgentTurnAdmission;
+use super::AgentUsageAccounting;
 use codex_extension_api::ExtensionData;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
@@ -14,6 +15,7 @@ pub enum AgentRuntimeOwnership {
     Controller,
     /// Requires an [`AgentTurnAdmission`] provider. Core skips controller rollout-budget
     /// accounting, budget reminders, and subagent roster context for this runtime.
+    /// Install an [`AgentUsageAccounting`] provider to receive usage reports.
     Host,
 }
 
@@ -24,6 +26,7 @@ pub(crate) enum AgentRuntimeServices {
 
 pub(crate) struct HostAgentServices {
     pub(crate) turn_admission: Arc<dyn AgentTurnAdmission>,
+    pub(crate) usage_accounting: Option<Arc<dyn AgentUsageAccounting>>,
 }
 
 impl AgentRuntimeServices {
@@ -38,6 +41,10 @@ impl AgentRuntimeServices {
         })?;
         Ok(Self::Host(HostAgentServices {
             turn_admission: Arc::clone(turn_admission.as_ref()),
+            usage_accounting: data
+                .get::<Arc<dyn AgentUsageAccounting>>()
+                .as_deref()
+                .cloned(),
         }))
     }
 }

@@ -57,6 +57,32 @@ use serde_json::json;
 use test_case::test_case;
 use wiremock::MockServer;
 
+pub(super) struct HostRuntime;
+
+impl codex_core::AgentTurnAdmission for HostRuntime {
+    fn admit_turn(
+        &self,
+        _: codex_core::AgentTurnAdmissionRequest,
+    ) -> BoxFuture<'_, CodexResult<AgentExecutionGuard>> {
+        Box::pin(async { Ok(AgentExecutionGuard::new(())) })
+    }
+}
+
+pub(super) fn install_host_runtime(data: &codex_extension_api::ExtensionData) {
+    data.insert(codex_core::AgentRuntimeOwnership::Host);
+    data.get_or_init(|| Arc::new(HostRuntime) as Arc<dyn codex_core::AgentTurnAdmission>);
+}
+
+impl codex_extension_api::ThreadLifecycleContributor<codex_core::config::Config> for HostRuntime {
+    fn on_thread_start<'a>(
+        &'a self,
+        input: codex_extension_api::ThreadStartInput<'a, codex_core::config::Config>,
+    ) -> codex_extension_api::ExtensionFuture<'a, ()> {
+        install_host_runtime(input.thread_store);
+        Box::pin(async {})
+    }
+}
+
 pub(super) struct TestAgentControl {
     thread_id: ThreadId,
     service_tier: Mutex<Option<String>>,
