@@ -178,9 +178,9 @@ mod tests {
     use codex_config::ThreadConfigSource;
     use codex_config::types::AuthKeyringBackendKind;
     use codex_config::types::McpServerConfig;
+    use codex_core::ThreadStoreBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::init_state_db;
-    use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
     use codex_extension_api::NoopExtensionEventSink;
     use codex_home::CodexHomeUserInstructionsProvider;
@@ -522,7 +522,8 @@ enabled = false
         let state_db = init_state_db(&good_config)
             .await
             .expect("refresh tests require state db");
-        let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
+        let thread_store =
+            ThreadStoreBuilder::from_config(&good_config, Some(state_db.clone())).build();
         let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(

@@ -1131,7 +1131,8 @@ async fn spawned_child_receives_forked_parent_context(
             .expect("legacy child thread id"),
     )?;
     // Read the acknowledged fork from storage without flushing the live child first.
-    let reopened_store = codex_core::thread_store_from_config(&test.config, /*state_db*/ None);
+    let reopened_store =
+        codex_core::ThreadStoreBuilder::from_config(&test.config, /*state_db*/ None).build();
     let persisted = reopened_store
         .load_latest_model_context(LoadThreadHistoryParams {
             thread_id: child_thread_id,

@@ -12,6 +12,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
+use crate::ThreadStoreBuilder;
 use crate::config::Config;
 use crate::resolve_installation_id;
 use crate::session::session::Session;
@@ -19,7 +20,6 @@ use crate::session::turn::build_prompt;
 use crate::state_db_bridge::StateDbHandle;
 use crate::thread_manager::StartThreadOptions;
 use crate::thread_manager::ThreadManager;
-use crate::thread_manager::thread_store_from_config;
 
 /// Build the model-visible `input` list for a single debug turn.
 #[doc(hidden)]
@@ -42,7 +42,7 @@ pub async fn build_prompt_input(
         config.codex_linux_sandbox_exe.clone(),
     )?;
 
-    let thread_store = thread_store_from_config(&config, state_db.clone());
+    let thread_store = ThreadStoreBuilder::from_config(&config, state_db.clone()).build();
     let installation_id = resolve_installation_id(&config.codex_home).await?;
     let thread_manager = ThreadManager::new(
         &config,

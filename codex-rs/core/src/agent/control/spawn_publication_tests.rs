@@ -122,7 +122,7 @@ async fn publication_harness(
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
         /*analytics_events_client*/ None,
         harness.manager.image_store(),
-        crate::thread_manager::thread_store_from_config(&harness.config, harness.state_db.clone()),
+        crate::ThreadStoreBuilder::from_config(&harness.config, harness.state_db.clone()).build(),
         Some(graph.clone()),
         "spawn-publication-cleanup-test".to_string(),
         /*attestation_provider*/ None,

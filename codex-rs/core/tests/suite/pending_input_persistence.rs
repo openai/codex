@@ -662,10 +662,11 @@ async fn local_preparation_is_durable_before_first_input_and_survives_restart(
     let thread_id = initial.session_configured.thread_id;
     initial.thread_manager.remove_thread(&thread_id).await;
     // Reopen persisted context by ID, which supports both local history modes.
-    let store = codex_core::thread_store_from_config(
+    let store = codex_core::ThreadStoreBuilder::from_config(
         &initial.config,
         codex_core::init_state_db(&initial.config).await,
-    );
+    )
+    .build();
     let context = store
         .load_latest_model_context(LoadThreadHistoryParams {
             thread_id,

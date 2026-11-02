@@ -3793,10 +3793,8 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             Arc::new(crate::test_support::EmptyUserInstructionsProvider),
             /*analytics_events_client*/ None,
             crate::thread_manager::passthrough_image_store(),
-            crate::thread_manager::thread_store_from_config(
-                &parent_config,
-                harness.state_db.clone(),
-            ),
+            crate::ThreadStoreBuilder::from_config(&parent_config, harness.state_db.clone())
+                .build(),
             crate::thread_manager::local_agent_graph_store_from_state_db(harness.state_db.as_ref()),
             uuid::Uuid::new_v4().to_string(),
             /*attestation_provider*/ None,
