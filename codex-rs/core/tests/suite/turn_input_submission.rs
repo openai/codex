@@ -311,6 +311,30 @@ async fn host_drain_allows_spawned_agent_input_but_not_automatic_work() -> anyho
             reason: NotSubmittedReason::ServerDraining
         },
     );
+    // A remote agent submission has not already been admitted by this host,
+    // even when its caller supplies parent lineage.
+    assert_eq!(
+        child
+            .start_or_steer_turn(
+                TurnInputRequest::new(TurnInput::InterAgentCommunication(
+                    InterAgentCommunication::new(
+                        AgentPath::root(),
+                        AgentPath::try_from("/root/worker").expect("valid agent path"),
+                        Vec::new(),
+                        "agent input while draining".to_string(),
+                        /*trigger_turn*/ true,
+                    ),
+                ))
+                .on_start(TurnStartOptions {
+                    parent_turn_id: Some("parent-turn".to_string()),
+                    ..Default::default()
+                }),
+            )
+            .await?,
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::ServerDraining
+        },
+    );
     assert!(matches!(
         child
             .start_or_steer_turn(user_message_request("delegated input").on_start(

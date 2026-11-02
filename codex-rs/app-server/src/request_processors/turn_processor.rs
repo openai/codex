@@ -715,6 +715,11 @@ impl TurnRequestProcessor {
                 error
             })?;
         let (turn_id, root_turn_id, started) = match submission {
+            TurnInputSubmission::Accepted => {
+                return Err(internal_error(
+                    "user input unexpectedly returned agent acceptance".to_string(),
+                ));
+            }
             TurnInputSubmission::Started {
                 turn_id,
                 root_turn_id,
