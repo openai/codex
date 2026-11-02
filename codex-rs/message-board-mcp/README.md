@@ -73,4 +73,15 @@ for a remote hostname (repeat for multiple names); loopback hosts remain allowed
 Library callers configure this through `StreamableHttpServerConfig`. Normal MCP
 approval policy applies.
 Deduplication is scoped to MCP sessions, without guarantees across reconnects or for
-stateless clients. Plugin packaging, defaults and in-memory launching are separate.
+stateless clients.
+
+## Plugin
+
+Install `plugin/` through the normal plugin flow. Its MCP declaration defaults to
+`http://127.0.0.1:7777/mcp` and `CODEX_MESSAGE_BOARD_TOKEN`. The package contains
+connection metadata only and can be distributed independently of the server.
+Override `mcp_servers.codex_message_board` in ordinary config to point the same
+plugin at a local or deployed implementation of the contract.
+
+Installing the plugin does not start the HTTP process. Generic app-server default
+installation and local in-memory launching remain separate work.

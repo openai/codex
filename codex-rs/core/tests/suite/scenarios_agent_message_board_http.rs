@@ -5,8 +5,10 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
 
+#[test_case::test_case(false; "config")]
+#[test_case::test_case(true; "plugin")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn http_board_is_shared_with_children() -> anyhow::Result<()> {
+async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let home = Arc::new(tempfile::tempdir()?);
     let sqlite = codex_state::SqliteConfig::new_for_testing(home.path().to_path_buf().try_into()?);
@@ -28,6 +30,26 @@ async fn http_board_is_shared_with_children() -> anyhow::Result<()> {
         .context("server readiness")?;
     let ready: Value = serde_json::from_str(&ready)?;
     let endpoint = json!({"url":ready["url"],"http_headers":{"Authorization":"Bearer http-board-test-token","Host":"board.example"},"required":true,"default_tools_approval_mode":"approve"});
+    if plugin {
+        let manifest = codex_utils_cargo_bin::find_resource!(
+            "../message-board-mcp/plugin/.codex-plugin/plugin.json"
+        )?;
+        let declaration_path =
+            codex_utils_cargo_bin::find_resource!("../message-board-mcp/plugin/.mcp.json")?;
+        let installed = home.path().join("plugins/cache/test/message-board/local");
+        std::fs::create_dir_all(installed.join(".codex-plugin"))?;
+        std::fs::copy(manifest, installed.join(".codex-plugin/plugin.json"))?;
+        let mut declaration: Value = serde_json::from_slice(&std::fs::read(declaration_path)?)?;
+        declaration["mcpServers"]["codex_message_board"] = endpoint.clone();
+        std::fs::write(
+            installed.join(".mcp.json"),
+            serde_json::to_vec(&declaration)?,
+        )?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[features]\nplugins = true\n[plugins.\"message-board@test\"]\nenabled = true\n",
+        )?;
+    }
     let configured_endpoint = endpoint.clone();
     let configured_sqlite = sqlite.clone();
     let configure_board = move |config: &mut codex_core::config::Config| {
@@ -37,12 +59,14 @@ async fn http_board_is_shared_with_children() -> anyhow::Result<()> {
             .features
             .disable(Feature::AgentMessageBoard)
             .expect("disable native board");
-        let mut servers = config.mcp_servers.get().clone();
-        servers.insert(
-            "codex_message_board".into(),
-            serde_json::from_value(configured_endpoint.clone()).expect("HTTP config"),
-        );
-        config.mcp_servers.set(servers).expect("configure endpoint");
+        if !plugin {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                "codex_message_board".into(),
+                serde_json::from_value(configured_endpoint.clone()).expect("HTTP config"),
+            );
+            config.mcp_servers.set(servers).expect("configure endpoint");
+        }
     };
     let mut builder = test_codex()
         .with_home(home)
@@ -194,7 +218,11 @@ async fn http_board_is_shared_with_children() -> anyhow::Result<()> {
         }
     }
     insta::assert_snapshot!(
-        "agent_message_board_mcp_context",
+        if plugin {
+            "agent_message_board_plugin_context"
+        } else {
+            "agent_message_board_mcp_context"
+        },
         context_snapshot::format_context_snapshot(
             "A child posts through the HTTP MCP executable; its restarted parent discovers the same board and reads the decision.",
             &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),

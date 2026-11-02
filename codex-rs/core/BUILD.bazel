@@ -30,6 +30,7 @@ codex_rust_crate(
         "CARGO_MANIFEST_DIR": "codex-rs/core",
     },
     test_data_extra = [
+        "//codex-rs/message-board-mcp:package-files",
         "config.schema.json",
     ] + glob(["src/**/snapshots/**"]) + [
     ],
