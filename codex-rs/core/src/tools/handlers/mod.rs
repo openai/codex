@@ -183,7 +183,7 @@ fn function_tool_environment<T: serde::de::DeserializeOwned>(
     .map(ToolEnvironments::single_executor)
 }
 
-fn selected_executor<'a>(
+pub(crate) fn selected_executor<'a>(
     environments: &'a ToolEnvironments,
     snapshot: &'a TurnEnvironmentSnapshot,
 ) -> Result<&'a TurnEnvironment, FunctionCallError> {

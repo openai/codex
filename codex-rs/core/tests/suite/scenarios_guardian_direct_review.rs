@@ -1,4 +1,4 @@
-//! Direct exec review preserves live action rendering without executing the command.
+//! Direct review preserves live action rendering without executing commands or applying patches.
 
 use anyhow::Result;
 use codex_core::config::Constrained;
@@ -6,6 +6,7 @@ use codex_core::guardian_review::GuardianReviewResult;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
 use codex_protocol::protocol::AskForApproval;
@@ -15,6 +16,7 @@ use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -228,6 +230,187 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
     }
     insta::assert_snapshot!("guardian_direct_exec", snapshot);
     direct.thread.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_patch_review_matches_live_action_without_writes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let builder = test_codex().with_model("gpt-5.5").with_config(|config| {
+        super::configure_scenario_catalog(config);
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("read-only permissions");
+    });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+    let test = harness.test();
+    harness
+        .write_file("guardian-direct.txt", "before\n")
+        .await?;
+
+    let patch =
+        "*** Begin Patch\n*** Update File: guardian-direct.txt\n@@\n-before\n+after\n*** End Patch";
+    let assessment = json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The patch is authorized."
+    });
+    let mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            // Normal execution: propose the patch, deny approval, then finish the turn.
+            sse(vec![
+                ev_apply_patch_custom_tool_call("patch-review", patch),
+                ev_completed("parent-action"),
+            ]),
+            sse(vec![
+                ev_assistant_message("live-denial", r#"{"outcome":"deny"}"#),
+                ev_completed("live-review"),
+            ]),
+            sse(vec![
+                ev_assistant_message("parent-done", "Denied."),
+                ev_completed("parent-done"),
+            ]),
+            // Direct review: allow the same patch without executing it.
+            sse(vec![
+                ev_assistant_message("direct-allow", &assessment.to_string()),
+                ev_completed("direct-review"),
+            ]),
+        ],
+    )
+    .await;
+    // 1. Capture the reference review through normal execution. Denial preserves
+    // the original file so the same patch remains valid for direct review.
+    let prompt = "Change guardian-direct.txt from before to after.";
+    test.submit_text_turn(prompt).await?;
+    assert_eq!(
+        harness.read_file_text("guardian-direct.txt").await?,
+        "before\n"
+    );
+
+    // 2. Replay the recorded user message and patch call through the direct-review API.
+    // Its mocked allow verdict must assess the patch without applying it.
+    test.codex.flush_rollout().await?;
+    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    let items = history
+        .items
+        .into_iter()
+        .filter_map(|entry| match entry {
+            RolloutItem::ResponseItem(item) => match &item.item {
+                ResponseItem::Message { role, content, .. }
+                    if role == "user" && content == &[input_text(prompt)] =>
+                {
+                    Some(item.into_item())
+                }
+                ResponseItem::CustomToolCall { .. } => Some(item.into_item()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(items.len(), 2);
+    let direct = test
+        .thread_manager
+        .start_thread(test.start_thread_options().await)
+        .await?;
+    direct.thread.inject_response_items(items).await?;
+    assert_eq!(
+        direct
+            .thread
+            .guardian_review(&CancellationToken::new())
+            .await?,
+        GuardianReviewResult {
+            call_id: "patch-review".to_owned(),
+            assessment: Some(serde_json::from_value(assessment)?),
+        }
+    );
+    // 3. Verify no writes despite approval, and parity with the normal review input.
+    assert_eq!(
+        harness.read_file_text("guardian-direct.txt").await?,
+        "before\n"
+    );
+
+    let requests = mock.requests();
+    let [_, live_review_request, _, direct_review_request] = requests.as_slice() else {
+        panic!("expected parent, live review, parent, direct review");
+    };
+    assert_eq!(
+        model_input(direct_review_request, direct.thread_id)?,
+        model_input(live_review_request, history.thread_id)?
+    );
+    let snapshot = context_snapshot::format_request_history_snapshot(
+        "Live and direct Guardian review of a native patch; direct approval leaves the file unchanged.",
+        &requests,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    );
+    let environment = test.executor_environment().selection();
+    let cwd = serde_json::to_string(&environment.cwd.inferred_native_path_string())?;
+    let file = serde_json::to_string(
+        &test
+            .workspace_path_uri("guardian-direct.txt")?
+            .inferred_native_path_string(),
+    )?;
+    let environment_id = serde_json::to_string(&environment.environment_id)?;
+    let snapshot = snapshot
+        .replace(&file, "\"<CWD>/guardian-direct.txt\"")
+        .replace(&cwd, "\"<CWD>\"")
+        .replace(&environment_id, "\"<ENVIRONMENT>\"");
+    insta::assert_snapshot!("guardian_direct_patch", snapshot);
+    direct.thread.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn direct_patch_review_skips_writable_file_without_writes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let builder = test_codex().with_model("gpt-5.5").with_config(|config| {
+        super::configure_scenario_catalog(config);
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::workspace_write())
+            .expect("workspace-write permissions");
+    });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+    let test = harness.test();
+    harness
+        .write_file("guardian-skipped.txt", "before\n")
+        .await?;
+    let mock = responses::mount_sse_once(
+        harness.server(),
+        sse(vec![ev_completed("unexpected-review")]),
+    )
+    .await;
+
+    test.codex
+        .inject_response_items(vec![serde_json::from_value(json!({
+            "type": "custom_tool_call",
+            "call_id": "patch-skip",
+            "name": "apply_patch",
+            "input": "*** Begin Patch\n*** Update File: guardian-skipped.txt\n@@\n-before\n+after\n*** End Patch",
+        }))?])
+        .await?;
+    assert_eq!(
+        test.codex
+            .guardian_review(&CancellationToken::new())
+            .await?,
+        GuardianReviewResult {
+            call_id: "patch-skip".to_owned(),
+            assessment: None,
+        }
+    );
+    assert!(mock.requests().is_empty());
+    assert_eq!(
+        harness.read_file_text("guardian-skipped.txt").await?,
+        "before\n"
+    );
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
