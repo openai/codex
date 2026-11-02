@@ -94,6 +94,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         apps: Some(AppsMessages {
             usage_instructions: Some("Catalog Apps instructions.".to_string()),
         }),
+        plugins: None,
         content_filter_guidance: None,
         persistent_instructions: Some(persistent_instructions.to_string()),
         tools: Some(ToolMessages {

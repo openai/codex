@@ -75,6 +75,7 @@ fn model_with_collaboration_messages(
     let mut model = model_info_from_slug(slug);
     let model_messages = model.model_messages.get_or_insert(ModelMessages {
         apps: None,
+        plugins: None,
         content_filter_guidance: None,
         persistent_instructions: None,
         tools: None,

@@ -4983,7 +4983,13 @@ impl Session {
             if next_item.is_none()
                 && let Some(recommended_plugins) = recommended_plugin_candidates
                     .as_deref()
-                    .and_then(RecommendedPluginsInstructions::from_plugins)
+                    .and_then(|plugins| {
+                        RecommendedPluginsInstructions::from_plugins(
+                            plugins,
+                            &ResolvedModelMessages::from_model(&step_context.settings.model_info)
+                                .plugin_recommendations(),
+                        )
+                    })
             {
                 developer_sections.push(recommended_plugins.render_fragment());
             }

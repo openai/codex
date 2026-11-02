@@ -1,0 +1,167 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Selected-plugin wording follows the receiving model while live skills, MCP, App policy, explicit selection eligibility and simplified selection dispatch remain authoritative.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: Selected-plugin wording follows the receiving model while live skills, MCP, App policy, explicit selection eligibility and simplified selection dispatch remain authoritative.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "selected-custom"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (11; hash=70f020489861129c):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
+    - function/list_mcp_resource_templates: Lists resource templates provided by MCP servers. Parameterized resource templates allow servers ...; args=[cursor, server]; hash=60f17c90ef7a4ebb
+    - function/read_mcp_resource: Read a specific resource from an MCP server given the server name and resource URI.; args=[server, uri]; hash=24246896b39008ae
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=2327142bda177c50
+      - function/close_agent
+      - function/resume_agent
+      - function/send_input
+      - function/spawn_agent
+      - function/wait_agent
+    - namespace/mcp__notes: Use these tools to exercise the rmcp test server.; hash=508dce78d8cc5d3b
+      - function/client_capabilities
+      - function/cwd
+      - function/echo
+      - function/echo_tool
+      - function/encrypted_output
+      - function/image
+      - function/image_scenario
+      - function/sandbox_meta
+      - function/sync
+      - function/sync_readonly
+    - web_search; hash=f103e327c6870a46
+-- request 1 (turn) --
+00:message/developer[2]:
+    [01] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        - `r1` = `<PLUGINS_CACHE>/test`
+        ### Available skills
+        - final-check: Review a final brief (file: r0/final-check/SKILL.md)
+        <OMITTED 14 LINES; ~497 TOKENS; hash=1553c68bf4173825>
+          - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+          - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+        - Context hygiene:
+          - Progressive disclosure applies to selecting relevant files, not partially reading a selected instruc...Do not load unrelated references, scripts, or assets. [hash=d6eeb13522175402]
+          - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+          - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+        - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+        </skills_instructions>
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+02:message/user:
+    List the available capabilities.
+-- request 2 (turn) --
+03:message/user:
+    Use the selected plugin.
+04:message/developer:
+    Catalog selected notes.
+    Catalog skills notes.
+    Catalog MCP `notes`.
+    Catalog closing.
+-- request 3 (turn) --
+05:message/user:
+    Continue without a plugin selection.
+
+## Window 2 (after request 3)
+Settings: relative to window 1
+  model: "selected-fallback"
+-- request 4 (turn) --
+00:message/developer[2]:
+    [01] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        - `r1` = `<PLUGINS_CACHE>/test`
+        ### Available skills
+        - final-check: Review a final brief (file: r0/final-check/SKILL.md)
+        <OMITTED 14 LINES; ~497 TOKENS; hash=1553c68bf4173825>
+          - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+          - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+        - Context hygiene:
+          - Progressive disclosure applies to selecting relevant files, not partially reading a selected instruc...Do not load unrelated references, scripts, or assets. [hash=d6eeb13522175402]
+          - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+          - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+        - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+        </skills_instructions>
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+02:message/user:
+    List the available capabilities.
+03:message/user:
+    Use the selected plugin.
+04:message/developer:
+    Catalog selected notes.
+    Catalog skills notes.
+    Catalog MCP `notes`.
+    Catalog closing.
+05:message/user:
+    Continue without a plugin selection.
+06:message/user:
+    Use the selected plugin again.
+07:message/developer:
+    Capabilities from the `notes` plugin:
+    - Skills from this plugin are prefixed with `notes:`.
+    - MCP servers from this plugin available in this session: `notes`.
+    Use these plugin-associated capabilities to help solve the task.

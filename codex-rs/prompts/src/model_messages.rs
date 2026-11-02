@@ -18,11 +18,15 @@ mod guardian;
 mod incremental_tools;
 mod multi_agent;
 pub(crate) mod permissions;
+mod plugins;
 
 pub use collaboration::ResolvedCollaborationModeMessages;
 pub use guardian::ResolvedAutoReviewMessages;
 pub use incremental_tools::ResolvedIncrementalToolMessages;
 pub use multi_agent::ResolvedMultiAgentMessages;
+pub use plugins::ResolvedGenericPluginMessages;
+pub use plugins::ResolvedPluginRecommendationMessages;
+pub use plugins::ResolvedSelectedPluginMessages;
 
 /// Text together with whether it was supplied by the catalog, even when it equals the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,3 +283,7 @@ impl<'a> ResolvedModelMessages<'a> {
             .unwrap_or(CONTENT_FILTER_GUIDANCE)
     }
 }
+
+#[cfg(test)]
+#[path = "model_messages/plugins_tests.rs"]
+mod plugins_tests;

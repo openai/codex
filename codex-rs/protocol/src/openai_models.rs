@@ -41,6 +41,11 @@ mod memento_v2;
 pub use memento_v2::ContextManagementToolMessages;
 pub use memento_v2::HistoryToolMessages;
 pub use memento_v2::NotesToolMessages;
+mod plugins;
+pub use plugins::GenericPluginMessages;
+pub use plugins::PluginMessages;
+pub use plugins::PluginRecommendationMessages;
+pub use plugins::SelectedPluginMessages;
 #[path = "openai_models/guardian.rs"]
 mod guardian;
 pub use guardian::GuardianModelPolicy;
@@ -583,6 +588,9 @@ pub struct ModelMessages {
     /// Optional model-owned Apps wording, transported without runtime interpretation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apps: Option<AppsMessages>,
+    /// Model-owned plugin wording; runtime capability facts and eligibility remain client-owned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<PluginMessages>,
     /// Developer guidance after a content-filter block. Missing, null, blank, or values over
     /// 512 UTF-8 bytes use the bundled guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1764,6 +1772,7 @@ mod tests {
             apps: Some(AppsMessages {
                 usage_instructions: Some("Literal Apps {{guidance}}".to_string()),
             }),
+            plugins: None,
             content_filter_guidance: Some("Offer a permitted alternative.".to_string()),
             persistent_instructions: Some("Persistent catalog instructions".to_string()),
             tools: Some(ToolMessages {

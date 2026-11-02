@@ -1271,6 +1271,7 @@ async fn build_skills_and_plugins(
         mcp_tools,
         &available_connectors,
         &turn_context.config.features,
+        codex_prompts::ResolvedModelMessages::from_model(&step_context.settings.model_info),
     );
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(user_input);
     explicitly_enabled_connectors.extend(skill_connector_ids);

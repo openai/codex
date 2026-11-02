@@ -1,0 +1,92 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A catalog omission suffix is reserved within the final selected-plugin bound after substituting a long Unicode runtime capability name.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: A catalog omission suffix is reserved within the final selected-plugin bound after substituting a long Unicode runtime capability name.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.5"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (10; hash=df5c5997ff843305):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
+    - function/list_mcp_resource_templates: Lists resource templates provided by MCP servers. Parameterized resource templates allow servers ...; args=[cursor, server]; hash=60f17c90ef7a4ebb
+    - function/read_mcp_resource: Read a specific resource from an MCP server given the server name and resource URI.; args=[server, uri]; hash=24246896b39008ae
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
+    - web_search; hash=f103e327c6870a46
+-- request 1 (turn) --
+00:message/developer[4]:
+    [01] <skills_instructions>
+        ## Skills
+        A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+        ### Skill roots
+        - `r0` = `<SKILLS_ROOT>`
+        - `r1` = `<PLUGINS_CACHE>/test`
+        ### Available skills
+        - final-check: Review a final brief (file: r0/final-check/SKILL.md)
+        <OMITTED 14 LINES; ~497 TOKENS; hash=1553c68bf4173825>
+          - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
+          - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
+        - Context hygiene:
+          - Progressive disclosure applies to selecting relevant files, not partially reading a selected instruc...Do not load unrelated references, scripts, or assets. [hash=d6eeb13522175402]
+          - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
+          - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
+        - Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+        </skills_instructions>
+    [02] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+        </permissions instructions>
+    [03] <apps_instructions>
+        ## Apps (Connectors)
+        Apps (Connectors) can be explicitly triggered in user messages in the format `[$app-name](app://{connect...long as the context suggests usage of available apps. [hash=8c2ddeb1adaf185d]
+        An app is equivalent to a set of MCP tools within the `codex_apps` MCP.
+        An installed app's MCP tools are either provided to you already, or can be lazy-loaded through the `tool...re searchable by `tools_search` will be listed by it. [hash=4f9c0d35da3968a5]
+        Do not additionally call list_mcp_resources or list_mcp_resource_templates for apps.
+        </apps_instructions>
+    [04] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar_caf__calendar_caf__calendar_caf__calendar_caf__calendar_caf__calendar_caf__calendar_caf: Plan events and manage your calendar.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+02:message/user:
+    Use the selected plugin.
+03:message/developer:
+    Catalog selected notes.
+    - For the user request that explicitly selected this plugin, and only for that request, if `tool_search`...s before falling back to unrelated or built-in tools. [hash=a8711ebc98aa4e05]
+    - Skills from this plugin are prefixed with `notes:`.
+    Catalog apps `Calendar café Calendar café Calendar café Calendar café Calendar café Calendar café Calend...dar café Calendar café Calendar café Calendar café Ca [hash=b7ebb1f4aabcf30e]
+    Catalog capability list omitted here.

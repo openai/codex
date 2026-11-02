@@ -41,6 +41,7 @@ async fn catalog_permission_message_loaded_from_remote_models_is_sent(
     let mut model = model_info_from_slug(model_slug);
     model.model_messages = Some(ModelMessages {
         apps: None,
+        plugins: None,
         content_filter_guidance: None,
         persistent_instructions: None,
         tools: None,

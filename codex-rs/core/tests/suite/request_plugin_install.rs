@@ -609,6 +609,143 @@ async fn startup_recommendations_use_developer_message(
     Ok(())
 }
 
+#[test_case("custom"; "custom")]
+#[test_case("absent"; "absent")]
+#[test_case("null"; "null")]
+#[test_case("empty"; "empty")]
+#[test_case("blank"; "blank")]
+#[test_case("oversized"; "oversized")]
+#[test_case("disabled"; "disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_plugin_recommendations_use_receiving_model(case: &str) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps = AppsTestServer::mount(&server).await?;
+    mount_recommendations(
+        &server,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "enabled": true,
+            "plugins": [{"id": "plugin_github", "name": "github", "display_name": "GitHub"}],
+        })),
+    )
+    .await;
+    let custom = "  Catalog recommendations: {{literal}}.\r\n";
+    let recommendations = match case {
+        "custom" | "disabled" => json!({"intro": custom}),
+        "absent" => json!({}),
+        "null" => json!({"intro": null}),
+        "empty" => json!({"intro": ""}),
+        "blank" => json!({"intro": " \n"}),
+        "oversized" => json!({"intro": "x".repeat(501)}),
+        _ => unreachable!("declared test case"),
+    };
+    let enabled = case != "disabled";
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            configure_apps_without_search_tool(config, &apps.chatgpt_base_url);
+            config.features.disable(Feature::ToolSuggest).unwrap();
+            config
+                .features
+                .set_enabled(Feature::RecommendedPlugins, enabled)
+                .unwrap();
+            let catalog = config.model_catalog.as_mut().unwrap();
+            let startup_model = catalog
+                .models
+                .iter_mut()
+                .find(|model| model.slug == "gpt-5.5")
+                .unwrap();
+            startup_model.model_messages = Some(serde_json::from_value(json!({
+                "plugins": {"recommendations": {"intro": "Stale startup model recommendations."}},
+            })).unwrap());
+            let mut receiving_model = startup_model.clone();
+            receiving_model.slug = "recommendations-receiving".to_string();
+            receiving_model.model_messages = Some(
+                serde_json::from_value(json!({
+                    "plugins": {"recommendations": recommendations},
+                }))
+                .unwrap(),
+            );
+            catalog.models.push(receiving_model);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("recommendations-first")]),
+            sse(vec![ev_completed("recommendations-followup")]),
+        ],
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Suggest a plugin for this task.".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                model: Some("recommendations-receiving".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_text_turn("Continue with the same recommendations.")
+        .await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let expected_intro = if case == "custom" {
+        custom
+    } else {
+        "Here is a list of plugins that are available but not installed."
+    };
+    let expected = if enabled {
+        vec![format!(
+            "<recommended_plugins>\n{expected_intro}\n\n- GitHub (github@openai-curated-remote)\n</recommended_plugins>"
+        )]
+    } else {
+        Vec::new()
+    };
+    for request in &requests {
+        assert_eq!(
+            request.body_json()["model"],
+            json!("recommendations-receiving")
+        );
+        let actual = request
+            .message_input_texts("developer")
+            .into_iter()
+            .filter(|text| text.starts_with("<recommended_plugins>"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual, expected,
+            "the receiving model owns wording; runtime recommendation identities remain unchanged and appear once"
+        );
+        assert!(!request.body_contains_text("Stale startup model recommendations."));
+        assert!(
+            !request
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text.contains("<recommended_plugins>"))
+        );
+    }
+    insta::assert_snapshot!(
+        format!("catalog_plugin_recommendations_{case}"),
+        context_snapshot::format_request_history_snapshot(
+            "The first receiving model controls recommendation wording without changing feature eligibility, developer role, runtime plugin identities or retained-history deduplication.",
+            &requests,
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
+        )
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_discovery_overlaps_endpoint_plugin_recommendations() -> Result<()> {
     skip_if_wine_exec!(

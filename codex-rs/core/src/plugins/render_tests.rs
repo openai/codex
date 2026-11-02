@@ -36,6 +36,7 @@ fn explicit_plugin_instructions_use_manifest_namespace_for_skills() {
         &[],
         &[],
         &Features::default(),
+        &codex_prompts::ResolvedModelMessages::bundled().selected_plugin(),
     )
     .expect("skill capability should render");
 
@@ -55,6 +56,7 @@ fn explicit_plugin_instructions_search_available_apps_before_fallback() {
         &[],
         &["Adobe".to_string()],
         &Features::default(),
+        &codex_prompts::ResolvedModelMessages::bundled().selected_plugin(),
     )
     .expect("app capability should render");
 
@@ -88,6 +90,7 @@ fn explicit_plugin_instructions_are_bounded() {
         &servers,
         &apps,
         &Features::default(),
+        &codex_prompts::ResolvedModelMessages::bundled().selected_plugin(),
     )
     .expect("MCP capability should render");
 
@@ -96,5 +99,59 @@ fn explicit_plugin_instructions_are_bounded() {
     assert!(rendered.contains("if `tool_search` is available"));
     assert!(rendered.contains("Skills from this plugin"));
     assert!(rendered.contains("`app-0`"));
-    assert!(rendered.ends_with(TRUNCATED_PLUGIN_INSTRUCTIONS_SUFFIX));
+    assert!(
+        rendered.ends_with(
+            &codex_prompts::ResolvedModelMessages::bundled()
+                .selected_plugin()
+                .omitted
+        )
+    );
+}
+
+#[test]
+fn selected_plugin_templates_insert_runtime_facts_once() {
+    let mut messages = codex_prompts::ResolvedModelMessages::bundled().selected_plugin();
+    messages.intro = "Selected {{ plugin_name }}.".into();
+    messages.search_tools = "Search wording {{literal}}.\r\n".into();
+    messages.skill_namespace = "Skills {{ skill_namespace }}.".into();
+    messages.apps = "Apps {{ apps }}.".into();
+    messages.mcp_servers = "Servers {{ mcp_servers }}.".into();
+    messages.closing = "Closing {{literal}}.".into();
+    let rendered = render_explicit_plugin_instructions(
+        &PluginCapabilitySummary {
+            display_name: "Name {{ apps }}".into(),
+            plugin_namespace: Some("namespace{{ plugin_name }}".into()),
+            has_skills: true,
+            ..PluginCapabilitySummary::default()
+        },
+        &["server{{ apps }}".into()],
+        &["app{{ mcp_servers }}".into()],
+        &Features::default(),
+        &messages,
+    )
+    .unwrap();
+    assert_eq!(
+        rendered,
+        "Selected Name {{ apps }}.\nSearch wording {{literal}}.\r\n\nSkills namespace{{ plugin_name }}.\nApps `app{{ mcp_servers }}`.\nServers `server{{ apps }}`.\nClosing {{literal}}."
+    );
+}
+
+#[test]
+fn selected_plugin_omission_keeps_utf8_and_the_final_item_bound() {
+    let mut messages = codex_prompts::ResolvedModelMessages::bundled().selected_plugin();
+    messages.omitted = "é".repeat(250);
+    let rendered = render_explicit_plugin_instructions(
+        &PluginCapabilitySummary {
+            display_name: "plugin".into(),
+            ..Default::default()
+        },
+        &[],
+        &["🦀".repeat(2_000)],
+        &Features::default(),
+        &messages,
+    )
+    .unwrap();
+    assert!(rendered.len() <= MAX_EXPLICIT_PLUGIN_INSTRUCTIONS_BYTES);
+    assert!(rendered.ends_with(&format!("\n{}", messages.omitted)));
+    assert!(rendered.contains("🦀"));
 }

@@ -644,6 +644,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         upgrade: None,
         model_messages: Some(ModelMessages {
             apps: None,
+            plugins: None,
             content_filter_guidance: None,
             persistent_instructions: None,
             tools: None,

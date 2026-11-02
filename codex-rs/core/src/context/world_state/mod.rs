@@ -426,6 +426,34 @@ impl WorldStateSnapshot {
         self.sections.into_iter().collect()
     }
 
+    fn section(&self, id: &str) -> Option<&Value> {
+        let snapshot = self.sections.get(id)?;
+        if id == PluginsInstructionsState::ID
+            && snapshot == &Value::Bool(false)
+            && let Some(retired) = self
+                .sections
+                .get(plugins_instructions::RETIRED_CHECKPOINT_ID)
+            && plugins_instructions::is_retired_checkpoint(retired)
+        {
+            return Some(retired);
+        }
+        Some(snapshot)
+    }
+
+    fn insert_section(&mut self, id: &str, mut snapshot: Value) {
+        if id == PluginsInstructionsState::ID
+            && plugins_instructions::is_retired_checkpoint(&snapshot)
+        {
+            // Keep the original section readable by clients whose snapshot type is bool.
+            self.sections.insert(
+                plugins_instructions::RETIRED_CHECKPOINT_ID.to_string(),
+                snapshot,
+            );
+            snapshot = Value::Bool(false);
+        }
+        self.sections.insert(id.to_string(), snapshot);
+    }
+
     /// Returns the RFC 7386 merge patch that advances `previous` to `self`.
     pub(crate) fn merge_patch_from(&self, previous: &Self) -> Option<Map<String, Value>> {
         let mut patch = Map::new();
@@ -475,7 +503,7 @@ impl WorldState {
     pub(crate) fn add_section<S: WorldStateSection>(&mut self, section: S) {
         let id = S::ID;
         assert!(
-            !self.sections.contains_key(id),
+            id != plugins_instructions::RETIRED_CHECKPOINT_ID && !self.sections.contains_key(id),
             "duplicate world-state section ID: {id}"
         );
         self.sections.insert(id, Box::new(section));
@@ -484,7 +512,7 @@ impl WorldState {
     pub(crate) fn add_extension_section(&mut self, section: WorldStateSectionContribution) {
         let id = section.id();
         assert!(
-            !self.sections.contains_key(id),
+            id != plugins_instructions::RETIRED_CHECKPOINT_ID && !self.sections.contains_key(id),
             "duplicate world-state section ID: {id}"
         );
         let section = Box::new(ExtensionWorldStateSection(section));
@@ -509,7 +537,7 @@ impl WorldState {
         items: impl IntoIterator<Item = &'a ResponseItem> + Clone,
     ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
         self.render_with(previous, |id, section| {
-            if let Some(previous) = previous.and_then(|previous| previous.sections.get(id)) {
+            if let Some(previous) = previous.and_then(|previous| previous.section(id)) {
                 if section.has_retained_fragment_matcher()
                     && !has_retained_fragment(items.clone(), section)
                 {
@@ -536,17 +564,12 @@ impl WorldState {
             let prior = previous(id, section.as_ref());
             let (section_snapshot, section_updates) = section.render_diff(prior);
             // A skipped snapshot retains stored state even if history required a fresh render.
-            let section_snapshot = section_snapshot.or_else(|| {
-                stored
-                    .and_then(|snapshot| snapshot.sections.get(*id))
-                    .cloned()
-            });
+            let section_snapshot = section_snapshot
+                .or_else(|| stored.and_then(|snapshot| snapshot.section(id)).cloned());
             if let Some(section_snapshot) = section_snapshot
                 && !section_snapshot.is_null()
             {
-                snapshot
-                    .sections
-                    .insert((*id).to_string(), section_snapshot);
+                snapshot.insert_section(id, section_snapshot);
             }
             updates.extend(section_updates);
         }

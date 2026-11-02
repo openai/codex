@@ -17,11 +17,13 @@ pub(crate) fn build_plugin_injections(
     mcp_tools: &[ToolInfo],
     available_connectors: &[connectors::AppInfo],
     features: &Features,
+    model_messages: codex_prompts::ResolvedModelMessages<'_>,
 ) -> Vec<ResponseItem> {
     if mentioned_plugins.is_empty() {
         return Vec::new();
     }
 
+    let messages = model_messages.selected_plugin();
     // Turn each explicit plugin mention with available capabilities into a developer hint.
     mentioned_plugins
         .iter()
@@ -57,6 +59,7 @@ pub(crate) fn build_plugin_injections(
                 &available_mcp_servers,
                 &available_apps,
                 features,
+                &messages,
             )
             .map(PluginInstructions::new)
             .map(ContextualUserFragment::into)

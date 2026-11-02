@@ -342,9 +342,15 @@ impl Session {
         ));
         let plugins_usage_instructions_available =
             step_context.mcp.plugins_available() && model_info.include_plugin_usage_instructions;
-        world_state.add_section(PluginsInstructionsState::new(
-            plugins_usage_instructions_available,
-        ));
+        let plugins_state = {
+            let state = self.state.lock().await;
+            PluginsInstructionsState::new(
+                plugins_usage_instructions_available,
+                model_messages.generic_plugin(),
+                state.history.raw_items(),
+            )
+        };
+        world_state.add_section(plugins_state);
         if turn_context
             .config
             .features
