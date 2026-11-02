@@ -19,6 +19,11 @@ runs:
       shell: pwsh
       run: ./.github/scripts/setup-dev-drive.ps1
 
+    - name: Enable segment heap (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Segment Heap' /v Enabled /t REG_DWORD /d 1 /f
+
     - name: Configure CI build root (Unix)
       if: runner.os != 'Windows'
       shell: bash
