@@ -16,9 +16,9 @@ fn groups_select_recent_whole_entries_and_redistribute_packing_gaps() {
         ElasticSection::TranscriptTools,
     ];
     let limits = ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS).unwrap();
-    let config = ElasticBudgetConfig {
+    let config = crate::budget::tests::complete_minimum_budget(ElasticBudgetConfig {
         sections: groups.map(|group| (group, limits)).into(),
-    };
+    });
     let mut demand = ContextDemand {
         required_tokens: 0,
         content_counts: vec![None, None],
@@ -70,7 +70,7 @@ fn whole_images_use_defaults_and_charge_shared_framing_once() {
         Budgeted::required("exact user instruction".to_owned().into()),
         Budgeted::historical("manual approval".to_owned().into()),
     ]);
-    let context = ComposedContext {
+    let mut context = ComposedContext {
         sections: [
             ("transcript_images", images),
             ("conversation_transcript", tools),
@@ -82,6 +82,24 @@ fn whole_images_use_defaults_and_charge_shared_framing_once() {
         .into(),
         truncations: Vec::new(),
     };
+    {
+        let mut future = std::pin::pin!(crate::prepare_sync_images(
+            &mut context,
+            /*history*/ &[],
+            Some(crate::DEFAULT_MAX_INPUT_TOKENS as i64),
+            |image, _| Some(std::borrow::Cow::Borrowed(image)),
+            |item| i64::try_from(crate::estimate_input_tokens(item)).unwrap(),
+            || std::future::ready(0),
+            crate::ContextBudgeting::Elastic,
+        ));
+        assert!(matches!(
+            std::future::Future::poll(
+                future.as_mut(),
+                &mut std::task::Context::from_waker(std::task::Waker::noop())
+            ),
+            std::task::Poll::Ready(())
+        ));
+    }
     let mut expected = context.clone();
     if let SectionDelivery::UserContent(images) = &mut expected.sections[0].delivery {
         images.remove(/*index*/ 0);
@@ -95,7 +113,8 @@ fn whole_images_use_defaults_and_charge_shared_framing_once() {
         BTreeMap::new(),
         BTreeMap::from([(ElasticSection::TranscriptTools, limits)]),
     ] {
-        let config = ElasticBudgetConfig { sections };
+        let config =
+            crate::budget::tests::complete_minimum_budget(ElasticBudgetConfig { sections });
         let input = PreparedElasticContext {
             context: context.clone(),
             config: &config,

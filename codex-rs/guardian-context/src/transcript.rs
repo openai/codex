@@ -82,7 +82,7 @@ impl Default for ConversationTranscriptOptions {
 /// Per-entry caps resolved by the caller for the current review.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TranscriptEntryLimits {
-    /// Cap for assistant and plaintext reasoning entries; user and manual approvals stay complete.
+    /// Profile cap for assistant and plaintext reasoning; user/approval policy is applied separately.
     pub message_tokens: usize,
     /// Cap for tool calls and ordinary tool outputs.
     pub tool_tokens: usize,
@@ -322,11 +322,12 @@ fn collect_transcript_for_review(
                 {
                     entries.push(ConversationTranscriptEntry {
                         kind,
-                        content: if crate::estimate_input_tokens(item)
-                            <= config
-                                .entry_limits
-                                .tool_tokens
-                                .min(MAX_TEXT_PART_ESTIMATED_TOKENS)
+                        content: if target == crate::ContextTarget::Sync
+                            || crate::estimate_input_tokens(item)
+                                <= config
+                                    .entry_limits
+                                    .tool_tokens
+                                    .min(MAX_TEXT_PART_ESTIMATED_TOKENS)
                         {
                             TranscriptContent::NativeMessage(Box::new(item.clone()))
                         } else {

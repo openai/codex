@@ -8,6 +8,21 @@ use codex_protocol::models::AudioReference;
 use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
+/// Keep allocation fixtures focused on their exercised sections. Trusted skills
+/// are absent in these sync fixtures and return their entire reservation.
+pub(crate) fn complete_minimum_budget(mut config: ElasticBudgetConfig) -> ElasticBudgetConfig {
+    let section = ElasticSection::TrustedSkills;
+    let limits = config.section_limits(section);
+    let minimum = limits.min_total_section_tokens() + DEFAULT_MAX_INPUT_TOKENS
+        - usize::try_from(config.total_minimum_tokens()).unwrap();
+    config.sections.insert(
+        section,
+        ElasticSectionLimits::new(minimum, limits.max_section_entry_tokens()).unwrap(),
+    );
+    config.validate().unwrap();
+    config
+}
+
 #[test]
 fn request_token_ranges_keep_boundary_values_in_the_lower_bucket() {
     let tokens = [
@@ -189,6 +204,32 @@ fn section_estimate_bounds_the_delivered_message() {
 
 #[test]
 fn elastic_section_config_validates_entry_limits() {
+    let mut policy = complete_minimum_budget(ElasticBudgetConfig::default());
+    assert_eq!(policy.validate(), Ok(()));
+    let section = ElasticSection::TrustedSkills;
+    let limits = policy.section_limits(section);
+    const BELOW_MINIMUM: isize = -1;
+    for adjustment in [BELOW_MINIMUM, 1] {
+        policy.sections.insert(
+            section,
+            ElasticSectionLimits::new(
+                limits
+                    .min_total_section_tokens()
+                    .checked_add_signed(adjustment)
+                    .unwrap(),
+                limits.max_section_entry_tokens(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            policy.validate(),
+            Err(crate::SectionError::SectionMinimumTotalMismatch {
+                total: (DEFAULT_MAX_INPUT_TOKENS as u128)
+                    .checked_add_signed(adjustment as i128)
+                    .unwrap(),
+            })
+        );
+    }
     let cap = crate::composition::MAX_TEXT_PART_ESTIMATED_TOKENS;
     let config = serde_json::json!({
         "sections": {"transcript_tools": {

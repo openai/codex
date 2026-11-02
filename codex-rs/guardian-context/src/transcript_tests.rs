@@ -115,6 +115,7 @@ fn heartbeat_references_preserve_positions_changes_and_human_messages() {
                 &crate::ContextProfile::synchronous(),
                 offset,
                 presentation,
+                crate::ContextBudgeting::Fixed,
             )
             .unwrap()
             .into_messages()
@@ -639,6 +640,17 @@ fn encrypted_messages_preserve_order_and_budget_for_both_reviewers() {
         profile.transcript.options.native_multi_agent_namespace =
             native_calls.then(|| "team".to_owned());
         if native_calls {
+            let mut limited = profile.clone();
+            limited.transcript.entry_limits.tool_tokens = 1;
+            let deferred = super::collect_transcript_for_target(
+                &vec![call.clone()],
+                &limited.transcript,
+                crate::ContextTarget::Sync,
+            );
+            assert!(
+                matches!(&deferred[0].content, crate::TranscriptContent::NativeMessage(item)
+                if item.as_ref() == &call)
+            );
             let mut limited = profile.clone();
             // The call fits alone; its paired output must count toward retention too.
             limited.retention.max_tool_transcript_tokens = crate::estimate_input_tokens(&call);

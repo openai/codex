@@ -4,7 +4,6 @@
 
 use crate::ContextSection;
 use crate::GuardianToolDescriptions;
-use crate::MAX_TEXT_PART_ESTIMATED_TOKENS;
 use crate::SectionContributor;
 use crate::SectionError;
 use crate::SectionInput;
@@ -29,7 +28,7 @@ pub fn action_for_review(mut action: serde_json::Value) -> serde_json::Value {
 pub struct PlannedAction {
     pub kind: PlannedActionKind,
     pub reason: Option<String>,
-    /// Untrusted metadata capped during sync preparation; action JSON stays complete.
+    /// Untrusted metadata; synchronous preparation applies the selected request policy.
     pub tool_descriptions: Option<GuardianToolDescriptions>,
 }
 
@@ -198,13 +197,6 @@ impl SectionContributor for PlannedActionSection {
         {
             return Err(SectionError::UnsupportedDelivery {
                 section: "planned_action",
-            });
-        }
-        if let PlannedActionKind::ToolCall(call) = &action.kind
-            && crate::native_tool_call::estimate_tokens(call) > MAX_TEXT_PART_ESTIMATED_TOKENS
-        {
-            return Err(SectionError::EvidenceLimitExceeded {
-                section: "native_tool_call",
             });
         }
         Ok(Some(ContextSection::PlannedAction(action.clone())))

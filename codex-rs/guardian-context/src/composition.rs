@@ -66,11 +66,7 @@ impl SectionDelivery {
         Self::UserContent(
             items
                 .into_iter()
-                .map(|item| Budgeted {
-                    content: SectionContent::Other(item.content),
-                    retention: item.retention,
-                    source: item.source,
-                })
+                .map(|item| item.map(SectionContent::Other))
                 .collect(),
         )
     }
@@ -229,7 +225,10 @@ impl CollectedContext {
                         section: "sync_preparation",
                     });
                 }
-                crate::preparation::prepare_sync_sections(&mut self);
+                crate::preparation::prepare_sync_sections(
+                    &mut self,
+                    crate::ContextBudgeting::Fixed,
+                )?;
                 self.compose_prepared(presentation, transcript)
             }
             ContextPresentation::Async | ContextPresentation::AsyncDelta => {
@@ -333,6 +332,11 @@ impl CollectedContext {
                         items
                             .into_iter()
                             .map(|item| Budgeted {
+                                protected: matches!(
+                                    item.kind,
+                                    RetainedInstructionKind::Framing
+                                        | RetainedInstructionKind::HostNotice
+                                ),
                                 content: ContentItem::InputText {
                                     text: format!("{}\n", item.content),
                                 },
@@ -359,7 +363,7 @@ impl CollectedContext {
                         transcript.take().ok_or(SectionError::UnsupportedDelivery {
                             section: "conversation_transcript",
                         })?;
-                    let mut items = vec![Budgeted::required(start.to_owned().into())];
+                    let mut items = vec![Budgeted::protected(start.to_owned().into())];
                     for (index, entry) in transcript.items.into_iter().enumerate() {
                         let content = match entry.content {
                             TranscriptContent::NativeMessage(message) => {
@@ -377,6 +381,7 @@ impl CollectedContext {
                                     SectionOutput {
                                         id: "conversation_transcript",
                                         delivery: SectionDelivery::Message(Budgeted {
+                                            protected: entry.protected,
                                             content: Box::new(ResponseItemEnvelope::new(*message)),
                                             retention: entry.retention,
                                             source: entry.source,
@@ -406,19 +411,20 @@ impl CollectedContext {
                             }
                         };
                         items.push(Budgeted {
+                            protected: entry.protected,
                             content,
                             retention: entry.retention,
                             source: entry.source,
                         });
                     }
-                    items.push(Budgeted::required(end.to_owned().into()));
+                    items.push(Budgeted::protected(end.to_owned().into()));
                     if let Some(session_id) = session_id {
-                        items.push(Budgeted::required(
+                        items.push(Budgeted::protected(
                             format!("Reviewed Codex session id: {session_id}\n").into(),
                         ));
                     }
                     if let Some(note) = transcript.omission_note {
-                        items.push(Budgeted::required(format!("\n{note}\n").into()));
+                        items.push(Budgeted::protected(format!("\n{note}\n").into()));
                     }
                     (
                         4,

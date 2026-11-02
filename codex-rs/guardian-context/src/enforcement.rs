@@ -36,10 +36,13 @@ pub(crate) enum BudgetPriority {
 }
 
 /// Content and its selection policy move together through rendering and admission.
-/// Consumers may add required content; optional priorities stay crate-owned.
+/// Required support uses the section minimum in Elastic mode. Protected host framing
+/// and exact actions stay complete; Fixed retention remains unchanged.
 #[derive(Clone, PartialEq)]
 pub struct Budgeted<T> {
     pub content: T,
+    /// Host framing and exact actions use global space, outside section quotas.
+    pub(crate) protected: bool,
     pub(crate) source: Option<codex_history::RetainedSource>,
     pub(crate) retention: Retention,
 }
@@ -48,14 +51,32 @@ impl<T> Budgeted<T> {
     pub fn required(content: T) -> Self {
         Self {
             content,
+            protected: false,
             source: None,
             retention: Retention::Required,
+        }
+    }
+
+    pub(crate) fn protected(content: T) -> Self {
+        Self {
+            protected: true,
+            ..Self::required(content)
+        }
+    }
+
+    pub(crate) fn map<U>(self, transform: impl FnOnce(T) -> U) -> Budgeted<U> {
+        Budgeted {
+            content: transform(self.content),
+            protected: self.protected,
+            source: self.source,
+            retention: self.retention,
         }
     }
 
     pub(crate) fn historical(content: T) -> Self {
         Self {
             content,
+            protected: false,
             source: None,
             retention: Retention::Historical,
         }
@@ -64,6 +85,7 @@ impl<T> Budgeted<T> {
     pub(crate) fn optional(content: T, priority: BudgetPriority) -> Self {
         Self {
             content,
+            protected: false,
             source: None,
             retention: Retention::Optional(priority),
         }
@@ -75,6 +97,7 @@ impl<T> std::fmt::Debug for Budgeted<T> {
         formatter
             .debug_struct("Budgeted")
             .field("retention", &self.retention)
+            .field("protected", &self.protected)
             .finish_non_exhaustive()
     }
 }

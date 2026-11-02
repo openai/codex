@@ -83,13 +83,13 @@ fn entry_caps_bound_required_and_optional_text_preserving_metadata_and_opaque_pa
             .is_ok()
     );
     let limits = ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS).unwrap();
-    let config = ElasticBudgetConfig {
+    let config = crate::budget::tests::complete_minimum_budget(ElasticBudgetConfig {
         sections: [
             (ElasticSection::TranscriptTools, limits),
             (ElasticSection::TranscriptMessages, limits),
         ]
         .into(),
-    };
+    });
     let tiny_limit = ElasticSectionLimits::new(
         /*min_total_section_tokens*/ 1, /*max_section_entry_tokens*/ 1,
     )

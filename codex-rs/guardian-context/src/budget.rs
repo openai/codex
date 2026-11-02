@@ -146,6 +146,24 @@ pub enum ElasticSection {
     PermissionContext,
 }
 
+impl ElasticSection {
+    const ALL: &[Self] = &[
+        Self::TranscriptMessages,
+        Self::TranscriptTools,
+        Self::RootConversationMessages,
+        Self::RetainedUserInstructions,
+        Self::TrustedUserAnswers,
+        Self::SenderUserMessages,
+        Self::PlannedAction,
+        Self::PreviousReviews,
+        Self::TrustedTools,
+        Self::TrustedSkills,
+        Self::TranscriptImages,
+        Self::NodeReplEvidence,
+        Self::PermissionContext,
+    ];
+}
+
 /// Per-group elastic limits, validated when decoded; not an activation switch.
 /// Entry caps apply to required and optional supporting text; exact actions stay whole.
 /// Omitted groups use the synchronous entry caps,
@@ -158,6 +176,24 @@ pub struct ElasticBudgetConfig {
 }
 
 impl ElasticBudgetConfig {
+    /// Includes fallback policies for sections omitted from the configured map.
+    pub fn total_minimum_tokens(&self) -> u128 {
+        ElasticSection::ALL
+            .iter()
+            .copied()
+            .map(|section| self.section_limits(section).min_total_section_tokens() as u128)
+            .sum()
+    }
+
+    /// Required reservations use exactly the nominal Guardian input budget.
+    pub fn validate(&self) -> Result<(), crate::SectionError> {
+        let total = self.total_minimum_tokens();
+        if total != DEFAULT_MAX_INPUT_TOKENS as u128 {
+            return Err(crate::SectionError::SectionMinimumTotalMismatch { total });
+        }
+        Ok(())
+    }
+
     pub(crate) fn section_limits(&self, section: ElasticSection) -> ElasticSectionLimits {
         self.sections.get(&section).copied().unwrap_or_else(|| {
             let entries = crate::ContextProfile::synchronous().transcript.entry_limits;
@@ -519,4 +555,4 @@ impl Write for ByteCount {
 
 #[cfg(test)]
 #[path = "budget_tests.rs"]
-mod tests;
+pub(crate) mod tests;

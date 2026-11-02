@@ -3,6 +3,8 @@
 //! Profile retention keeps the existing sync and async evidence priorities.
 
 use super::*;
+use crate::composition::SectionContent;
+use crate::composition::SectionDelivery;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -125,6 +127,52 @@ fn profiles_reserve_the_newest_five_tool_entries_for_aggregate_enforcement() {
                 Retention::Required
             ]
         );
+        if profile.target == ContextTarget::Sync {
+            let mut limited = profile.clone();
+            limited.retention.max_recent_non_user_entries = 1;
+            limited.retention.max_tool_transcript_tokens = 1;
+            limited.transcript.entry_limits.tool_tokens = 1;
+            limited.transcript_format = crate::TranscriptFormat::Json;
+            let elastic = crate::prepare_sync_context(
+                crate::CollectedContext {
+                    sections: vec![crate::ContextSection::ConversationTranscript {
+                        items: entries.clone(),
+                    }],
+                },
+                &limited,
+                /*entry_number_offset*/ 0,
+                crate::ContextPresentation::SyncFull {
+                    session_id: "worker",
+                },
+                ContextBudgeting::Elastic,
+            )
+            .unwrap();
+            let actual = elastic
+                .sections
+                .into_iter()
+                .flat_map(|section| {
+                    let SectionDelivery::UserContent(items) = section.delivery else {
+                        panic!("expected transcript content");
+                    };
+                    items.into_iter().filter_map(|item| match item.content {
+                        SectionContent::Transcript(record) => {
+                            Some((item.retention, record.text().to_owned()))
+                        }
+                        SectionContent::Other(_) | SectionContent::Exact(_) => None,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let expected = entries
+                .iter()
+                .map(|entry| {
+                    let TranscriptContent::Text(text) = &entry.content else {
+                        panic!("expected source text");
+                    };
+                    (Retention::Optional(BudgetPriority::Tool), text.clone())
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
     }
 }
 

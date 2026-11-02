@@ -363,14 +363,42 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
                 )),
                 ..action.clone()
             };
-            assert_eq!(
-                super::default_registry().collect(&SectionInput {
+            let collected = super::default_registry()
+                .prepare(&SectionInput {
                     planned_action: Some(&oversized),
                     ..input
-                }),
-                Err(SectionError::EvidenceLimitExceeded {
+                })
+                .unwrap();
+            assert_eq!(
+                super::prepare_sync_context(
+                    collected.clone(),
+                    &super::ContextProfile::synchronous(),
+                    /*entry_number_offset*/ 0,
+                    super::ContextPresentation::SyncFull {
+                        session_id: "worker"
+                    },
+                    super::ContextBudgeting::Fixed,
+                )
+                .err(),
+                Some(SectionError::EvidenceLimitExceeded {
                     section: "native_tool_call"
                 })
+            );
+            let elastic = super::prepare_sync_context(
+                collected,
+                &super::ContextProfile::synchronous(),
+                /*entry_number_offset*/ 0,
+                super::ContextPresentation::SyncFull {
+                    session_id: "worker",
+                },
+                super::ContextBudgeting::Elastic,
+            )
+            .unwrap();
+            let config = super::ElasticBudgetConfig::default();
+            let prepared = elastic.prepare_elastic_entries(&config).unwrap();
+            assert!(
+                matches!(&oversized.kind, super::PlannedActionKind::ToolCall(call)
+                if prepared.context.into_messages().contains(call))
             );
         }
         if target == ContextTarget::Async {
