@@ -79,14 +79,21 @@ pub(super) async fn revert(
 
     // Preserve old-reader compatibility when introducing the first reference to a standalone
     // source. Already-shared ancestors stay read-only; their offsets address decoded JSONL bytes.
-    let mut lineage = store
+    let lineage = store
         .resolve_rollout_lineage(thread_id, /*initial_path*/ None)
         .await?;
-    for segment in &mut lineage.segments {
-        if segment.rollout_id() == current_rollout.rollout_id && source_meta.history_base.is_none()
-        {
-            segment.rollout_path =
-                codex_rollout::materialize_rollout_for_reference(segment.rollout_path.as_path())
+    let boundary = &ForkBoundary::BeforeTurn(before_turn_id);
+    let standalone_rollout_id = source_meta
+        .history_base
+        .is_none()
+        .then_some(current_rollout.rollout_id);
+    let history_base = lineage
+        .read_with_fallback(store, |mut lineage| async move {
+            for segment in &mut lineage.segments {
+                if Some(segment.rollout_id()) == standalone_rollout_id {
+                    segment.rollout_path = codex_rollout::materialize_rollout_for_reference(
+                        segment.rollout_path.as_path(),
+                    )
                     .await
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!(
@@ -94,21 +101,18 @@ pub(super) async fn revert(
                             segment.rollout_path.display()
                         ),
                     })?;
-        }
-        super::thread_history_materialization::materialize_to_sqlite(
-            store,
-            segment.rollout_id(),
-            segment.rollout_path.as_path(),
-        )
+                }
+                super::thread_history_materialization::materialize_to_sqlite_with_reads(
+                    store,
+                    segment.rollout_id(),
+                    segment.rollout_path.as_path(),
+                    &lineage.reads,
+                )
+                .await?;
+            }
+            paginated_fork::history_base_at_boundary(store, thread_id, boundary, &lineage).await
+        })
         .await?;
-    }
-    let history_base = paginated_fork::history_base_at_boundary(
-        store,
-        thread_id,
-        ForkBoundary::BeforeTurn(before_turn_id),
-        &lineage,
-    )
-    .await?;
 
     let forked_from_ordinal_exclusive =
         codex_rollout::forked_from_ordinal_exclusive(&source_meta, Some(source_path.as_path()))

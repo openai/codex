@@ -1452,6 +1452,7 @@ async fn find_thread_path_by_id_from_filenames(
     let mut newest = None;
     visit_rollout_filenames::<()>(
         root,
+        /*excluded_path*/ None,
         |file_name| file_name.thread_id() == target,
         |file_name, path| {
             let rollout_id = Uuid::parse_str(&file_name.rollout_id().to_string()).ok();
@@ -1476,6 +1477,7 @@ async fn find_thread_path_by_id_from_filenames(
 
 async fn visit_rollout_filenames<T>(
     root: &Path,
+    excluded_path: Option<&Path>,
     matches: impl Fn(&RolloutFileName) -> bool,
     mut visitor: impl FnMut(RolloutFileName, PathBuf) -> ControlFlow<T>,
 ) -> io::Result<Option<T>> {
@@ -1511,7 +1513,16 @@ async fn visit_rollout_filenames<T>(
             let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
                 continue;
             };
-            if let ControlFlow::Break(found) = visitor(file_name, rollout_file.into_path()) {
+            let path = rollout_file.into_path();
+            if let Some(excluded) = excluded_path
+                && (path == excluded
+                    || !tokio::fs::canonicalize(&path)
+                        .await
+                        .is_ok_and(|path| path != excluded))
+            {
+                continue;
+            }
+            if let ControlFlow::Break(found) = visitor(file_name, path) {
                 return Ok(Some(found));
             }
         }
@@ -1522,9 +1533,11 @@ async fn visit_rollout_filenames<T>(
 async fn find_rollout_path_by_rollout_id_from_filenames(
     root: &Path,
     rollout_id: RolloutId,
+    excluded_canonical_path: Option<&Path>,
 ) -> io::Result<Option<PathBuf>> {
     visit_rollout_filenames(
         root,
+        excluded_canonical_path,
         |file_name| file_name.rollout_id() == rollout_id,
         |_file_name, path| ControlFlow::Break(path),
     )
@@ -1566,10 +1579,23 @@ pub async fn find_rollout_path_by_rollout_id(
     codex_home: &Path,
     rollout_id: RolloutId,
 ) -> io::Result<Option<PathBuf>> {
+    find_rollout_path_by_rollout_id_excluding(
+        codex_home, rollout_id, /*excluded_canonical_path*/ None,
+    )
+    .await
+}
+
+/// Find an immutable rollout, skipping the canonical path of a rejected copy when supplied.
+pub async fn find_rollout_path_by_rollout_id_excluding(
+    codex_home: &Path,
+    rollout_id: RolloutId,
+    excluded_canonical_path: Option<&Path>,
+) -> io::Result<Option<PathBuf>> {
     for subdir in [SESSIONS_SUBDIR, ARCHIVED_SESSIONS_SUBDIR] {
         let path = find_rollout_path_by_rollout_id_from_filenames(
             codex_home.join(subdir).as_path(),
             rollout_id,
+            excluded_canonical_path,
         )
         .await?;
         if path.is_some() {
@@ -1595,6 +1621,7 @@ pub async fn find_rollout_paths_by_rollout_ids(
         }
         if visit_rollout_filenames(
             &codex_home.join(subdir),
+            /*excluded_path*/ None,
             |file_name| ids.contains(&file_name.rollout_id()),
             |file_name, path| {
                 paths.entry(file_name.rollout_id()).or_insert(path);
@@ -1660,6 +1687,7 @@ pub async fn prefetch_sibling_rollout_paths(
     let mut paths = HashMap::new();
     visit_rollout_filenames(
         &active_root,
+        /*excluded_path*/ None,
         |file_name| ids.contains(&file_name.rollout_id()),
         |file_name, path| {
             paths.entry(file_name.rollout_id()).or_insert(path);

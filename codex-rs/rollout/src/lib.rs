@@ -123,6 +123,7 @@ pub use list::ThreadSortKey;
 pub use list::ThreadsPage;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_rollout_path_by_rollout_id;
+pub use list::find_rollout_path_by_rollout_id_excluding;
 pub use list::find_rollout_paths_by_rollout_ids;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]

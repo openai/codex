@@ -2524,7 +2524,10 @@ async fn paused_projection_releases_writer_and_retains_progress_when_stopped() {
             rollout_line_byte_offsets(rollout_path.as_path(), /*ordinal*/ 1);
         let (sender, receiver) = tokio::sync::mpsc::channel(2);
         super::read_projection_batches(
-            rollout_path.as_path(),
+            &super::ProjectionRollout {
+                path: rollout_path.clone(),
+                reads: Default::default(),
+            },
             before.0 as u64,
             before.1 as u64,
             thread_id,
@@ -2718,7 +2721,10 @@ async fn blank_and_rejected_rollout_lines_advance_projection() {
     let checks = Cell::new(0);
     assert!(
         super::read_projection_batches(
-            rollout_path.as_path(),
+            &super::ProjectionRollout {
+                path: rollout_path.clone(),
+                reads: Default::default(),
+            },
             /*start_offset*/ 0,
             /*expected_ordinal*/ 0,
             thread_id,

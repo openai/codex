@@ -1,9 +1,12 @@
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::HistoryPosition;
+use codex_rollout::RolloutItem;
 use std::sync::Arc;
 
 use super::LocalThreadStore;
 use super::live_writer;
 use super::model_context;
+use super::rollout_lineage::RolloutLineage;
 use super::thread_history::find_source_turn;
 use super::thread_history::find_visible_turn;
 use crate::ForkBoundary;
@@ -18,7 +21,7 @@ pub(super) async fn prepare(
 ) -> ThreadStoreResult<PreparedFork> {
     let PrepareForkParams {
         thread_id,
-        boundary,
+        ref boundary,
     } = params;
     let source_reservation = store.live_writer_locks.reserve_lifecycle(thread_id).await;
     // Keep the source reserved until persistence and lineage materialization finish, even if the
@@ -38,17 +41,36 @@ pub(super) async fn prepare(
     .map_err(|err| ThreadStoreError::Internal {
         message: format!("failed to resolve fork lineage: {err}"),
     })??;
+    if store.state_db.is_none() {
+        return Err(ThreadStoreError::Unsupported {
+            operation: "prepare_fork",
+        });
+    }
+    let (history_base, model_context) = lineage
+        .read_with_fallback(store, |lineage| {
+            read_fork_history(store, thread_id, boundary, lineage)
+        })
+        .await?;
+    Ok(PreparedFork::new(
+        thread_id,
+        history_base,
+        Arc::new(model_context),
+        source_reservation,
+    ))
+}
+
+async fn read_fork_history(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    boundary: &ForkBoundary,
+    lineage: RolloutLineage,
+) -> ThreadStoreResult<(Option<HistoryPosition>, Vec<RolloutItem>)> {
     let source_segment = lineage
         .segments()
         .last()
         .ok_or_else(|| ThreadStoreError::Internal {
             message: "fork lineage has no source segment".to_string(),
         })?;
-    if store.state_db.is_none() {
-        return Err(ThreadStoreError::Unsupported {
-            operation: "prepare_fork",
-        });
-    }
     if !matches!(boundary, ForkBoundary::Latest) {
         for segment in lineage
             .segments()
@@ -56,10 +78,11 @@ pub(super) async fn prepare(
             .take(lineage.segments().len().saturating_sub(1))
         {
             let _ancestor_writer_guard = store.live_writer_locks.lock(segment.rollout_id()).await;
-            super::thread_history_materialization::materialize_to_sqlite(
+            super::thread_history_materialization::materialize_to_sqlite_with_reads(
                 store,
                 segment.rollout_id(),
                 segment.rollout_path.as_path(),
+                &lineage.reads,
             )
             .await?;
         }
@@ -74,21 +97,15 @@ pub(super) async fn prepare(
 
     let history_base = history_base_at_boundary(store, thread_id, boundary, &lineage).await?;
     drop(source_writer_guard);
-    let model_context = Arc::new(model_context::load_for_fork(lineage, history_base).await?);
-
-    Ok(PreparedFork::new(
-        thread_id,
-        history_base,
-        model_context,
-        source_reservation,
-    ))
+    let model_context = model_context::load_for_fork(lineage, history_base).await?;
+    Ok((history_base, model_context))
 }
 
 pub(super) async fn history_base_at_boundary(
     store: &LocalThreadStore,
-    thread_id: codex_protocol::ThreadId,
-    boundary: ForkBoundary,
-    lineage: &super::rollout_lineage::RolloutLineage,
+    thread_id: ThreadId,
+    boundary: &ForkBoundary,
+    lineage: &RolloutLineage,
 ) -> ThreadStoreResult<Option<HistoryPosition>> {
     let source_segment = lineage
         .segments()
@@ -111,9 +128,7 @@ pub(super) async fn history_base_at_boundary(
     let position = match boundary {
         ForkBoundary::Latest => latest_position,
         ForkBoundary::ThroughTurn(turn_id) => {
-            let visible = store
-                .resolve_rollout_lineage_for_history_page(thread_id)
-                .await?;
+            let visible = lineage.for_history_page().await?;
             let row = find_visible_turn(pool, &visible, turn_id.as_str()).await?;
             if row.status == "inProgress" {
                 return Err(ThreadStoreError::InvalidRequest {
@@ -137,9 +152,7 @@ pub(super) async fn history_base_at_boundary(
             }
         }
         ForkBoundary::BeforeTurn(turn_id) => {
-            let visible = store
-                .resolve_rollout_lineage_for_history_page(thread_id)
-                .await?;
+            let visible = lineage.for_history_page().await?;
             let row = find_source_turn(pool, &visible, turn_id.as_str()).await?;
             if row.rollout_end_ordinal == Some(row.rollout_ordinal) {
                 return Err(ThreadStoreError::InvalidRequest {

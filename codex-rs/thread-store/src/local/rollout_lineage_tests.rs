@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use codex_protocol::ThreadId;
@@ -14,6 +15,10 @@ use tempfile::TempDir;
 use super::super::LocalThreadStore;
 use super::super::test_support::test_config;
 use super::RolloutLineageSegment;
+use crate::ForkBoundary;
+use crate::LoadThreadHistoryParams;
+use crate::PrepareForkParams;
+use crate::ThreadStore;
 
 #[cfg(unix)]
 #[tokio::test]
@@ -86,18 +91,21 @@ async fn resolves_nested_lineage_with_empty_intermediate_segments() {
                 rollout_path: root_path.clone(),
                 start_ordinal: 1,
                 end: Some(root_end),
+                hides_parent: false,
             },
             RolloutLineageSegment {
                 rollout_id: middle,
                 rollout_path: middle_path.clone(),
                 start_ordinal: 5,
                 end: Some(middle_end),
+                hides_parent: false,
             },
             RolloutLineageSegment {
                 rollout_id: child,
                 rollout_path: child_path,
                 start_ordinal: 6,
                 end: None,
+                hides_parent: false,
             },
         ]
     );
@@ -132,6 +140,161 @@ async fn resolves_archived_ancestors() {
         .expect("resolve archived ancestor");
 
     assert_eq!(lineage.segments[0].rollout_path, root_path);
+}
+
+#[tokio::test]
+async fn unreadable_ancestor_recovers_from_another_copy_of_the_same_rollout() {
+    let temp = TempDir::new().expect("temp dir");
+    let home = temp.path().canonicalize().expect("canonical home");
+    let store = store_with_state(&home).await;
+    let owner = ThreadId::new();
+    let root = ThreadId::new();
+    let child = ThreadId::new();
+    let original = write_rollout(
+        &home, owner, /*history_base*/ None, /*next_ordinal*/ 5,
+    );
+    // Reverted rollout filenames contain the owner's stable thread ID and a distinct rollout ID.
+    let name = format!("rollout-2026-07-16T00-00-00-{owner}_{root}.jsonl");
+    let active = original.with_file_name(&name);
+    fs::rename(original, &active).expect("name reverted rollout");
+    let end = history_position(&active, root, /*end_ordinal_exclusive*/ 3);
+    let child_path = write_rollout(&home, child, Some(end), /*next_ordinal*/ 2);
+    let archived_dir = home.join("archived_sessions");
+    fs::create_dir_all(&archived_dir).expect("create archive");
+    let archived = archived_dir.join(name);
+    let contents = fs::read_to_string(&active).expect("read active rollout");
+    let load_context = || {
+        store.load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: child,
+            include_archived: false,
+        })
+    };
+    let expected = load_context().await.expect("load intact context").items;
+    let expected = serde_json::to_value(expected).expect("serialize context");
+    let compressed = active.with_extension("jsonl.zst");
+    let header = contents
+        .split_inclusive('\n')
+        .next()
+        .expect("session header");
+    write_unfinished_frame(&compressed, header, header.len());
+    fs::remove_file(&active).expect("remove plain rollout");
+
+    let assert_original_error = async || {
+        let err = load_context().await.expect_err("no usable copy");
+        assert!(
+            err.to_string()
+                .ends_with(&format!("{}: incomplete frame", compressed.display())),
+            "{err}"
+        );
+    };
+    assert_original_error().await;
+    let page_error = store
+        .resolve_rollout_lineage_for_history_page(child)
+        .await
+        .expect_err("the active copy cannot supply the inherited prefix");
+    let child_contents = fs::read_to_string(&child_path).expect("read child");
+    let checkpoint = serde_json::json!({
+        "timestamp": "2026-07-16T00:00:00.000Z", "ordinal": 5, "type": "compacted",
+        "payload": {"message": "child checkpoint", "replacement_history": [], "window_number": 1}
+    });
+    fs::write(&child_path, format!("{child_contents}{checkpoint}\n")).expect("append checkpoint");
+    let context = load_context()
+        .await
+        .expect("resume at the newer checkpoint");
+    assert!(matches!(
+        context.items.as_slice(),
+        [RolloutItem::SessionMeta(_), RolloutItem::Compacted(item)] if item.message == "child checkpoint"
+    ));
+    fs::write(&child_path, child_contents).expect("restore child");
+    fs::write(
+        &archived,
+        contents.replace(&owner.to_string(), &root.to_string()),
+    )
+    .expect("stage another owner's history");
+    assert_original_error().await;
+    let err = store
+        .resolve_rollout_lineage_for_history_page(child)
+        .await
+        .expect_err("history pages must reject a replacement from another owner");
+    assert_eq!(err.to_string(), page_error.to_string());
+
+    let archive = contents.split_inclusive('\n').take(4).collect::<String>();
+    fs::write(&archived, archive).expect("restore matching archived copy");
+    let page = store
+        .resolve_rollout_lineage_for_history_page(child)
+        .await
+        .expect("page from archive");
+    assert_eq!(page.segments[0].rollout_path, archived);
+    let context = load_context().await.expect("resume from archive").items;
+    assert_eq!(
+        serde_json::to_value(context).expect("serialize resumed context"),
+        expected
+    );
+    let fork = store
+        .prepare_fork(PrepareForkParams {
+            thread_id: child,
+            boundary: ForkBoundary::Latest,
+        })
+        .await
+        .expect("fork from archive");
+    assert_eq!(
+        serde_json::to_value(fork.model_context.as_ref()).expect("serialize fork context"),
+        expected
+    );
+
+    let assert_archive_projected = async |expected_offset| {
+        let err = store
+            .prepare_fork(PrepareForkParams {
+                thread_id: child,
+                boundary: ForkBoundary::ThroughTurn("missing".to_string()),
+            })
+            .await
+            .expect_err("turn is missing after projection");
+        assert!(
+            matches!(&err, crate::ThreadStoreError::InvalidRequest { message } if message == "turn not found: missing"),
+            "{err}"
+        );
+        let projection = super::super::thread_history::projection_state(&store, root)
+            .await
+            .expect("read checkpoint")
+            .expect("ancestor projected");
+        assert_eq!(projection.next_byte_offset, expected_offset);
+    };
+    assert_archive_projected(end.end_byte_offset).await;
+
+    // The ancestor's own projection can advance beyond the child's inherited prefix.
+    super::super::thread_history_materialization::materialize_to_sqlite(&store, root, &archived)
+        .await
+        .expect("project the rest of the archive");
+    let projected = fs::metadata(&archived).expect("archive size").len();
+    let prefix = &contents.as_bytes()[..end.end_byte_offset as usize];
+    let compressed_prefix = zstd::encode_all(prefix, /*level*/ 0).expect("compress prefix");
+    fs::write(&compressed, compressed_prefix).expect("replace active copy with a shorter stream");
+    fs::write(&archived, prefix).expect("shorten archive to the inherited prefix");
+    assert_archive_projected(projected).await;
+}
+
+async fn store_with_state(home: &Path) -> LocalThreadStore {
+    let config = test_config(home);
+    let state = codex_state::StateRuntime::init(
+        config.sqlite.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await
+    .expect("initialize sqlite");
+    LocalThreadStore::new(config, Some(state))
+}
+
+fn write_unfinished_frame(path: &Path, contents: &str, prefix_len: usize) {
+    let mut encoder = zstd::Encoder::new(Vec::new(), /*level*/ 0).expect("create encoder");
+    encoder
+        .set_pledged_src_size(Some(contents.len() as u64))
+        .expect("advertise full size");
+    encoder
+        .write_all(&contents.as_bytes()[..prefix_len])
+        .expect("write prefix");
+    encoder.flush().expect("flush unfinished frame");
+    fs::write(path, encoder.get_ref()).expect("write unfinished frame");
 }
 
 #[tokio::test]
@@ -170,12 +333,14 @@ async fn resolves_lineage_at_explicit_history_position() {
                 rollout_path: root_path.clone(),
                 start_ordinal: 1,
                 end: Some(root_end),
+                hides_parent: false,
             },
             RolloutLineageSegment {
                 rollout_id: child,
                 rollout_path: child_path.clone(),
                 start_ordinal: 5,
                 end: Some(end),
+                hides_parent: false,
             },
         ]
     );
@@ -246,7 +411,10 @@ async fn rejects_missing_cycles_and_out_of_bounds_offsets() {
 
 async fn assert_invalid_lineage(store: &LocalThreadStore, thread_id: ThreadId, detail: &str) {
     let err = store
-        .resolve_rollout_lineage(thread_id, /*initial_path*/ None)
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
         .await
         .expect_err("lineage should be invalid");
     assert!(err.to_string().contains(detail), "{err}");

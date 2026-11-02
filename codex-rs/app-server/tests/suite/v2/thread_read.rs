@@ -1237,6 +1237,105 @@ async fn thread_read_can_return_archived_threads_by_id() -> Result<()> {
 }
 
 #[tokio::test]
+async fn cold_resume_pages_inherited_history_when_active_ancestor_is_short() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let filename_ts = "2025-01-05T12-00-00";
+    let parent_id = create_fake_paginated_rollout(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let active = rollout_path(codex_home.path(), filename_ts, &parent_id);
+    for item in [
+        paginated_turn_started("turn-1"),
+        paginated_completed_item(
+            codex_protocol::ThreadId::from_string(&parent_id)?,
+            "turn-1",
+            CoreTurnItem::UserMessage(UserMessageItem {
+                id: "user-1".to_string(),
+                client_id: None,
+                content: Vec::new(),
+            }),
+        ),
+        paginated_turn_completed("turn-1"),
+    ] {
+        codex_rollout::append_rollout_item_to_path(&active, &item).await?;
+    }
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let fork: ThreadForkResponse = app
+        .request(|request_id| ClientRequest::ThreadFork {
+            request_id,
+            params: ThreadForkParams {
+                thread_id: parent_id,
+                ..Default::default()
+            },
+        })
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, app.shutdown_gracefully()).await??;
+
+    // Leave the preferred copy readable, but shorter than the child's inherited bookmark.
+    let archive = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    std::fs::create_dir_all(&archive)?;
+    let filename = active.file_name().expect("rollout filename");
+    std::fs::copy(&active, archive.join(filename))?;
+    let contents = std::fs::read_to_string(&active)?;
+    let (header, _) = contents.split_once('\n').expect("rollout body");
+    std::fs::write(&active, format!("{header}\n"))?;
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let child_id = codex_protocol::ThreadId::from_string(&fork.thread.id)?;
+    let resumed: ThreadResumeResponse = app
+        .request(|request_id| ClientRequest::ThreadResume {
+            request_id,
+            params: ThreadResumeParams {
+                thread_id: fork.thread.id,
+                exclude_turns: true,
+                ..Default::default()
+            },
+        })
+        .await?;
+    assert!(resumed.thread.turns.is_empty());
+    let turn_cursor = resumed.turns_backwards_cursor.expect("turn cursor");
+    let item_cursor = resumed.items_backwards_cursor.expect("item cursor");
+    let turns = read_turns_page(
+        &mut app,
+        child_id,
+        Some(turn_cursor),
+        Some(1),
+        SortDirection::Desc,
+        Some(TurnItemsView::NotLoaded),
+    )
+    .await?;
+    let items = read_items_page(
+        &mut app,
+        child_id,
+        /*turn_id*/ None,
+        Some(item_cursor),
+        Some(1),
+        SortDirection::Desc,
+    )
+    .await?;
+    assert_eq!(turns.data[0].id, "turn-1");
+    assert_eq!(items.data[0].turn_id, "turn-1");
+    assert_eq!(items.data[0].item.id(), "user-1");
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_initial_turns_page_matches_requested_turns_list_page() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
