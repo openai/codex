@@ -600,6 +600,53 @@ async fn evicted_voice_marker_survives_widget_snapshot_for_late_reasoning() {
 }
 
 #[tokio::test]
+async fn switching_back_to_a_long_running_turn_preserves_steering() {
+    let (mut app, _events, mut ops) = make_test_app_with_channels().await;
+    let (mut before_switch, _tx, _rx, _ops) = make_chatwidget_manual_with_sender().await;
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, app.config.cwd.to_path_buf());
+    before_switch.handle_thread_session(session.clone());
+    let mut store = ThreadEventStore::new_with_session(
+        /*capacity*/ 1,
+        session,
+        vec![test_turn("previous", TurnStatus::Completed, Vec::new())],
+    );
+    let started = ServerNotification::TurnStarted(TurnStartedNotification {
+        thread_id: thread_id.to_string(),
+        turn: test_turn("running", TurnStatus::InProgress, Vec::new()),
+    });
+    store.push_notification_ref(&started);
+    before_switch.handle_server_notification(started, /*replay_kind*/ None);
+    before_switch.apply_external_edit("follow-up".to_string());
+    before_switch.handle_key_event(KeyEvent::from(KeyCode::Tab));
+    store.input_state = before_switch.capture_thread_input_state();
+    store.push_notification(agent_message_delta_notification(
+        thread_id, "running", "answer", "Working",
+    ));
+    app.replay_thread_snapshot(store.snapshot(), /*resume_restored_queue*/ true);
+
+    for text in ["first steer", "second steer"] {
+        app.chat_widget.apply_external_edit(text.to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::Enter));
+        let Op::UserTurn { items, .. } = next_user_turn_op(&mut ops) else {
+            unreachable!()
+        };
+        assert_eq!(
+            items,
+            [UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }]
+        );
+    }
+    insta::assert_snapshot!(
+        "steers_after_returning_to_a_running_turn",
+        normalize_snapshot_paths(render_bottom_popup(&app.chat_widget, /*width*/ 80))
+    );
+}
+
+#[tokio::test]
 async fn buffered_replay_renders_completed_text_without_streaming_again() {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let mut store = ThreadEventStore::new(/*capacity*/ 16);

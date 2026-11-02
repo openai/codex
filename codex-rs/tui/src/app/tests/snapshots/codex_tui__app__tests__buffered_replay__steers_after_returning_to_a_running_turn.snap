@@ -1,0 +1,18 @@
+---
+source: tui/src/app/tests/buffered_replay.rs
+expression: "normalize_snapshot_paths(render_bottom_popup(&app.chat_widget, 80))"
+---
+• Working
+
+• Messages to be submitted after next tool call (press esc to interrupt and send
+  immediately)
+  ↳ first steer
+  ↳ second steer
+
+• Queued follow-up inputs
+  ↳ follow-up
+    ⇧← edit last queued message
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project

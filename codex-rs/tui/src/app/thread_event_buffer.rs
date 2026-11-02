@@ -64,6 +64,10 @@ impl ThreadEventStore {
                         self.buffered_agent_message_delta_bytes = self
                             .buffered_agent_message_delta_bytes
                             .saturating_sub(delta.delta.len());
+                    } else if let ServerNotification::TurnStarted(started) = *notification
+                        && self.active_turn_id() == Some(&started.turn.id)
+                    {
+                        self.evicted_active_turn = Some(Box::new(started.turn));
                     }
                 }
                 ThreadBufferedEvent::Request(request) => self
