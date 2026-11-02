@@ -615,6 +615,12 @@ pub struct ThreadOccurrenceSearchPage {
 /// Store-owned thread metadata used by list/read/resume responses.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredThread {
+    /// Recorded creator user, when available from the backing store.
+    #[serde(default)]
+    pub creator_user_id: Option<String>,
+    /// Recorded creator workspace, when available from the backing store.
+    #[serde(default)]
+    pub creator_account_id: Option<String>,
     /// Originator recorded at creation, if available from the backing store.
     #[serde(default)]
     pub originator: Option<String>,

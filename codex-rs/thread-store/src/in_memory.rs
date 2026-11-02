@@ -1115,6 +1115,14 @@ fn stored_thread_from_state(
         });
 
     Ok(StoredThread {
+        creator_user_id: created
+            .creator_user_id
+            .clone()
+            .or_else(|| metadata.and_then(|metadata| metadata.creator_user_id.clone())),
+        creator_account_id: created
+            .creator_account_id
+            .clone()
+            .or_else(|| metadata.and_then(|metadata| metadata.creator_account_id.clone())),
         originator: (!created.originator.is_empty()).then(|| created.originator.clone()),
         thread_id,
         extra_config: created.extra_config.clone(),

@@ -1,0 +1,8 @@
+---
+source: app-server/tests/suite/v2/thread_resume_account_tests.rs
+expression: "serde_json::to_string_pretty(&error.error)?"
+---
+{
+  "code": -32600,
+  "message": "This thread was created with a different ChatGPT account or workspace. Sign in with the original account to resume it."
+}

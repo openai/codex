@@ -29,6 +29,8 @@ use tempfile::TempDir;
 
 fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThread {
     StoredThread {
+        creator_user_id: None,
+        creator_account_id: None,
         originator: None,
         thread_id: ThreadId::new(),
         extra_config: None,

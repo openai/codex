@@ -105,6 +105,8 @@ pub enum Feature {
     ApiKeyCyberAccessPrograms,
     /// Enable Daybreak controls and automatic access-program selection in CLI clients.
     CliDaybreak,
+    /// Restrict CLI resume of attributed local threads to their creator.
+    CliResumeAccountCheck,
     /// Removed no-op; use `tui.fullscreen_transcript` instead.
     TranscriptV2,
     // Stable.
@@ -1094,6 +1096,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
             announcement: "",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CliResumeAccountCheck,
+        key: "cli_resume_account_check",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

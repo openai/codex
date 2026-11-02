@@ -6,6 +6,9 @@ mod daemon_snapshot;
 
 mod workspace_switching;
 
+#[path = "thread_resume_account.rs"]
+mod thread_resume_account;
+
 use super::persisted_resume_settings::PersistedResumeSettings;
 use super::persisted_resume_settings::latest_owned_thread_settings;
 use super::persisted_resume_settings::latest_persisted_model_settings;
@@ -4012,37 +4015,37 @@ impl ThreadRequestProcessor {
         let prepared_model_context = prepared_config
             .as_mut()
             .and_then(|prepared| prepared.model_context.take());
-        let resume_result = if let Some(history) = history {
-            self.resume_thread_from_history(history.as_slice())
-                .await
-                .map(|thread_history| (thread_history, None))
-        } else if let Some(stored_thread) = stored_thread_from_running_probe {
-            self.load_resume_initial_history_from_stored_thread(
-                *stored_thread,
-                prepared_model_context,
+        let (thread_history, resume_source_thread) = if let Some(history) = history {
+            (
+                self.resume_thread_from_history(history.as_slice()).await?,
+                None,
             )
-            .await
-            .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
         } else {
-            match self
-                .read_stored_thread_for_resume(
-                    &thread_id,
-                    path.as_ref(),
-                    /*include_history*/ false,
-                )
-                .await
-            {
-                Ok(stored_thread) => self
-                    .load_resume_initial_history_from_stored_thread(
-                        stored_thread,
-                        prepared_model_context,
+            let stored_thread = match stored_thread_from_running_probe {
+                Some(stored_thread) => *stored_thread,
+                None => {
+                    self.read_stored_thread_for_resume(
+                        &thread_id,
+                        path.as_ref(),
+                        /*include_history*/ false,
                     )
-                    .await
-                    .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread))),
-                Err(error) => Err(error),
-            }
+                    .await?
+                }
+            };
+            thread_resume_account::check(
+                &self.config.features,
+                app_server_client_name.as_deref(),
+                &self.auth_manager,
+                &stored_thread,
+            )?;
+            let (thread_history, stored_thread) = self
+                .load_resume_initial_history_from_stored_thread(
+                    stored_thread,
+                    prepared_model_context,
+                )
+                .await?;
+            (thread_history, Some(stored_thread))
         };
-        let (thread_history, resume_source_thread) = resume_result?;
         // Path-based resume can use an empty request thread ID. Coordinate once its real
         // identity is known; unrelated loaded threads never wait for this cold startup.
         let _goal_resume_guard = if let InitialHistory::Resumed(resumed) = &thread_history {
@@ -4684,6 +4687,12 @@ impl ThreadRequestProcessor {
         };
 
         if let Some((existing_thread_id, existing_thread, mut source_thread)) = running_thread {
+            thread_resume_account::check(
+                &self.config.features,
+                app_server_client_name.as_deref(),
+                &self.auth_manager,
+                &source_thread,
+            )?;
             let paginated_resume =
                 matches!(source_thread.history_mode, ThreadHistoryMode::Paginated);
             let existing_thread_rollout_path = existing_thread.rollout_path();
