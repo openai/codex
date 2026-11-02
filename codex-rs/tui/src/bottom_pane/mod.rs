@@ -1376,7 +1376,6 @@ impl BottomPane {
         self.status_widget().is_some()
     }
 
-    #[cfg(test)]
     pub(crate) fn status_line_content(&self) -> Option<&footer_content::FooterContent> {
         self.composer.status_line_content()
     }

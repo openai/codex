@@ -69,7 +69,9 @@ impl App {
         if !app_server.is_older_history_page_pending(thread_id, cursor) {
             return Ok(());
         }
+        // The widget can already belong to the destination while the transcript still replays.
         if self.chat_widget.thread_id() != Some(thread_id)
+            || self.awaiting_side_replay(tui)
             || (tui.is_owned_screen() && !self.scrollback_has_older_history)
         {
             app_server.cancel_older_history_page(thread_id, cursor);

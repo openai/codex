@@ -1,4 +1,4 @@
-//! Retain displayed revisions while selecting or reading a live tail or a replaced tool group.
+//! Retain displayed revisions while selecting or reading across live updates and history replay.
 //! Pinned layouts respect manual disclosures; Find's expansion is applied only at display time.
 
 use std::collections::HashMap;
@@ -78,6 +78,27 @@ impl TranscriptView {
                 .snapshot()
                 .and_then(|snapshot| snapshot.search_live.clone())
                 .or_else(|| self.search.live.clone()),
+        }
+    }
+
+    /// Keep the parked reading revision and rebind a quiet tail to its replayed identity.
+    pub(crate) fn restore_after_replay(
+        &mut self,
+        parked: &[Arc<dyn HistoryCell>],
+        replayed: &[Arc<dyn HistoryCell>],
+        replay_may_have_output: bool,
+        replayed_live: Option<ActiveCellTranscriptKey>,
+    ) {
+        if matches!(self.position, Position::Reading(_)) && self.snapshot().is_none() {
+            self.held_reading = Some(self.capture_snapshot(parked));
+        }
+        if !replay_may_have_output {
+            self.last_tail = replayed.last().map(EntryKey::cell);
+            // The parked display and replayed widget may represent the same stream differently.
+            self.live_key = replayed_live.map(|mut key| {
+                key.cacheable = false;
+                (self.area.width, key)
+            });
         }
     }
 

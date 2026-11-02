@@ -125,6 +125,8 @@ pub enum Feature {
     DaemonAutoStart,
     /// Allow the TUI to discover and select among multiple conversation backends.
     TuiMultiBackend,
+    /// Enable workspace behavior for side conversations in the owned TUI.
+    TuiWorkspace,
     /// Render the configured status line through the experimental TUI Extensions renderer.
     TuiExtensionsStatusLine,
     /// Enable negotiated zstd compression for app-server WebSocket and UDS connections.
@@ -1122,6 +1124,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "daemon_auto_start",
         stage: Stage::Removed,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::TuiWorkspace,
+        key: "tui_workspace",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TuiMultiBackend,

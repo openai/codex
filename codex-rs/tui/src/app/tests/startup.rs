@@ -909,6 +909,11 @@ async fn unattended_modals_survive_unfinished_terminal_input() -> Result<()> {
         );
     }
 
+    let snapshot = app.thread_event_channels[&thread_id]
+        .store
+        .lock()
+        .await
+        .snapshot();
     // After the drain has settled a fresh explicit decision works normally.
     app.handle_tui_event(
         &mut tui,
@@ -917,6 +922,40 @@ async fn unattended_modals_survive_unfinished_terminal_input() -> Result<()> {
     )
     .await?;
     assert!(!app.chat_widget.has_active_modal());
+
+    // Replay the cached request with the startup boundary already ended.
+    while app_event_rx.try_recv().is_ok() {}
+    app.startup_protected_input_boundary = false;
+    app.config.features.enable(Feature::TuiWorkspace)?;
+    app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;
+    tui.set_owned_screen(/*owned*/ true)?;
+    crossterm::event::buffer_input(b"\rya")?;
+    app.render_thread_snapshot(
+        &mut tui,
+        &app_server,
+        thread_id,
+        snapshot,
+        /*resume_restored_queue*/ false,
+    )?;
+    assert!(app.chat_widget.has_active_modal());
+    let before = tui.terminal.previous_buffer().clone();
+    let cursor = tui.terminal.last_known_cursor_pos;
+    loop {
+        app.render_startup_frame(&mut tui, &app_event_rx)?;
+        assert_eq!(tui.terminal.previous_buffer(), &before);
+        assert_eq!(tui.terminal.last_known_cursor_pos, cursor);
+        let event = app_event_rx.try_recv()?;
+        let finished = matches!(event, AppEvent::SideReplayFinished(id) if id == thread_id);
+        boxed_future!(app.handle_event(&mut tui, &mut app_server, event)).await?;
+        if finished {
+            break;
+        }
+    }
+    assert!(crossterm::event::poll(std::time::Duration::ZERO)?);
+    app.render_startup_frame(&mut tui, &app_event_rx)?;
+    assert!(buffer_text(tui.terminal.previous_buffer()).contains("echo hello"));
+    assert!(!crossterm::event::poll(std::time::Duration::ZERO)?);
+    tui.set_owned_screen(/*owned*/ false)?;
 
     // Overview can open before the first real input, and survives a server reconnect.
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;

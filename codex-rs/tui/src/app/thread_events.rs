@@ -80,6 +80,8 @@ pub(super) struct ThreadEventStore {
     pub(super) input_state: Option<ThreadInputState>,
     pub(super) capacity: usize,
     pub(super) active: bool,
+    /// Output received since deactivation can change the transcript rebuilt on replay.
+    pub(super) replay_may_have_output: bool,
     pub(super) buffered_agent_message_delta_bytes: usize,
     delegated_turns: VecDeque<String>,
     recap_progress: recap::RecapProgress,
@@ -125,6 +127,7 @@ impl ThreadEventStore {
             input_state: None,
             capacity,
             active: false,
+            replay_may_have_output: false,
             buffered_agent_message_delta_bytes: 0,
             delegated_turns: VecDeque::new(),
             recap_progress: recap::RecapProgress::default(),

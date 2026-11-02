@@ -190,9 +190,14 @@ impl AppServerSession {
 
     /// Match a completion to the page still pending for this thread, before interpreting its result.
     pub(crate) fn is_older_history_page_pending(&self, thread_id: ThreadId, cursor: &str) -> bool {
-        self.history_pagination.get(&thread_id).is_some_and(|page| {
-            page.loading_older && page.next_item_cursor.as_deref() == Some(cursor)
-        })
+        self.pending_older_history_cursor(thread_id) == Some(cursor)
+    }
+
+    pub(crate) fn pending_older_history_cursor(&self, thread_id: ThreadId) -> Option<&str> {
+        self.history_pagination
+            .get(&thread_id)
+            .filter(|page| page.loading_older)
+            .and_then(|page| page.next_item_cursor.as_deref())
     }
 
     pub(crate) fn cancel_older_history_page(&mut self, thread_id: ThreadId, cursor: &str) {

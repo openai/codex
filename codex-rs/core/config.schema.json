@@ -1419,6 +1419,9 @@
             "tui_multi_backend": {
               "type": "boolean"
             },
+            "tui_workspace": {
+              "type": "boolean"
+            },
             "ultrafast_mode": {
               "type": "boolean"
             },
@@ -8134,6 +8137,9 @@
           "type": "boolean"
         },
         "tui_multi_backend": {
+          "type": "boolean"
+        },
+        "tui_workspace": {
           "type": "boolean"
         },
         "ultrafast_mode": {

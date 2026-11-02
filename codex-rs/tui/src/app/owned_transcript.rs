@@ -1,4 +1,5 @@
 //! Compose the owned transcript above the composer and route their selection gestures.
+//! A docked side conversation paints the captured neighbor before the centered dialog.
 //! Painting records the screen regions used by selection and pointer input.
 //! Input that depends on those regions refreshes the layout before using them.
 //! Reserve a cleared row below activity and previews, immediately above the composer.
@@ -30,6 +31,7 @@ use ratatui::widgets::Widget;
 #[derive(Default)]
 pub(super) struct ConversationFrame {
     inset: Option<Rect>,
+    side_pane: bool,
     /// A dialog can obscure neighboring content in the terminal's completed buffer.
     behind_dialog: Option<ratatui::buffer::Buffer>,
     caller_images: Vec<ImagePlacement>,
@@ -154,7 +156,7 @@ impl App {
         true
     }
 
-    fn sync_owned_transcript(&mut self, width: u16) -> bool {
+    pub(super) fn sync_owned_transcript(&mut self, width: u16) -> bool {
         self.transcript_view.image_protocol = self.prepare_frame_images();
         let chat_widget = &self.chat_widget;
         let transcript_width = chat_widget.history_wrap_width(width);
@@ -194,11 +196,22 @@ impl App {
         screen_size: Size,
     ) -> Result<Rect> {
         let frames = tui.frame_requester();
-        let prepared =
-            self.prepare_conversation(screen_size.into(), self.conversation_frame.inset, &frames);
+        if self.conversation_frame.side_pane {
+            // Recompute our own inset on every frame, including the first narrow frame.
+            self.conversation_frame = ConversationFrame::default();
+        }
+        let caller_inset = self.conversation_frame.inset;
+        let dock = if caller_inset.is_none() {
+            side_pane::layout(self, tui, screen_size.into())
+        } else {
+            None
+        };
+        let inset = caller_inset.or_else(|| dock.as_ref().map(|panes| panes.focused));
+        let prepared = self.prepare_conversation(screen_size.into(), inset, &frames);
+        self.conversation_frame.side_pane = dock.is_some();
         // An input refresh opens a fresh terminal buffer. Carry the outer owner's
         // completed cells through it when only the conversation is being redrawn.
-        let backdrop = self.conversation_frame.inset.map(|_| {
+        let backdrop = caller_inset.map(|_| {
             self.conversation_frame
                 .behind_dialog
                 .take()
@@ -223,6 +236,12 @@ impl App {
                 }
             }
             painted = self.paint_conversation(frame, &prepared);
+            if let Some(panes) = dock
+                && let Some(companion) = self.side_companions.get_mut(&panes.passive_thread)
+            {
+                companion.view.image_protocol = self.transcript_view.image_protocol;
+                panes.paint_companion(companion, frame);
+            }
             self.paint_centered_dialog(frame);
         })?;
         self.finish_conversation(tui, painted)
@@ -235,6 +254,7 @@ impl App {
         frames: &tui::FrameRequester,
     ) -> PreparedConversation {
         self.conversation_frame.inset = conversation_inset;
+        self.conversation_frame.side_pane = false;
         let area = self.conversation_area(viewport);
         if let Some((previous, reflowed)) = self.chat_widget.resize_owned_conversation(area.width) {
             self.transcript_view
@@ -327,6 +347,7 @@ impl App {
             .min(area.height);
         let options = |interacting| ComposerRenderOptions {
             max_height: Some(max_composer_height),
+            extend_composer_background_left: self.conversation_frame.side_pane && area.x > 0,
             overlay_top: area.top(),
             command_popup_placement: if interacting {
                 CommandPopupPlacement::Hidden
@@ -483,7 +504,7 @@ impl App {
     ) -> Result<Rect> {
         if self.conversation_frame.behind_dialog.is_none() {
             self.conversation_frame.caller_images.clear();
-            if self.conversation_frame.inset.is_some() {
+            if self.conversation_frame.inset.is_some() && !self.conversation_frame.side_pane {
                 self.conversation_frame.caller_images.extend(
                     tui.retained_images
                         .iter()
@@ -513,7 +534,12 @@ impl App {
             return;
         };
         let area = frame.area();
-        if self.conversation_frame.inset.is_some() {
+        if self.conversation_frame.side_pane {
+            let covered = dialog.area(area);
+            frame
+                .image_placements
+                .retain(|placement| !covered.intersects(placement.area));
+        } else if self.conversation_frame.inset.is_some() {
             self.conversation_frame.behind_dialog = Some(frame.buffer.clone());
             // The conversation omits its own images while a dialog is open. Keep the
             // caller's registrations so dismissal can restore graphics behind the dialog.

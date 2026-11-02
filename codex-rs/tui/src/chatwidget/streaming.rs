@@ -4,6 +4,8 @@
 //! cells, commit ticks, and interrupt deferral.
 
 use super::*;
+use crate::app_event::CapturedSideDisplay;
+use crate::app_event::CapturedSideStream;
 use crate::markdown_render::ListSpacing;
 
 fn streamed_message_matches_completed(streamed: &str, completed: &str) -> bool {
@@ -200,6 +202,71 @@ impl ChatWidget {
             self.status_state.current_status.details_max_lines,
         );
         self.status_state.pending_status_indicator_restore = false;
+    }
+
+    /// Capture at handoff, while links and visualization directives still have the outgoing cwd.
+    pub(crate) fn take_side_display(
+        &mut self,
+        width: u16,
+    ) -> (Option<CapturedSideStream>, CapturedSideDisplay) {
+        self.flush_completed_tool_activity();
+        let stream = if let Some(controller) = &self.stream_controller {
+            let source = controller.source_snapshot();
+            let markdown = parse_assistant_markdown(&source, self.config.cwd.as_path());
+            let context = self.thread_id.and_then(|id| {
+                crate::inline_visualization::InlineVisualizationContext::from_config(
+                    &self.config,
+                    id,
+                )
+            });
+            let cell = history_cell::AgentMarkdownCell::new_with_inline_visualizations(
+                markdown.visible_markdown,
+                &self.config.cwd,
+                context,
+            )
+            .with_copy_source(Some(source));
+            Some(CapturedSideStream::Answer(Arc::new(cell)))
+        } else if self.plan_stream_controller.is_some() {
+            Some(CapturedSideStream::Plan(Arc::new(
+                history_cell::new_proposed_plan(
+                    self.transcript.plan_delta_buffer.clone(),
+                    &self.config.cwd,
+                ),
+            )))
+        } else {
+            None
+        };
+        let active = self
+            .transcript
+            .take_active_cell()
+            .filter(|cell| match &stream {
+                Some(CapturedSideStream::Answer(_)) => {
+                    !cell.as_any().is::<history_cell::StreamingAgentTailCell>()
+                }
+                Some(CapturedSideStream::Plan(_)) => {
+                    !cell.as_any().is::<history_cell::StreamingPlanTailCell>()
+                }
+                None => true,
+            });
+        let display = CapturedSideDisplay {
+            active,
+            auxiliary: self
+                .active_cell_transcript_hyperlink_lines(width)
+                .unwrap_or_default(),
+            draft: if self.bottom_pane.is_in_paste_burst() {
+                let draft = self.bottom_pane.composer_recovery_snapshot();
+                crate::bottom_pane::ChatComposer::expand_pending_pastes(
+                    &draft.text,
+                    draft.text_elements,
+                    &draft.pending_pastes,
+                )
+                .0
+            } else {
+                self.composer_text_with_pending()
+            },
+            status: self.status_line_text(),
+        };
+        (stream, display)
     }
 
     fn completed_agent_message_was_flushed(&self, message: &str) -> bool {
@@ -537,11 +604,10 @@ impl ChatWidget {
 
     /// Runs a commit tick for the current stream queue snapshot.
     ///
-    /// `scope` controls whether this call may commit in smooth mode or only when catch-up
-    /// is currently active. While lines are actively streaming we hide the status row to avoid
-    /// duplicate "in progress" affordances. Restoration is gated separately so we only re-show
+    /// `scope` selects paced, catch-up, or replay draining. While lines are actively streaming
+    /// we hide the status row to avoid duplicate "in progress" affordances. We only re-show
     /// the row after commentary completion once stream queues are idle.
-    pub(super) fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
+    pub(crate) fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
         let now = Instant::now();
         let outcome = run_commit_tick(
             &mut self.adaptive_chunking,

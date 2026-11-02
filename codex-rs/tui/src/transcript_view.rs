@@ -342,6 +342,63 @@ impl TranscriptView {
         placements
     }
 
+    /// Reflow the captured live owner without treating a passive paint as reading new output.
+    pub(crate) fn render_parked(
+        &mut self,
+        area: Rect,
+        buffer: &mut Buffer,
+        cells: &[Arc<dyn HistoryCell>],
+        active: Option<&dyn HistoryCell>,
+        auxiliary: &[HyperlinkLine],
+    ) {
+        let width = area.width;
+        let unseen_activity = self.unseen_activity;
+        let ids = active.map_or_else(Vec::new, HistoryCell::activity_ids);
+        let disclose = !ids.is_empty() && self.mode == HistoryRenderMode::Rich;
+        let expanded = self.sync_live_activity(cells, ids);
+        let mode = self.mode;
+        let lines = |width| {
+            let mut lines = active.map_or_else(Vec::new, |c| c.transcript_hyperlink_lines(width));
+            if !lines.is_empty() && !auxiliary.is_empty() {
+                lines.push("".into());
+            }
+            lines.extend_from_slice(auxiliary);
+            (!lines.is_empty()).then_some(lines)
+        };
+        self.sync_search_live_tail(width, None, lines);
+        if self.detailed {
+            self.sync_live_tail(width, None, lines);
+        } else {
+            self.sync_live_activity_tail(width, None, expanded && disclose, |width| {
+                let activity = active.map_or_else(Vec::new, |cell| {
+                    if disclose && expanded {
+                        cell.expanded_hyperlink_lines(width)
+                    } else {
+                        crate::history_cell::fullscreen_session_lines(
+                            cell, width, /*detailed*/ false, mode,
+                        )
+                    }
+                });
+                let mut auxiliary = auxiliary.to_vec();
+                if activity.is_empty() && auxiliary.is_empty() {
+                    return None;
+                }
+                if !activity.is_empty() && !auxiliary.is_empty() {
+                    auxiliary.insert(0, "".into());
+                }
+                Some(ActivityTranscriptLines {
+                    activity,
+                    auxiliary,
+                    disclosure: active
+                        .filter(|_| disclose)
+                        .and_then(|cell| cell.activity_disclosure(width)),
+                })
+            });
+        }
+        self.render(area, buffer, cells);
+        self.unseen_activity = unseen_activity;
+    }
+
     pub(crate) fn sync_live_tail(
         &mut self,
         width: u16,

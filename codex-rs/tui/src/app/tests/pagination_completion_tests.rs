@@ -123,6 +123,78 @@ pub(super) async fn completed_history_app(
 }
 
 #[tokio::test]
+async fn side_replay_retries_an_older_find_page_discarded_while_inactive() -> Result<()> {
+    let (mut app, _codex_home, thread_id) = completed_history_app(&["Oldest", "Newest"]).await?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let started = app_server
+        .resume_thread(
+            &app.local_settings,
+            app.config.clone(),
+            thread_id,
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+        )
+        .await?;
+    let session = started.session;
+    app.enqueue_primary_thread_session(session.clone(), started.turns)
+        .await?;
+    let (event_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = crate::app_event_sender::AppEventSender::new(event_tx);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    enable_side_retention(&mut app)?;
+    tui.set_owned_screen(/*owned*/ true)?;
+
+    app.scrollback_has_older_history = app_server.has_older_history(thread_id);
+    app.transcript_cells = vec![plain_line_cell("Newest answer")];
+    app.transcript_view.history = TranscriptHistoryState::Partial;
+    app.transcript_view.begin_search();
+    app.transcript_view.paste_search("Oldest answer");
+    while app.transcript_view.advance_search(&app.transcript_cells) {}
+    app.request_owned_history(&mut tui, &mut app_server);
+    let page = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
+        .await?
+        .expect("first page requested by Find");
+
+    let child = ThreadId::new();
+    app.side_threads
+        .insert(child, SideThreadState::new(thread_id));
+    let (stream, display) = app.chat_widget.take_side_display(/*width*/ 100);
+    boxed_future!(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::ParkSideCompanion {
+            pair: child,
+            thread_id,
+            stream,
+            display
+        },
+    ))
+    .await?;
+    app.chat_widget
+        .handle_side_thread_session(test_thread_session(child, app.config.cwd.to_path_buf()));
+    boxed_future!(app.handle_event(&mut tui, &mut app_server, page)).await?;
+
+    app.chat_widget.handle_thread_session(session);
+    app.transcript_cells = vec![plain_line_cell("Newest answer")];
+    app.pending_thread_switch_resets = 1;
+    boxed_future!(app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::SideReplayFinished(thread_id)
+    ))
+    .await?;
+    app.request_owned_history(&mut tui, &mut app_server);
+    let retry = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
+        .await?
+        .expect("page retried by Find");
+    boxed_future!(app.handle_event(&mut tui, &mut app_server, retry)).await?;
+
+    let frame = side_frame(&mut app, &mut tui, Size::new(/*width*/ 100, /*height*/ 16))?;
+    assert!(frame.contains("Oldest answer"), "{frame}");
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn older_pagination_completion_footers_follow_answers_without_overlap_duplicates()
 -> Result<()> {
     let (mut app, _codex_home, thread_id) =

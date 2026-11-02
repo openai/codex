@@ -209,6 +209,13 @@ impl SideParentStatusChange {
     }
 }
 
+/// Transcript state retained while the other conversation is active.
+pub(super) struct SideCompanion {
+    pub(super) display: crate::app_event::CapturedSideDisplay,
+    pub(super) cells: Vec<Arc<dyn HistoryCell>>,
+    pub(super) view: crate::transcript_view::TranscriptView,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct SideThreadState {
     /// Thread to return to when the current side conversation is dismissed.
@@ -306,6 +313,20 @@ impl App {
         self.current_displayed_thread_id()
             .and_then(|thread_id| self.side_threads.get(&thread_id))
             .map(|state| state.parent_thread_id)
+    }
+
+    pub(super) fn side_retention_enabled(&self, tui: &tui::Tui) -> bool {
+        self.config.features.enabled(Feature::TuiWorkspace)
+            && self.local_settings.transcript_mode.is_owned()
+            && tui.is_owned_screen()
+    }
+
+    pub(super) fn side_pair_key(&self, thread_id: ThreadId) -> Option<ThreadId> {
+        if self.side_threads.contains_key(&thread_id) {
+            Some(thread_id)
+        } else {
+            self.side_thread_for_parent(thread_id)
+        }
     }
 
     pub(super) fn side_thread_for_parent(&self, parent_thread_id: ThreadId) -> Option<ThreadId> {
@@ -543,6 +564,7 @@ impl App {
         self.pending_server_profiles.remove(&thread_id);
         self.agents_overview.activity.remove(&thread_id);
         self.side_threads.remove(&thread_id);
+        self.side_companions.remove(&thread_id);
         self.agent_navigation.remove(thread_id);
         if self.active_thread_id == Some(thread_id) {
             self.clear_active_thread().await;

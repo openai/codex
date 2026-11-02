@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use super::*;
+use crate::history_cell::is_session_history_prefix_cell;
 
 impl TranscriptView {
     /// Rebuild the layout of an observed revision without counting the reflow as new output.
@@ -183,9 +184,12 @@ impl TranscriptView {
         &mut self,
         cells: &[Arc<dyn HistoryCell>],
         inserted: Range<usize>,
-    ) {
+    ) -> Range<usize> {
+        if inserted.is_empty() {
+            return inserted;
+        }
         let Some(snapshot) = self.snapshot_mut() else {
-            return;
+            return inserted;
         };
         let existing = snapshot
             .cells
@@ -198,21 +202,22 @@ impl TranscriptView {
             .cloned()
             .collect::<Vec<_>>();
         if older.is_empty() {
-            return;
+            return 0..0;
         }
-        let index = cells[..inserted.start]
+        let preceding = &cells[..inserted.start];
+        let index = snapshot
+            .cells
             .iter()
-            .rev()
-            .find_map(|cell| {
-                snapshot
-                    .cells
-                    .iter()
-                    .position(|retained| Arc::ptr_eq(retained, cell))
+            .rposition(|retained| {
+                is_session_history_prefix_cell(retained.as_ref())
+                    || preceding.iter().any(|cell| Arc::ptr_eq(retained, cell))
             })
             .map_or(/*default*/ 0, |index| index + 1);
+        let retained = index..index + older.len();
         let mut extended = snapshot.cells.to_vec();
         extended.splice(index..index, older);
         snapshot.cells = extended.into();
+        retained
     }
 }
 

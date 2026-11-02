@@ -13,6 +13,7 @@ use crate::app_server_session::is_server_shutting_down_error;
 use crate::app_server_session::source_agent_path;
 use crate::app_server_session::thread_blocks_direct_input;
 use crate::chatwidget::ThreadInputStateRestoreMode;
+use crate::streaming::commit_tick::CommitTickScope;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy)]
@@ -462,6 +463,18 @@ impl App {
                 (session, turns, false)
             }
         };
+        // A reattach can discover output missed while the server was disconnected.
+        let replay_may_have_output = if self.side_companions.contains_key(&thread_id) {
+            match self.thread_event_channels.get(&thread_id) {
+                Some(channel) => {
+                    let store = channel.store.lock().await;
+                    store.replay_may_have_output || store.session.is_none() || store.turns != turns
+                }
+                None => true,
+            }
+        } else {
+            false
+        };
         self.agents_overview.activity.remove(&thread_id);
         let recap_progress =
             if live_attached && let Some(channel) = self.thread_event_channels.remove(&thread_id) {
@@ -483,6 +496,7 @@ impl App {
         }
         let mut store = channel.store.lock().await;
         store.set_session(session, turns);
+        store.replay_may_have_output |= replay_may_have_output;
         store.merge_recap_progress(recap_progress);
         store.rebase_buffer_after_session_refresh();
         Ok(live_attached)
@@ -704,6 +718,27 @@ impl App {
         self.recap.seed_from_progress(recap_progress, now);
         self.schedule_recap_check(thread_id, now);
 
+        // Draining the old receiver can queue history insertions and stream consolidation.
+        // Park the transcript after those events and before the destination's reset and replay.
+        if self.side_retention_enabled(tui)
+            && self.pending_thread_switch_resets == 0
+            && let Some(old) = previous_thread_id
+            && old != thread_id
+            && let Some(pair) = self.side_pair_key(old)
+        {
+            let conversation_width = self
+                .conversation_area(tui.terminal.last_known_screen_size.into())
+                .width;
+            self.sync_owned_transcript(conversation_width);
+            let width = self.transcript_view.remaining_area().width.max(1);
+            let (stream, display) = self.chat_widget.take_side_display(width);
+            self.app_event_tx.send(AppEvent::ParkSideCompanion {
+                pair,
+                thread_id: old,
+                stream,
+                display,
+            });
+        }
         self.render_thread_snapshot(tui, app_server, thread_id, snapshot, !is_replay_only)?;
         if is_replay_only
             && self
@@ -734,6 +769,14 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) -> Result<()> {
+        let retain_side_view = self.side_retention_enabled(tui);
+        let preserve_screen = retain_side_view
+            && self.side_pair_key(thread_id).is_some_and(|pair| {
+                self.chat_widget
+                    .thread_id()
+                    .and_then(|id| self.side_pair_key(id))
+                    == Some(pair)
+            });
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
             self.config.clone(),
@@ -754,10 +797,21 @@ impl App {
         if self.agent_navigation.is_parent_owned(thread_id) {
             self.chat_widget.set_parent_owned_thread();
         }
-        self.reset_for_thread_switch(tui)?;
+        if retain_side_view {
+            // Even a superseding selection must leave queued history its original cells and view.
+            tui.clear_pending_history_lines();
+            if !preserve_screen {
+                tui.clear_for_thread_switch()?;
+            }
+        } else {
+            self.reset_for_thread_switch(tui)?;
+        }
         self.pending_thread_switch_resets += 1;
-        self.app_event_tx
-            .send(AppEvent::ResetTranscriptForThreadSwitch);
+        self.app_event_tx.send(if preserve_screen {
+            AppEvent::ResetTranscriptForThreadSwitchPreservingScreen
+        } else {
+            AppEvent::ResetTranscriptForThreadSwitch
+        });
         self.replay_thread_snapshot(snapshot, resume_restored_queue);
         if let Some(thread_id) = self.chat_widget.thread_id()
             && let Some(active) = self
@@ -775,6 +829,14 @@ impl App {
         }
         if external_writer {
             self.chat_widget.show_external_writer_thread();
+        }
+        if retain_side_view {
+            // Hold drawing and input through the history events emitted by replay.
+            self.chat_widget
+                .run_commit_tick_with_scope(CommitTickScope::Replay);
+            self.pending_thread_switch_resets += 1;
+            self.app_event_tx
+                .send(AppEvent::SideReplayFinished(thread_id));
         }
         Ok(())
     }
@@ -834,6 +896,14 @@ impl App {
         });
         self.thread_event_channels
             .retain(|id, _| Some(*id) == voice_owner || self.side_threads.contains_key(id));
+        // A retained side can still display its parent even after the parent channel is detached.
+        self.side_companions.retain(|id, _| {
+            self.side_threads.contains_key(id)
+                || self
+                    .side_threads
+                    .values()
+                    .any(|side| side.parent_thread_id == *id)
+        });
         self.pending_realtime_speech_replay.clear();
         self.pending_realtime_transcript_replay.clear();
         self.realtime_replay_order.clear();

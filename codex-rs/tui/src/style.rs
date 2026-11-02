@@ -177,6 +177,17 @@ pub(crate) fn secondary_text_style() -> Style {
         .not_bold()
 }
 
+/// Bring a focusable surface closer to the terminal background while keeping its text readable.
+pub(crate) fn quiet_workspace_style() -> Style {
+    let base = Style::default().not_bold().not_reversed().not_underlined();
+    let Some(bg) = default_bg() else {
+        return base.fg(Color::Reset).bg(Color::Reset).dim();
+    };
+    let fill = best_color(blend(user_message_bg_rgb(bg), bg, 0.40));
+    let foreground = default_fg().map_or(Color::Reset, |fg| best_color(blend(fg, bg, 0.66)));
+    base.bg(fill).fg(readable_color_on(foreground, Some(fill)))
+}
+
 pub(crate) fn selection_style() -> Style {
     contrast::selection_style(default_bg(), effective_stdout_color_level())
 }

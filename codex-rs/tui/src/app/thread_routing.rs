@@ -128,6 +128,9 @@ impl App {
         if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
             let receiver = self.active_thread_rx.take();
             let mut store = channel.store.lock().await;
+            if store.active {
+                store.replay_may_have_output = false;
+            }
             store.active = false;
             store.input_state = input_state;
             store.merge_recap_progress(recap_progress);
@@ -1194,6 +1197,28 @@ impl App {
                 {
                     self.retain_inactive_realtime_transcript(thread_id, &notification);
                 }
+                // Status traffic alone does not change the displayed transcript.
+                guard.replay_may_have_output |= !matches!(
+                    &notification,
+                    ServerNotification::ThreadStarted(_)
+                        | ServerNotification::ThreadStatusChanged(_)
+                        | ServerNotification::ThreadReadStateChanged(_)
+                        | ServerNotification::ThreadTokenUsageUpdated(_)
+                        | ServerNotification::ThreadNameUpdated(_)
+                        | ServerNotification::ThreadProjectUpdated(_)
+                        | ServerNotification::ThreadQueueChanged(_)
+                        | ServerNotification::ThreadPredictionUpdated(_)
+                        | ServerNotification::ThreadAttachmentUpdated(_)
+                        | ServerNotification::ThreadSettingsUpdated(_)
+                        | ServerNotification::McpToolCallProgress(_)
+                        | ServerNotification::FileChangePatchUpdated(_)
+                        | ServerNotification::ServerRequestResolved(_)
+                        | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
+                        | ServerNotification::ThreadRealtimeSdp(_)
+                        | ServerNotification::ThreadRealtimeItemAdded(_)
+                        | ServerNotification::RawResponseItemCompleted(_)
+                        | ServerNotification::RawResponseCompleted(_)
+                );
                 guard.push_notification(notification);
                 None
             };
@@ -1657,6 +1682,7 @@ impl App {
         let AppServerStartedThread { session, turns, .. } = started;
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
+            store.replay_may_have_output |= snapshot.turns != turns;
             store.set_session(session.clone(), turns.clone());
             store.rebase_buffer_after_session_refresh();
             snapshot.active_reasoning_item = store.active_reasoning_item.clone();

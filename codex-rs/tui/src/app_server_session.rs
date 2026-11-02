@@ -336,6 +336,8 @@ pub(crate) struct AppServerSession {
     request_id_namespace: Option<Uuid>,
     next_request_id: i64,
     automatic_name_writes: HashMap<ThreadId, Arc<Semaphore>>,
+    /// The newest docked replay refresh on this connection.
+    pub(crate) pending_side_skills_refresh: Option<Uuid>,
     history_pagination: HashMap<ThreadId, history::ThreadHistoryPagination>,
     pub(crate) focused_conversation: Option<ThreadId>,
     pub(crate) attempted_revision: Option<String>,
@@ -542,6 +544,7 @@ impl AppServerSession {
             request_id_namespace: None,
             next_request_id: 1,
             automatic_name_writes: HashMap::new(),
+            pending_side_skills_refresh: None,
             history_pagination: HashMap::new(),
             focused_conversation: None,
             attempted_revision: None,
@@ -1983,6 +1986,7 @@ impl AppServerSession {
         &mut self,
         params: SkillsListParams,
     ) -> Result<SkillsListResponse> {
+        self.pending_side_skills_refresh = None;
         let request_id = self.next_request_id();
         self.request_handle
             .request_typed(ClientRequest::SkillsList { request_id, params })

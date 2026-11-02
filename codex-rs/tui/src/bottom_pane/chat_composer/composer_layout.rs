@@ -8,6 +8,19 @@ use crate::tui::FrameRequester;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
+pub(super) fn background_rect(
+    composer: Rect,
+    buffer: Rect,
+    options: ComposerRenderOptions<'_>,
+) -> Rect {
+    let gutter = u16::from(options.extend_composer_background_left && composer.x > buffer.x);
+    Rect {
+        x: composer.x - gutter,
+        width: composer.width + gutter,
+        ..composer
+    }
+}
+
 impl ChatComposer {
     pub(crate) fn set_voice_strip(
         &mut self,

@@ -598,7 +598,7 @@ impl TranscriptView {
         {
             self.last_tail = cells.last().map(EntryKey::cell);
         }
-        self.prepend_snapshot_history(cells, inserted.clone());
+        let inserted = self.prepend_snapshot_history(cells, inserted);
         if let Position::Reading(anchor) = self.position {
             let index = self.resolve(cells, anchor);
             self.position = Position::Reading(Anchor {

@@ -2085,14 +2085,12 @@ impl ChatWidget {
         &self.config
     }
 
-    #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
         self.status_line_content()
             .cloned()
             .map(|content| content.into_hyperlink_line().line.to_string())
     }
 
-    #[cfg(test)]
     pub(crate) fn status_line_content(
         &self,
     ) -> Option<&crate::bottom_pane::footer_content::FooterContent> {
