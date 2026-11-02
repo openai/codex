@@ -120,7 +120,7 @@ impl AdditionalContextStore {
             telemetry.histogram_with_boundaries(
                 ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC,
                 i64::try_from(bytes).unwrap_or(i64::MAX),
-                ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS,
+                ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS.as_slice(),
                 &size_tags,
             );
         }
