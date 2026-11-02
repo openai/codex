@@ -1427,6 +1427,9 @@ pub struct ThreadSectionDeleteResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadListParams {
+    /// Show local history visible to the current ChatGPT account. Defaults to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current_account_only: bool,
     /// Opaque pagination cursor returned by a previous call.
     #[ts(optional = nullable)]
     pub cursor: Option<String>,
@@ -1515,6 +1518,9 @@ pub struct ThreadListParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadSearchParams {
+    /// Show local history visible to the current ChatGPT account. Defaults to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current_account_only: bool,
     /// Opaque pagination cursor returned by a previous call.
     #[ts(optional = nullable)]
     pub cursor: Option<String>,

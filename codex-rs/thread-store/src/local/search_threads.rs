@@ -125,19 +125,42 @@ pub(super) async fn search_threads(
             sort_direction,
         )
         .await?;
+        let page_thread_ids: Vec<_> = page
+            .items
+            .iter()
+            .filter_map(|item| item.thread_id)
+            .collect();
+        let mut original_paths = None;
         for item in page.items {
             let logical_path = rollout_search_path(item.path.as_path());
-            let Some(snippet) = (match remaining_rollouts.remove(logical_path.as_path()) {
-                Some(Some(snippet)) => Some(snippet),
-                Some(None) => first_rollout_content_match_snippet(item.path.as_path(), search_term)
+            let Some(mut snippet) = remaining_rollouts.remove(logical_path.as_path()) else {
+                continue;
+            };
+            if let Some(account) = &params.account {
+                let Some(thread_id) = item.thread_id else {
+                    continue;
+                };
+                if !account
+                    .includes(
+                        &store.config.codex_home,
+                        thread_id,
+                        Some(&item.path),
+                        &page_thread_ids,
+                        &mut original_paths,
+                    )
+                    .await
+                {
+                    continue;
+                }
+            }
+            if snippet.is_none() {
+                snippet = first_rollout_content_match_snippet(item.path.as_path(), search_term)
                     .await
                     .map_err(|err| ThreadStoreError::Internal {
                         message: format!("failed to read rollout search match: {err}"),
-                    })?,
-                None => None,
-            }) else {
-                continue;
-            };
+                    })?;
+            }
+            let Some(snippet) = snippet else { continue };
             matching_items.push(ThreadSearchItem { item, snippet });
             if matching_items.len() > params.page_size {
                 break;

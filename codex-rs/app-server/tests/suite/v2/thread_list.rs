@@ -102,6 +102,7 @@ async fn list_threads_with_sort(
     mcp.request(|request_id| ClientRequest::ThreadList {
         request_id,
         params: codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -144,6 +145,7 @@ async fn list_threads_for_relation(
     mcp.request(|request_id| ClientRequest::ThreadList {
         request_id,
         params: codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -777,6 +779,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -893,6 +896,7 @@ sqlite = true
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -964,6 +968,7 @@ async fn thread_search_returns_content_matches() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1019,6 +1024,7 @@ async fn thread_search_returns_content_matches() -> Result<()> {
 
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1081,6 +1087,7 @@ async fn thread_search_matches_json_escaped_content() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1126,6 +1133,7 @@ async fn thread_search_filters_by_source_kind() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1300,6 +1308,7 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1339,6 +1348,7 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1371,6 +1381,7 @@ sqlite = true
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1559,6 +1570,7 @@ async fn thread_list_relation_filters_reject_invalid_requests() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1588,6 +1600,7 @@ async fn thread_list_relation_filters_reject_invalid_requests() -> Result<()> {
     let thread_id = ThreadId::new().to_string();
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -1828,6 +1841,7 @@ async fn thread_list_reports_loaded_subagent_direct_input_capability() -> Result
 
     let request_id = mcp
         .send_thread_search_request(codex_app_server_protocol::ThreadSearchParams {
+            current_account_only: false,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1881,6 +1895,7 @@ async fn thread_list_reports_loaded_subagent_direct_input_capability() -> Result
         .request(|request_id| ClientRequest::ThreadList {
             request_id,
             params: codex_app_server_protocol::ThreadListParams {
+                current_account_only: false,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -2705,6 +2720,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
     } = {
         let request_id = mcp
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                current_account_only: false,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -2749,6 +2765,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
     } = {
         let request_id = mcp
             .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                current_account_only: false,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,
@@ -3183,6 +3200,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -3210,5 +3228,118 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
     assert_eq!(error.error.code, -32600);
     assert_eq!(error.error.message, "invalid cursor: not-a-cursor");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_account_history_refills_list_and_search() -> Result<()> {
+    let home = TempDir::new()?;
+    create_minimal_config(home.path())?;
+    app_test_support::write_chatgpt_auth(
+        home.path(),
+        app_test_support::ChatGptAuthFixture::new("token")
+            .chatgpt_user_id("me")
+            .chatgpt_account_id("team")
+            .account_id("team"),
+        codex_config::types::AuthCredentialsStoreMode::File,
+    )?;
+    let (stamp, timestamp) = timestamp_at(
+        /*year*/ 2025, /*month*/ 1, /*day*/ 5, /*hour*/ 12, /*minute*/ 0,
+        /*second*/ 0,
+    );
+    let mut ids = Vec::new();
+    for _ in 0..6 {
+        ids.push(app_test_support::create_fake_paginated_rollout(
+            home.path(),
+            &stamp,
+            &timestamp,
+            "fixture-preview",
+            Some("openai"),
+            /*git_info*/ None,
+        )?);
+    }
+    // With tied creation times, the largest ID is first. Give it to the other user.
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    for (id, (user, account, preview, scoped)) in ids.iter().zip([
+        (Some("other-needle-user"), Some("team"), "needle", true),
+        (Some("me"), Some("team"), "needle", true),
+        (Some("me"), None, "partial", true),
+        (None, None, "shared", true),
+        (Some("legacy-user"), Some("legacy-team"), "needle", false),
+        (Some("me"), Some("other-team"), "other workspace", true),
+    ]) {
+        let path = rollout_path(home.path(), &stamp, id);
+        let text = fs::read_to_string(&path)?;
+        let (header, rest) = text.split_once('\n').expect("session header");
+        let mut header: serde_json::Value = serde_json::from_str(header)?;
+        header["payload"]["creator_user_id"] = json!(user);
+        header["payload"]["creator_account_id"] = json!(account);
+        // Attribution predates enforcement: an absent marker keeps old history shared.
+        if scoped {
+            header["payload"]["account_scoped"] = json!(true);
+        }
+        let rest = rest.replace("fixture-preview", preview);
+        fs::write(path, format!("{header}\n{rest}"))?;
+    }
+
+    let mut server = init_mcp(home.path()).await?;
+    for (limit, db_only) in [(4, false), (4, true), (1, false), (1, true)] {
+        let params = json!({
+            "currentAccountOnly": true,
+            "sortKey": "created_at",
+            "limit": limit,
+            "useStateDbOnly": db_only,
+        });
+        let request = server.send_raw_request("thread/list", Some(params)).await?;
+        let list: ThreadListResponse = server.read_response(request).await?;
+        assert_eq!(
+            list.data.into_iter().map(|t| t.id).collect::<Vec<_>>(),
+            ids[1..=limit]
+        );
+    }
+
+    // The foreign header matches the raw search, but reading its snippet would hit invalid UTF-8.
+    let foreign = rollout_path(home.path(), &stamp, &ids[0]);
+    let intact = fs::read_to_string(&foreign)?;
+    let (header, rest) = intact.split_once('\n').expect("session header");
+    fs::write(
+        &foreign,
+        [header.as_bytes(), b"\n\xff\n", rest.as_bytes()].concat(),
+    )?;
+    let mut cursor = None;
+    for expected_id in [&ids[1], &ids[4]] {
+        let params = json!({
+            "currentAccountOnly": true,
+            "sortKey": "created_at",
+            "limit": 1,
+            "cursor": cursor,
+            "searchTerm": "needle",
+        });
+        let request = server
+            .send_raw_request("thread/search", Some(params))
+            .await?;
+        let search: ThreadSearchResponse = server.read_response(request).await?;
+        assert_eq!(
+            search
+                .data
+                .into_iter()
+                .map(|t| t.thread.id)
+                .collect::<Vec<_>>(),
+            vec![expected_id.clone()]
+        );
+        cursor = search.next_cursor;
+    }
+    assert_eq!(cursor, None);
+    fs::write(foreign, intact)?;
+
+    let request = server
+        .send_login_account_api_key_request("sk-test-key")
+        .await?;
+    let _: codex_app_server_protocol::LoginAccountResponse = server.read_response(request).await?;
+    let request = server
+        .send_raw_request("thread/list", Some(json!({"currentAccountOnly": true})))
+        .await?;
+    let list: ThreadListResponse = server.read_response(request).await?;
+    assert_eq!(list.data.len(), 6);
     Ok(())
 }

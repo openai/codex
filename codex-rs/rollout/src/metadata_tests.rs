@@ -117,6 +117,7 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
 
     let session_meta = SessionMeta {
+        account_scoped: false,
         creator_user_id: Some("creator-user".to_string()),
         attached_thread: false,
         creator_account_id: Some("creator-account".to_string()),
@@ -242,6 +243,7 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
 
     let session_meta = SessionMeta {
+        account_scoped: false,
         creator_user_id: None,
         attached_thread: false,
         creator_account_id: None,
@@ -592,6 +594,7 @@ fn write_rollout_in_sessions_with_cwd(
     std::fs::create_dir_all(sessions_dir.as_path()).expect("create sessions dir");
     let path = sessions_dir.join(format!("rollout-{filename_ts}-{thread_uuid}.jsonl"));
     let session_meta = SessionMeta {
+        account_scoped: false,
         creator_user_id: None,
         attached_thread: false,
         creator_account_id: None,

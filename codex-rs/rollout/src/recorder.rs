@@ -106,6 +106,7 @@ pub enum RolloutRecorderParams {
         source: Box<SessionSource>,
         thread_source: Option<ThreadSource>,
         originator: String,
+        account_scoped: bool,
         creator_user_id: Option<String>,
         creator_account_id: Option<String>,
         base_instructions: BaseInstructions,
@@ -227,6 +228,7 @@ impl RolloutRecorderParams {
             source: Box::new(source),
             thread_source,
             originator,
+            account_scoped: false,
             creator_user_id: None,
             creator_account_id: None,
             base_instructions,
@@ -242,13 +244,20 @@ impl RolloutRecorderParams {
     }
 
     /// Record the authenticated identity at thread creation, or preserve it on revert.
-    pub fn with_creator(mut self, user_id: Option<String>, account_id: Option<String>) -> Self {
+    pub fn with_creator(
+        mut self,
+        user_id: Option<String>,
+        account_id: Option<String>,
+        account_scoped: bool,
+    ) -> Self {
         if let Self::Create {
             creator_user_id,
             creator_account_id,
+            account_scoped: scoped,
             ..
         } = &mut self
         {
+            *scoped = account_scoped;
             *creator_user_id = user_id;
             *creator_account_id = account_id;
         }
@@ -920,6 +929,7 @@ impl RolloutRecorder {
                 source,
                 thread_source,
                 originator,
+                account_scoped,
                 creator_user_id,
                 creator_account_id,
                 base_instructions,
@@ -957,6 +967,7 @@ impl RolloutRecorder {
                     cwd: cwd.clone(),
                     runtime_workspace_roots,
                     originator,
+                    account_scoped,
                     creator_user_id,
                     creator_account_id,
                     cli_version: env!("CARGO_PKG_VERSION").to_string(),

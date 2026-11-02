@@ -116,6 +116,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
+            current_account_only: false,
             excluded_thread_ids: None,
             attached_to_thread_id: None,
             originators: None,
@@ -238,6 +239,20 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let thread_path = thread.path.clone().expect("thread path");
     assert!(thread_path.as_path().is_absolute());
     assert_ne!(thread_path.as_path(), original_path);
+    assert_eq!(
+        (
+            read_session_meta_line(&original_path)
+                .await?
+                .meta
+                .account_scoped,
+            read_session_meta_line(thread_path.as_path())
+                .await?
+                .meta
+                .account_scoped,
+        ),
+        (false, true),
+        "forking legacy history creates a newly account-scoped thread"
+    );
     assert!(thread.cwd.as_path().is_absolute());
     assert_eq!(thread.source, SessionSource::VsCode);
     assert_eq!(thread.thread_source, Some(ThreadSource::User));

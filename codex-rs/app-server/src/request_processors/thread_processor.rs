@@ -46,6 +46,7 @@ use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_thread_store::LocalHistoryAccount;
 use codex_thread_store::PersistContext;
 use std::ops::ControlFlow;
 
@@ -91,6 +92,7 @@ async fn remove_pending_thread_metadata(
 }
 
 struct ThreadListFilters {
+    account: Option<LocalHistoryAccount>,
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
     archived: bool,
@@ -2739,6 +2741,7 @@ impl ThreadRequestProcessor {
         params: ThreadListParams,
     ) -> Result<ThreadListResponse, JSONRPCErrorError> {
         let ThreadListParams {
+            current_account_only,
             cursor,
             limit,
             excluded_thread_ids,
@@ -2860,6 +2863,7 @@ impl ThreadRequestProcessor {
                 store_sort_key,
                 sort_direction,
                 ThreadListFilters {
+                    account: self.local_history_account(current_account_only),
                     model_providers,
                     source_kinds,
                     archived: archived.unwrap_or(false),
@@ -2909,6 +2913,7 @@ impl ThreadRequestProcessor {
         params: ThreadSearchParams,
     ) -> Result<ThreadSearchResponse, JSONRPCErrorError> {
         let ThreadSearchParams {
+            current_account_only,
             cursor,
             limit,
             sort_key,
@@ -2935,6 +2940,7 @@ impl ThreadRequestProcessor {
         let mut cursor_obj = cursor;
         let mut last_cursor = cursor_obj.clone();
         let mut remaining = requested_page_size;
+        let account = self.local_history_account(current_account_only);
         let mut search_results = Vec::with_capacity(requested_page_size);
         let mut next_cursor = None;
 
@@ -2942,6 +2948,7 @@ impl ThreadRequestProcessor {
             let page = self
                 .thread_store
                 .search_threads(StoreSearchThreadsParams {
+                    account: account.clone(),
                     page_size: remaining.min(THREAD_LIST_MAX_LIMIT),
                     cursor: cursor_obj.clone(),
                     sort_key: store_sort_key,
@@ -5996,6 +6003,22 @@ impl ThreadRequestProcessor {
         Ok(GetConversationSummaryResponse { summary })
     }
 
+    /// Local discovery matches each recorded creator ID to the current login. Threads with
+    /// no creator IDs or predating enforcement are shared; API-key logins see all local history.
+    fn local_history_account(&self, current_account_only: bool) -> Option<LocalHistoryAccount> {
+        if !current_account_only || !self.thread_store.as_any().is::<LocalThreadStore>() {
+            return None;
+        }
+        let auth = self.auth_manager.auth_cached();
+        if auth.as_ref().is_some_and(CodexAuth::is_api_key_auth) {
+            return None;
+        }
+        Some(LocalHistoryAccount {
+            user_id: auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id),
+            account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
+        })
+    }
+
     async fn list_threads_common(
         &self,
         requested_page_size: usize,
@@ -6005,6 +6028,7 @@ impl ThreadRequestProcessor {
         filters: ThreadListFilters,
     ) -> Result<(Vec<StoredThread>, Option<String>), JSONRPCErrorError> {
         let ThreadListFilters {
+            account,
             model_providers,
             source_kinds,
             archived,
@@ -6067,8 +6091,23 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(thread_store_list_error)?;
 
+            let page_thread_ids: Vec<_> = page.items.iter().map(|item| item.thread_id).collect();
+            let mut original_paths = None;
             let mut filtered = Vec::with_capacity(page.items.len());
             for it in page.items {
+                if let Some(account) = &account
+                    && !account
+                        .includes(
+                            &self.config.codex_home,
+                            it.thread_id,
+                            it.rollout_path.as_deref(),
+                            &page_thread_ids,
+                            &mut original_paths,
+                        )
+                        .await
+                {
+                    continue;
+                }
                 let source = with_thread_spawn_agent_metadata(
                     it.source.clone(),
                     it.agent_nickname.clone(),

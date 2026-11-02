@@ -1,4 +1,5 @@
 use codex_utils_absolute_path::test_support::PathExt;
+use std::collections::HashMap;
 use std::fs;
 use std::fs::FileTimes;
 #[cfg(unix)]
@@ -1070,12 +1071,30 @@ async fn find_thread_path_by_id_handles_compressed_rollout_filenames() -> anyhow
     );
     assert_eq!(
         crate::find_rollout_path_by_rollout_id(home.path(), thread_id).await?,
-        Some(rollout_path)
+        Some(rollout_path.clone())
     );
     let missing_rollout_id = ThreadId::from_string(&Uuid::from_u128(2000).to_string())?;
     assert_eq!(
         crate::find_rollout_path_by_rollout_id(home.path(), missing_rollout_id).await?,
         None
+    );
+    let archived_id = ThreadId::new();
+    let archived_path = home
+        .path()
+        .join(crate::ARCHIVED_SESSIONS_SUBDIR)
+        .join(format!("rollout-2025-01-03T12-00-00-{archived_id}.jsonl"));
+    write_rollout(&archived_path, archived_id, "archived original")?;
+    compress_now(&archived_path)?;
+    assert_eq!(
+        crate::find_rollout_paths_by_rollout_ids(
+            home.path(),
+            &[thread_id, archived_id, missing_rollout_id],
+        )
+        .await,
+        HashMap::from([
+            (thread_id, rollout_path),
+            (archived_id, compressed_rollout_path(&archived_path)),
+        ])
     );
     assert_eq!(
         crate::find_thread_path_by_id_str(home.path(), "not-a-uuid", /*state_db_ctx*/ None).await?,
@@ -1121,6 +1140,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
     fs::create_dir_all(parent)?;
     let session_meta_line = SessionMetaLine {
         meta: SessionMeta {
+            account_scoped: false,
             attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,

@@ -141,6 +141,7 @@ async fn search_matches_selected_rollout_across_path_spellings_and_compression()
                 ] {
                     let page = store
                         .search_threads(SearchThreadsParams {
+                            account: None,
                             page_size: 10,
                             cursor: None,
                             sort_key: ThreadSortKey::CreatedAt,

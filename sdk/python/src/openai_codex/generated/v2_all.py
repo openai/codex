@@ -10857,6 +10857,13 @@ class ThreadListParams(BaseModel):
             description="Optional archived filter; when set to true, only archived threads are returned. If false or null, only non-archived threads are returned."
         ),
     ] = None
+    current_account_only: Annotated[
+        bool | None,
+        Field(
+            alias="currentAccountOnly",
+            description="Show local history visible to the current ChatGPT account. Defaults to false.",
+        ),
+    ] = None
     cursor: Annotated[
         str | None, Field(description="Opaque pagination cursor returned by a previous call.")
     ] = None

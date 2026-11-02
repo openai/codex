@@ -254,6 +254,7 @@ fn create_fake_rollout_with_source_and_parent_thread_id(
 
     // Build JSONL lines
     let meta = SessionMeta {
+        account_scoped: false,
         attached_thread: false,
         creator_user_id: None,
         creator_account_id: None,
@@ -351,6 +352,7 @@ pub fn create_fake_rollout_with_text_elements(
 
     // Build JSONL lines
     let meta = SessionMeta {
+        account_scoped: false,
         attached_thread: false,
         creator_user_id: None,
         creator_account_id: None,

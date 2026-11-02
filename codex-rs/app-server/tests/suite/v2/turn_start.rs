@@ -4723,6 +4723,7 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
         .request(|request_id| ClientRequest::ThreadList {
             request_id,
             params: codex_app_server_protocol::ThreadListParams {
+                current_account_only: false,
                 excluded_thread_ids: None,
                 attached_to_thread_id: None,
                 originators: None,

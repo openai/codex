@@ -23,6 +23,16 @@ resolved memory version, including thread-specific configuration overrides.
 It is `null` when memory use is disabled or the selected summary is missing,
 unreadable, or blank. It never falls back to the other memory version.
 
+# Local history by account
+
+Pass `currentAccountOnly: true` on `thread/list` or `thread/search` to scope local
+discovery to the current ChatGPT login. Newly created threads record that discovery
+is account-scoped, and each recorded creator user or account ID must match.
+Threads created before this change and threads without creator IDs stay visible
+across account switches. Resume and revert preserve that distinction; forks are new threads.
+Scoped requests skip candidates whose rollout header cannot be read. API-key
+logins see all local history. Direct access by thread ID remains available.
+
 # Thread list exclusions
 
 `thread/list` accepts `excludedThreadIds`, an optional array of up to 100

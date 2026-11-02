@@ -1579,6 +1579,41 @@ pub async fn find_rollout_path_by_rollout_id(
     Ok(None)
 }
 
+/// Locate a page's rollout IDs with one filename traversal per storage root.
+///
+/// Keeps the first match, searching active storage before archives. On a read error, stops
+/// scanning and retains earlier matches, just as individual lookups would have found them.
+pub async fn find_rollout_paths_by_rollout_ids(
+    codex_home: &Path,
+    rollout_ids: &[RolloutId],
+) -> HashMap<RolloutId, PathBuf> {
+    let ids: std::collections::HashSet<_> = rollout_ids.iter().copied().collect();
+    let mut paths = HashMap::new();
+    for subdir in [SESSIONS_SUBDIR, ARCHIVED_SESSIONS_SUBDIR] {
+        if paths.len() == ids.len() {
+            break;
+        }
+        if visit_rollout_filenames(
+            &codex_home.join(subdir),
+            |file_name| ids.contains(&file_name.rollout_id()),
+            |file_name, path| {
+                paths.entry(file_name.rollout_id()).or_insert(path);
+                if paths.len() == ids.len() {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+        )
+        .await
+        .is_err()
+        {
+            break;
+        }
+    }
+    paths
+}
+
 /// Prefetch a bounded set of active rollout paths for a history page.
 ///
 /// The sibling directory supplies candidate IDs. They are resolved in the same traversal order as

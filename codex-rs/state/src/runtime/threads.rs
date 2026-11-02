@@ -2920,6 +2920,7 @@ mod tests {
         );
         let items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
+                account_scoped: false,
                 attached_thread: false,
                 creator_user_id: None,
                 creator_account_id: None,
@@ -2995,6 +2996,7 @@ mod tests {
         );
         let items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
             meta: SessionMeta {
+                account_scoped: false,
                 attached_thread: false,
                 creator_user_id: None,
                 creator_account_id: None,

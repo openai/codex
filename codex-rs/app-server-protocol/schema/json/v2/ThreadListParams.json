@@ -54,6 +54,10 @@
         "null"
       ]
     },
+    "currentAccountOnly": {
+      "description": "Show local history visible to the current ChatGPT account. Defaults to false.",
+      "type": "boolean"
+    },
     "cursor": {
       "description": "Opaque pagination cursor returned by a previous call.",
       "type": [

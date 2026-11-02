@@ -214,6 +214,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
 
     let session_meta_line = SessionMetaLine {
         meta: SessionMeta {
+            account_scoped: false,
             attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
