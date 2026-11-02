@@ -55,6 +55,7 @@ codex-multi-env-copy-file = { workspace = true }
 codex-goal-extension = { workspace = true }
 codex-git-attribution = { workspace = true }
 codex-guardian-v2 = { workspace = true }
+codex-guardian-v3 = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-file-watcher = { workspace = true }
 codex-hooks = { workspace = true }
@@ -132,6 +133,7 @@ codex-windows-sandbox = { workspace = true }
 
 [dev-dependencies]
 zip = { workspace = true }
+codex-message-board = { workspace = true }
 codex-uds = { workspace = true }
 app_test_support = { workspace = true }
 axum = { workspace = true, default-features = false, features = [

@@ -2038,7 +2038,7 @@ async fn local_board_setup_survives_reopen() -> Result<()> {
 }
 
 #[tokio::test]
-async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
+async fn storage_namespaces_preserve_isolation_reopen_and_deletion() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
     let root = ThreadId::new();
@@ -2054,7 +2054,7 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
         notifications: Mutex::default(),
     });
     for storage_namespace in ["queue", "goals"] {
-        // Opening a board must not modify another runtime database.
+        // Opening and deleting a board must not modify another runtime database.
         let runtime_database = sqlite
             .open_read_write_pool(&dir.path().join(format!("{storage_namespace}_1.sqlite")))
             .await
@@ -2067,7 +2067,7 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
         let options = LocalBoardOptions {
             storage_namespace: storage_namespace.into(),
         };
-        let descriptor = LocalBoard::new(sqlite.clone(), identity).with_options(options);
+        let descriptor = LocalBoard::new(sqlite.clone(), identity).with_options(options.clone());
         let writer = descriptor.read_write().open(host.clone()).await?;
         let seed = PostRequest {
             request_id: "seed".into(),
@@ -2094,7 +2094,7 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
         drop(writer);
         let reopened = descriptor.read_write().open(host.clone()).await?;
         assert_eq!(
-            reopened.read_post(child, read).await?,
+            reopened.read_post(child, read.clone()).await?,
             PostContent {
                 metadata,
                 text: seed.text.clone(),
@@ -2102,6 +2102,43 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
                 next_offset_chars: seed.text.chars().count(),
             }
         );
+        let survivor = LocalBoard::new(sqlite.clone(), SessionId::new())
+            .with_options(LocalBoardOptions {
+                storage_namespace: storage_namespace.into(),
+            })
+            .read_write()
+            .open(host.clone())
+            .await?;
+        let survivor_metadata = survivor.post(root, seed.clone()).await?;
+        let after_deletion = PostRequest {
+            request_id: "after-deletion".into(),
+            destination: PostDestination::Channel("records".into()),
+            ..seed.clone()
+        };
+        let late_append = AppendRequest {
+            request_id: "late-append".into(),
+            destination: PostDestination::NewChannel("late-evidence".into()),
+            text: seed.text.clone(),
+        };
+        let deleted_ids = [identity, SessionId::new()];
+        LocalAgentMessageBoard::delete_boards(&sqlite, &options, &deleted_ids).await?;
+        assert!(reopened.read_post(root, read).await.is_err());
+        assert!(reopened.post(root, seed.clone()).await.is_err());
+        assert!(reopened.append(root, late_append.clone()).await.is_err());
+        assert_eq!(survivor.post(root, seed.clone()).await?, survivor_metadata);
+        survivor.post(root, after_deletion.clone()).await?;
+        survivor.append(root, late_append.clone()).await?;
+        // Fresh pools must retain both markers, including the board never opened before deletion.
+        drop((reopened, survivor));
+        for deleted_id in deleted_ids {
+            let deleted = LocalBoard::new(sqlite.clone(), deleted_id)
+                .with_options(options.clone())
+                .read_write()
+                .open(host.clone())
+                .await?;
+            assert!(deleted.post(root, seed.clone()).await.is_err());
+            assert!(deleted.append(root, late_append.clone()).await.is_err());
+        }
         assert_eq!(
             legacy
                 .read_post(
@@ -2119,6 +2156,17 @@ async fn storage_namespaces_preserve_isolation_and_reopen() -> Result<()> {
                 n_chars: seed.text.chars().count(),
                 next_offset_chars: seed.text.chars().count(),
             }
+        );
+        legacy.post(root, after_deletion).await?;
+        let unopened_options = LocalBoardOptions {
+            storage_namespace: format!("unopened_{storage_namespace}"),
+        };
+        LocalAgentMessageBoard::delete_boards(&sqlite, &unopened_options, &[identity]).await?;
+        assert!(
+            !tokio::fs::try_exists(dir.path().join(format!(
+                "message_board_unopened_{storage_namespace}_1.sqlite"
+            )))
+            .await?
         );
         assert_eq!(
             sqlx::query_scalar::<_, String>(
