@@ -839,6 +839,9 @@
             "agent_message_board": {
               "type": "boolean"
             },
+            "agent_message_board_mcp": {
+              "type": "boolean"
+            },
             "analytics_plan_history": {
               "type": "boolean"
             },
@@ -7551,6 +7554,9 @@
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
         "agent_message_board": {
+          "type": "boolean"
+        },
+        "agent_message_board_mcp": {
           "type": "boolean"
         },
         "analytics_plan_history": {

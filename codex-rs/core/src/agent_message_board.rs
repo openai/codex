@@ -54,6 +54,7 @@ pub fn install_agent_message_board(
         ))
     });
     let in_memory_boards = Arc::new(InMemoryMessageBoards::default());
+    let mcp_boards = codex_agent_message_board_extension::install_mcp(registry);
     codex_agent_message_board_extension::install(
         registry,
         MULTI_AGENT_V2_NAMESPACE_DESCRIPTION,
@@ -62,18 +63,22 @@ pub fn install_agent_message_board(
             let config = input.config;
             let connection = input.thread_store.get::<LocalBoardConnection>();
             let in_memory = config.multi_agent_v2.message_board_in_memory;
-            // Automatic boards need MAv2 and persistent storage. An explicit host
-            // connection also works for isolated, ephemeral runtimes.
+            let mcp =
+                config.features.enabled(Feature::AgentMessageBoardMcp) && connection.is_none();
+            // Automatic boards need MAv2. In-memory boards and explicit host
+            // connections also work for isolated, ephemeral runtimes.
             if connection.is_none()
-                && (!config.features.enabled(Feature::AgentMessageBoard)
+                && ((!config.features.enabled(Feature::AgentMessageBoard) && !mcp)
                     || !config.features.enabled(Feature::MultiAgentV2)
                     || (config.ephemeral
+                        && !mcp
                         && !in_memory
                         && config.multi_agent_v2.message_board_remote.is_none()))
             {
                 return Box::pin(async { Ok(None) });
             }
             let in_memory_boards = Arc::clone(&in_memory_boards);
+            let mcp_boards = Arc::clone(&mcp_boards);
             let host = Arc::new(LocalBoardHost {
                 manager: manager.clone(),
                 tree,
@@ -82,6 +87,12 @@ pub fn install_agent_message_board(
                 connection: connection.clone(),
             });
             Box::pin(async move {
+                if mcp {
+                    mcp_boards
+                        .open(input.thread_store, tree, caller, host)
+                        .await?;
+                    return Ok(None);
+                }
                 let board: Arc<dyn AgentMessageBoard> = if let Some(connection) = connection {
                     Arc::new(connection.open(host).await?)
                 } else if let Some(remote) = config.multi_agent_v2.message_board_remote.clone() {

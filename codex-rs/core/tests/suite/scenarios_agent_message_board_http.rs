@@ -8,17 +8,30 @@ use tokio::io::AsyncBufReadExt;
 #[path = "../../../message-board/tests/common/mod.rs"]
 mod board_host;
 
-#[test_case::test_case(false, false; "config")]
-#[test_case::test_case(true, false; "plugin")]
-#[test_case::test_case(true, true; "in_memory")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BoardMode {
+    Config,
+    Plugin,
+    InMemory,
+    Feature,
+}
+
+#[test_case::test_case(BoardMode::Config; "config")]
+#[test_case::test_case(BoardMode::Plugin; "plugin")]
+#[test_case::test_case(BoardMode::InMemory; "in_memory")]
+#[test_case::test_case(BoardMode::Feature; "feature")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> anyhow::Result<()> {
+async fn http_board_is_shared_with_children(mode: BoardMode) -> anyhow::Result<()> {
+    let plugin = matches!(mode, BoardMode::Plugin | BoardMode::InMemory);
+    let in_memory = matches!(mode, BoardMode::InMemory | BoardMode::Feature);
     let server = responses::start_mock_server().await;
     let home = Arc::new(tempfile::tempdir()?);
     let sqlite = codex_state::SqliteConfig::new_for_testing(home.path().to_path_buf().try_into()?);
     let mut process = None;
     let mut local = None;
-    let (url, authorization) = if in_memory {
+    let (url, authorization) = if mode == BoardMode::Feature {
+        (String::new(), String::new())
+    } else if in_memory {
         let launched = codex_message_board_mcp::launch_in_memory().await?;
         let connection = (
             launched.url().to_owned(),
@@ -78,12 +91,21 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
             "[features]\nplugins = true\n[plugins.\"message-board@test\"]\nenabled = true\n",
         )?;
     }
+    if mode == BoardMode::Feature {
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[features]\nagent_message_board_mcp = true\n",
+        )?;
+    }
     let configured_endpoint = endpoint.clone();
     let configured_sqlite = sqlite.clone();
     let configure_board = move |config: &mut codex_core::config::Config| {
         configure(config);
         config.sqlite = configured_sqlite.clone();
         config.ephemeral = in_memory;
+        if mode == BoardMode::Feature {
+            return; // The feature supplies the endpoint and suppresses the native board.
+        }
         config
             .features
             .disable(Feature::AgentMessageBoard)
@@ -199,10 +221,12 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
         "worker-post",
     )?;
     assert_eq!(post["author"], "/root/worker");
-    if in_memory {
+    if mode == BoardMode::InMemory {
         assert_eq!(post["created_at"], "2026-09-18T12:00:00Z");
     }
-    child.shutdown_and_wait().await?;
+    if mode != BoardMode::Feature {
+        child.shutdown_and_wait().await?;
+    }
 
     // Persistent boards survive a parent restart; the in-memory runner owns its lifetime.
     let resumed = if in_memory {
@@ -264,7 +288,7 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
         );
         assert!(request.tool_by_name("collaboration", "post").is_none());
     }
-    if !in_memory {
+    if mode != BoardMode::InMemory {
         let timestamp = post["created_at"].as_str().context("post timestamp")?;
         let mut bodies = posted
             .requests()
@@ -285,17 +309,125 @@ async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> an
             }
         }
         insta::assert_snapshot!(
-            if plugin {
+            if mode == BoardMode::Feature {
+                "agent_message_board_mcp_feature_context"
+            } else if plugin {
                 "agent_message_board_plugin_context"
             } else {
                 "agent_message_board_mcp_context"
             },
             context_snapshot::format_context_snapshot(
-                "A child posts through the HTTP MCP executable; its restarted parent discovers the same board and reads the decision.",
+                if mode == BoardMode::Feature {
+                    "The config flag starts an in-memory MCP board shared by a parent and child."
+                } else {
+                    "A child posts through the HTTP MCP executable; its restarted parent discovers the same board and reads the decision."
+                },
                 &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),
                 &ContextSnapshotOptions::default().rewrite_known_segments(),
             )
         );
+    }
+    if mode == BoardMode::Feature {
+        // The child must keep the shared board usable after its original host unloads.
+        resumed.codex.shutdown_and_wait().await?;
+        assert!(
+            resumed
+                .thread_manager
+                .remove_thread(&root_id)
+                .await
+                .is_some()
+        );
+        for (name, enabled) in [("subscribe", true), ("unsubscribe", false)] {
+            let subscribed = responses::mount_sse_sequence(
+                &server,
+                board_turn(name, name, json!({"channel_name":"design"})),
+            )
+            .await;
+            child
+                .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: format!("{name} to the design channel."),
+                    text_elements: vec![],
+                }]))
+                .await?;
+            wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+            assert_eq!(
+                board_result(
+                    subscribed
+                        .requests()
+                        .last()
+                        .context("subscription result")?,
+                    name
+                )?,
+                json!({
+                    "channel_name":"design", "thread_id":null,
+                    "target_agent":"/root/worker", "enabled":enabled,
+                    "last_message_id":post["message_id"],
+                }),
+            );
+        }
+        // Offer two mutations together and observe the real MCP execution intervals.
+        // Native board writes are exclusive even though reads may run concurrently.
+        let arguments = json!({
+            "channel_name":"design", "text":"The child still owns its host.",
+            "agents_to_notify":["/root/worker"],
+        });
+        let mut mutation_turn = board_turn("survivor-a", "post", arguments.clone());
+        mutation_turn[1] = sse(vec![
+            ev_function_call_with_namespace(
+                "survivor-a",
+                "mcp__codex_message_board",
+                "post",
+                &arguments.to_string(),
+            ),
+            ev_function_call_with_namespace(
+                "survivor-b",
+                "mcp__codex_message_board",
+                "post",
+                &arguments.to_string(),
+            ),
+            ev_completed("survivor-posts"),
+        ]);
+        let mutations = responses::mount_sse_sequence(&server, mutation_turn).await;
+        child
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Post twice, notifying yourself.".into(),
+                text_elements: vec![],
+            }]))
+            .await?;
+        let mut active_call = None;
+        let mut completed_calls = 0;
+        wait_for_event(&child, |event| {
+            match event {
+                EventMsg::McpToolCallBegin(begin) => {
+                    assert_eq!(
+                        active_call.replace(begin.call_id.clone()),
+                        None,
+                        "board mutations overlapped"
+                    );
+                }
+                EventMsg::McpToolCallEnd(end) => {
+                    assert_eq!(active_call.take(), Some(end.call_id.clone()));
+                    completed_calls += 1;
+                }
+                _ => {}
+            }
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        assert_eq!(completed_calls, 2);
+        for id in ["survivor-a", "survivor-b"] {
+            let result = board_result(
+                mutations
+                    .requests()
+                    .last()
+                    .context("surviving child follow-up")?,
+                id,
+            )?;
+            assert_eq!(result["author"], "/root/worker");
+        }
+        child.shutdown_and_wait().await?;
+        assert!(!sqlite.home().join("agent_message_board_1.sqlite").exists());
+        return Ok(());
     }
     // The endpoint runs on the app host, including when the executor is remote.
     // Exercise authentication and membership through a host-local HTTP client.

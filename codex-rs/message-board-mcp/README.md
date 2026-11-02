@@ -88,6 +88,18 @@ installation remains separate work.
 
 ## In-memory launcher
 
+To start the launcher automatically in Codex, enable both features:
+
+```toml
+[features]
+multi_agent_v2 = true
+agent_message_board_mcp = true
+```
+
+The MCP flag defaults off and takes precedence over `agent_message_board`.
+No plugin or endpoint configuration is needed. Boards are temporary and use the
+existing launcher lifecycle; explicit host-supplied board connections are unchanged.
+
 A runner calls `launch_in_memory()`, then registers each tree with
 `server.add_board(session_id, host)`. It supplies the existing `MessageBoardHost`
 for membership, clocks and notification delivery. Configure the same MCP server

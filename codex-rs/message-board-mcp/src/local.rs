@@ -1,13 +1,16 @@
 //! Runner-owned HTTP lifecycle over the existing in-memory board and host interfaces.
+//! Agent-specific bindings share tree state while retaining each caller's host.
 
 use crate::MessageBoardMcpServer;
 use crate::serve_http;
 use axum::http::HeaderValue;
 use codex_message_board::AgentMessageBoard;
 use codex_message_board::InMemoryAgentMessageBoard;
+use codex_message_board::InMemoryMessageBoards;
 use codex_message_board::MessageBoardHost;
 use codex_message_board::MessageBoardTool;
 use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
 use rmcp::ErrorData;
 use rmcp::transport::StreamableHttpServerConfig;
 use std::collections::HashMap;
@@ -18,7 +21,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 type BoardBinding = (Arc<dyn AgentMessageBoard>, Arc<dyn MessageBoardHost>);
-type Boards = Arc<RwLock<HashMap<SessionId, BoardBinding>>>;
+type Boards = Arc<RwLock<HashMap<(SessionId, Option<ThreadId>), BoardBinding>>>;
 
 /// One runner-owned endpoint. Dropping it initiates HTTP and MCP session cleanup.
 /// Call [`Self::shutdown`] to wait until that cleanup has finished.
@@ -27,6 +30,7 @@ pub struct LocalServer {
     url: String,
     authorization: HeaderValue,
     boards: Boards,
+    states: InMemoryMessageBoards,
     cancellation: CancellationToken,
     task: Option<JoinHandle<anyhow::Result<()>>>,
 }
@@ -52,16 +56,36 @@ impl LocalServer {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         anyhow::ensure!(
-            !boards.contains_key(&identity),
+            !boards.keys().any(|(tree, _)| *tree == identity),
             "board session already registered"
         );
         boards.insert(
-            identity,
+            (identity, None),
             (
                 Arc::new(InMemoryAgentMessageBoard::new(identity, host.clone())),
                 host,
             ),
         );
+        Ok(())
+    }
+
+    /// Binds one caller's host to shared tree state, instead of using a tree-wide host.
+    pub async fn bind_agent(
+        &self,
+        identity: SessionId,
+        caller: ThreadId,
+        host: Arc<dyn MessageBoardHost>,
+    ) -> anyhow::Result<()> {
+        let board = self.states.open(identity, host.clone()).await;
+        let mut boards = self
+            .boards
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        anyhow::ensure!(
+            !boards.contains_key(&(identity, None)),
+            "board session already has a tree-wide host"
+        );
+        boards.insert((identity, Some(caller)), (Arc::new(board), host));
         Ok(())
     }
 
@@ -97,11 +121,15 @@ pub async fn launch_in_memory() -> anyhow::Result<LocalServer> {
         token,
         StreamableHttpServerConfig::default().with_cancellation_token(cancellation.clone()),
         move |caller, session_id| {
-            let board = binding
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(&session_id)
-                .cloned();
+            let board = {
+                let boards = binding
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                boards
+                    .get(&(session_id, Some(caller)))
+                    .or_else(|| boards.get(&(session_id, None)))
+                    .cloned()
+            };
             async move {
                 let (board, host) = board.ok_or_else(|| {
                     ErrorData::invalid_params("Unknown board session", /*data*/ None)
@@ -122,6 +150,7 @@ pub async fn launch_in_memory() -> anyhow::Result<LocalServer> {
         url,
         authorization,
         boards,
+        states: InMemoryMessageBoards::default(),
         cancellation,
         task: Some(task),
     })
