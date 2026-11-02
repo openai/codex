@@ -56,7 +56,3 @@ pub use runtime_auth::select_runtime_auth;
 pub use runtime_auth::validate_runtime_destination;
 pub use runtime_auth::validate_runtime_provider;
 pub use runtime_auth::validate_runtime_selectors;
-
-#[cfg(test)]
-#[path = "workspace_routing_tests.rs"]
-mod workspace_routing_tests;

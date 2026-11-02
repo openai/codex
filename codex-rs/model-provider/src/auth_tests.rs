@@ -1,0 +1,673 @@
+//! Unit tests for the auth module.
+
+use codex_agent_identity::generate_agent_key_material;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthKeyringBackendKind;
+use codex_login::auth::AgentIdentityAuthRecord;
+use codex_login::auth::BedrockApiKeyAuth;
+use codex_login::auth::login_with_chatgpt_auth_tokens;
+use codex_model_provider_info::WireApi;
+use codex_model_provider_info::create_oss_provider_with_base_url;
+use codex_protocol::account::PlanType;
+use codex_protocol::config_types::ModelProviderAuthInfo;
+use codex_protocol::error::CodexErrorDetails;
+use http::header::AUTHORIZATION;
+use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::num::NonZeroU64;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+
+use super::*;
+
+static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
+const TEST_CHATGPT_ID_TOKEN: &str = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfdXNlcl9pZCI6InVzZXItMTIzNDUiLCJ1c2VyX2lkIjoidXNlci0xMjM0NSIsImNoYXRncHRfcGxhbl90eXBlIjoicHJvIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjb3VudC0xMjMifX0.c2ln";
+
+async fn agent_identity_auth(chatgpt_account_is_fedramp: bool) -> AgentIdentityAuth {
+    let key_material = generate_agent_key_material().expect("generate key material");
+    AgentIdentityAuth::from_record(
+        AgentIdentityAuthRecord {
+            agent_runtime_id: "agent-runtime-1".to_string(),
+            agent_private_key: key_material.private_key_pkcs8_base64,
+            account_id: "account-1".to_string(),
+            chatgpt_user_id: "user-1".to_string(),
+            email: Some("agent@example.com".to_string()),
+            plan_type: PlanType::Plus,
+            chatgpt_account_is_fedramp,
+            task_id: Some("task-run-1".to_string()),
+        },
+        "https://auth.openai.com/api/accounts",
+        &codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await
+    .expect("agent identity auth record should include task id")
+}
+
+fn provider_auth_scope(
+    policy: AgentIdentityAuthPolicy,
+    fallback: AgentIdentitySessionFallback,
+) -> ProviderAuthScope {
+    ProviderAuthScope {
+        agent_identity_policy: policy,
+        session_source: SessionSource::Cli,
+        agent_identity_session_fallback: fallback,
+    }
+}
+
+fn test_codex_home() -> PathBuf {
+    let id = NEXT_CODEX_HOME_ID.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "codex-model-provider-agent-identity-{pid}-{id}",
+        pid = std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("create temp codex home");
+    path
+}
+
+fn write_chatgpt_auth_json(codex_home: &Path) {
+    let auth_json = json!({
+        "tokens": {
+            "id_token": TEST_CHATGPT_ID_TOKEN,
+            "access_token": "test-access-token",
+            "refresh_token": "test-refresh-token",
+            "account_id": "account-123"
+        },
+        "last_refresh": "2099-01-01T00:00:00Z"
+    });
+    std::fs::write(
+        codex_home.join("auth.json"),
+        serde_json::to_string_pretty(&auth_json).expect("serialize auth.json"),
+    )
+    .expect("write auth.json");
+}
+
+async fn chatgpt_auth_manager(
+    agent_identity_authapi_base_url: String,
+) -> (PathBuf, Arc<AuthManager>, CodexAuth) {
+    let codex_home = test_codex_home();
+    write_chatgpt_auth_json(&codex_home);
+    let auth_manager = AuthManager::shared(
+        codex_home.clone(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await;
+    let auth = auth_manager.auth().await.expect("auth should load");
+    let auth_manager = AuthManager::from_auth_for_testing_with_agent_identity_authapi_base_url(
+        auth.clone(),
+        agent_identity_authapi_base_url,
+    );
+    (codex_home, auth_manager, auth)
+}
+
+async fn mount_transient_agent_registration(
+    server: &MockServer,
+    status: u16,
+    registration_count: Arc<AtomicUsize>,
+) {
+    Mock::given(method("POST"))
+        .and(path("/v1/agent/register"))
+        .respond_with(move |_request: &wiremock::Request| {
+            registration_count.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(status)
+        })
+        .mount(server)
+        .await;
+}
+
+#[test]
+fn unauthenticated_auth_provider_adds_no_headers() {
+    let provider =
+        create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+    let auth = resolve_provider_auth(/*auth*/ None, &provider).expect("auth should resolve");
+
+    assert!(auth.to_auth_headers().unwrap().is_empty());
+}
+
+#[test]
+fn custom_provider_does_not_inherit_ambient_auth_headers() {
+    let provider =
+        create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+    let mut ambient_headers = HeaderMap::new();
+    ambient_headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer ambient-token"),
+    );
+    ambient_headers.insert(
+        "ChatGPT-Account-ID",
+        HeaderValue::from_static("account-123"),
+    );
+    for ambient_auth in [
+        CodexAuth::Headers(AuthHeaders::new(ambient_headers)),
+        CodexAuth::from_api_key("sk-proj-fedramp-synthetic-test-key"),
+    ] {
+        let auth =
+            resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+        assert!(auth.to_auth_headers().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn custom_provider_does_not_inherit_ambient_bedrock_auth() {
+    let provider =
+        create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+    let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+        api_key: "bedrock-api-key-test".to_string(),
+        region: "us-east-1".to_string(),
+    });
+
+    let auth = resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+
+    assert!(auth.to_auth_headers().unwrap().is_empty());
+}
+
+#[test]
+fn custom_provider_uses_explicit_bearer_instead_of_ambient_auth() {
+    let mut provider =
+        create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+    provider.experimental_bearer_token = Some("provider-token".into());
+    let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+        api_key: "bedrock-api-key-test".to_string(),
+        region: "us-east-1".to_string(),
+    });
+
+    let headers = resolve_provider_auth(Some(&ambient_auth), &provider)
+        .expect("auth should resolve")
+        .to_auth_headers()
+        .unwrap();
+
+    assert_eq!(
+        headers.get(AUTHORIZATION),
+        Some(&HeaderValue::from_static("Bearer provider-token"))
+    );
+    assert_eq!(headers.len(), 1);
+}
+
+#[test]
+fn api_key_fedramp_routing_follows_the_selected_provider_credential() {
+    let project_key = "sk-proj-fedramp-synthetic-test-key";
+    let service_account_key = "sk-svcacct-fedramp-synthetic-test-key";
+    let legacy_key = "sk-proj-synthetic-test-key";
+
+    for (ambient_key, provider_key, expected_fedramp) in [
+        (project_key, None, true),
+        (service_account_key, None, true),
+        (legacy_key, None, false),
+        (project_key, Some(legacy_key), false),
+        (legacy_key, Some(project_key), true),
+        (legacy_key, Some(service_account_key), true),
+    ] {
+        let mut provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        provider.experimental_bearer_token = provider_key.map(Into::into);
+        let ambient_auth = CodexAuth::from_api_key(ambient_key);
+
+        let headers = resolve_provider_auth(Some(&ambient_auth), &provider)
+            .expect("auth should resolve")
+            .to_auth_headers()
+            .unwrap();
+
+        let key = provider_key.unwrap_or(ambient_key);
+        let mut expected_headers = HeaderMap::from_iter([(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {key}")).unwrap(),
+        )]);
+        if expected_fedramp {
+            expected_headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
+        }
+        assert_eq!(headers, expected_headers);
+    }
+}
+
+#[test]
+fn custom_provider_uses_command_resolved_auth() {
+    let mut provider =
+        create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+    provider.auth = Some(ModelProviderAuthInfo {
+        command: "print-token".to_string(),
+        args: Vec::new(),
+        timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+        refresh_interval_ms: 300_000,
+        cwd: std::env::current_dir()
+            .expect("current directory should be available")
+            .try_into()
+            .expect("current directory should be absolute"),
+    });
+    let command_auth = CodexAuth::from_api_key("command-token");
+
+    let headers = resolve_provider_auth(Some(&command_auth), &provider)
+        .expect("auth should resolve")
+        .to_auth_headers()
+        .unwrap();
+
+    assert_eq!(
+        headers.get(AUTHORIZATION),
+        Some(&HeaderValue::from_static("Bearer command-token"))
+    );
+}
+
+#[test]
+fn openai_provider_preserves_ambient_auth_headers() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let mut expected = HeaderMap::new();
+    expected.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer ambient-token"),
+    );
+    expected.insert(
+        "ChatGPT-Account-ID",
+        HeaderValue::from_static("account-123"),
+    );
+    let ambient_auth = CodexAuth::Headers(AuthHeaders::new(expected.clone()));
+
+    let auth = resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
+
+    assert_eq!(auth.to_auth_headers().unwrap(), expected);
+}
+
+#[test]
+fn header_auth_adds_predefined_headers() {
+    let mut expected = HeaderMap::new();
+    expected.insert(
+        http::header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer external"),
+    );
+    expected.insert("x-external-auth", HeaderValue::from_static("enabled"));
+    let auth = CodexAuth::Headers(AuthHeaders::new(expected.clone()));
+
+    let actual = auth_provider_from_auth(&auth).to_auth_headers().unwrap();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn openai_provider_rejects_bedrock_api_key_auth() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+        api_key: "bedrock-api-key-test".to_string(),
+        region: "us-east-1".to_string(),
+    });
+
+    match resolve_provider_auth(Some(&auth), &provider) {
+        Err(err) => match err.details() {
+            CodexErrorDetails::UnsupportedOperation(message) => {
+                assert_eq!(message, BEDROCK_API_KEY_UNSUPPORTED_MESSAGE);
+            }
+            details => panic!("unexpected auth error: {details:?}"),
+        },
+        Ok(_) => panic!("Bedrock API key auth should be rejected"),
+    }
+}
+
+#[tokio::test]
+async fn auth_manager_provider_follows_refreshes_but_not_account_switches() {
+    let codex_home = test_codex_home();
+    login_with_chatgpt_auth_tokens(
+        &codex_home,
+        "header.e30.first",
+        "test-account",
+        /*chatgpt_plan_type*/ None,
+    )
+    .expect("save initial auth");
+    let auth_manager = Arc::new(
+        AuthManager::new(
+            codex_home.clone(),
+            /*enable_codex_api_key_env*/ false,
+            AuthCredentialsStoreMode::Ephemeral,
+            /*forced_chatgpt_workspace_id*/ None,
+            /*chatgpt_base_url*/ None,
+            AuthKeyringBackendKind::default(),
+            codex_login::test_support::transport_default_auth_route_config(),
+        )
+        .await,
+    );
+    let expected_auth = auth_manager
+        .auth_cached()
+        .expect("initial auth should be cached");
+    let provider = auth_provider_from_auth_manager(Arc::clone(&auth_manager), &expected_auth);
+    let initial_headers = provider
+        .apply_auth_headers(HeaderMap::new())
+        .await
+        .expect("initial auth headers");
+
+    assert_eq!(
+        provider.to_auth_headers().unwrap().get(AUTHORIZATION),
+        Some(&HeaderValue::from_static("Bearer header.e30.first"))
+    );
+
+    login_with_chatgpt_auth_tokens(
+        &codex_home,
+        "header.e30.reloaded",
+        "test-account",
+        /*chatgpt_plan_type*/ None,
+    )
+    .expect("save reloaded auth");
+
+    // Ordinary requests retain the manager's cache until refresh or recovery runs.
+    assert_eq!(
+        provider
+            .apply_auth_headers(HeaderMap::new())
+            .await
+            .expect("cached auth headers"),
+        initial_headers
+    );
+    assert_eq!(
+        tokio::join!(
+            provider.refresh_after_unauthorized(initial_headers.clone()),
+            provider.refresh_after_unauthorized(initial_headers),
+        ),
+        (true, true)
+    );
+
+    let resolved_headers = provider
+        .apply_auth_headers(HeaderMap::new())
+        .await
+        .expect("managed auth headers should resolve");
+    assert_eq!(
+        resolved_headers.get(AUTHORIZATION),
+        Some(&HeaderValue::from_static("Bearer header.e30.reloaded"))
+    );
+
+    login_with_chatgpt_auth_tokens(
+        &codex_home,
+        "header.e30.other-account",
+        "other-account",
+        /*chatgpt_plan_type*/ None,
+    )
+    .expect("save switched-account auth");
+    assert!(!provider.refresh_after_unauthorized(resolved_headers).await);
+    auth_manager.reload().await;
+
+    assert!(matches!(
+        provider.to_auth_headers(),
+        Err(AuthError::Transient(_))
+    ));
+    assert!(matches!(
+        provider.apply_auth_headers(HeaderMap::new()).await,
+        Err(AuthError::Transient(_))
+    ));
+}
+
+#[derive(Clone, Copy)]
+enum RefreshFailure {
+    Transient,
+    Permanent,
+    Policy,
+}
+
+struct FailingRefreshAuth {
+    auth: tokio::sync::watch::Receiver<CodexAuth>,
+    barrier: tokio::sync::Barrier,
+    failure: RefreshFailure,
+}
+
+impl codex_login::ExternalAuth for FailingRefreshAuth {
+    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.auth.borrow().clone()) })
+    }
+
+    fn refresh(
+        &self,
+        _context: codex_login::ExternalAuthRefreshContext,
+    ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async {
+            self.barrier.wait().await;
+            self.barrier.wait().await;
+            Err(std::io::Error::other("refresh service unavailable"))
+        })
+    }
+
+    fn classify_error(&self, error: std::io::Error) -> codex_login::RefreshTokenError {
+        match self.failure {
+            RefreshFailure::Transient => codex_login::RefreshTokenError::Transient(error),
+            RefreshFailure::Permanent => codex_login::auth::RefreshTokenFailedError::new(
+                codex_login::auth::RefreshTokenFailedReason::Other,
+                error.to_string(),
+            )
+            .into(),
+            RefreshFailure::Policy => codex_login::RefreshTokenError::Policy(
+                codex_http_client::NetworkPolicyDenied::Revoked,
+            ),
+        }
+    }
+}
+
+#[tokio::test]
+async fn failed_refresh_retries_only_with_newer_credentials() {
+    for failure in [
+        RefreshFailure::Transient,
+        RefreshFailure::Permanent,
+        RefreshFailure::Policy,
+    ] {
+        for (token, account, changed) in [
+            ("Bearer old", "account", false),
+            ("Bearer new", "account", true),
+            ("Bearer new", "other-account", false),
+        ] {
+            let initial = CodexAuth::Headers(AuthHeaders::new(HeaderMap::from_iter([
+                (AUTHORIZATION, HeaderValue::from_static("Bearer old")),
+                (
+                    http::HeaderName::from_static("chatgpt-account-id"),
+                    HeaderValue::from_static("account"),
+                ),
+            ])));
+            let (updates, auth) = tokio::sync::watch::channel(initial.clone());
+            let external = Arc::new(FailingRefreshAuth {
+                auth,
+                barrier: tokio::sync::Barrier::new(2),
+                failure,
+            });
+            let manager = AuthManager::from_auth_for_testing(initial.clone());
+            manager.set_external_auth(external.clone()).await.unwrap();
+            let provider = auth_provider_from_auth_manager(manager.clone(), &initial);
+            let rejected = provider.to_auth_headers().expect("initial auth headers");
+            let recovery = provider.refresh_after_unauthorized(rejected);
+            let concurrent_update = async {
+                external.barrier.wait().await;
+                updates.send_replace(CodexAuth::Headers(AuthHeaders::new(HeaderMap::from_iter(
+                    [
+                        (AUTHORIZATION, HeaderValue::from_static(token)),
+                        (
+                            http::HeaderName::from_static("chatgpt-account-id"),
+                            HeaderValue::from_static(account),
+                        ),
+                    ],
+                ))));
+                manager.reload().await;
+                external.barrier.wait().await;
+            };
+            let (retry, ()) = tokio::join!(recovery, concurrent_update);
+            assert_eq!(retry, changed && !matches!(failure, RefreshFailure::Policy));
+            if matches!(failure, RefreshFailure::Permanent) && token == "Bearer old" {
+                // Even a late rejection must not reuse a credential known to have failed.
+                assert!(!provider.refresh_after_unauthorized(HeaderMap::new()).await);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn first_party_run_scope_uses_agent_assertion_and_exposes_telemetry() {
+    let auth =
+        CodexAuth::AgentIdentity(agent_identity_auth(/*chatgpt_account_is_fedramp*/ false).await);
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+
+    let auth = resolve_provider_auth_for_scope(
+        /*auth_manager*/ None,
+        Some(&auth),
+        &provider,
+        provider_auth_scope(
+            AgentIdentityAuthPolicy::JwtOnly,
+            AgentIdentitySessionFallback::default(),
+        ),
+    )
+    .await
+    .expect("auth should resolve");
+
+    assert_eq!(
+        auth.agent_identity_telemetry,
+        Some(AgentIdentityTelemetry {
+            agent_id: "agent-runtime-1".to_string(),
+            task_id: "task-run-1".to_string(),
+        })
+    );
+    let headers = auth.auth.to_auth_headers().unwrap();
+    assert!(
+        headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("AgentAssertion "))
+    );
+}
+
+#[tokio::test]
+async fn agent_identity_auth_provider_preserves_account_routing_headers() {
+    let auth = agent_identity_auth(/*chatgpt_account_is_fedramp*/ true).await;
+    let provider = auth_provider_from_auth(&CodexAuth::AgentIdentity(auth));
+
+    let headers = provider.to_auth_headers().unwrap();
+
+    assert!(
+        headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("AgentAssertion "))
+    );
+    assert_eq!(
+        headers
+            .get("ChatGPT-Account-ID")
+            .and_then(|value| value.to_str().ok()),
+        Some("account-1")
+    );
+    assert_eq!(
+        headers
+            .get("X-OpenAI-Fedramp")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+}
+
+#[tokio::test]
+async fn chatgpt_bootstrap_unavailable_uses_session_bearer_fallback() {
+    let server = MockServer::start().await;
+    let registration_count = Arc::new(AtomicUsize::new(0));
+    mount_transient_agent_registration(
+        &server,
+        /*status*/ 503,
+        Arc::clone(&registration_count),
+    )
+    .await;
+    let (_codex_home, auth_manager, auth) = chatgpt_auth_manager(server.uri()).await;
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let fallback = AgentIdentitySessionFallback::default();
+
+    let provider_auth = resolve_provider_auth_for_scope(
+        Some(auth_manager),
+        Some(&auth),
+        &provider,
+        provider_auth_scope(AgentIdentityAuthPolicy::ChatGptAuth, fallback.clone()),
+    )
+    .await
+    .expect("fallback should resolve bearer auth");
+
+    let headers = provider_auth.auth.to_auth_headers().unwrap();
+    assert_eq!(
+        headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer test-access-token")
+    );
+    assert_eq!(
+        headers
+            .get("ChatGPT-Account-ID")
+            .and_then(|value| value.to_str().ok()),
+        Some("account-123")
+    );
+    assert!(fallback.is_engaged());
+    assert_eq!(registration_count.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn chatgpt_session_fallback_skips_later_agent_identity_bootstrap() {
+    let server = MockServer::start().await;
+    let registration_count = Arc::new(AtomicUsize::new(0));
+    mount_transient_agent_registration(
+        &server,
+        /*status*/ 503,
+        Arc::clone(&registration_count),
+    )
+    .await;
+    let (_codex_home, auth_manager, auth) = chatgpt_auth_manager(server.uri()).await;
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let fallback = AgentIdentitySessionFallback::default();
+
+    resolve_provider_auth_for_scope(
+        Some(Arc::clone(&auth_manager)),
+        Some(&auth),
+        &provider,
+        provider_auth_scope(AgentIdentityAuthPolicy::ChatGptAuth, fallback.clone()),
+    )
+    .await
+    .expect("first fallback should resolve bearer auth");
+    resolve_provider_auth_for_scope(
+        Some(auth_manager),
+        Some(&auth),
+        &provider,
+        provider_auth_scope(AgentIdentityAuthPolicy::ChatGptAuth, fallback),
+    )
+    .await
+    .expect("second fallback should resolve bearer auth");
+
+    assert_eq!(registration_count.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn chatgpt_sessions_share_bootstrap_failure_cooldown() {
+    let server = MockServer::start().await;
+    let registration_count = Arc::new(AtomicUsize::new(0));
+    mount_transient_agent_registration(
+        &server,
+        /*status*/ 503,
+        Arc::clone(&registration_count),
+    )
+    .await;
+    let (_codex_home, auth_manager, auth) = chatgpt_auth_manager(server.uri()).await;
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let first_fallback = AgentIdentitySessionFallback::default();
+    let second_fallback = AgentIdentitySessionFallback::default();
+
+    resolve_provider_auth_for_scope(
+        Some(Arc::clone(&auth_manager)),
+        Some(&auth),
+        &provider,
+        provider_auth_scope(AgentIdentityAuthPolicy::ChatGptAuth, first_fallback.clone()),
+    )
+    .await
+    .expect("first session fallback should resolve bearer auth");
+    resolve_provider_auth_for_scope(
+        Some(auth_manager),
+        Some(&auth),
+        &provider,
+        provider_auth_scope(
+            AgentIdentityAuthPolicy::ChatGptAuth,
+            second_fallback.clone(),
+        ),
+    )
+    .await
+    .expect("second session fallback should resolve bearer auth");
+
+    assert!(first_fallback.is_engaged());
+    assert!(second_fallback.is_engaged());
+    assert_eq!(registration_count.load(Ordering::SeqCst), 3);
+}

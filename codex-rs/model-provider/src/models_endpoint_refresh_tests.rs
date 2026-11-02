@@ -1,5 +1,4 @@
 //! A catalog deadline must not interrupt rotating OAuth credentials before persistence.
-#![cfg(test)]
 
 use super::*;
 use base64::Engine;
