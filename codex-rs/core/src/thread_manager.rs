@@ -15,6 +15,7 @@ use crate::agent::LocalAgentControl;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentControl;
 use crate::agent::control::AgentControlInit;
+use crate::agent::host::InheritedSessionId;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
@@ -2287,6 +2288,15 @@ impl ThreadManagerState {
         }
         let inherited_environments = captured_environments.or(inherited_environments);
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
+        if thread_extension_init.get::<InheritedSessionId>().is_some()
+            && (!matches!(&initial_history, InitialHistory::New)
+                || session_source.is_non_root_agent())
+        {
+            return Err(CodexErr::InvalidRequest(
+                "an inherited agent session ID requires a fresh thread started directly by the host"
+                    .to_string(),
+            ));
+        }
         // Older callers and saved reviewers identify isolation through their source.
         // New internal callers supply an explicit runtime policy before startup.
         let isolation = thread_extension_init

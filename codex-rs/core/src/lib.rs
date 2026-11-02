@@ -164,6 +164,7 @@ pub use agent::host::AgentUsageAccounting;
 pub use agent::host::AgentUsageReport;
 pub use agent::host::HostThreadSpawnReservation;
 pub use agent::host::HostToolInvocationLookup;
+pub use agent::host::InheritedSessionId;
 pub use agent::host::PreparedChildContext;
 pub use agent::host::RestrictRootCapabilities;
 pub use agent::host::ToolInvocationContext;

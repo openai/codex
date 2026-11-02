@@ -7,6 +7,7 @@ use crate::agents_md_manager::SessionInstructions;
 use crate::exec_policy::ExecPolicyManager;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RequirementsExecPolicy;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -30,6 +31,15 @@ use std::sync::Arc;
 /// Obtaining current root evidence for Guardian is a separate host responsibility.
 #[derive(Clone, Copy, Debug)]
 pub struct RestrictRootCapabilities;
+
+/// The root's session ID, supplied by a trusted host when starting a fresh child.
+///
+/// Insert this into the thread's startup [`codex_extension_api::ExtensionDataInit`].
+/// The child keeps its own distinct thread ID. Resumed threads take their session
+/// ID from persisted metadata, and native children take it from their controller.
+/// To restrict root capabilities, also supply [`RestrictRootCapabilities`].
+#[derive(Clone, Copy, Debug)]
+pub struct InheritedSessionId(pub SessionId);
 
 /// A fresh child ID reserved in the host's tree.
 /// The host commits membership, serializes startup attempts and deduplicates retries.

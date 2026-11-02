@@ -18,6 +18,7 @@ pub use mcp_metadata::AgentMcpMetadataRecipient;
 pub use ownership::AgentRuntimeOwnership;
 pub(crate) use ownership::AgentRuntimeServices;
 pub use types::HostThreadSpawnReservation;
+pub use types::InheritedSessionId;
 pub use types::PreparedChildContext;
 pub(crate) use types::PreparedChildInheritance;
 pub use types::RestrictRootCapabilities;

@@ -13,6 +13,7 @@ use codex_core::AgentTurnOutcome;
 use codex_core::DeliveryReceipt;
 use codex_core::ForkSnapshot;
 use codex_core::GuardianRootSnapshot;
+use codex_core::InheritedSessionId;
 use codex_core::LiveAgent;
 use codex_core::PendingAgentMessage;
 use codex_core::RolloutBudgetReminder;
@@ -523,6 +524,70 @@ async fn host_factory_follows_thread_lifecycle() -> anyhow::Result<()> {
     );
     cold.thread.shutdown_and_wait().await?;
     fork.thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_hosted_child_persists_inherited_session_id() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let root = test_codex().build_with_auto_env(&server).await?;
+    let root_session_id = root.session_configured.session_id;
+    let manager = &root.thread_manager;
+    let options = || StartThreadOptions {
+        session_source: Some(SessionSource::Custom("host".to_string())),
+        environments: Some(vec![root.executor_environment().request()]),
+        ..StartThreadOptions::new(root.config.clone())
+    };
+    let mut child_options = options();
+    child_options
+        .thread_extension_init
+        .insert(InheritedSessionId(root_session_id));
+    let child = manager.start_thread(child_options).await?;
+    assert_ne!(SessionId::from(child.thread_id), root_session_id);
+    assert_eq!(
+        (
+            child.session_configured.session_id,
+            child.session_configured.parent_thread_id
+        ),
+        (root_session_id, None)
+    );
+    child.thread.ensure_rollout_materialized().await;
+    child.thread.flush_rollout().await?;
+    let history = child
+        .thread
+        .load_history(/*include_archived*/ false)
+        .await?;
+    let Some(RolloutItem::SessionMeta(meta)) = history.items.first() else {
+        anyhow::bail!("expected child metadata as the first rollout item");
+    };
+    assert_eq!(
+        (meta.meta.id, meta.meta.session_id),
+        (child.thread_id, root_session_id)
+    );
+    child.thread.shutdown_and_wait().await?;
+    let resumed = manager
+        .start_thread(StartThreadOptions {
+            initial_history: InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
+                conversation_id: child.thread_id,
+                history: Arc::new(history.items),
+                rollout_path: child.thread.rollout_path(),
+            }),
+            ..options()
+        })
+        .await?;
+    assert!(!Arc::ptr_eq(&resumed.thread, &child.thread));
+    assert_eq!(
+        (
+            resumed.thread_id,
+            resumed.session_configured.session_id,
+            resumed.session_configured.parent_thread_id
+        ),
+        (child.thread_id, root_session_id, None)
+    );
+    resumed.thread.shutdown_and_wait().await?;
+    root.codex.shutdown_and_wait().await?;
     Ok(())
 }
 

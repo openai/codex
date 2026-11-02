@@ -9,6 +9,7 @@ use super::step_settings::StepSettingsUpdate;
 use super::*;
 use crate::agent::api::AgentControl;
 use crate::agent::host::AgentRuntimeServices;
+use crate::agent::host::InheritedSessionId;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
 use crate::config::ConstraintError;
@@ -954,6 +955,15 @@ impl Session {
                 ));
             }
         };
+        let inherited_session_id = thread_extension_init
+            .remove::<InheritedSessionId>()
+            .map(|inherited| inherited.0);
+        if inherited_session_id == Some(SessionId::from(thread_id)) {
+            return Err(CodexErr::InvalidRequest(
+                "an inherited agent session ID must differ from the child thread ID".to_string(),
+            )
+            .into());
+        }
         let isolation = thread_extension_init
             .get::<codex_extension_api::SessionIsolation>()
             .map(|policy| *policy)
@@ -996,13 +1006,15 @@ impl Session {
                 || *session_id != SessionId::from(thread_id)
         });
         // session_id is equal to the root thread's ID.
-        let session_id = resumed_session_id.unwrap_or_else(|| {
-            if session_configuration.session_source.is_non_root_agent() {
-                agent_control.control().identity()
-            } else {
-                SessionId::from(thread_id)
-            }
-        });
+        let session_id = resumed_session_id
+            .or(inherited_session_id)
+            .unwrap_or_else(|| {
+                if session_configuration.session_source.is_non_root_agent() {
+                    agent_control.control().identity()
+                } else {
+                    SessionId::from(thread_id)
+                }
+            });
         let initial_auto_compact_window_ids = AutoCompactWindowIds::new_initial();
         let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
             && session_configuration.session_source.is_non_root_agent()
