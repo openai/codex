@@ -1,3 +1,4 @@
+mod admission;
 mod compact;
 mod lifecycle;
 mod regular;
@@ -60,6 +61,7 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_thread_store::PersistContext;
 
+pub(crate) use admission::HostTurnStarted;
 use codex_features::Feature;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -354,15 +356,22 @@ impl Session {
             (task_kind == TaskKind::Regular).then(|| turn_context.attribution()),
         )
         .await;
-        let agent_execution_guard = self.services.agent_control.admit_turn(
-            turn_context.multi_agent_version,
-            &turn_context.session_source,
-        );
+        let host_admission = self.host_turn_admission();
+        let (agent_execution_guard, task_input, pending_admission_input) = match &host_admission {
+            Some(_) => (None, Vec::new(), Some(input)),
+            None => (
+                self.services.agent_control.admit_turn(
+                    turn_context.multi_agent_version,
+                    &turn_context.session_source,
+                ),
+                input,
+                None,
+            ),
+        };
         let done_clone = Arc::clone(&done);
         let session = Arc::clone(self);
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
-        let task_input = input;
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
@@ -385,15 +394,27 @@ impl Session {
         let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
         let task_future = async move {
             let ctx_for_finish = Arc::clone(&ctx);
-            let mut task_result = task_for_run
-                .run(
-                    Arc::clone(&session),
-                    ctx,
-                    task_input,
-                    task_cancellation_token.child_token(),
-                )
-                .instrument(trace_span!("session_task.run"))
-                .await;
+            let mut task_result = async {
+                let input = match host_admission {
+                    Some(provider) => admission::admit(
+                        &session,
+                        &ctx,
+                        task_kind,
+                        provider.as_ref(),
+                        &task_cancellation_token,
+                    ).await?,
+                    None => task_input,
+                };
+                task_for_run
+                    .run(
+                        Arc::clone(&session),
+                        ctx,
+                        input,
+                        task_cancellation_token.child_token(),
+                    )
+                    .instrument(trace_span!("session_task.run"))
+                    .await
+            }.await;
             loop {
                 // Private reviewers save their transcript together with the terminal event.
                 // Errors and cancellation retain their existing save path.
@@ -448,6 +469,7 @@ impl Session {
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
             _agent_execution_guard: agent_execution_guard,
+            pending_admission_input,
             _diagnostics_guard: ACTIVE_TURNS.track(),
             _timer: timer,
         };
@@ -677,33 +699,21 @@ impl Session {
         turn_context: Arc<TurnContext>,
         task_result: SessionTaskResult,
     ) -> Option<McpStartupRequirements> {
-        let (regular_output, abort_reason) = match task_result {
-            Ok(output) => (output, None),
+        let (regular_output, abort_reason, task_error) = match task_result {
+            Ok(output) => (output, None, None),
             Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
-                (None, Some(TurnAbortReason::Interrupted))
+                (None, Some(TurnAbortReason::Interrupted), None)
             }
             Err(err) => {
                 warn!(%err, "session task returned an unexpected error");
-                self.emit_turn_error_lifecycle(
-                    turn_context.as_ref(),
-                    err.to_codex_protocol_error(),
-                    err.details(),
-                )
-                .await;
-                self.track_turn_codex_error(turn_context.as_ref(), &err);
-                self.send_event(
-                    turn_context.as_ref(),
-                    EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
-                )
-                .await;
-                (None, None)
+                (None, None, Some(err))
             }
         };
         let can_continue =
             regular_output.is_some() && turn_context.terminal_error.lock().await.is_none();
         let finishing = CancellationToken::new();
         let finish_recording = finishing.clone().drop_guard();
-        let turn_state = {
+        let (turn_state, unadmitted_task, mut pending_input) = {
             let mut active = self.active_turn.lock().await;
             let active_turn = active.as_mut()?;
             if !Arc::ptr_eq(&active_turn.task.as_ref()?.turn_context, &turn_context) {
@@ -720,16 +730,21 @@ impl Session {
             let task = active_turn.task.take()?;
             task.handle.detach();
             active_turn.finishing = Some(finishing);
-            Arc::clone(&active_turn.turn_state)
+            (
+                Arc::clone(&active_turn.turn_state),
+                task.pending_admission_input.is_some().then_some(task.task),
+                task.pending_admission_input.unwrap_or_default(),
+            )
         };
         turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
         let last_agent_message = regular_output.and_then(|output| output.last_agent_message);
-        let pending_input = self
-            .input_queue
-            .take_pending_input_for_turn_state(turn_state.as_ref())
-            .await;
+        pending_input.extend(
+            self.input_queue
+                .take_pending_input_for_turn_state(turn_state.as_ref())
+                .await,
+        );
         let (
             turn_had_memory_citation,
             turn_tool_calls,
@@ -744,15 +759,22 @@ impl Session {
                 std::mem::take(&mut ts.token_usage_by_model),
             )
         };
-        if let Err(err) = run_hooks_and_record_inputs(
+        let record_result = run_hooks_and_record_inputs(
             self,
             &turn_context,
             &turn_context.capture_current_model_info(),
             &pending_input,
             PersistContext::Standard,
         )
-        .await
-        {
+        .await;
+        if let Some(task) = unadmitted_task {
+            // The task never ran. Unwind setup such as entering review mode.
+            task.abort(Arc::clone(self), Arc::clone(&turn_context))
+                .await;
+        }
+        drop(finish_recording);
+        // A retry on the first error must start a new turn with the denied turn's input in history.
+        for err in task_error.into_iter().chain(record_result.err()) {
             self.emit_turn_error_lifecycle(
                 turn_context.as_ref(),
                 err.to_codex_protocol_error(),
@@ -766,7 +788,6 @@ impl Session {
             )
             .await;
         }
-        drop(finish_recording);
         let turn_telemetry = &turn_context.session_telemetry;
         // Emit token usage metrics.
         {
@@ -1051,6 +1072,22 @@ impl Session {
         task.handle.abort();
         // Aborting schedules destruction; join before freezing the turn's timing.
         let _ = task.handle.await;
+
+        if let Err(error) = self
+            .record_unadmitted_input(
+                &task.turn_context,
+                turn_state,
+                task.pending_admission_input,
+                Some(&reason),
+            )
+            .await
+        {
+            self.send_event(
+                &task.turn_context,
+                EventMsg::Error(error.to_error_event(/*message_prefix*/ None)),
+            )
+            .await;
+        }
 
         session_task
             .abort(Arc::clone(self), Arc::clone(&task.turn_context))

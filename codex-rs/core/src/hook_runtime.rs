@@ -761,6 +761,8 @@ pub(crate) async fn record_pending_input(
             client_id,
             metadata,
         } => {
+            // Prompt telemetry can contain full text. Emit it only for prompts selected for recording.
+            turn_context.session_telemetry.user_prompt(&content);
             sess.record_user_prompt_and_emit_turn_item(
                 turn_context.as_ref(),
                 model_info,

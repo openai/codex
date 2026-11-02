@@ -242,7 +242,10 @@ pub(crate) async fn finalize(
             usize::try_from(estimate_item_token_count(&reminder)).unwrap_or(usize::MAX),
         );
     }
-    if let Some(reminder) = session
+    if matches!(
+        &session.agent_runtime,
+        crate::agent::host::AgentRuntimeServices::Controller
+    ) && let Some(reminder) = session
         .services
         .agent_control
         .pending_budget_reminder(session.thread_id(), &session.current_window_id().await)

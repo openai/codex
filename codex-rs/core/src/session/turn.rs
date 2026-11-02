@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -970,55 +971,22 @@ pub(crate) async fn run_hooks_and_record_inputs(
     input: &[TurnInput],
     persist_context: PersistContext,
 ) -> CodexResult<bool> {
-    let rejected_uploaded_audio = input.iter().any(turn_input_has_uploaded_audio_file);
-    // Cancellation can reach this path before Guardian's tools and context are
-    // resolved. Only finalized evidence may enter reusable reviewer history.
-    if sess
-        .services
-        .thread_extension_data
-        .get::<crate::guardian::PendingReviewContext>()
-        .is_some()
-    {
-        return if rejected_uploaded_audio {
-            Err(uploaded_audio_disabled_error())
-        } else {
-            Ok(false)
-        };
-    }
     let mut blocked_input = false;
     let mut accepted_user_input = false;
-    for input_item in input {
-        let filtered_input;
-        let input_item = match input_item {
-            TurnInput::UserInput { content, .. } if content.iter().any(is_uploaded_audio_file) => {
-                let mut filtered = input_item.clone();
-                let TurnInput::UserInput { content, .. } = &mut filtered else {
-                    unreachable!("cloned user input must remain user input");
-                };
-                content.retain(|item| !is_uploaded_audio_file(item));
-                if content.is_empty() {
-                    continue;
-                }
-                filtered_input = filtered;
-                &filtered_input
-            }
-            _ => input_item,
-        };
-        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+    for input_item in recordable_inputs(sess, input) {
+        let input_item = input_item?;
+        let hook_outcome = inspect_pending_input(sess, turn_context, &input_item).await;
         if hook_outcome.should_stop {
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
-            if let TurnInput::UserInput { content, .. } = input_item {
-                // Prompt telemetry can contain the full text, so emit it only after hooks accept it.
-                turn_context.session_telemetry.user_prompt(content);
-            }
-            if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
+            if matches!(input_item.as_ref(), TurnInput::UserInput { content, .. } if !content.is_empty())
+            {
                 accepted_user_input = true;
             }
             // Tool outputs retain their durability barrier, including in mixed input batches.
             let input_persist_context = if persist_context == PersistContext::SteeredUserInput
-                && matches!(input_item, TurnInput::FunctionCallOutput(_))
+                && matches!(input_item.as_ref(), TurnInput::FunctionCallOutput(_))
             {
                 PersistContext::Standard
             } else {
@@ -1028,17 +996,48 @@ pub(crate) async fn run_hooks_and_record_inputs(
                 sess,
                 turn_context,
                 model_info,
-                input_item.clone(),
+                input_item.into_owned(),
                 hook_outcome.additional_contexts,
                 input_persist_context,
             )
             .await;
         }
     }
-    if rejected_uploaded_audio {
-        return Err(uploaded_audio_disabled_error());
-    }
     Ok(blocked_input && !accepted_user_input)
+}
+
+/// Yields usable input in order, then reports unsupported audio after valid siblings can be recorded.
+pub(crate) fn recordable_inputs<'a>(
+    sess: &Session,
+    input: &'a [TurnInput],
+) -> impl Iterator<Item = CodexResult<Cow<'a, TurnInput>>> {
+    let rejected_audio = input.iter().any(turn_input_has_uploaded_audio_file);
+    // Only finalized evidence may enter reusable Guardian history.
+    let items: &[TurnInput] = if sess
+        .services
+        .thread_extension_data
+        .get::<crate::guardian::PendingReviewContext>()
+        .is_some()
+    {
+        &[]
+    } else {
+        input
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let mut item = Cow::Borrowed(item);
+            if turn_input_has_uploaded_audio_file(&item)
+                && let TurnInput::UserInput { content, .. } = item.to_mut()
+            {
+                content.retain(|part| !is_uploaded_audio_file(part));
+                if content.is_empty() {
+                    return None;
+                }
+            }
+            Some(Ok(item))
+        })
+        .chain(rejected_audio.then(|| Err(uploaded_audio_disabled_error())))
 }
 
 fn turn_input_has_uploaded_audio_file(input: &TurnInput) -> bool {

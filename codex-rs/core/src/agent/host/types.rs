@@ -1,5 +1,6 @@
 //! Prepared inputs and host reservations for native child startup.
 
+use super::admission::AgentTurnAdmission;
 use crate::agent::api::AgentControl;
 use crate::agents_md_manager::SessionInstructions;
 use crate::exec_policy::ExecPolicyManager;
@@ -18,10 +19,13 @@ use std::sync::Arc;
 /// A fresh child ID reserved in the host's tree.
 /// The host commits membership, serializes startup attempts and deduplicates retries.
 /// Core derives the parent, session and path from the invocation and child request.
-/// The controller supplies runtime coordination.
+/// The controller supplies runtime coordination by default. For host-owned admission, select
+/// `AgentRuntimeOwnership::Host` before startup finishes.
 pub struct HostThreadSpawnReservation {
     pub thread_id: ThreadId,
     pub control: Arc<dyn AgentControl>,
+    /// Admission provider for a host-owned child. A lifecycle contributor may also install it.
+    pub turn_admission: Option<Arc<dyn AgentTurnAdmission>>,
 }
 
 /// Parent inputs captured from the tool invocation for a host starting or forking a child.

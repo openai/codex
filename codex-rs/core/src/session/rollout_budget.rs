@@ -1,5 +1,6 @@
 use super::session::Session;
 use super::turn_context::TurnContext;
+use crate::agent::host::AgentRuntimeServices;
 use crate::context::ContextualUserFragment;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TokenUsage;
@@ -9,6 +10,9 @@ pub(super) async fn maybe_record_reminder(
     turn_context: &TurnContext,
     window_id: &str,
 ) {
+    if matches!(&sess.agent_runtime, AgentRuntimeServices::Host(_)) {
+        return;
+    }
     let agent_control = &sess.services.agent_control;
     let Some(reminder) = agent_control
         .pending_budget_reminder(sess.thread_id(), window_id)
@@ -32,6 +36,9 @@ pub(super) async fn maybe_record_reminder(
 
 impl Session {
     pub(crate) async fn record_rollout_budget_usage(&self, usage: &TokenUsage) -> CodexResult<()> {
+        if matches!(&self.agent_runtime, AgentRuntimeServices::Host(_)) {
+            return Ok(());
+        }
         self.services
             .agent_control
             .record_usage(usage.clone())

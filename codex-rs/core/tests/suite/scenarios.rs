@@ -155,6 +155,9 @@ mod agent_eviction;
 #[path = "scenarios_reserved_spawn.rs"]
 mod reserved_spawn;
 
+#[path = "host_turn_admission.rs"]
+mod host_turn_admission;
+
 #[path = "scenarios_partial_answers.rs"]
 mod partial_answers;
 

@@ -229,6 +229,7 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
     let reservation = || HostThreadSpawnReservation {
         thread_id: child_id,
         control: controller.clone(),
+        turn_admission: None,
     };
     let mut mismatched = reservation();
     mismatched.control = Arc::new(TestAgentControl::new(ThreadId::new()));
@@ -351,6 +352,7 @@ async fn cancelled_creation_cleans_registered_child() -> Result<()> {
                     HostThreadSpawnReservation {
                         thread_id: child_id,
                         control: controller,
+                        turn_admission: None,
                     },
                 )
                 .await

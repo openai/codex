@@ -134,7 +134,11 @@ impl Session {
                 model_instructions,
             )
         };
-        let environment_subagents = if turn_context.config.include_environment_context {
+        let environment_subagents = if turn_context.config.include_environment_context
+            && matches!(
+                self.agent_runtime,
+                crate::agent::host::AgentRuntimeServices::Controller
+            ) {
             match turn_context.multi_agent_version {
                 MultiAgentVersion::V2 => {
                     let agent_paths = self

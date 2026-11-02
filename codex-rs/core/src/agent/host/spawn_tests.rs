@@ -198,6 +198,7 @@ async fn same_manager_creation_retains_step_executor_and_shares_exec_policy() ->
             HostThreadSpawnReservation {
                 thread_id: child_id,
                 control: Arc::clone(&session.services.agent_control),
+                turn_admission: None,
             },
         )
         .await?;
