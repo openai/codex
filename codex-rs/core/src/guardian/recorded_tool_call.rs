@@ -1,5 +1,5 @@
-//! Prepares a supplied exec or native patch call for review against captured history.
-//! Preparation never executes the command or applies the patch.
+//! Prepares a supplied exec, patch, or permission request for review against captured history.
+//! Preparation never executes the tool or grants permissions.
 
 use std::sync::Arc;
 
@@ -9,6 +9,7 @@ use codex_guardian_reviewer::ReviewDeadline;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_tools::FunctionCallError;
 use codex_tools::ToolName;
 use tokio_util::sync::CancellationToken;
@@ -22,6 +23,7 @@ use crate::guardian_review::GuardianReviewResult;
 use crate::session::session::Session;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::PreparedPermissionRequest;
 use crate::tools::handlers::ToolEnvironmentArgs;
 use crate::tools::handlers::apply_patch::prepare_patch_request;
 use crate::tools::handlers::parse_arguments;
@@ -47,7 +49,7 @@ pub(crate) async fn review_tool_call(
             status,
             encrypted_function_args,
             ..
-        } if name == "exec_command"
+        } if matches!(name.as_str(), "exec_command" | "request_permissions")
             && encrypted_function_args.as_ref().is_none_or(Vec::is_empty)
             && ToolName::new(namespace.clone(), name).is_default_namespace()
             && !call_id.trim().is_empty()
@@ -64,11 +66,11 @@ pub(crate) async fn review_tool_call(
             && matches!(status.as_deref(), None | Some("completed")) => {}
         _ => {
             return Err(CodexErr::InvalidRequest(
-                "expected a completed plaintext exec_command or apply_patch call with a nonempty call ID".into(),
+                "expected a completed plaintext exec_command, apply_patch, or request_permissions call with a nonempty call ID".into(),
             ));
         }
     };
-    if history.raw_items().any(|item| {
+    if history.raw_items().rev().skip(1).any(|item| {
         matches!(item, ResponseItem::FunctionCall { name, namespace, .. }
             if name == "request_permissions"
                 && ToolName::new(namespace.clone(), name).is_default_namespace())
@@ -91,7 +93,9 @@ pub(crate) async fn review_tool_call(
             .build_tool_call(tool_call.clone())
             .map_err(tool_error)?
             .ok_or_else(|| {
-                CodexErr::InvalidRequest("expected an exec_command or apply_patch call".into())
+                CodexErr::InvalidRequest(
+                    "expected an exec_command, apply_patch, or request_permissions call".into(),
+                )
             })?;
         let tool = step
             .tool_router
@@ -151,7 +155,7 @@ pub(crate) async fn review_tool_call(
                 }
                 let requirement = prepared.approval_requirement(session, step).await;
                 let action = prepared.approval_action(&invocation.call_id, &requirement);
-                (requirement, action)
+                (Some(requirement), action)
             }
             ("apply_patch", ToolPayload::Custom { input }) => {
                 let environment = selected_executor(&invocation.environments, &step.environments)
@@ -160,7 +164,32 @@ pub(crate) async fn review_tool_call(
                     .await
                     .map_err(tool_error)?;
                 let action = prepared.approval_action(&invocation.call_id);
-                (prepared.exec_approval_requirement, action)
+                (Some(prepared.exec_approval_requirement), action)
+            }
+            ("request_permissions", ToolPayload::Function { arguments }) => {
+                let environment = selected_executor(&invocation.environments, &step.environments)
+                    .map_err(tool_error)?;
+                let prepared =
+                    PreparedPermissionRequest::parse(arguments, environment).map_err(tool_error)?;
+                match step.settings.approval_policy() {
+                    AskForApproval::Never => {
+                        return Ok(GuardianReviewResult {
+                            call_id: invocation.call_id,
+                            assessment: None,
+                        });
+                    }
+                    AskForApproval::Granular(policy) if !policy.allows_request_permissions() => {
+                        return Ok(GuardianReviewResult {
+                            call_id: invocation.call_id,
+                            assessment: None,
+                        });
+                    }
+                    AskForApproval::OnRequest
+                    | AskForApproval::UnlessTrusted
+                    | AskForApproval::Granular(_) => {}
+                }
+                let action = prepared.approval_action(&invocation.call_id, &step.turn.sub_id);
+                (None, action)
             }
             _ => {
                 return Err(CodexErr::Fatal(
@@ -169,19 +198,20 @@ pub(crate) async fn review_tool_call(
             }
         };
         let approval = match &requirement {
-            ExecApprovalRequirement::Skip { .. } => {
+            None => None,
+            Some(ExecApprovalRequirement::Skip { .. }) => {
                 return Ok(GuardianReviewResult {
                     call_id: invocation.call_id,
                     assessment: None,
                 });
             }
-            ExecApprovalRequirement::NeedsApproval { reason, .. } => reason.clone(),
-            ExecApprovalRequirement::NeedsHumanApproval { .. } => {
+            Some(ExecApprovalRequirement::NeedsApproval { reason, .. }) => reason.clone(),
+            Some(ExecApprovalRequirement::NeedsHumanApproval { .. }) => {
                 return Err(CodexErr::InvalidRequest(
                     "Managed command policy requires human approval.".into(),
                 ));
             }
-            ExecApprovalRequirement::Forbidden { reason } => {
+            Some(ExecApprovalRequirement::Forbidden { reason }) => {
                 return Err(CodexErr::InvalidRequest(reason.clone()));
             }
         };

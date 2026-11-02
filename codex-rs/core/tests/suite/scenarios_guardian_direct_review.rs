@@ -3,6 +3,7 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::guardian_review::GuardianReviewResult;
+use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -366,6 +367,130 @@ async fn direct_patch_review_matches_live_action_without_writes() -> Result<()> 
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_permissions_review_matches_live_action() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let builder = test_codex().with_model("gpt-5.5").with_config(|config| {
+        super::configure_scenario_catalog(config);
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("enable permission requests");
+        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config
+            .permissions
+            .set_permission_profile(PermissionProfile::read_only())
+            .expect("read-only permissions");
+    });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+    let test = harness.test();
+
+    let arguments =
+        r#"{"reason":"Edit the requested file.","permissions":{"file_system":{"write":["."]}}}"#;
+    let assessment = json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The permission request is authorized."
+    });
+    let mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            // Live reference: deny the permission request so no access is granted.
+            sse(vec![
+                ev_function_call("permissions-review", "request_permissions", arguments),
+                ev_completed("parent-action"),
+            ]),
+            sse(vec![
+                ev_assistant_message("live-denial", r#"{"outcome":"deny"}"#),
+                ev_completed("live-review"),
+            ]),
+            sse(vec![
+                ev_assistant_message("parent-done", "Denied."),
+                ev_completed("parent-done"),
+            ]),
+            // Direct review: allow the request without granting access.
+            sse(vec![
+                ev_assistant_message("direct-allow", &assessment.to_string()),
+                ev_completed("direct-review"),
+            ]),
+        ],
+    )
+    .await;
+    // 1. Capture a live review without granting permissions.
+    let prompt = "Request access to edit files in this directory.";
+    test.submit_text_turn(prompt).await?;
+
+    // 2. Review the same recorded permission request in isolation.
+    test.codex.flush_rollout().await?;
+    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    let items = history
+        .items
+        .into_iter()
+        .filter_map(|entry| match entry {
+            RolloutItem::ResponseItem(item) => match &item.item {
+                ResponseItem::Message { role, content, .. }
+                    if role == "user" && content == &[input_text(prompt)] =>
+                {
+                    Some(item.into_item())
+                }
+                ResponseItem::FunctionCall { .. } => Some(item.into_item()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(items.len(), 2);
+    let direct = test
+        .thread_manager
+        .start_thread(test.start_thread_options().await)
+        .await?;
+    direct.thread.inject_response_items(items).await?;
+    assert_eq!(
+        direct
+            .thread
+            .guardian_review(&CancellationToken::new())
+            .await?,
+        GuardianReviewResult {
+            call_id: "permissions-review".to_owned(),
+            assessment: Some(serde_json::from_value(assessment)?),
+        }
+    );
+    // 3. Verify parity with the live review input.
+
+    let requests = mock.requests();
+    let [_, live_review_request, _, direct_review_request] = requests.as_slice() else {
+        panic!("expected parent, live review, parent, direct review");
+    };
+    let turn_ids = regex_lite::Regex::new(r#"\\"turn_id\\": \\"[^"\\]*\\""#)?;
+    assert_eq!(
+        turn_ids.replace_all(
+            &model_input(direct_review_request, direct.thread_id)?,
+            r#"\"turn_id\": \"<TURN>\""#
+        ),
+        turn_ids.replace_all(
+            &model_input(live_review_request, history.thread_id)?,
+            r#"\"turn_id\": \"<TURN>\""#
+        ),
+    );
+    let snapshot = context_snapshot::format_request_history_snapshot(
+        "Live and direct Guardian review receive the same permission request.",
+        &requests,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    );
+    let environment = test.executor_environment().selection();
+    let cwd = serde_json::to_string(&environment.cwd.inferred_native_path_string())?;
+    let environment_id = serde_json::to_string(&environment.environment_id)?;
+    let snapshot = snapshot
+        .replace(&cwd, "\"<CWD>\"")
+        .replace(&environment_id, "\"<ENVIRONMENT>\"");
+    insta::assert_snapshot!("guardian_direct_permissions", snapshot);
+    direct.thread.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn direct_patch_review_skips_writable_file_without_writes() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -411,6 +536,53 @@ async fn direct_patch_review_skips_writable_file_without_writes() -> Result<()> 
         harness.read_file_text("guardian-skipped.txt").await?,
         "before\n"
     );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[test_case::test_case(AskForApproval::Never; "never")]
+#[test_case::test_case(AskForApproval::Granular(codex_protocol::protocol::GranularApprovalConfig {
+    sandbox_approval: true,
+    rules: true,
+    mcp_elicitations: true,
+    request_permissions: false,
+    skill_approval: true,
+}); "granular")]
+#[tokio::test]
+async fn direct_permissions_review_skips_when_policy_disallows_requests(
+    policy: AskForApproval,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let builder = test_codex()
+        .with_model("gpt-5.5")
+        .with_config(move |config| {
+            super::configure_scenario_catalog(config);
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("enable permission requests");
+            config.permissions.approval_policy = Constrained::allow_any(policy);
+        });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+    let test = harness.test();
+    let mock =
+        responses::mount_sse_once(harness.server(), sse(vec![ev_completed("unexpected")])).await;
+    test.codex
+        .inject_response_items(vec![serde_json::from_value(json!({
+            "type": "function_call", "name": "request_permissions", "call_id": "permissions-skip",
+            "arguments": r#"{"permissions":{"network":{"enabled":true}}}"#,
+        }))?])
+        .await?;
+    assert_eq!(
+        test.codex
+            .guardian_review(&CancellationToken::new())
+            .await?,
+        GuardianReviewResult {
+            call_id: "permissions-skip".into(),
+            assessment: None,
+        }
+    );
+    assert!(mock.requests().is_empty());
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }

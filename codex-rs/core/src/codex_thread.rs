@@ -931,7 +931,7 @@ impl CodexThread {
         Ok(())
     }
 
-    /// Review the final injected exec or native patch call without executing it.
+    /// Review the final injected exec, patch, or permission request without executing it.
     pub async fn guardian_review(
         &self,
         cancellation: &CancellationToken,
@@ -942,7 +942,8 @@ impl CodexThread {
         let history = self.session.clone_history().await;
         let tool_call = history.raw_items().next_back().cloned().ok_or_else(|| {
             CodexErr::InvalidRequest(
-                "expected a final plaintext exec_command or apply_patch call".into(),
+                "expected a final plaintext exec_command, apply_patch, or request_permissions call"
+                    .into(),
             )
         })?;
         crate::guardian::review_tool_call(&self.session, history, &tool_call, cancellation).await
