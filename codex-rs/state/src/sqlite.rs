@@ -2,6 +2,7 @@
 //! New databases use DELETE on NFS and WAL elsewhere.
 //! Writable pools preserve existing settings unless managed policy requires DELETE on NFS.
 //! Startup retries SQLITE_BUSY and reports other errors to callers.
+//! Schema version checks and migrations share one transaction and retry contention together.
 //! The configured logs directory is created and locked only when opening its database.
 
 #![expect(
@@ -413,7 +414,21 @@ impl SqliteConfig {
             if matches!(spec.kind, DbKind::State) {
                 repair_legacy_recency_migration_version(&pool, migrator).await?;
             }
-            migrator.run(&pool).await.map_err(anyhow::Error::from)
+            // SQLx's SQLite migration lock is a no-op. Keep version checks and changes in
+            // one transaction, retrying from a fresh snapshot after a concurrent migration.
+            // A current schema needs only a read lock, including when opened on NFS.
+            retry_on_busy(|| async {
+                let mut transaction = pool.begin().await?;
+                if let Err(error) = migrator
+                    .run_direct(/*target*/ None, &mut *transaction, /*skip*/ false)
+                    .await
+                {
+                    transaction.rollback().await?;
+                    return Err(error.into());
+                }
+                transaction.commit().await.map_err(anyhow::Error::from)
+            })
+            .await
         }
         .await;
         telemetry::record_init_result(
