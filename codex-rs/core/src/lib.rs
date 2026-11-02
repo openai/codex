@@ -165,6 +165,7 @@ pub use agent::host::AgentUsageReport;
 pub use agent::host::HostThreadSpawnReservation;
 pub use agent::host::HostToolInvocationLookup;
 pub use agent::host::PreparedChildContext;
+pub use agent::host::RestrictRootCapabilities;
 pub use agent::host::ToolInvocationContext;
 pub use agent::host::UsageAccountingDecision;
 pub use thread_spawn::ThreadCreateRequest;

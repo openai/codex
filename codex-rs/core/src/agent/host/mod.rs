@@ -20,6 +20,7 @@ pub(crate) use ownership::AgentRuntimeServices;
 pub use types::HostThreadSpawnReservation;
 pub use types::PreparedChildContext;
 pub(crate) use types::PreparedChildInheritance;
+pub use types::RestrictRootCapabilities;
 pub use usage::AgentUsageAccounting;
 pub use usage::AgentUsageReport;
 pub use usage::UsageAccountingDecision;

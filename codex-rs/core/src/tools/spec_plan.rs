@@ -1324,7 +1324,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     }
 
     if turn_context.config.experimental_request_user_input_enabled
-        && !turn_context.session_source.is_non_root_agent()
+        && !turn_context.root_capabilities_restricted
         && context
             .model_info
             .experimental_supported_tools
@@ -1351,7 +1351,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         );
     }
 
-    if !turn_context.session_source.is_non_root_agent()
+    if !turn_context.root_capabilities_restricted
         && (features.enabled(Feature::SendMessageToUserAsync)
             || context
                 .model_info

@@ -64,7 +64,7 @@ impl RequestUserInputHandler {
             }
         };
 
-        if turn.session_source.is_non_root_agent() {
+        if turn.root_capabilities_restricted {
             return Err(FunctionCallError::RespondToModel(
                 "request_user_input can only be used by the root thread".to_string(),
             ));

@@ -1,4 +1,4 @@
-//! Prepared inputs and host reservations for native child startup.
+//! Host inputs for child startup and root-only capability restrictions.
 
 use super::admission::AgentTurnAdmission;
 use super::usage::AgentUsageAccounting;
@@ -16,6 +16,20 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::sync::Arc;
+
+/// Restrict a thread's root-only capabilities as for a native subagent.
+///
+/// A trusted host supplies this marker in the thread's startup [`codex_extension_api::ExtensionDataInit`],
+/// including when cold-resuming the thread. Core captures it once at startup.
+/// Embeddings can read it during extension startup and MCP projection to apply their own
+/// root-only restrictions. Session attribution, agent lineage and the thread's permission
+/// profile come from their usual startup inputs. Native subagents are always restricted.
+///
+/// For agent forks, hosts must also supply history with native agent-fork provenance.
+/// This marks copied messages as inherited and excludes the source's Guardian checkpoints.
+/// Obtaining current root evidence for Guardian is a separate host responsibility.
+#[derive(Clone, Copy, Debug)]
+pub struct RestrictRootCapabilities;
 
 /// A fresh child ID reserved in the host's tree.
 /// The host commits membership, serializes startup attempts and deduplicates retries.

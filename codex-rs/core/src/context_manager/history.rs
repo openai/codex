@@ -60,7 +60,6 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
@@ -282,10 +281,13 @@ impl ContextManager {
         &self.retained_context
     }
 
-    pub(crate) fn for_session(source: &SessionSource, features: &ManagedFeatures) -> Self {
+    pub(crate) fn for_session(
+        root_capabilities_restricted: bool,
+        features: &ManagedFeatures,
+    ) -> Self {
         let independent = !features.enabled(Feature::GuardianReuseParentCompaction);
         Self {
-            retain_inherited_user_messages: !source.is_non_root_agent(),
+            retain_inherited_user_messages: !root_capabilities_restricted,
             guardian_review_mode: if independent {
                 GuardianContextMode::Independent
             } else {

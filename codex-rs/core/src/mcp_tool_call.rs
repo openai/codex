@@ -1779,7 +1779,7 @@ pub(crate) async fn request_mcp_tool_user_approval(
             cancellation_reason,
         )
     } else {
-        if turn_context.session_source.is_non_root_agent() {
+        if turn_context.root_capabilities_restricted {
             return ApprovalResolution {
                 decision: ReviewDecision::denied(concat!(
                     "MCP tool approval via request_user_input requires the root thread. ",

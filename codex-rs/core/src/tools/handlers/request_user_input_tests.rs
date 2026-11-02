@@ -11,10 +11,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_guardian_context::RenderedVerifiedAnswers;
-use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use pretty_assertions::assert_eq;
@@ -25,15 +22,9 @@ use test_case::test_case;
 use tokio::sync::Mutex;
 
 #[tokio::test]
-async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
+async fn request_user_input_rejects_restricted_threads() {
     let (session, mut turn) = make_session_and_context().await;
-    turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id: ThreadId::new(),
-        depth: 1,
-        agent_path: None,
-        agent_nickname: None,
-        agent_role: None,
-    });
+    turn.root_capabilities_restricted = true;
     let turn = Arc::new(turn);
 
     let result = RequestUserInputHandler {
@@ -74,7 +65,7 @@ async fn multi_agent_v2_request_user_input_rejects_subagent_threads() {
     .await;
 
     let Err(err) = result else {
-        panic!("sub-agent request_user_input should fail");
+        panic!("restricted request_user_input should fail");
     };
     assert_eq!(
         err,

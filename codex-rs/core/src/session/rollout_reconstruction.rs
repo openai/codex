@@ -195,7 +195,7 @@ impl Session {
             rollout_items,
             turn_context.history_mode,
             ContextManager::for_session(
-                &turn_context.session_source,
+                turn_context.root_capabilities_restricted,
                 &turn_context.config.features,
             ),
             turn_context.model_info().truncation_policy.into(),

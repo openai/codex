@@ -133,7 +133,7 @@ fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
 
 fn root_history() -> ContextManager {
     ContextManager::for_session(
-        &SessionSource::Cli,
+        /*root_capabilities_restricted*/ false,
         &ManagedFeatures::from(codex_features::Features::with_defaults()),
     )
 }

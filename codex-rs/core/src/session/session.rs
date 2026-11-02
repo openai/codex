@@ -159,6 +159,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) trusted_guardian_reviewer: bool,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
+    /// Whether native lineage or the trusted host restricts this session's root-only capabilities.
+    pub(super) root_capabilities_restricted: bool,
     /// Persisted thread history contract selected when this thread was created.
     pub(super) history_mode: ThreadHistoryMode,
     /// Immediate history source copied into this thread, when this thread was forked.
@@ -1574,7 +1576,7 @@ impl Session {
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
                 ContextManager::for_session(
-                    &session_configuration.session_source,
+                    session_configuration.root_capabilities_restricted,
                     &config.features,
                 ),
             );
