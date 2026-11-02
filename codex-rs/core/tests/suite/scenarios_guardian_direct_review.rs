@@ -18,6 +18,7 @@ use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
+use core_test_support::responses::ev_apply_patch_exec_command_call_via_heredoc;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -235,8 +236,13 @@ async fn direct_exec_review_matches_live_action_without_execution() -> Result<()
     Ok(())
 }
 
+#[test_case::test_case(ev_apply_patch_custom_tool_call, "guardian_direct_patch"; "native")]
+#[test_case::test_case(ev_apply_patch_exec_command_call_via_heredoc, "guardian_direct_exec_patch"; "exec_command")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn direct_patch_review_matches_live_action_without_writes() -> Result<()> {
+async fn direct_patch_review_matches_live_action_without_writes(
+    patch_call: fn(&str, &str) -> serde_json::Value,
+    snapshot_name: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let builder = test_codex().with_model("gpt-5.5").with_config(|config| {
         super::configure_scenario_catalog(config);
@@ -266,7 +272,7 @@ async fn direct_patch_review_matches_live_action_without_writes() -> Result<()> 
         vec![
             // Normal execution: propose the patch, deny approval, then finish the turn.
             sse(vec![
-                ev_apply_patch_custom_tool_call("patch-review", patch),
+                patch_call("patch-review", patch),
                 ev_completed("parent-action"),
             ]),
             sse(vec![
@@ -308,7 +314,12 @@ async fn direct_patch_review_matches_live_action_without_writes() -> Result<()> 
                 {
                     Some(item.into_item())
                 }
-                ResponseItem::CustomToolCall { .. } => Some(item.into_item()),
+                ResponseItem::CustomToolCall { call_id, .. }
+                | ResponseItem::FunctionCall { call_id, .. }
+                    if call_id == "patch-review" =>
+                {
+                    Some(item.into_item())
+                }
                 _ => None,
             },
             _ => None,
@@ -345,7 +356,7 @@ async fn direct_patch_review_matches_live_action_without_writes() -> Result<()> 
         model_input(live_review_request, history.thread_id)?
     );
     let snapshot = context_snapshot::format_request_history_snapshot(
-        "Live and direct Guardian review of a native patch; direct approval leaves the file unchanged.",
+        "Live and direct Guardian review of a patch; direct approval leaves the file unchanged.",
         &requests,
         &ContextSnapshotOptions::default().rewrite_known_segments(),
     );
@@ -361,7 +372,7 @@ async fn direct_patch_review_matches_live_action_without_writes() -> Result<()> 
         .replace(&file, "\"<CWD>/guardian-direct.txt\"")
         .replace(&cwd, "\"<CWD>\"")
         .replace(&environment_id, "\"<ENVIRONMENT>\"");
-    insta::assert_snapshot!("guardian_direct_patch", snapshot);
+    insta::assert_snapshot!(snapshot_name, snapshot);
     direct.thread.shutdown_and_wait().await?;
     test.codex.shutdown_and_wait().await?;
     Ok(())

@@ -25,6 +25,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::PreparedPermissionRequest;
 use crate::tools::handlers::ToolEnvironmentArgs;
+use crate::tools::handlers::apply_patch::prepare_intercepted_patch;
 use crate::tools::handlers::apply_patch::prepare_patch_request;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::resolve_tool_environment;
@@ -145,17 +146,24 @@ pub(crate) async fn review_tool_call(
                     ExecCommandLifetime::OneShot
                 };
                 let prepared = parsed.prepare(lifetime).map_err(tool_error)?;
-                if codex_apply_patch::MaybeApplyPatch::intercepts_command(
+                let fs = prepared.turn_environment.environment.get_filesystem();
+                if let Some(patch) = prepare_intercepted_patch(
                     &prepared.resolved.command,
                     &prepared.cwd,
-                ) {
-                    return Err(CodexErr::InvalidRequest(
-                        "the recorded exec_command would be handled by apply_patch; direct review only supports ordinary commands".into(),
-                    ));
+                    fs.as_ref(),
+                    &prepared.turn_environment,
+                    step,
+                )
+                .await
+                .map_err(tool_error)?
+                {
+                    let action = patch.approval_action(&invocation.call_id);
+                    (Some(patch.exec_approval_requirement), action)
+                } else {
+                    let requirement = prepared.approval_requirement(session, step).await;
+                    let action = prepared.approval_action(&invocation.call_id, &requirement);
+                    (Some(requirement), action)
                 }
-                let requirement = prepared.approval_requirement(session, step).await;
-                let action = prepared.approval_action(&invocation.call_id, &requirement);
-                (Some(requirement), action)
             }
             ("apply_patch", ToolPayload::Custom { input }) => {
                 let environment = selected_executor(&invocation.environments, &step.environments)

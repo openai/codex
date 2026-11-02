@@ -181,7 +181,7 @@ impl ExecCommandHandler {
             &prepared.resolved.command,
             &prepared.cwd,
             fs.as_ref(),
-            prepared.turn_environment.clone(),
+            &prepared.turn_environment,
             context.session.clone(),
             Arc::clone(&context.step_context),
             context.cancellation_token.clone(),

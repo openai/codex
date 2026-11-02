@@ -424,7 +424,7 @@ pub(crate) async fn intercept_apply_patch(
     command: &[String],
     cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
-    turn_environment: TurnEnvironment,
+    turn_environment: &TurnEnvironment,
     session: Arc<Session>,
     step_context: Arc<StepContext>,
     cancellation_token: CancellationToken,
@@ -432,21 +432,35 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
+    let Some(request) =
+        prepare_intercepted_patch(command, cwd, fs, turn_environment, &step_context).await?
+    else {
+        return Ok(None);
+    };
+    let tool_ctx = ToolCtx {
+        session,
+        step_context,
+        cancellation_token,
+        call_id: call_id.to_string(),
+        tool_name: ToolName::plain(tool_name),
+    };
+    let content = execute_prepared_patch(request, tracker, tool_ctx).await?;
+    Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
+}
+
+pub(crate) async fn prepare_intercepted_patch(
+    command: &[String],
+    cwd: &PathUri,
+    fs: &dyn ExecutorFileSystem,
+    turn_environment: &TurnEnvironment,
+    step_context: &StepContext,
+) -> Result<Option<ApplyPatchRequest>, FunctionCallError> {
     let sandbox = turn_environment.sandbox_context(/*additional_permissions*/ None);
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
         .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-            let request = prepare_verified_patch(changes, turn_environment, &step_context)?;
-            let tool_ctx = ToolCtx {
-                session,
-                step_context,
-                cancellation_token,
-                call_id: call_id.to_string(),
-                tool_name: ToolName::plain(tool_name),
-            };
-            let content = execute_prepared_patch(request, tracker, tool_ctx).await?;
-            Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
+            prepare_verified_patch(changes, turn_environment.clone(), step_context).map(Some)
         }
         codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
             Err(FunctionCallError::RespondToModel(format!(

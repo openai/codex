@@ -2,7 +2,7 @@
 source: core/tests/suite/scenarios_guardian_direct_review.rs
 expression: snapshot
 ---
-Scenario: Live and direct Guardian review of a native patch; direct approval leaves the file unchanged.
+Scenario: Live and direct Guardian review of a patch; direct approval leaves the file unchanged.
 
 ## Window 1
 -- request 1 (turn) --
