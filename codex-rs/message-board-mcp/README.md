@@ -84,4 +84,16 @@ Override `mcp_servers.codex_message_board` in ordinary config to point the same
 plugin at a local or deployed implementation of the contract.
 
 Installing the plugin does not start the HTTP process. Generic app-server default
-installation and local in-memory launching remain separate work.
+installation remains separate work.
+
+## In-memory launcher
+
+A runner calls `launch_in_memory()`, then registers each tree with
+`server.add_board(session_id, host)`. It supplies the existing `MessageBoardHost`
+for membership, clocks and notification delivery. Configure the same MCP server
+with `server.url()` and the `Authorization` header from `server.authorization()`;
+this overrides the plugin endpoint through normal configuration.
+
+The launcher reuses `serve_http` and `InMemoryAgentMessageBoard` without a SQLite
+registry or new Core hooks. Keep its handle alive for the run. Dropping it cancels
+HTTP and MCP sessions; `server.shutdown().await` also waits for completion.

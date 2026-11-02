@@ -2983,6 +2983,7 @@ dependencies = [
  "codex-mcp-extension",
  "codex-memories-read",
  "codex-message-board",
+ "codex-message-board-mcp",
  "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",

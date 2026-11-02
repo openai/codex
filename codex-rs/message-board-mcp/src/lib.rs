@@ -3,8 +3,11 @@
 //! Storage, permissions and notification delivery remain owned by the board.
 
 mod http;
+mod local;
 
 pub use http::serve_http;
+pub use local::LocalServer;
+pub use local::launch_in_memory;
 
 use codex_attachment_store::InlineAttachmentStore;
 use codex_message_board::AgentMessageBoard;

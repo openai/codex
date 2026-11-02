@@ -37,7 +37,7 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }
-uuid = { workspace = true, features = ["v7"] }
+uuid = { workspace = true, features = ["v4", "v7"] }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }

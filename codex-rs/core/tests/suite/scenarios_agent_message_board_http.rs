@@ -5,31 +5,57 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
 
-#[test_case::test_case(false; "config")]
-#[test_case::test_case(true; "plugin")]
+#[path = "../../../message-board/tests/common/mod.rs"]
+mod board_host;
+
+#[test_case::test_case(false, false; "config")]
+#[test_case::test_case(true, false; "plugin")]
+#[test_case::test_case(true, true; "in_memory")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> {
+async fn http_board_is_shared_with_children(plugin: bool, in_memory: bool) -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let home = Arc::new(tempfile::tempdir()?);
     let sqlite = codex_state::SqliteConfig::new_for_testing(home.path().to_path_buf().try_into()?);
-    let _state = codex_state::StateRuntime::init(sqlite.clone(), "openai".into()).await?;
-    let command = codex_utils_cargo_bin::cargo_bin("codex-message-board-mcp")?;
-    let mut process =
-        tokio::process::Command::from(codex_utils_process::background_command(command))
-            .arg("--sqlite-home")
-            .arg(sqlite.home())
-            .args(["--listen", "127.0.0.1:0", "--allowed-host", "board.example"])
-            .env("CODEX_MESSAGE_BOARD_TOKEN", "http-board-test-token")
-            .stdout(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
-    let ready = tokio::io::BufReader::new(process.stdout.take().context("server stdout")?)
-        .lines()
-        .next_line()
-        .await?
-        .context("server readiness")?;
-    let ready: Value = serde_json::from_str(&ready)?;
-    let endpoint = json!({"url":ready["url"],"http_headers":{"Authorization":"Bearer http-board-test-token","Host":"board.example"},"required":true,"default_tools_approval_mode":"approve"});
+    let mut process = None;
+    let mut local = None;
+    let (url, authorization) = if in_memory {
+        let launched = codex_message_board_mcp::launch_in_memory().await?;
+        let connection = (
+            launched.url().to_owned(),
+            launched.authorization().to_str()?.to_owned(),
+        );
+        local = Some(launched);
+        connection
+    } else {
+        let _state = codex_state::StateRuntime::init(sqlite.clone(), "openai".into()).await?;
+        let command = codex_utils_cargo_bin::cargo_bin("codex-message-board-mcp")?;
+        let mut child =
+            tokio::process::Command::from(codex_utils_process::background_command(command))
+                .arg("--sqlite-home")
+                .arg(sqlite.home())
+                .args(["--listen", "127.0.0.1:0", "--allowed-host", "board.example"])
+                .env("CODEX_MESSAGE_BOARD_TOKEN", "http-board-test-token")
+                .stdout(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()?;
+        let ready = tokio::io::BufReader::new(child.stdout.take().context("server stdout")?)
+            .lines()
+            .next_line()
+            .await?
+            .context("server readiness")?;
+        let ready: Value = serde_json::from_str(&ready)?;
+        process = Some(child);
+        (
+            ready["url"].as_str().context("server URL")?.to_owned(),
+            "Bearer http-board-test-token".to_owned(),
+        )
+    };
+    let host = if in_memory {
+        "127.0.0.1"
+    } else {
+        "board.example"
+    };
+    let endpoint = json!({"url":url,"http_headers":{"Authorization":authorization,"Host":host},"required":true,"default_tools_approval_mode":"approve"});
     if plugin {
         let manifest = codex_utils_cargo_bin::find_resource!(
             "../message-board-mcp/plugin/.codex-plugin/plugin.json"
@@ -40,7 +66,9 @@ async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> 
         std::fs::create_dir_all(installed.join(".codex-plugin"))?;
         std::fs::copy(manifest, installed.join(".codex-plugin/plugin.json"))?;
         let mut declaration: Value = serde_json::from_slice(&std::fs::read(declaration_path)?)?;
-        declaration["mcpServers"]["codex_message_board"] = endpoint.clone();
+        if !in_memory {
+            declaration["mcpServers"]["codex_message_board"] = endpoint.clone();
+        }
         std::fs::write(
             installed.join(".mcp.json"),
             serde_json::to_vec(&declaration)?,
@@ -55,11 +83,13 @@ async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> 
     let configure_board = move |config: &mut codex_core::config::Config| {
         configure(config);
         config.sqlite = configured_sqlite.clone();
+        config.ephemeral = in_memory;
         config
             .features
             .disable(Feature::AgentMessageBoard)
             .expect("disable native board");
-        if !plugin {
+        if !plugin || in_memory {
+            // The runner endpoint overrides the packaged plugin endpoint.
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 "codex_message_board".into(),
@@ -98,6 +128,29 @@ async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> 
     let child = root.thread_manager.get_thread(child_id).await?;
     wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
+    if let Some(local) = &local {
+        local.add_board(
+            root_id.into(),
+            Arc::new(board_host::Host {
+                members: [
+                    (root_id, codex_protocol::AgentPath::root()),
+                    (
+                        child_id,
+                        codex_protocol::AgentPath::root()
+                            .join("worker")
+                            .expect("worker path"),
+                    ),
+                ]
+                .into(),
+                clock: Default::default(),
+                fail_clock: Default::default(),
+                agent_path_calls: Default::default(),
+                active: Default::default(),
+                fail_notifications: Default::default(),
+                notifications: Default::default(),
+            }),
+        )?;
+    }
     let board_turn = |id: &str, name: &str, arguments: Value| {
         vec![
             sse(vec![
@@ -146,18 +199,29 @@ async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> 
         "worker-post",
     )?;
     assert_eq!(post["author"], "/root/worker");
+    if in_memory {
+        assert_eq!(post["created_at"], "2026-09-18T12:00:00Z");
+    }
     child.shutdown_and_wait().await?;
 
-    // A restarted parent discovers and reads the same persisted board.
-    let resumed = test_codex()
-        .with_config(configure_board)
-        .restart_with_auto_env(&server, &root)
-        .await?;
+    // Persistent boards survive a parent restart; the in-memory runner owns its lifetime.
+    let resumed = if in_memory {
+        root
+    } else {
+        test_codex()
+            .with_config(configure_board)
+            .restart_with_auto_env(&server, &root)
+            .await?
+    };
     // A read must not initialize the schema or acquire the database writer lock.
-    let pool = sqlite
-        .open_read_write_pool(&sqlite.home().join("agent_message_board_1.sqlite"))
-        .await?;
-    let writer = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let writer = if in_memory {
+        None
+    } else {
+        let pool = sqlite
+            .open_read_write_pool(&sqlite.home().join("agent_message_board_1.sqlite"))
+            .await?;
+        Some(pool.begin_with("BEGIN IMMEDIATE").await?)
+    };
     let read = responses::mount_sse_sequence(
         &server,
         board_turn(
@@ -170,7 +234,9 @@ async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> 
     resumed
         .submit_turn("Find the board tools and read the worker's decision.")
         .await?;
-    writer.rollback().await?;
+    if let Some(writer) = writer {
+        writer.rollback().await?;
+    }
     let result = board_result(
         read.requests().last().context("parent follow-up")?,
         "root-read",
@@ -198,45 +264,52 @@ async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> 
         );
         assert!(request.tool_by_name("collaboration", "post").is_none());
     }
-    let timestamp = post["created_at"].as_str().context("post timestamp")?;
-    let mut bodies = posted
-        .requests()
-        .iter()
-        .chain(read.requests().iter())
-        .map(ResponsesRequest::body_json)
-        .collect::<Vec<_>>();
-    for body in &mut bodies {
-        for item in body["input"].as_array_mut().context("request input")? {
-            if item["type"] == "function_call_output"
-                && let Some(output) = item["output"].as_str()
-            {
-                item["output"] = Value::String(
-                    context_snapshot::normalize_json_lines(output)
-                        .replace(timestamp, "<TIMESTAMP>"),
-                );
+    if !in_memory {
+        let timestamp = post["created_at"].as_str().context("post timestamp")?;
+        let mut bodies = posted
+            .requests()
+            .iter()
+            .chain(read.requests().iter())
+            .map(ResponsesRequest::body_json)
+            .collect::<Vec<_>>();
+        for body in &mut bodies {
+            for item in body["input"].as_array_mut().context("request input")? {
+                if item["type"] == "function_call_output"
+                    && let Some(output) = item["output"].as_str()
+                {
+                    item["output"] = Value::String(
+                        context_snapshot::normalize_json_lines(output)
+                            .replace(timestamp, "<TIMESTAMP>"),
+                    );
+                }
             }
         }
+        insta::assert_snapshot!(
+            if plugin {
+                "agent_message_board_plugin_context"
+            } else {
+                "agent_message_board_mcp_context"
+            },
+            context_snapshot::format_context_snapshot(
+                "A child posts through the HTTP MCP executable; its restarted parent discovers the same board and reads the decision.",
+                &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),
+                &ContextSnapshotOptions::default().rewrite_known_segments(),
+            )
+        );
     }
-    insta::assert_snapshot!(
-        if plugin {
-            "agent_message_board_plugin_context"
-        } else {
-            "agent_message_board_mcp_context"
-        },
-        context_snapshot::format_context_snapshot(
-            "A child posts through the HTTP MCP executable; its restarted parent discovers the same board and reads the decision.",
-            &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),
-            &ContextSnapshotOptions::default().rewrite_known_segments(),
-        )
-    );
     // The endpoint runs on the app host, including when the executor is remote.
     // Exercise authentication and membership through a host-local HTTP client.
     use codex_rmcp_client::RmcpClient;
     let url = endpoint["url"].as_str().context("endpoint URL")?;
+    let valid_token = endpoint["http_headers"]["Authorization"]
+        .as_str()
+        .context("authorization")?
+        .strip_prefix("Bearer ")
+        .context("bearer token")?;
     for (token, host) in [
-        ("wrong-token", "board.example"),
-        ("http-board-test-token", "unlisted.example"),
-        ("http-board-test-token", "127.0.0.1"),
+        ("wrong-token", host),
+        (valid_token, "unlisted.example"),
+        (valid_token, "127.0.0.1"),
     ] {
         let client = RmcpClient::new_streamable_http_client(
             "board-auth-test",
@@ -283,7 +356,20 @@ async fn http_board_is_shared_with_children(plugin: bool) -> anyhow::Result<()> 
         client.shutdown().await;
     }
     resumed.codex.shutdown_and_wait().await?;
-    process.kill().await?;
-    process.wait().await?;
+    if let Some(local) = local {
+        assert!(
+            !resumed
+                .config
+                .sqlite_config()
+                .home()
+                .join("agent_message_board_1.sqlite")
+                .exists()
+        );
+        local.shutdown().await?;
+    }
+    if let Some(mut process) = process {
+        process.kill().await?;
+        process.wait().await?;
+    }
     Ok(())
 }
