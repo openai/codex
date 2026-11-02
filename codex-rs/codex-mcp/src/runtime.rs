@@ -764,6 +764,24 @@ impl McpRuntime {
             .await
     }
 
+    pub async fn latest_call_tool_without_attribution(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+    ) -> anyhow::Result<CallToolResult> {
+        let connections = self.latest_connections();
+        connections.validate_tool_call(server, tool, /*environment_id*/ None)?;
+        connections.wait_for_server_startup(server).await;
+        connections
+            .call_tool(
+                server, tool, /*environment_id*/ None, arguments, meta,
+                /*requested_timeout*/ None, /*wait_for_server*/ true,
+            )
+            .await
+    }
+
     /// Calls a tool for the host, retaining attribution while its catalogs stay unchanged.
     /// Waiting calls capture a binding after the selected server starts; non-waiting calls
     /// use the cached binding. Missing or changed catalogs leave the namespace unknown.
@@ -1226,6 +1244,17 @@ mod tests {
             ready_environments: HashMap::new(),
             cached_binding: Mutex::new(None),
         });
+        let runtime = McpRuntime::empty(/*prefix_mcp_tool_names*/ true);
+        runtime.current.store(Arc::clone(&published));
+        runtime
+            .latest_call_tool_without_attribution(
+                CODEX_APPS_MCP_SERVER_NAME,
+                "search",
+                /*arguments*/ None,
+                /*meta*/ None,
+            )
+            .await?;
+        assert!(published.cached_binding.lock().unwrap().is_none());
         let before = McpRuntime::binding_from_published_runtime(
             Arc::clone(&published),
             /*required_servers*/ &[],

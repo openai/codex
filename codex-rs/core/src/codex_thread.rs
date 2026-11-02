@@ -1369,12 +1369,8 @@ impl CodexThread {
         self.session
             .services
             .mcp_runtime
-            .latest_call_tool(
-                server, tool, /*environment_id*/ None, arguments, meta,
-                /*requested_timeout*/ None, /*wait_for_server*/ true,
-            )
+            .latest_call_tool_without_attribution(server, tool, arguments, meta)
             .await
-            .map(|call| call.result)
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

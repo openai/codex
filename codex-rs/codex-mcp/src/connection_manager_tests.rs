@@ -310,6 +310,14 @@ impl ServerHandler for RefreshTestTransportFactory {
         )
     }
 
+    async fn call_tool(
+        &self,
+        _request: rmcp::model::CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        Ok(rmcp::model::CallToolResult::success(Vec::new()).into())
+    }
+
     async fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParams>,
