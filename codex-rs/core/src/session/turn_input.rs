@@ -970,7 +970,7 @@ impl Session {
         };
         pending_input.push(input);
         self.input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .extend_pending_input_and_notify_for_turn_state(
                 active_turn.turn_state.as_ref(),
                 pending_input,
             )

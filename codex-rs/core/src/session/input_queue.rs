@@ -90,6 +90,17 @@ pub(crate) enum InputQueueActivity {
 }
 
 impl TurnInput {
+    fn is_queue_only_mail(&self) -> bool {
+        match self {
+            Self::InterAgentCommunication(communication) => !communication.trigger_turn,
+            Self::ResponseItem(ResponseItemEnvelope {
+                item: ResponseItem::AgentMessage { .. },
+                ..
+            }) => true,
+            Self::UserInput { .. } | Self::FunctionCallOutput(_) | Self::ResponseItem(_) => false,
+        }
+    }
+
     fn wait_activity(&self) -> InputQueueActivity {
         match self {
             Self::InterAgentCommunication(_)
@@ -247,6 +258,32 @@ impl InputQueue {
                 .is_some_and(|(_, _, updates)| *updates.borrow())
     }
 
+    /// Native mailbox backlog qualifies regardless of turn ID or delivery phase.
+    /// Injected mail qualifies only while its matching turn still accepts mail.
+    pub(crate) async fn should_preempt_sampling_for_mail(
+        &self,
+        active_turn: &Mutex<Option<ActiveTurn>>,
+        sub_id: &str,
+    ) -> bool {
+        if self.has_pending_mailbox_items().await {
+            return true;
+        }
+        let Some(turn_state) = self.turn_state_for_sub_id(active_turn, sub_id).await else {
+            return false;
+        };
+        let turn_state = turn_state.lock().await;
+        turn_state.accepts_mailbox_delivery_for_current_turn()
+            && turn_state.pending_input.items.iter().any(|input| {
+                matches!(
+                    input,
+                    TurnInput::ResponseItem(ResponseItemEnvelope {
+                        item: ResponseItem::AgentMessage { .. },
+                        ..
+                    })
+                )
+            })
+    }
+
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
         self.mailbox_pending_mails
             .lock()
@@ -353,14 +390,14 @@ impl InputQueue {
             return;
         };
         let mut turn_state = turn_state.lock().await;
-        // Explicit same-turn work still needs a follow-up. Queue-only child mail does not: keep
+        // Explicit same-turn work still needs a follow-up. Queue-only agent mail does not: keep
         // it pending so task completion records it for the next turn without sampling again.
-        if turn_state.pending_input.items.iter().any(|input| {
-            !matches!(
-                input,
-                TurnInput::InterAgentCommunication(communication) if !communication.trigger_turn
-            )
-        }) {
+        if turn_state
+            .pending_input
+            .items
+            .iter()
+            .any(|input| !input.is_queue_only_mail())
+        {
             return;
         }
         turn_state.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
@@ -389,18 +426,21 @@ impl InputQueue {
             .accept_mailbox_delivery_for_current_turn();
     }
 
-    pub(super) async fn extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+    pub(super) async fn extend_pending_input_and_notify_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
         input: Vec<TurnInput>,
     ) {
         let activity = input.iter().map(TurnInput::wait_activity).max();
+        let queue_only_mail = !input.is_empty() && input.iter().all(TurnInput::is_queue_only_mail);
         {
             let mut turn_state = turn_state.lock().await;
             turn_state.pending_input.notified_activity =
                 turn_state.pending_input.notified_activity.max(activity);
             turn_state.pending_input.items.extend(input);
-            turn_state.accept_mailbox_delivery_for_current_turn();
+            if !queue_only_mail {
+                turn_state.accept_mailbox_delivery_for_current_turn();
+            }
         }
         self.activity_tx
             .send_replace(activity.unwrap_or(InputQueueActivity::Steer));
@@ -628,7 +668,7 @@ mod tests {
         assert_eq!(pending_activity, None);
 
         input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .extend_pending_input_and_notify_for_turn_state(
                 &turn_state,
                 vec![TurnInput::UserInput {
                     metadata: Default::default(),
@@ -651,7 +691,7 @@ mod tests {
             /*trigger_turn*/ true,
         );
         input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .extend_pending_input_and_notify_for_turn_state(
                 &turn_state,
                 vec![TurnInput::InterAgentCommunication(mail.into())],
             )
@@ -683,7 +723,7 @@ mod tests {
             None
         );
         input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .extend_pending_input_and_notify_for_turn_state(
                 &turn_state,
                 vec![passive_output.clone()],
             )
@@ -720,7 +760,7 @@ mod tests {
             Some(InputQueueActivity::Mailbox)
         );
         input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .extend_pending_input_and_notify_for_turn_state(
                 &turn_state,
                 vec![TurnInput::UserInput {
                     metadata: Default::default(),

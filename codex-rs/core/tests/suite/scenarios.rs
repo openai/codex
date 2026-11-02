@@ -111,6 +111,9 @@ use tokio::sync::oneshot;
 
 const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
+#[path = "scenarios_injected_agent_mail.rs"]
+mod injected_agent_mail;
+
 #[path = "scenarios_dynamic_tools.rs"]
 mod dynamic_tools;
 

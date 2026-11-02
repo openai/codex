@@ -45,7 +45,7 @@ impl Session {
         match active.as_mut().filter(|turn| turn.finishing.is_none()) {
             Some(active_turn) => {
                 self.input_queue
-                    .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                    .extend_pending_input_and_notify_for_turn_state(
                         active_turn.turn_state.as_ref(),
                         input
                             .into_iter()
@@ -77,7 +77,7 @@ impl Session {
             return Err(input);
         }
         self.input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+            .extend_pending_input_and_notify_for_turn_state(
                 active_turn.turn_state.as_ref(),
                 input
                     .into_iter()
@@ -106,7 +106,7 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         if let Some(active_turn) = active.as_mut().filter(|turn| turn.finishing.is_none()) {
             self.input_queue
-                .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                .extend_pending_input_and_notify_for_turn_state(
                     active_turn.turn_state.as_ref(),
                     items
                         .into_iter()
