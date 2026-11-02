@@ -218,6 +218,10 @@ async fn build_and_install_compaction(
                 prefix,
                 prefix_context,
                 initial_context,
+                reset_world_state_sections: world_state
+                    .full_context_excluded_section_ids()
+                    .chain(cutoff_world_state.full_context_excluded_section_ids())
+                    .collect(),
                 model_info: &model_info,
                 compaction_response_id,
                 reviewer_compaction_hash,

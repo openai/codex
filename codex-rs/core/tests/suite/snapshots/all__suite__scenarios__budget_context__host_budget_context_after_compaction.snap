@@ -1,0 +1,98 @@
+---
+source: core/tests/suite/scenarios_budget_context.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A host contributes budget reminders at thresholds. Remote compaction spends within the same threshold, so its captured reminder is omitted and the next sampling step inserts the fresh remainder once.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A host contributes budget reminders at thresholds. Remote compaction spends within the same threshold, so its captured reminder is omitted and the next sampling step inserts the fresh remainder once.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Start planning the release.
+07:message/developer:
+    <rollout_budget>
+    You have 1000 weighted tokens left in the shared session token budget.
+    </rollout_budget>
+08:configuration_update:reasoning={"effort":"low"}
+-- request 2 (turn) --
+09:message/user:
+    Continue planning.
+-- request 3 (turn) --
+10:message/developer:
+    <rollout_budget>
+    You have 400 weighted tokens left in the shared session token budget.
+    </rollout_budget>
+11:message/user:
+    Check the release plan.
+-- request 4 (compaction) --
+12:compaction_trigger
+
+## Window 2 (after request 4: input diverged at item 02)
+-- request 5 (turn) --
+00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
+        - namespace/functions; hash=fada4a476a3754dd
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/user:
+    Start planning the release.
+03:message/user:
+    Continue planning.
+04:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+05:message/developer:
+    <MULTI_AGENT_ROLE>
+06:message/developer:
+    <MULTI_AGENT_MODE>
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/user:
+    Check the release plan.
+09:compaction:encrypted=true; chars=25; hash=455278c90f6b4d93
+10:message/developer:
+    <rollout_budget>
+    You have 350 weighted tokens left in the shared session token budget.
+    </rollout_budget>
+11:message/user:
+    Continue from the compacted plan.
+-- request 6 (turn) --
+12:message/user:
+    Finish the release plan.

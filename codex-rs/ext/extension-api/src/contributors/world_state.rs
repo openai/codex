@@ -98,6 +98,7 @@ type LegacyFragmentMatcher = dyn Fn(&str, &str) -> bool + Send + Sync;
 #[derive(Clone)]
 pub struct WorldStateSectionContribution {
     id: &'static str,
+    include_in_full_context: bool,
     window_prefix: bool,
     render_diff: Arc<RenderDiff>,
     matches_legacy_fragment: Arc<LegacyFragmentMatcher>,
@@ -119,11 +120,26 @@ impl WorldStateSectionContribution {
     ) -> Self {
         Self {
             id,
+            include_in_full_context: true,
             window_prefix: false,
             render_diff: Arc::new(render_diff),
             matches_legacy_fragment: Arc::new(|_, _| false),
             matches_retained_fragment: None,
         }
+    }
+
+    /// Recompute this section during ordinary step context updates instead of replaying
+    /// its captured value when initial or compacted context is rebuilt. Full rendering
+    /// omits both its fragment and comparison snapshot so a fresh contribution can emit.
+    /// After prefix compaction, the next diff receives [`PreviousWorldStateSection::Unknown`]
+    /// if the section's legacy matcher recognizes text in the retained suffix.
+    pub fn without_full_context(mut self) -> Self {
+        self.include_in_full_context = false;
+        self
+    }
+
+    pub fn include_in_full_context(&self) -> bool {
+        self.include_in_full_context
     }
 
     pub fn with_legacy_matcher(

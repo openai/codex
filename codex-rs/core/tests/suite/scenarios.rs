@@ -97,6 +97,7 @@ use core_test_support::stdio_server_bin;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::test_codex;
@@ -227,6 +228,9 @@ mod frozen_cloud_skills;
 
 #[path = "scenarios_compaction_tests.rs"]
 mod compaction;
+
+#[path = "scenarios_budget_context.rs"]
+mod budget_context;
 
 #[path = "scenarios_world_state_prefix_tests.rs"]
 mod world_state_prefix;
@@ -3201,13 +3205,14 @@ fn compaction_output(value: &str) -> serde_json::Value {
 }
 
 async fn async_compaction_test(
+    builder: TestCodexBuilder,
     responses_uri: &str,
     features: Vec<Feature>,
     configure: impl Fn(&mut Config) + Send + Sync + 'static,
 ) -> Result<(wiremock::MockServer, TestCodex)> {
     let config_server = start_mock_server().await;
     let base_url = format!("{responses_uri}/v1");
-    let test = test_codex()
+    let test = builder
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             configure_scenario_catalog(config);
@@ -3437,13 +3442,23 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
             vec![Feature::RetainClientToolOutputs]
         }
     };
-    let (_config_server, test) = async_compaction_test(streaming.uri(), features, move |config| {
-        if over_budget {
-            config.async_compaction_threshold_percent = 1;
-            config.model_auto_compact_token_limit = Some(5_000);
-        }
-    })
-    .await?;
+    let reminders = Arc::new(budget_context::PrefixBudgetReminders {
+        remaining: 400.into(),
+    });
+    let mut builder = test_codex();
+    if matches!(suffix, LiveSuffix::User) {
+        let mut extensions = ExtensionRegistryBuilder::new();
+        extensions.prompt_contributor(reminders.clone());
+        builder = builder.with_extensions(Arc::new(extensions.build()));
+    }
+    let (_config_server, test) =
+        async_compaction_test(builder, streaming.uri(), features, move |config| {
+            if over_budget {
+                config.async_compaction_threshold_percent = 1;
+                config.model_auto_compact_token_limit = Some(5_000);
+            }
+        })
+        .await?;
     test.codex.ensure_rollout_materialized().await;
     let compaction_event = |event: &EventMsg| match event {
         EventMsg::ItemStarted(event) if matches!(event.item, TurnItem::ContextCompaction(_)) => {
@@ -3459,6 +3474,9 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
     let timeout = Duration::from_secs(/*secs*/ 20);
     tokio::time::timeout(timeout, streaming.wait_for_request_count(/*count*/ 2)).await?;
     let next_input = if matches!(suffix, LiveSuffix::User) {
+        reminders
+            .remaining
+            .store(350, std::sync::atomic::Ordering::SeqCst);
         TurnInputRequest::user_input(vec![text("Check who can finish the notes.")])
     } else {
         let item = serde_json::from_value(json!({
@@ -3516,6 +3534,9 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
         test.codex.wait_for_background_compaction_for_test(),
     )
     .await?;
+    reminders
+        .remaining
+        .store(325, std::sync::atomic::Ordering::SeqCst);
     release_foreground
         .send(())
         .expect("release foreground work");
@@ -3567,6 +3588,8 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
     assert!(history.windows(2).any(|items| matches!(items,
         [RolloutItem::Compacted(_), RolloutItem::WorldState(baseline)]
         if baseline.full && baseline.state["collaboration_mode"]["mode"] == "plan"
+            && !baseline.state.contains_key("cutoff_budget")
+            && !baseline.state.contains_key("install_budget")
     )));
     let input = requests[3]["input"].as_array().expect("request input");
     // The full snapshot normalizes mode text; check the cutoff and later update explicitly.
@@ -3590,7 +3613,7 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
         insta::assert_snapshot!(
             "astra_async_compaction_with_live_suffix",
             context_snapshot::format_context_snapshot(
-                "Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode while it runs. Adoption restores Default mode at the cutoff, then preserves the Plan update, newer user message, and assistant/tool exchange in their original order.",
+                "Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode and the host changes which budget reminder opts out of full context. Adoption keeps the live suffix and refreshes both reminders after the tool output.",
                 &entries,
                 &ContextSnapshotOptions::default().rewrite_known_segments(),
             )
@@ -3715,6 +3738,7 @@ async fn async_compaction_reuses_pending_work(
     )));
     let (streaming, mut completions) = start_streaming_sse_server(responses).await;
     let (_config_server, test) = async_compaction_test(
+        test_codex(),
         streaming.uri(),
         if over_budget {
             vec![Feature::RetainClientToolOutputs]

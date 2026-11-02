@@ -4,17 +4,48 @@ use anyhow::Result;
 use codex_core::build_prompt_input;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_extension_api::ContextContributor;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::RenderedWorldStateFragment;
+use codex_extension_api::WorldStateContributionInput;
+use codex_extension_api::WorldStateSectionContribution;
+use codex_extension_api::input_text;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::strip_metadata;
 use core_test_support::responses::strip_response_item_id;
+use core_test_support::responses::user_message_item;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 const TEST_INSTRUCTIONS: &str = "Global test instructions";
+const STEP_REMINDER: &str = "Fresh step reminder";
+
+struct StepReminder;
+
+impl ContextContributor for StepReminder {
+    fn contribute_world_state<'a>(
+        &'a self,
+        _input: WorldStateContributionInput<'a>,
+    ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
+        Box::pin(async {
+            vec![
+                WorldStateSectionContribution::new("step_reminder", |_| {
+                    let reminder = RenderedWorldStateFragment::new(
+                        "developer",
+                        ("", ""),
+                        input_text(STEP_REMINDER),
+                    );
+                    (None, Some(reminder))
+                })
+                .without_full_context(),
+            ]
+        })
+    }
+}
 
 #[tokio::test]
 async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
@@ -33,6 +64,8 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
     let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
         config.codex_home.clone(),
     ));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.prompt_contributor(Arc::new(StepReminder));
     let input = build_prompt_input(
         config,
         vec![UserInput::Text {
@@ -40,31 +73,23 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
             text_elements: Vec::new(),
         }],
         /*state_db*/ None,
-        Arc::new(ExtensionRegistryBuilder::new().build()),
+        Arc::new(extensions.build()),
         user_instructions_provider,
     )
     .await?;
 
-    let expected_user_message = ResponseItem::Message {
-        status: None,
-        encrypted_content: None,
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello from debug prompt".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
+    let [initial_context @ .., user_message, reminder] = input.as_slice() else {
+        panic!("expected user input followed by step context");
     };
     assert_eq!(
-        input
-            .last()
-            .cloned()
-            .map(strip_metadata)
-            .map(strip_response_item_id),
-        Some(expected_user_message)
+        strip_response_item_id(strip_metadata(user_message.clone())),
+        user_message_item("hello from debug prompt")
     );
-    assert!(input.iter().any(|item| {
+    assert!(
+        matches!(reminder, ResponseItem::Message { role, content, .. }
+        if role == "developer" && content == &[input_text(STEP_REMINDER)])
+    );
+    let contains_text = |item: &ResponseItem, needle: &str| {
         let ResponseItem::Message { content, .. } = item else {
             return false;
         };
@@ -75,8 +100,18 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
             else {
                 return false;
             };
-            text.contains(TEST_INSTRUCTIONS)
+            text.contains(needle)
         })
-    }));
+    };
+    assert!(
+        initial_context
+            .iter()
+            .any(|item| contains_text(item, TEST_INSTRUCTIONS))
+    );
+    assert!(
+        !initial_context
+            .iter()
+            .any(|item| contains_text(item, STEP_REMINDER))
+    );
     Ok(())
 }

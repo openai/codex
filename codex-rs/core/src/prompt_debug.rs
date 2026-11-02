@@ -103,6 +103,8 @@ pub(crate) async fn build_prompt_input_from_session(
         .await;
     }
 
+    sess.record_step_world_state_if_changed(step_context.as_ref())
+        .await?;
     let prompt_input = sess
         .clone_history()
         .await

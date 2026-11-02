@@ -140,6 +140,10 @@ pub(crate) fn split_prefix_updates(
 }
 
 trait ErasedWorldStateSection: Send + Sync {
+    fn include_in_full_context(&self) -> bool {
+        true
+    }
+
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool;
 
     fn has_retained_fragment_matcher(&self) -> bool;
@@ -222,6 +226,10 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
 struct ExtensionWorldStateSection(WorldStateSectionContribution);
 
 impl ErasedWorldStateSection for ExtensionWorldStateSection {
+    fn include_in_full_context(&self) -> bool {
+        self.0.include_in_full_context()
+    }
+
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
         self.0.matches_legacy_fragment(role, text)
     }
@@ -422,6 +430,10 @@ impl From<&Map<String, Value>> for WorldStateSnapshot {
 }
 
 impl WorldStateSnapshot {
+    pub(crate) fn remove_section(&mut self, id: &str) {
+        self.sections.remove(id);
+    }
+
     pub(crate) fn into_object(self) -> Map<String, Value> {
         self.sections.into_iter().collect()
     }
@@ -499,7 +511,20 @@ impl fmt::Debug for WorldState {
     }
 }
 
+enum RenderScope {
+    FullContext,
+    HistoryDiff,
+}
+
 impl WorldState {
+    pub(crate) fn full_context_excluded_section_ids(
+        &self,
+    ) -> impl Iterator<Item = &'static str> + '_ {
+        self.sections
+            .iter()
+            .filter_map(|(id, section)| (!section.include_in_full_context()).then_some(*id))
+    }
+
     pub(crate) fn add_section<S: WorldStateSection>(&mut self, section: S) {
         let id = S::ID;
         assert!(
@@ -525,9 +550,11 @@ impl WorldState {
         }
     }
 
-    /// Renders every section as new, preserving update order and placement.
+    /// Renders restorable sections as new, preserving update order and placement.
     pub(crate) fn render_full(&self) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
-        self.render_with(/*stored*/ None, |_, _| PreviousSectionState::Absent)
+        self.render_with(RenderScope::FullContext, /*stored*/ None, |_, _| {
+            PreviousSectionState::Absent
+        })
     }
 
     /// Falls back to retained model history when no exact persisted snapshot is available.
@@ -536,7 +563,7 @@ impl WorldState {
         previous: Option<&WorldStateSnapshot>,
         items: impl IntoIterator<Item = &'a ResponseItem> + Clone,
     ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
-        self.render_with(previous, |id, section| {
+        self.render_with(RenderScope::HistoryDiff, previous, |id, section| {
             if let Some(previous) = previous.and_then(|previous| previous.section(id)) {
                 if section.has_retained_fragment_matcher()
                     && !has_retained_fragment(items.clone(), section)
@@ -555,12 +582,16 @@ impl WorldState {
 
     fn render_with<'a>(
         &self,
+        scope: RenderScope,
         stored: Option<&WorldStateSnapshot>,
         mut previous: impl FnMut(&str, &dyn ErasedWorldStateSection) -> PreviousSectionState<'a, Value>,
     ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
         let mut snapshot = WorldStateSnapshot::default();
         let mut updates = Vec::new();
         for (id, section) in &self.sections {
+            if matches!(scope, RenderScope::FullContext) && !section.include_in_full_context() {
+                continue;
+            }
             let prior = previous(id, section.as_ref());
             let (section_snapshot, section_updates) = section.render_diff(prior);
             // A skipped snapshot retains stored state even if history required a fresh render.

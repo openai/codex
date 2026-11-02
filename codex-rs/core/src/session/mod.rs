@@ -482,6 +482,7 @@ pub(crate) enum CompactedHistoryInstallation<'a> {
         prefix: CompactionPrefix,
         prefix_context: Vec<ResponseItem>,
         initial_context: Vec<ResponseItemEnvelope>,
+        reset_world_state_sections: Vec<&'static str>,
         model_info: &'a ModelInfo,
         compaction_response_id: String,
         reviewer_compaction_hash: Option<String>,
@@ -4539,6 +4540,7 @@ impl Session {
                     prefix,
                     prefix_context,
                     initial_context,
+                    reset_world_state_sections,
                     model_info,
                     compaction_response_id,
                     reviewer_compaction_hash,
@@ -4574,6 +4576,11 @@ impl Session {
                     // The unchanged suffix already contains updates through this baseline.
                     if let Some(checkpoint) = state.history.world_state_checkpoint() {
                         world_state_baseline = WorldStateSnapshot::from(&checkpoint.state);
+                    }
+                    // Volatile sections must refresh in the new window even if their
+                    // previous messages and comparison state survived in the suffix.
+                    for section_id in reset_world_state_sections {
+                        world_state_baseline.remove_section(section_id);
                     }
                     // Prefix replacement already retains all edits in the live suffix.
                     let input_goal_ids = Default::default();
