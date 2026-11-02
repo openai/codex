@@ -382,6 +382,12 @@ impl AppServerSession {
             {
                 break;
             }
+            if state.next_item_cursor.is_none() {
+                break;
+            }
+            if budget.rows.is_none() {
+                continue;
+            }
             if let Some((config, local_settings)) = config.zip(local_settings) {
                 rendered_rows = rendered_history_rows(
                     thread_id,
@@ -394,9 +400,6 @@ impl AppServerSession {
                 );
             } else {
                 rendered_rows = rendered_rows.saturating_add(items.len());
-            }
-            if state.next_item_cursor.is_none() {
-                break;
             }
         }
         if config.is_some() {
