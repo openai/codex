@@ -81,7 +81,7 @@ Settings: relative to window 2
         </tools>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
-03:function_call_output/cloud_threads.send_message:<codex_delegation><source_thread_id><UUID 1></source_thread_id><input>Inspect.</input></codex_delegation>
+03:function_call_output/cloud_threads.send_message:<codex_delegation><source_thread_id><UUID 1></source_thread_id><source_orbit_id>orbit-source</source_orbit_id><input>Inspect.</input></codex_delegation>
 
 ## Window 4 (after request 5: input diverged at item 00)
 Settings: relative to window 3
@@ -117,7 +117,7 @@ Settings: relative to window 3
 
     [03] >>> TRANSCRIPT START
 
-    [04] [1] tool cloud_threads.send_message result: <codex_delegation><source_thread_id><UUID 1></source_thread_id><input>Inspect.</input></codex_delegation>
+    [04] [1] tool cloud_threads.send_message result: <codex_delegation><source_thread_id><UUID 1></source_thread_...e_orbit_id><input>Inspect.</input></codex_delegation> [hash=d07acc49b7555746]
 
     [05]
         [2] tool exec_command call: {"cmd":"exit 0","sandbox_permissions":"require_escalated"}
@@ -166,6 +166,6 @@ Settings: same as window 3
         </tools>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
-03:function_call_output/cloud_threads.send_message:<codex_delegation><source_thread_id><UUID 1></source_thread_id><input>Inspect.</input></codex_delegation>
+03:function_call_output/cloud_threads.send_message:<codex_delegation><source_thread_id><UUID 1></source_thread_id><source_orbit_id>orbit-source</source_orbit_id><input>Inspect.</input></codex_delegation>
 04:function_call/exec_command:{"cmd":"exit 0","sandbox_permissions":"require_escalated"}
 05:function_call_output:exec_command failed: CreateProcess { message: "Rejected(\\"This action was rejected due to unacceptable r...e risk. Otherwise, stop and request user input.\\")" } [hash=099c82d6bbb0d161]

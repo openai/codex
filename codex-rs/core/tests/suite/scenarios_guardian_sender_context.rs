@@ -130,7 +130,7 @@ async fn cross_host_sender_context(history_mode: ThreadHistoryMode) -> Result<()
     let delivery: ResponseItem = serde_json::from_value(json!({
         "type": "function_call_output", "id": "delivery-0",
         "name": "send_message", "namespace": "cloud_threads",
-        "output": format!("<codex_delegation><source_thread_id>{sender_id}</source_thread_id><input>Inspect.</input></codex_delegation>"),
+        "output": format!("<codex_delegation><source_thread_id>{sender_id}</source_thread_id><source_orbit_id>orbit-source</source_orbit_id><input>Inspect.</input></codex_delegation>"),
     }))?;
     receiver
         .codex
