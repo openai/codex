@@ -703,11 +703,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
     }
 }
 
-pub(crate) fn anchor_from_item(
-    item: &ThreadMetadata,
-    sort_key: SortKey,
-    include_thread_id_tiebreaker: bool,
-) -> Option<Anchor> {
+pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
     let ts = match sort_key {
         SortKey::CreatedAt => item.created_at,
         SortKey::UpdatedAt => item.updated_at,
@@ -716,12 +712,7 @@ pub(crate) fn anchor_from_item(
     };
     Some(Anchor {
         ts,
-        id: (include_thread_id_tiebreaker
-            || matches!(
-                sort_key,
-                SortKey::CreatedAt | SortKey::RecencyAt | SortKey::SectionPosition
-            ))
-        .then_some(item.id),
+        id: Some(item.id),
     })
 }
 

@@ -559,9 +559,9 @@ ON CONFLICT(child_thread_id) DO NOTHING
             if let Some(overflow_item) = items.pop() {
                 parent_thread_ids.remove(&overflow_item.id);
             }
-            items.last().and_then(|item| {
-                anchor_from_item(item, filters.sort_key, relation_filter.is_some())
-            })
+            items
+                .last()
+                .and_then(|item| anchor_from_item(item, filters.sort_key))
         } else {
             None
         };
@@ -1303,15 +1303,10 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         }
         None => builder.push(" FROM threads"),
     };
-    let include_thread_id_tiebreaker = relation_filter.is_some()
-        || matches!(
-            filters.sort_key,
-            SortKey::CreatedAt | SortKey::RecencyAt | SortKey::SectionPosition
-        );
     push_thread_filters_with_preview(
         builder,
         filters,
-        include_thread_id_tiebreaker,
+        /*include_thread_id_tiebreaker*/ true,
         /*include_empty_preview*/ relation_filter.is_some(),
     );
     if !matches!(
@@ -1350,7 +1345,7 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         filters.sort_key,
         filters.sort_direction,
         order_by_index,
-        include_thread_id_tiebreaker,
+        /*include_thread_id_tiebreaker*/ true,
         limit,
     );
 }
@@ -2328,7 +2323,7 @@ mod tests {
             Some(Anchor {
                 ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_200_000)
                     .expect("valid timestamp"),
-                id: None,
+                id: Some(newer_id),
             })
         );
 
@@ -2422,7 +2417,7 @@ mod tests {
             Some(Anchor {
                 ts: DateTime::<Utc>::from_timestamp_millis(1_700_000_300_000)
                     .expect("valid timestamp"),
-                id: None,
+                id: Some(second_id),
             })
         );
 
@@ -2607,8 +2602,9 @@ mod tests {
                         "cursor query lost its timestamp index range: {plan_details:?}"
                     );
                 }
-                // The visible creation-time index covers timestamps, so only ties need sorting.
-                let expect_tie_sort = sort_key == SortKey::CreatedAt && cwd_filters.is_none();
+                // The visible creation/update indexes cover timestamps, so only ties need sorting.
+                let expect_tie_sort = matches!(sort_key, SortKey::CreatedAt | SortKey::UpdatedAt)
+                    && cwd_filters.is_none();
                 if expect_tie_sort {
                     assert!(
                         plan_details.iter().any(|detail| {
