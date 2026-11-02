@@ -7039,6 +7039,108 @@ fn plain_line_cell(text: impl Into<String>) -> Arc<dyn HistoryCell> {
 }
 
 #[tokio::test]
+async fn owned_stream_reflows_at_allocated_width_without_reporting_activity() -> Result<()> {
+    let table = "| Left | Right |\n| --- | --- |\n| one two three four five six seven | red blue green white orange |\n";
+    for kind in ["answer", "plan"] {
+        let mut app = make_test_app().await;
+        let id = ThreadId::new();
+        super::owned_transcript::tests::attach_thread(&mut app, id);
+        app.transcript_cells = (0..40)
+            .map(|i| plain_line_cell(format!("history-{i}")))
+            .collect();
+        if kind == "plan" {
+            app.chat_widget
+                .set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+            app.chat_widget.set_collaboration_mask(
+                crate::collaboration_modes::plan_mask(&app.model_catalog).unwrap(),
+            );
+        }
+        let delta = |text: &str| match kind {
+            "plan" => {
+                ServerNotification::PlanDelta(codex_app_server_protocol::PlanDeltaNotification {
+                    thread_id: id.to_string(),
+                    turn_id: kind.into(),
+                    item_id: kind.into(),
+                    delta: text.into(),
+                })
+            }
+            _ => agent_message_delta_notification(id, kind, kind, text),
+        };
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.set_owned_screen(/*owned*/ true)?;
+        let mut draw = |app: &mut App, width| -> Result<String> {
+            let screen = tui.terminal.last_known_screen_size;
+            app.handle_draw_pre_render(&mut tui, screen)?;
+            let frames = tui.frame_requester();
+            let mut painted = Default::default();
+            tui.draw(screen.height, |frame| {
+                let area = Rect {
+                    width,
+                    ..frame.area()
+                };
+                let prepared = app.prepare_conversation(frame.area(), Some(area), &frames);
+                painted = app.paint_conversation(frame, &prepared);
+            })?;
+            app.finish_conversation(&mut tui, painted)?;
+            Ok(super::owned_transcript::tests::buffer_text(
+                tui.terminal.previous_buffer(),
+            ))
+        };
+        app.chat_widget
+            .handle_server_notification(delta(table), /*replay_kind*/ None);
+        for width in [80, 44, 80] {
+            let frame = draw(&mut app, width)?;
+            let mut expected = Vec::new();
+            let reserved = if kind == "plan" { 4 } else { 2 };
+            crate::markdown::append_markdown_agent(
+                table,
+                Some(usize::from(width) - reserved),
+                &mut expected,
+            );
+            let separator = expected
+                .iter()
+                .map(ToString::to_string)
+                .find(|line| line.contains('━'))
+                .unwrap();
+            assert!(
+                frame.lines().any(|line| line.trim() == separator.trim()),
+                "{kind} at {width}: {frame}"
+            );
+            if kind == "answer" && width == 44 {
+                insta::assert_snapshot!(
+                    "allocated_stream_table",
+                    normalize_snapshot_paths(frame.as_str())
+                );
+            }
+        }
+        app.transcript_view
+            .jump_to_entry(&app.transcript_cells, /*index*/ 8);
+        for width in [80, 44, 80] {
+            let held = draw(&mut app, width)?;
+            assert!(
+                held.contains("history-8")
+                    && held.contains("Back to bottom")
+                    && !held.contains("New activity"),
+                "{kind}: {held}"
+            );
+        }
+        // Deliver output without painting it. The next resize must preserve that unseen revision.
+        app.chat_widget.handle_server_notification(
+            delta("| new row | arrived |\n"),
+            /*replay_kind*/ None,
+        );
+        let changed = draw(&mut app, 44)?;
+        assert!(
+            changed.contains("history-8") && changed.contains("New activity"),
+            "{kind}: {changed}"
+        );
+        app.transcript_view.jump_to_latest();
+        assert_eq!(draw(&mut app, 80)?.matches("new row").count(), 1, "{kind}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn app_server_thread_replacement_clears_previous_transcript_before_replay() -> Result<()> {
     let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
     app.local_settings.tui.show_tooltips = false;

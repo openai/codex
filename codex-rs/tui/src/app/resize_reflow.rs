@@ -432,10 +432,7 @@ impl App {
     ) -> Result<()> {
         self.flush_native_history(tui);
         if tui.is_owned_screen() {
-            let width = self.transcript_reflow.note_width(size.width);
-            if width.changed || width.initialized {
-                self.chat_widget.on_terminal_resize(size.width);
-            }
+            self.transcript_reflow.note_width(size.width);
             if size != tui.terminal.last_known_screen_size {
                 self.refresh_status_line();
             }

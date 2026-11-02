@@ -236,6 +236,10 @@ impl App {
     ) -> PreparedConversation {
         self.conversation_frame.inset = conversation_inset;
         let area = self.conversation_area(viewport);
+        if let Some((previous, reflowed)) = self.chat_widget.resize_owned_conversation(area.width) {
+            self.transcript_view
+                .rebind_observed_live_revision(previous, reflowed);
+        }
         self.chat_widget.sync_warnings(&self.transcript_cells);
         let motion = MotionMode::from_animations_enabled(
             self.local_settings.tui.animations && self.local_settings.tui.effects.shimmer,

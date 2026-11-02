@@ -1747,6 +1747,17 @@ impl ChatWidget {
         }
     }
 
+    /// Reflow at the allocated conversation width and report any presentation-only revision change.
+    pub(crate) fn resize_owned_conversation(&mut self, width: u16) -> Option<(u64, u64)> {
+        if self.last_rendered_width.get() == Some(width) {
+            return None;
+        }
+        let previous = self.transcript.active_cell_revision;
+        self.on_terminal_resize(width);
+        let reflowed = self.transcript.active_cell_revision;
+        (previous != reflowed).then_some((previous, reflowed))
+    }
+
     /// Whether an agent message stream is active (not a plan stream).
     pub(crate) fn has_active_agent_stream(&self) -> bool {
         self.stream_controller.is_some()
