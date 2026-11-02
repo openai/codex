@@ -114,7 +114,7 @@ impl BackendSessions {
         self.entries
             .iter()
             .filter(|entry| entry.listening || entry.session.backend_id() == displayed_owner)
-            .map(|entry| entry.session.picker_view())
+            .map(|entry| entry.session.request_view())
             .collect()
     }
 
