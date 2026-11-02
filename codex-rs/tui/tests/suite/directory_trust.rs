@@ -39,6 +39,7 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
         let cwd = repo_root.clone();
         let methods = Arc::new(Mutex::new(Vec::new()));
         let requests = Arc::clone(&methods);
+        let server_home = codex_home.path().to_path_buf();
         let server = tokio::spawn(async move {
             let mut clients = tokio::task::JoinSet::new();
             let trust_reads = Arc::new(AtomicUsize::new(0));
@@ -48,6 +49,7 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
                     .await
                     .expect("accept fake app-server client");
                 let cwd = cwd.clone();
+                let server_home = server_home.clone();
                 let methods = Arc::clone(&requests);
                 let trust_reads = Arc::clone(&trust_reads);
                 clients.spawn(async move {
@@ -74,7 +76,7 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
                         };
                         methods.lock().unwrap().push(request.method.clone());
                         let result = match request.method.as_str() {
-                            "initialize" => json!({"userAgent": "trust-pty"}),
+                            "initialize" => json!({"userAgent": "trust-pty/0.0.0", "codexHome": server_home, "platformFamily": std::env::consts::FAMILY, "platformOs": std::env::consts::OS}),
                             "experimentalFeature/list" => json!({"data": (["api_key_model_discovery", "code_mode_host", "auth_elicitation"].map(|name| json!({
                                 "name": name, "stage": "stable", "displayName": null,
                                 "description": null, "announcement": null,

@@ -2973,15 +2973,26 @@ fn deprecation_notice_renders_summary_with_details() {
 }
 
 #[test]
-fn legacy_zsh_migration_notice_snapshot() {
-    let mut features = codex_features::Features::default();
-    features.record_legacy_usage_force("shell_zsh_fork", codex_features::Feature::ShellZshFork);
-    let usage = features
-        .legacy_feature_usages()
-        .next()
-        .expect("migration notice");
-    let cell = new_deprecation_notice(usage.summary.clone(), usage.details.clone());
-    insta::assert_snapshot!(render_lines(&cell.transcript_lines(/*width*/ 80)).join("\n"));
+fn legacy_feature_migration_notices() {
+    for (key, snapshot) in [
+        ("shell_zsh_fork", "legacy_zsh_migration_notice_snapshot"),
+        ("daemon_auto_start", "daemon_auto_start_migration_notice"),
+    ] {
+        let mut features = codex_features::Features::with_defaults();
+        features.apply_map(&std::collections::BTreeMap::from([(
+            key.to_string(),
+            false,
+        )]));
+        let usage = features
+            .legacy_feature_usages()
+            .next()
+            .expect("migration notice");
+        let cell = new_deprecation_notice(usage.summary.clone(), usage.details.clone());
+        insta::assert_snapshot!(
+            snapshot,
+            render_lines(&cell.transcript_lines(/*width*/ 80)).join("\n")
+        );
+    }
 }
 
 #[test]

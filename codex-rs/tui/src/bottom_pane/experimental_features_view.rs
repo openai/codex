@@ -282,7 +282,10 @@ impl BottomPaneView for ExperimentalFeaturesView {
                 let mut count = 0;
                 for feature in features {
                     if feature.stage != ExperimentalFeatureStage::Beta
-                        || matches!(feature.name.as_str(), "worktrees" | "realtime_conversation")
+                        || matches!(
+                            feature.name.as_str(),
+                            "daemon_auto_start" | "worktrees" | "realtime_conversation"
+                        )
                     {
                         continue;
                     }

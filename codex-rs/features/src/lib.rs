@@ -121,7 +121,7 @@ pub enum Feature {
     /// Store CLI auth in the encrypted local secrets backend when keyring storage is selected.
     SecretAuthStorage,
 
-    /// Automatically start the shared local daemon for eligible interactive launches.
+    /// Removed compatibility flag. Eligible interactive launches always start or reuse the daemon.
     DaemonAutoStart,
     /// Allow the TUI to discover and select among multiple conversation backends.
     TuiMultiBackend,
@@ -720,6 +720,13 @@ impl Features {
                     );
                     continue;
                 }
+                "daemon_auto_start" => {
+                    self.record_legacy_usage_force(
+                        "features.daemon_auto_start",
+                        Feature::DaemonAutoStart,
+                    );
+                    continue;
+                }
                 "transcript_v2" => {
                     self.record_legacy_usage_force("features.transcript_v2", Feature::TranscriptV2);
                     continue;
@@ -842,6 +849,10 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
         Feature::GuardianThreadContext => (
             "`[features.guardianv2].thread_context` is deprecated and ignored.".to_string(),
             Some("Thread-owned Guardian context is always enabled. Remove `thread_context` from [features.guardianv2] in config.toml, including profile overrides.".to_string()),
+        ),
+        Feature::DaemonAutoStart => (
+            "`[features].daemon_auto_start` is deprecated and ignored.".to_string(),
+            Some("Remove `daemon_auto_start` from [features] in config.toml or profile configuration files. Use `--no-daemon` to run without the shared background server.".to_string()),
         ),
         Feature::TranscriptV2 => (
             "`[features].transcript_v2` is deprecated and ignored.".to_string(),
@@ -1107,7 +1118,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DaemonAutoStart,
         key: "daemon_auto_start",
-        stage: Stage::Stable,
+        stage: Stage::Removed,
         default_enabled: true,
     },
     FeatureSpec {

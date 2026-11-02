@@ -99,6 +99,7 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
         &root,
         codex_home,
         &[
+            "--no-daemon",
             "--no-alt-screen",
             "-c",
             "features.worktrees=true",

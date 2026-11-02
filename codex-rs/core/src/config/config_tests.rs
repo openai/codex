@@ -12363,6 +12363,7 @@ shell_tool = false
 
 #[test_case::test_case(Feature::Personality; "personality")]
 #[test_case::test_case(Feature::GuardianThreadContext; "guardian thread context")]
+#[test_case::test_case(Feature::DaemonAutoStart; "daemon auto start")]
 #[test_case::test_case(Feature::Worktrees; "worktrees")]
 #[test_case::test_case(Feature::RealtimeConversation; "realtime conversation")]
 #[test_case::test_case(Feature::ShellZshFork; "shell zsh fork")]

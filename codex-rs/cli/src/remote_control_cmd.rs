@@ -16,7 +16,6 @@ use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::LoaderOverrides;
 use codex_core::config::ConfigBuilder;
-use codex_features::Feature;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
@@ -161,8 +160,7 @@ async fn daemon_eligible(root_config_overrides: &CliConfigOverrides) -> anyhow::
     let Ok(config) = ConfigBuilder::default().build().await else {
         return Ok(false);
     };
-    Ok(config.features.enabled(Feature::DaemonAutoStart)
-        && !codex_tui::uses_wsl_drvfs(&config.codex_home))
+    Ok(!codex_tui::uses_wsl_drvfs(&config.codex_home))
 }
 
 fn print_remote_control_progress(json: bool, message: &str) -> anyhow::Result<()> {
