@@ -1413,7 +1413,9 @@ async fn read_exec_server_json(websocket: &mut WebSocketStream<TcpStream>) -> Va
     }
 }
 
-async fn accept_initialized_exec_server(listener: TcpListener) -> WebSocketStream<TcpStream> {
+pub(super) async fn accept_initialized_exec_server(
+    listener: TcpListener,
+) -> WebSocketStream<TcpStream> {
     let (stream, _) = listener.accept().await.expect("connection");
     let mut websocket = accept_async(stream).await.expect("websocket handshake");
 

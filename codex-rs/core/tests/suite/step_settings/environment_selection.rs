@@ -4,6 +4,8 @@ use super::*;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_extension_api::ExtensionDataInit;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::EnvironmentCapabilityRoots;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -14,7 +16,193 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::environment_config_for_selection;
 use pretty_assertions::assert_eq;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use test_case::test_case;
+use tokio::net::TcpListener;
+use tokio::sync::Notify;
+use tokio::sync::oneshot;
+
+use crate::suite::remote_env::accept_initialized_exec_server;
+use crate::suite::remote_env::serve_environment_with_agents_md;
+
+/// Holds one startup after environment selection and before the thread publishes SessionConfigured.
+#[derive(Default)]
+struct PauseNextThreadStart {
+    pause_next: AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+
+impl ThreadLifecycleContributor<Config> for PauseNextThreadStart {
+    fn on_thread_start<'a>(
+        &'a self,
+        _input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if self.pause_next.swap(false, Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+        })
+    }
+}
+
+#[test]
+fn connection_events_follow_the_active_turn_environment_selection() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let scheduler_idle = Arc::new(Notify::new());
+    let notifier = Arc::clone(&scheduler_idle);
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .on_thread_park(move || notifier.notify_waiters())
+        .build()?
+        .block_on(check_connection_events_for_active_selection(scheduler_idle))
+}
+
+async fn check_connection_events_for_active_selection(scheduler_idle: Arc<Notify>) -> Result<()> {
+    let server = start_mock_server().await;
+    mount_sse_sequence(
+        &server,
+        vec![
+            paused_response("temporary", "pause-temporary"),
+            sse_completed("temporary-done"),
+            paused_response("restored", "pause-restored"),
+            sse_completed("restored-done"),
+        ],
+    )
+    .await;
+    let startup_barrier = Arc::new(PauseNextThreadStart::default());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.thread_lifecycle_contributor(startup_barrier.clone());
+    let test = step_settings_test()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::DeferredExecutor)
+                .expect("enable deferred executors for the test");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let resume_listener = TcpListener::from_std(listener.try_clone()?)?;
+    let listener = TcpListener::from_std(listener)?;
+    let remote_id = "watched";
+    test.thread_manager
+        .environment_manager()
+        .upsert_environment(
+            remote_id.to_string(),
+            format!("ws://{}", listener.local_addr()?),
+            /*connect_timeout*/ None,
+        )?;
+    let primary = test
+        .executor_environment()
+        .selection()
+        .clone()
+        .into_request();
+    let mut remote = primary.clone();
+    remote.environment_id = remote_id.to_string();
+    let options = || StartThreadOptions {
+        environments: Some(vec![primary.clone(), remote.clone()]),
+        ..StartThreadOptions::new(test.config.clone())
+    };
+    let control = test.thread_manager.start_thread(options()).await?.thread;
+    let thread = test.thread_manager.start_thread(options()).await?.thread;
+    let turn = start_paused_turn(&thread).await?;
+    apply_turn_settings(
+        &thread,
+        &turn.turn_id,
+        TurnSettingsUpdate {
+            environments: Some(vec![primary.clone()]),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    // Connect while the remote is deselected on one thread and another is still starting.
+    startup_barrier.pause_next.store(true, Ordering::SeqCst);
+    let starting = test.thread_manager.start_thread(options());
+    tokio::pin!(starting);
+    tokio::select! {
+        _ = startup_barrier.entered.notified() => {}
+        result = &mut starting => {
+            result?;
+            anyhow::bail!("thread startup completed before the executor connected");
+        }
+    }
+    let (ready, start) = oneshot::channel();
+    let (disconnect, stop) = oneshot::channel();
+    ready.send(()).expect("exec-server start receiver is alive");
+    let executor = tokio::spawn(serve_environment_with_agents_md(listener, "", start, stop));
+    let connection_event = |event: &EventMsg| {
+        matches!(event, EventMsg::EnvironmentConnected(e) | EventMsg::EnvironmentDisconnected(e)
+            if e.environment_id == remote_id)
+    };
+    let wait_for_connection = async |thread: &CodexThread| {
+        let event = wait_for_event(thread, connection_event).await;
+        assert!(
+            matches!(event, EventMsg::EnvironmentConnected(_)),
+            "expected {remote_id} to connect, got {event:?}"
+        );
+    };
+    let assert_no_connection_events = async |thread: &CodexThread, message: &str| -> Result<()> {
+        // Register on the sole worker so the next park follows all runnable listeners.
+        let idle = Arc::clone(&scheduler_idle);
+        tokio::spawn(async move { idle.notified().await }).await?;
+        for _ in 0..thread.queued_event_count() {
+            let event = thread.next_event().await?.msg;
+            assert!(!connection_event(&event), "{message} {event:?}");
+        }
+        Ok(())
+    };
+    wait_for_connection(&control).await;
+    assert_no_connection_events(&thread, "deselected executor emitted").await?;
+    startup_barrier.release.notify_one();
+    let started = starting
+        .await
+        .expect("SessionConfigured must precede executor connection events")
+        .thread;
+    assert_no_connection_events(&started, "startup replayed").await?;
+
+    answer_paused_turn(&thread, &turn.turn_id).await?;
+    let end_of_turn =
+        |event: &EventMsg| connection_event(event) || matches!(event, EventMsg::TurnComplete(_));
+    let event = wait_for_event(&thread, end_of_turn).await;
+    assert!(
+        matches!(event, EventMsg::TurnComplete(_)),
+        "deselected executor emitted {event:?}"
+    );
+
+    // The next turn inherits the configured selection. A resumed transport should notify it once.
+    thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "use the configured environments".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let event = wait_for_event(&thread, |event| {
+        connection_event(event) || matches!(event, EventMsg::RequestUserInput(_))
+    })
+    .await;
+    let EventMsg::RequestUserInput(turn) = event else {
+        anyhow::bail!("reselecting an already connected executor replayed {event:?}");
+    };
+    disconnect
+        .send(())
+        .expect("exec-server should be connected when the test requests a disconnect");
+    executor.await?;
+    let _resumed_socket = accept_initialized_exec_server(resume_listener).await;
+    wait_for_connection(&control).await;
+    wait_for_connection(&thread).await;
+    assert_no_connection_events(&thread, "duplicate connection event").await?;
+    answer_paused_turn(&thread, &turn.turn_id).await?;
+    wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    Ok(())
+}
 
 /// Active updates restore selected roots even when the request only names the environment.
 #[test_case(false; "without roots")]
