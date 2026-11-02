@@ -36,6 +36,7 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::plugins::build_plugin_injections;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_retry::ResponsesRequestTransport;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::ResponsesStreamRetryState;
 use crate::responses_retry::handle_response_stream_error;
@@ -1880,6 +1881,7 @@ async fn run_sampling_request(
             Arc::clone(&step_context),
             Arc::clone(&turn_store),
             client_session,
+            &mut retry_state.transport,
             &responses_metadata,
             Arc::clone(&turn_diff_tracker),
             prompt,
@@ -2733,6 +2735,7 @@ async fn try_run_sampling_request(
     step_context: Arc<StepContext>,
     turn_store: Arc<codex_extension_api::ExtensionData>,
     client_session: &mut ModelClientSession,
+    transport: &mut ResponsesRequestTransport,
     responses_metadata: &CodexResponsesMetadata,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: Prompt,
@@ -2831,7 +2834,7 @@ async fn try_run_sampling_request(
         None
     };
     let stream = client_session
-        .stream(
+        .stream_attempt(
             &prompt,
             &step_context.settings.model_info,
             &step_context.session_telemetry,
@@ -2840,6 +2843,7 @@ async fn try_run_sampling_request(
             step_context.settings.service_tier.clone(),
             responses_metadata,
             &inference_trace,
+            transport,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

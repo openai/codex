@@ -245,17 +245,34 @@ impl ResponsesWebsocketConnection {
             .is_none_or(|stream| stream.pump_task.is_finished())
     }
 
+    pub async fn stream_request(
+        &self,
+        request: ResponsesWsRequest<'_>,
+        connection_reused: bool,
+        turn_state: Option<Arc<OnceLock<String>>>,
+    ) -> Result<ResponseStream, ApiError> {
+        self.stream_request_with_ack_timeout(
+            request,
+            connection_reused,
+            turn_state,
+            /*ack_timeout*/ None,
+        )
+        .await
+    }
+
+    /// On a recovery trial, bound the wait for the first response independently of stream idleness.
     #[instrument(
         name = "responses_websocket.stream_request",
         level = "info",
         skip_all,
         fields(transport = "responses_websocket", api.path = "/responses")
     )]
-    pub async fn stream_request(
+    pub async fn stream_request_with_ack_timeout(
         &self,
         request: ResponsesWsRequest<'_>,
         connection_reused: bool,
         turn_state: Option<Arc<OnceLock<String>>>,
+        ack_timeout: Option<Duration>,
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -352,7 +369,7 @@ impl ResponsesWebsocketConnection {
                         &mut ws_stream,
                         tx_event.clone(),
                         request_text,
-                        idle_timeout,
+                        FrameTimeout::new(idle_timeout, ack_timeout),
                         telemetry,
                         turn_state.as_deref(),
                         &timing_log_context,
@@ -768,12 +785,55 @@ struct InterruptAcknowledgement {
     response_id: String,
 }
 
+/// The first response to a recovery request has an absolute deadline across writes and reads.
+struct FrameTimeout {
+    idle: Duration,
+    recovering: bool,
+    ack_deadline: Option<Instant>,
+}
+
+impl FrameTimeout {
+    fn new(idle: Duration, ack_timeout: Option<Duration>) -> Self {
+        Self {
+            idle,
+            recovering: ack_timeout.is_some(),
+            ack_deadline: ack_timeout.map(|timeout| Instant::now() + timeout.min(idle)),
+        }
+    }
+
+    async fn wait<F: Future>(
+        &self,
+        operation: F,
+        message: &'static str,
+    ) -> Result<F::Output, ApiError> {
+        if let Some(deadline) = self.ack_deadline {
+            tokio::select! {
+                biased;
+                () = tokio::time::sleep_until(deadline) => {
+                    Err(ApiError::Transport(TransportError::Timeout))
+                }
+                result = operation => Ok(result),
+            }
+        } else {
+            tokio::time::timeout(self.idle, operation)
+                .await
+                .map_err(|_| {
+                    if self.recovering {
+                        ApiError::Transport(TransportError::Timeout)
+                    } else {
+                        ApiError::Stream(message.into())
+                    }
+                })
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_websocket_response_stream(
     ws_stream: &mut WsStream,
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
     request_text: String,
-    idle_timeout: Duration,
+    mut timeout: FrameTimeout,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     turn_state: Option<&OnceLock<String>>,
     timing_log_context: &ResponsesWebsocketTimingLogContext,
@@ -792,7 +852,7 @@ async fn run_websocket_response_stream(
     send_websocket_request(
         ws_stream,
         request_text,
-        idle_timeout,
+        &timeout,
         telemetry.as_ref(),
         timing_log_context.connection_reused,
     )
@@ -806,9 +866,7 @@ async fn run_websocket_response_stream(
     loop {
         let poll_start = Instant::now();
         let response = tokio::select! {
-            response = tokio::time::timeout(idle_timeout, ws_stream.next()) => {
-                response.map_err(|_| ApiError::Stream("idle timeout waiting for websocket".into()))
-            }
+            response = timeout.wait(ws_stream.next(), "idle timeout waiting for websocket") => response,
             request = &mut interrupt_request, if response_id.is_some() => {
                 interruption = Some(request);
                 send_websocket_request(
@@ -818,7 +876,7 @@ async fn run_websocket_response_stream(
                         "response_id": response_id,
                         "mode": "discard_partial_items",
                     }).to_string(),
-                    idle_timeout,
+                    &timeout,
                     /*telemetry*/ None,
                     timing_log_context.connection_reused,
                 )
@@ -925,7 +983,11 @@ async fn run_websocket_response_stream(
                 }
                 let model = event.response_model();
                 // Preserve terminal usage before any accompanying notification can block.
-                let event = match process_responses_event(event) {
+                let event = process_responses_event(event);
+                if matches!(&event, Ok(Some(_))) {
+                    timeout.ack_deadline = None;
+                }
+                let event = match event {
                     Ok(Some(event @ ResponseEvent::Completed { .. })) => {
                         *completion = Some(event);
                         Ok(None)
@@ -1035,18 +1097,18 @@ fn safety_buffering_for_event(
 async fn send_websocket_request(
     ws_stream: &mut WsStream,
     request_text: String,
-    idle_timeout: Duration,
+    timeout: &FrameTimeout,
     telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
 ) -> Result<(), ApiError> {
     let request_start = Instant::now();
-    let result = tokio::time::timeout(
-        idle_timeout,
-        ws_stream.send(Message::Text(request_text.into())),
-    )
-    .await
-    .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
-    .and_then(|result| result.map_err(map_ws_stream_error));
+    let result = timeout
+        .wait(
+            ws_stream.send(Message::Text(request_text.into())),
+            "idle timeout sending websocket request",
+        )
+        .await
+        .and_then(|result| result.map_err(map_ws_stream_error));
 
     if let Some(t) = telemetry.as_ref() {
         t.on_ws_request(

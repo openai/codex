@@ -18,6 +18,7 @@ use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::tracing::NamedTraceEvents;
 use core_test_support::wait_for_event;
 use http::Method;
 use http::StatusCode;
@@ -1808,6 +1809,8 @@ async fn websocket_failed_event_uses_header_over_plaintext_retry_after() -> Resu
 async fn websocket_upgrade_rejection_uses_retry_after() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let mut probe = NamedTraceEvents::subscribe("codex.websocket_probe_finished");
+
     let server = responses::start_mock_server().await;
     let prewarm_rejection = Mock::given(method("GET"))
         .and(path("/v1/responses"))
@@ -1864,13 +1867,19 @@ async fn websocket_upgrade_rejection_uses_retry_after() -> Result<()> {
 
     // Both WebSocket advice deadlines apply, including the one before transport fallback.
     assert!(start.elapsed() >= Duration::from_secs(2));
+    probe.next().await?;
     let requests = server.received_requests().await.unwrap_or_default();
     let methods = requests
         .iter()
         .filter(|request| request.url.path() == "/v1/responses")
         .map(|request| request.method.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(methods, vec!["GET", "GET", "GET", "POST", "POST"]);
+    // The background GET can race either HTTP attempt after foreground retries finish.
+    let (foreground, fallback) = methods.split_at(3);
+    assert_eq!(foreground, ["GET", "GET", "GET"]);
+    let mut fallback = fallback.to_vec();
+    fallback.sort_unstable();
+    assert_eq!(fallback, ["GET", "POST", "POST"]);
     assert_eq!(response_mock.requests().len(), 2);
     Ok(())
 }
