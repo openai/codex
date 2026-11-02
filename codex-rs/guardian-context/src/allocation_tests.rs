@@ -118,6 +118,7 @@ fn whole_images_use_defaults_and_charge_shared_framing_once() {
         let input = PreparedElasticContext {
             context: context.clone(),
             config: &config,
+            delivered_omissions: None,
         };
         let mut budget = RequestBudget {
             max_input_tokens: context.estimated_tokens() + HISTORY_TOKENS,

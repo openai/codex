@@ -1,6 +1,7 @@
 //! Exercises reviewer history safety at cancellation and budget boundaries.
 
 use super::*;
+use codex_guardian_context::ContextBudgeting;
 use codex_guardian_context::ContextPresentation;
 use codex_guardian_context::ContextProfile;
 use codex_guardian_context::PlannedAction;
@@ -48,6 +49,7 @@ async fn finalization_exports_loss_totals_only_for_accepted_input(window: i64) {
     context.truncations = [(256, 100), (64, 40), (16, 0)]
         .into_iter()
         .map(|(original_bytes, retained_bytes)| TruncationObservation {
+            source: None,
             component: "conversation_transcript",
             original_bytes,
             retained_bytes,
@@ -61,7 +63,10 @@ async fn finalization_exports_loss_totals_only_for_accepted_input(window: i64) {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext { context });
+        .insert(PendingReviewContext {
+            context,
+            elastic: None,
+        });
     assert_eq!(
         finalize(&session, &step, &mut input, HistoryTruncation::Preserve)
             .await
@@ -177,7 +182,10 @@ async fn cancelled_startup_does_not_record_unselected_review_evidence() {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext { context });
+        .insert(PendingReviewContext {
+            context,
+            elastic: None,
+        });
     session
         .set_session_startup_prewarm(
             crate::session::startup_prewarm::SessionStartupPrewarmHandle::new(
@@ -234,7 +242,10 @@ async fn feasibility_rejects_required_evidence_inside_the_reserved_margin() {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext { context });
+        .insert(PendingReviewContext {
+            context,
+            elastic: None,
+        });
 
     assert!(check_pending(&session, &turn).await.is_err());
 }
@@ -257,7 +268,10 @@ async fn finalization_overflow_marks_the_reviewer_exhausted() {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext { context });
+        .insert(PendingReviewContext {
+            context,
+            elastic: None,
+        });
 
     assert!(
         finalize(&session, &step, &mut input, HistoryTruncation::Preserve)
@@ -274,7 +288,16 @@ async fn finalization_overflow_marks_the_reviewer_exhausted() {
 }
 
 #[tokio::test]
-async fn compacted_review_restores_originals_once_and_persists_the_request_prefix() {
+#[test_case(ContextBudgeting::Fixed; "fixed")]
+#[test_case(ContextBudgeting::Elastic; "elastic")]
+async fn compacted_review_restores_originals_once_and_persists_the_request_prefix(
+    budgeting: ContextBudgeting,
+) {
+    const LARGE_INSTRUCTION_REPEATS: usize = 224;
+    let instruction = "Do not publish. ".repeat(match budgeting {
+        ContextBudgeting::Fixed => 1,
+        ContextBudgeting::Elastic => LARGE_INSTRUCTION_REPEATS,
+    });
     let (session, turn) = crate::session::tests::make_session_and_context().await;
     let session = Arc::new(session);
     let step = session
@@ -286,7 +309,7 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
             &step.turn,
             &step.settings.model_info,
             &[codex_protocol::user_input::UserInput::Text {
-                text: "Do not publish.".to_owned(),
+                text: instruction.clone(),
                 text_elements: vec![],
             }],
             /*client_id*/ None,
@@ -297,9 +320,16 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
             codex_thread_store::PersistContext::Standard,
         )
         .await;
-    let context = super::super::prompt::build_guardian_prompt_items(
+    let collected = super::super::prompt::collect_guardian_prompt_items_with_parent_turn(
         &session,
-        /*retry_reason*/ None,
+        super::super::prompt::GuardianTranscriptHistory::Retained(
+            session.conversation_history_snapshot().await.as_ref(),
+        ),
+        /*parent_context*/ None,
+        super::super::ApprovalRequestReasons {
+            approval: None,
+            retry: None,
+        },
         super::super::GuardianApprovalRequest::RequestPermissions {
             id: "review".to_owned(),
             environment_id: "local".to_owned(),
@@ -308,12 +338,45 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
             permissions: Default::default(),
         },
         super::super::prompt::GuardianPromptMode::Full,
+        /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await
-    .unwrap()
-    .context;
+    .unwrap();
+    let context = codex_guardian_context::prepare_sync_context(
+        collected.sections,
+        &collected.profile,
+        /*entry_number_offset*/ 0,
+        ContextPresentation::SyncFull {
+            session_id: &collected.session_id,
+        },
+        budgeting,
+    )
+    .unwrap();
+    let elastic = (budgeting == ContextBudgeting::Elastic).then(|| {
+        let section = codex_guardian_context::ElasticSection::TrustedSkills;
+        let mut policy = codex_guardian_context::ElasticBudgetConfig::default();
+        policy.sections.insert(
+            section,
+            codex_guardian_context::ElasticSectionLimits::new(
+                /*min_total_section_tokens*/ 1, /*max_section_entry_tokens*/ 1,
+            )
+            .unwrap(),
+        );
+        let minimum = codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS
+            - usize::try_from(policy.total_minimum_tokens()).unwrap()
+            + 1;
+        policy.sections.insert(
+            section,
+            codex_guardian_context::ElasticSectionLimits::new(
+                minimum, /*max_section_entry_tokens*/ 1,
+            )
+            .unwrap(),
+        );
+        policy
+    });
     step.turn.extension_data.insert(RetainedReviewContext {
         context: context.retained_instructions(),
+        elastic,
         history_version: session.clone_history().await.history_version(),
     });
     // Simulate a reviewer compaction that discarded the earlier user-message block.
@@ -332,10 +395,11 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
     super::super::request_budget::prepare_prompt(&session, &mut prompt, &step, &metadata)
         .await
         .unwrap();
-    assert!(
-        serde_json::to_string(&prompt.input)
-            .unwrap()
-            .contains("Do not publish.")
+    let restored = serde_json::to_string(&prompt.input).unwrap();
+    assert!(restored.contains("Do not publish."));
+    assert_eq!(
+        restored.contains("<truncated"),
+        budgeting == ContextBudgeting::Elastic
     );
     let persisted = session
         .clone_history()

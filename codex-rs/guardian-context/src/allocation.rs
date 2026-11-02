@@ -82,15 +82,28 @@ pub(crate) fn allocation_section(
 pub struct PreparedElasticContext<'a> {
     pub(crate) context: ComposedContext,
     pub(crate) config: &'a ElasticBudgetConfig,
+    pub(crate) delivered_omissions: Option<codex_history::GuardianRetainedOmissions>,
 }
 
 impl PreparedElasticContext<'_> {
-    /// Deduplicates using the completeness of the capped representations.
+    /// Removes history-delivered instructions and deduplicates native deliveries.
+    /// Pending instruction proof is reconciled when the budget is enforced.
     pub fn prepare_sync_delivery(
         mut self,
         history: &[ResponseItemEnvelope],
     ) -> Result<Self, SectionError> {
-        crate::prepare_sync_delivery(&mut self.context, history)?;
+        self.context.remove_delivered_instructions(
+            history
+                .iter()
+                .filter_map(|item| item.metadata.as_ref())
+                .flat_map(|metadata| &metadata.guardian_sources),
+            crate::ContextBudgeting::Elastic,
+        );
+        self.context.retain_new_native_messages(history)?;
+        self.delivered_omissions = history
+            .iter()
+            .rev()
+            .find_map(|item| item.metadata.as_ref()?.guardian_retained_omissions);
         Ok(self)
     }
 
@@ -115,6 +128,7 @@ impl PreparedElasticContext<'_> {
             .ok_or(SectionError::EvidenceLimitExceeded {
                 section: "request_budget",
             })?;
+        context.retain_selected_instructions(self.delivered_omissions);
         let demand = collect_demand(&context)?;
         let context_tokens = context.estimated_tokens();
         if context_tokens <= remaining && context.truncations.is_empty() {
@@ -311,6 +325,7 @@ fn retain_selected(context: &mut ComposedContext, selected: &HashSet<(usize, usi
                     && !selected.contains(&(section_index, 0)) =>
             {
                 context.truncations.push(TruncationObservation {
+                    source: None,
                     component: section.id,
                     original_bytes: ByteCount::item(&message.content.item),
                     retained_bytes: 0,

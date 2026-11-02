@@ -68,6 +68,7 @@ impl ComposedContext {
                             source.complete = false;
                         }
                         self.truncations.push(TruncationObservation {
+                            source: item.source.clone(),
                             component: section.id,
                             original_bytes,
                             retained_bytes: item.content.evidence_bytes(),
@@ -79,6 +80,7 @@ impl ComposedContext {
         Ok(PreparedElasticContext {
             context: self,
             config,
+            delivered_omissions: None,
         })
     }
 }

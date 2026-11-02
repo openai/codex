@@ -166,6 +166,7 @@ pub fn render_review_evidence(review: ReviewEvidence<'_>) -> RenderedReviewEvide
         let text = truncate_entry(&text, token_cap);
         if original_bytes > text.len() {
             truncations.push(TruncationObservation {
+                source: None,
                 component,
                 original_bytes,
                 retained_bytes: text.len(),

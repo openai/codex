@@ -294,13 +294,15 @@ fn legacy_verified_answers_keep_distinct_source_order() {
 
 #[test]
 fn delivery_uses_source_revision_and_complete_host_metadata() {
+    const REPEATS: usize = 64;
+    const ENTRY_TOKENS: usize = 128;
     let mut retained = RetainedContext::default();
     retained.mark_user_messages_incomplete();
     let mut message = RetainedUserMessage {
         phase: None,
         turn_id: "turn".to_owned(),
         message_id: Some("source".to_owned()),
-        text: "Draft only.".to_owned(),
+        text: "Draft only. ".repeat(REPEATS),
         complete: true,
         origin: codex_history::UserInputOrigin::User,
     };
@@ -320,6 +322,32 @@ fn delivery_uses_source_revision_and_complete_host_metadata() {
     let mut next = original.clone();
     next.retain_new_instructions(&delivered);
     assert!(next.into_messages().is_empty());
+
+    // A complete admitted revision also covers a newly capped duplicate.
+    let config = crate::budget::tests::complete_minimum_budget(crate::ElasticBudgetConfig {
+        sections: std::collections::BTreeMap::from([(
+            crate::ElasticSection::RetainedUserInstructions,
+            crate::ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS).unwrap(),
+        )]),
+    });
+    let capped = original.clone().prepare_elastic_entries(&config).unwrap();
+    assert!(!capped.context.truncations.is_empty());
+    let history_tokens = original.estimated_tokens();
+    assert!(
+        capped
+            .prepare_sync_delivery(&delivered)
+            .unwrap()
+            .enforce_budget(
+                crate::RequestBudget {
+                    max_input_tokens: history_tokens,
+                    existing_context_tokens: history_tokens,
+                },
+                "omitted".to_owned()
+            )
+            .unwrap()
+            .into_messages()
+            .is_empty()
+    );
 
     // Identical prompt text alone, or a shortened copy with the same source ID, is not proof.
     for metadata in [

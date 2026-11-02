@@ -557,6 +557,7 @@ async fn run_review_on_session(
         .thread_extension_data
         .insert(super::input_budget::PendingReviewContext {
             context: prompt_items.context,
+            elastic: None,
         });
     review_session
         .session

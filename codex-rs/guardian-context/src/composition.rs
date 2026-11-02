@@ -438,6 +438,7 @@ impl CollectedContext {
                 ContextSection::TranscriptImages(images) => {
                     if images.omitted_bytes > 0 {
                         truncations.push(TruncationObservation {
+                            source: None,
                             component: "transcript_image",
                             original_bytes: images.omitted_bytes,
                             retained_bytes: 0,

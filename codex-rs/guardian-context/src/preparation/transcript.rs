@@ -286,6 +286,7 @@ impl ContextProfile {
                 };
                 if self.target == ContextTarget::Async && entry.original_bytes > retained_bytes {
                     truncations.push(TruncationObservation {
+                        source: None,
                         component,
                         original_bytes: entry.original_bytes,
                         retained_bytes,

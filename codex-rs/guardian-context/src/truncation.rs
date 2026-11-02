@@ -81,6 +81,8 @@ mod tests;
 /// Actual evidence reduction, reported by consumers using their existing metrics.
 #[derive(Clone)]
 pub struct TruncationObservation {
+    /// Owning source revision, so deduplicated copies do not report evidence loss.
+    pub source: Option<codex_history::RetainedSource>,
     pub component: &'static str,
     pub original_bytes: usize,
     pub retained_bytes: usize,
