@@ -9,7 +9,10 @@ use anyhow::bail;
 use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecProcessEvent;
+use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ProcessId;
+use codex_exec_server::ProcessOutputChunk;
 use codex_hooks::EnvironmentHookOutput;
 use codex_hooks::EnvironmentHookSource;
 use codex_hooks::HookEnvironmentExecutor;
@@ -197,52 +200,31 @@ impl HookEnvironmentExecutor for EnvironmentCommandExecutor {
             };
             let argv = shell.derive_exec_args(&script, environment.config().allow_login_shell);
             // Keep network attribution registered until the hook and its output are complete.
-            let (params, _execution_network) = self
-                .launch_params(environment, argv, env)
+            let deadline = tokio::time::Instant::now() + timeout;
+            let (params, _execution_network) = tokio::time::timeout_at(deadline, self.launch_params(environment, argv, env))
                 .await
+                .context("environment command hook timed out during launch")?
                 .map_err(|error| match error {
                     ToolError::Rejected(message) => anyhow::anyhow!("{message}"),
                     ToolError::Codex(error) => anyhow::Error::new(error),
                 })?;
-            let deadline = tokio::time::Instant::now() + timeout;
             let backend = environment.environment.get_exec_backend();
             let process = tokio::time::timeout_at(deadline, backend.start(params))
                 .await
                 .context("environment command hook timed out during launch")??
                 .process;
             let mut guard = HookProcessGuard(Some(Arc::clone(&process)));
+            let events = process.subscribe_events();
             let output = tokio::time::timeout_at(deadline, async {
                 let written = process.write(input_json).await?;
                 if written.status != codex_exec_server::WriteStatus::Accepted {
                     bail!("hook process did not accept its input: {:?}", written.status);
                 }
-                let mut after_seq = None;
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                loop {
-                    let result = process.read(after_seq, Some(64 * 1024), Some(1000)).await?;
-                    if let Some(failure) = result.failure {
-                        bail!("{failure}");
-                    }
-                    // Closed describes the process, not this bounded page. Keep
-                    // reading retained output until we receive an empty final page.
-                    let drained = result.closed && result.chunks.is_empty();
-                    for chunk in result.chunks {
-                        let target = match chunk.stream {
-                            ExecOutputStream::Stdout | ExecOutputStream::Pty => &mut stdout,
-                            ExecOutputStream::Stderr => &mut stderr,
-                        };
-                        let remaining = MAX_HOOK_OUTPUT_BYTES.saturating_sub(target.len());
-                        target.extend_from_slice(&chunk.chunk.0[..remaining.min(chunk.chunk.0.len())]);
-                    }
-                    after_seq = result.next_seq.checked_sub(1).or(after_seq);
-                    if drained {
-                        return Ok(EnvironmentHookOutput {
-                            exit_code: result.exit_code.context("hook process closed without exit status")?,
-                            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-                        });
-                    }
+                // A finished hook can deliver its decision while the read RPC is still queued.
+                tokio::select! {
+                    biased;
+                    Some(output) = pushed_hook_output(events) => Ok(output),
+                    result = read_hook_output(process.as_ref()) => result,
                 }
             })
             .await
@@ -251,5 +233,79 @@ impl HookEnvironmentExecutor for EnvironmentCommandExecutor {
             Ok(output)
         }
         .boxed()
+    }
+}
+
+async fn pushed_hook_output(mut events: ExecProcessEventReceiver) -> Option<EnvironmentHookOutput> {
+    let mut output = HookOutputBuffer::default();
+    let mut exit_code = None;
+    let mut next_seq = 1;
+    loop {
+        match events.recv().await.ok()? {
+            ExecProcessEvent::Output(chunk) if chunk.seq == next_seq => output.push(chunk),
+            ExecProcessEvent::Exited {
+                seq,
+                exit_code: code,
+                ..
+            } if seq == next_seq => {
+                exit_code = Some(code);
+            }
+            ExecProcessEvent::Closed { seq } if seq == next_seq => {
+                return Some(output.finish(exit_code?));
+            }
+            ExecProcessEvent::Output(_)
+            | ExecProcessEvent::Exited { .. }
+            | ExecProcessEvent::Closed { .. }
+            | ExecProcessEvent::Failed(_) => return None,
+        }
+        next_seq = next_seq.checked_add(1)?;
+    }
+}
+
+async fn read_hook_output(process: &dyn ExecProcess) -> anyhow::Result<EnvironmentHookOutput> {
+    let mut output = HookOutputBuffer::default();
+    let mut after_seq = None;
+    loop {
+        let result = process.read(after_seq, Some(64 * 1024), Some(1000)).await?;
+        if let Some(failure) = result.failure {
+            bail!("{failure}");
+        }
+        // Closed describes the process, not this bounded page. Keep reading
+        // retained output until we receive an empty final page.
+        if result.closed && result.chunks.is_empty() {
+            let code = result
+                .exit_code
+                .context("hook process closed without exit status")?;
+            return Ok(output.finish(code));
+        }
+        for chunk in result.chunks {
+            output.push(chunk);
+        }
+        after_seq = result.next_seq.checked_sub(1).or(after_seq);
+    }
+}
+
+#[derive(Default)]
+struct HookOutputBuffer {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl HookOutputBuffer {
+    fn push(&mut self, chunk: ProcessOutputChunk) {
+        let target = match chunk.stream {
+            ExecOutputStream::Stdout | ExecOutputStream::Pty => &mut self.stdout,
+            ExecOutputStream::Stderr => &mut self.stderr,
+        };
+        let remaining = MAX_HOOK_OUTPUT_BYTES.saturating_sub(target.len());
+        target.extend_from_slice(&chunk.chunk.0[..remaining.min(chunk.chunk.0.len())]);
+    }
+
+    fn finish(self, exit_code: i32) -> EnvironmentHookOutput {
+        EnvironmentHookOutput {
+            exit_code,
+            stdout: String::from_utf8_lossy(&self.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&self.stderr).into_owned(),
+        }
     }
 }
