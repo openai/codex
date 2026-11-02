@@ -49,6 +49,8 @@ use toml_edit::Item as TomlItem;
 
 #[path = "config_manager_service_credential_edits.rs"]
 mod credential_edits;
+#[path = "config_manager_service_model_providers.rs"]
+mod model_providers;
 #[path = "config_manager_service_provider_setup.rs"]
 mod provider_setup;
 

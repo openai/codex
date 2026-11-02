@@ -3270,3 +3270,229 @@ async fn cloud_desktop_storage_requirements_control_reads_and_writes() {
         .await
         .expect("unmanaged desktop settings stay writable");
 }
+
+#[tokio::test]
+async fn model_provider_list_allows_user_overrides_of_system_defaults() -> Result<()> {
+    use codex_app_server_protocol::ModelProviderListParams;
+
+    let tmp = tempdir()?;
+    let system_path = tmp.path().join("system.toml");
+    std::fs::write(
+        &system_path,
+        "model_provider = 'team'\n[model_providers.team]\nname = 'System gateway'\nbase_url = 'https://system.example.test/v1'\nenv_key = 'SYSTEM_KEY'\n",
+    )?;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_config_path = Some(system_path);
+    for (cli_overrides, ignore_user_config, can_edit, can_change_default, name, auth_mode) in [
+        (
+            vec![],
+            false,
+            true,
+            true,
+            "System gateway",
+            "environmentVariable",
+        ),
+        (
+            vec![],
+            true,
+            false,
+            false,
+            "System gateway",
+            "environmentVariable",
+        ),
+        (
+            vec![("model_provider", "team")],
+            false,
+            true,
+            false,
+            "System gateway",
+            "environmentVariable",
+        ),
+        (
+            vec![(
+                "model_providers.team.base_url",
+                "https://system.example.test/v1",
+            )],
+            false,
+            true,
+            true,
+            "System gateway",
+            "environmentVariable",
+        ),
+        (
+            vec![
+                ("model_providers.team.name", "System gateway"),
+                (
+                    "model_providers.team.base_url",
+                    "https://system.example.test/v1",
+                ),
+                ("model_providers.team.env_key", "SYSTEM_KEY"),
+            ],
+            false,
+            false,
+            true,
+            "System gateway",
+            "environmentVariable",
+        ),
+        (
+            vec![("model_providers.team.name", "OpenAI")],
+            false,
+            false,
+            true,
+            "OpenAI",
+            "externallyConfigured",
+        ),
+        (
+            vec![("model_providers.team.name", " ")],
+            false,
+            false,
+            true,
+            " ",
+            "environmentVariable",
+        ),
+    ] {
+        overrides.ignore_user_config = ignore_user_config;
+        let cli_overrides = cli_overrides
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), TomlValue::String(value.to_owned())))
+            .collect();
+        let service = ConfigManager::new_for_tests(
+            tmp.path().to_path_buf(),
+            cli_overrides,
+            overrides.clone(),
+            CloudConfigBundleLoader::default(),
+        );
+        let response = service
+            .model_provider_list(ModelProviderListParams {})
+            .await?;
+        assert_eq!(response.can_change_default, can_change_default);
+        assert_eq!(response.default_provider_id, "team");
+        assert_eq!(
+            serde_json::to_value(response.data)?,
+            serde_json::json!([
+                {"id": "openai", "name": "OpenAI", "canEdit": false, "baseUrl":null, "settings":{"type":"openai"}},
+                {
+                    "id": "team", "name": name,
+                    "canEdit": can_edit, "baseUrl": "https://system.example.test/v1",
+                    "settings": {"type": "customGateway", "auth": {"mode": auth_mode, "envKey": "SYSTEM_KEY"}},
+                }
+            ])
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_provider_list_checks_builtin_configuration_fields() -> Result<()> {
+    use codex_app_server_protocol::ModelProviderListParams;
+    use codex_app_server_protocol::ModelProviderSummary;
+    use codex_app_server_protocol::ProviderSettings;
+
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        "[model_providers.amazon-bedrock.aws]\nregion = 'us-east-1'\n[model_providers.amazon-bedrock-runtime.aws]\nregion = 'us-east-1'\n[model_providers.gcp]\nproject_id = 'test-project'\n",
+    )?;
+    let credential_file = home.path().join("credentials.json").display().to_string();
+    for (id, name, settings) in [
+        (
+            "amazon-bedrock",
+            "Amazon Bedrock Mantle",
+            &[("aws.profile", "default"), ("aws.region", "us-east-1")][..],
+        ),
+        (
+            "amazon-bedrock-runtime",
+            "Amazon Bedrock Runtime",
+            &[("aws.profile", "default"), ("aws.region", "us-east-1")][..],
+        ),
+        (
+            "gcp",
+            "Google Cloud Vertex AI",
+            &[
+                ("project_id", "test-project"),
+                ("location", "global"),
+                ("credential_file", credential_file.as_str()),
+            ][..],
+        ),
+    ] {
+        for pinned_fields in [1, settings.len()] {
+            let overrides = settings
+                .iter()
+                .take(pinned_fields)
+                .map(|(field, value)| {
+                    (
+                        format!("model_providers.{id}.{field}"),
+                        TomlValue::String((*value).to_owned()),
+                    )
+                })
+                .collect();
+            let service = ConfigManager::new_for_tests(
+                home.path().to_path_buf(),
+                overrides,
+                LoaderOverrides::without_managed_config_for_tests(),
+                CloudConfigBundleLoader::default(),
+            );
+            let list = service
+                .model_provider_list(ModelProviderListParams {})
+                .await?;
+            assert_eq!(
+                list.data.into_iter().find(|provider| provider.id == id),
+                Some(ModelProviderSummary {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    can_edit: pinned_fields < settings.len(),
+                    base_url: None,
+                    settings: if id == "gcp" {
+                        ProviderSettings::Gcp {
+                            project_id: Some("test-project".to_owned()),
+                            location: (pinned_fields == settings.len())
+                                .then(|| "global".to_owned()),
+                            credential_file: (pinned_fields == settings.len())
+                                .then(|| credential_file.clone()),
+                        }
+                    } else {
+                        ProviderSettings::Bedrock {
+                            profile: Some("default".to_owned()),
+                            region: Some("us-east-1".to_owned()),
+                        }
+                    },
+                })
+            );
+        }
+    }
+    for id in ["amazon-bedrock", "amazon-bedrock-runtime"] {
+        for (section, overrides) in [
+            ("auth", vec![]),
+            (
+                "aws.credential_export",
+                vec![(
+                    format!("model_providers.{id}.aws.region"),
+                    "us-east-1".into(),
+                )],
+            ),
+        ] {
+            std::fs::write(
+                home.path().join(CONFIG_TOML_FILE),
+                format!("[model_providers.{id}.{section}]\ncommand = 'helper'\n"),
+            )?;
+            let service = ConfigManager::new_for_tests(
+                home.path().to_path_buf(),
+                overrides,
+                LoaderOverrides::without_managed_config_for_tests(),
+                CloudConfigBundleLoader::default(),
+            );
+            let list = service
+                .model_provider_list(ModelProviderListParams {})
+                .await?;
+            assert_eq!(
+                list.data
+                    .into_iter()
+                    .find(|provider| provider.id == id)
+                    .map(|provider| provider.can_edit),
+                Some(false)
+            );
+        }
+    }
+    Ok(())
+}

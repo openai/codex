@@ -726,6 +726,43 @@ existing SSO session. Core accepts the callback only for the requesting login
 and target workspace. Cancel through `account/login/cancel` to keep the current
 workspace. Government workspaces require a separate sign-in.
 
+# Model provider configuration
+
+Use `modelProvider/list` with `{}` to list OpenAI and providers explicitly defined
+under `[model_providers.<id>]` in the effective configuration, including requirements.
+Clients can filter the complete list by `settings.type === "customGateway"`.
+`defaultProviderId` reports the selected default even if it has no provider table.
+`canChangeDefault` accounts for required selection and higher-precedence overrides.
+
+Every entry contains `id`, `name`, `canEdit`, `baseUrl`, and `settings`.
+The shared `baseUrl` includes a configured endpoint override, including for
+Bedrock and GCP. It is null if unset or unsuitable for display.
+The `settings.type` field selects the provider-specific fields.
+
+- `openai` has no additional settings.
+- `bedrock` contains `profile` and `region` for either Bedrock provider.
+- `gcp` contains `projectId`, `location`, and `credentialFile`. The last field
+  is a path on the server host.
+- `customGateway` contains an `auth` object. Mode `none` has no other fields.
+  Mode `environmentVariable` includes the variable name in `envKey`. Mode
+  `externallyConfigured` includes a nullable `envKey` and indicates that the
+  gateway form cannot fully represent the authentication. Preserve this
+  authentication when editing other fields.
+
+Settings include inherited values and use null for unset nullable fields.
+Credential values are never resolved.
+
+`canEdit` indicates that at least one supported configuration field can be changed
+in the active user layer. Supported built-in fields are AWS profile/region for
+Bedrock and project/location/credential file for GCP. Custom providers support
+name, URL, and environment-variable authentication where applicable. Individual
+writes still require validation. Lower-precedence definitions can be overridden;
+required definitions are read-only. Both capabilities are false when user
+configuration is ignored. The flag does not establish credential validity or
+whether a setup flow that also selects a default provider will succeed.
+`account/bedrock/setup` targets `amazon-bedrock`; edits to `amazon-bedrock-runtime`
+must use that provider's configuration paths instead.
+
 # GCP provider account
 
 The experimental `account/gcp/setup` method configures the built-in Vertex AI provider.

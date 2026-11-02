@@ -1316,6 +1316,11 @@ impl MessageProcessor {
                 .unwatch(connection_id, params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::ModelProviderList { params, .. } => self
+                .config_processor
+                .model_provider_list(params)
+                .await
+                .map(|r| Some(r.into())),
             ClientRequest::ModelProviderCapabilitiesRead { params: _, .. } => self
                 .config_processor
                 .model_provider_capabilities_read()

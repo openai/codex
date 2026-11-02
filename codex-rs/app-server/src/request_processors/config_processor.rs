@@ -211,6 +211,16 @@ impl ConfigRequestProcessor {
         Ok(None)
     }
 
+    pub(crate) async fn model_provider_list(
+        &self,
+        params: codex_app_server_protocol::ModelProviderListParams,
+    ) -> Result<codex_app_server_protocol::ModelProviderListResponse, JSONRPCErrorError> {
+        self.config_manager
+            .model_provider_list(params)
+            .await
+            .map_err(map_error)
+    }
+
     pub(crate) async fn model_provider_capabilities_read(
         &self,
     ) -> Result<ModelProviderCapabilitiesReadResponse, JSONRPCErrorError> {

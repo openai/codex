@@ -1,0 +1,221 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "GatewayAuth": {
+      "oneOf": [
+        {
+          "properties": {
+            "mode": {
+              "enum": [
+                "none"
+              ],
+              "title": "NoneGatewayAuthMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "NoneGatewayAuth",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "envKey": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "environmentVariable"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "envKey",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Authentication is configured outside the gateway form. Preserve it on edits.",
+          "properties": {
+            "envKey": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mode": {
+              "enum": [
+                "externallyConfigured"
+              ],
+              "title": "ModeGatewayAuthMode",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "title": "ModeGatewayAuth",
+          "type": "object"
+        }
+      ]
+    },
+    "ModelProviderSummary": {
+      "properties": {
+        "baseUrl": {
+          "description": "Null when the endpoint is absent or cannot be safely displayed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "canEdit": {
+          "description": "Whether a supported configuration field can be edited in the active user layer.",
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "settings": {
+          "$ref": "#/definitions/ProviderSettings"
+        }
+      },
+      "required": [
+        "canEdit",
+        "id",
+        "name",
+        "settings"
+      ],
+      "type": "object"
+    },
+    "ProviderSettings": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "openai"
+              ],
+              "title": "OpenaiProviderSettingsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OpenaiProviderSettings",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "auth": {
+              "$ref": "#/definitions/GatewayAuth"
+            },
+            "type": {
+              "enum": [
+                "customGateway"
+              ],
+              "title": "CustomGatewayProviderSettingsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "auth",
+            "type"
+          ],
+          "title": "CustomGatewayProviderSettings",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "region": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "bedrock"
+              ],
+              "title": "BedrockProviderSettingsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "BedrockProviderSettings",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "credentialFile": {
+              "description": "Path on the app-server host, without credential-file contents.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "location": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "projectId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "gcp"
+              ],
+              "title": "GcpProviderSettingsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "GcpProviderSettings",
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "canChangeDefault": {
+      "type": "boolean"
+    },
+    "data": {
+      "items": {
+        "$ref": "#/definitions/ModelProviderSummary"
+      },
+      "type": "array"
+    },
+    "defaultProviderId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "canChangeDefault",
+    "data",
+    "defaultProviderId"
+  ],
+  "title": "ModelProviderListResponse",
+  "type": "object"
+}

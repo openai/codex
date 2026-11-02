@@ -20,6 +20,7 @@ from openai_codex.generated.v2_all import (
     AuthRecoveryNotification,
     CommandGuardianApprovalReviewAction,
     GetAccountResponse,
+    ModelProviderListResponse,
     PlanType,
     ReasoningEffort,
     ReasoningEffortOption,
@@ -39,6 +40,57 @@ from openai_codex.models import InitializeResponse, JsonObject, Notification, Un
 from openai_codex.types import ThreadSource
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_model_provider_list_preserves_wire_fields_for_each_auth_mode() -> None:
+    wire = {
+        "data": [
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "canEdit": False,
+                "baseUrl": None,
+                "settings": {"type": "openai"},
+            },
+            {
+                "id": "amazon-bedrock",
+                "name": "Amazon Bedrock Mantle",
+                "canEdit": True,
+                "baseUrl": None,
+                "settings": {"type": "bedrock", "profile": "work", "region": "us-east-1"},
+            },
+            {
+                "id": "gcp",
+                "name": "Google Cloud Vertex AI",
+                "canEdit": True,
+                "baseUrl": None,
+                "settings": {
+                    "type": "gcp",
+                    "projectId": "test-project",
+                    "location": "global",
+                    "credentialFile": "/host/adc.json",
+                },
+            },
+            *[
+                {
+                    "id": auth["mode"],
+                    "name": "Gateway",
+                    "canEdit": True,
+                    "baseUrl": "https://gateway.example.test",
+                    "settings": {"type": "customGateway", "auth": auth},
+                }
+                for auth in [
+                    {"mode": "none"},
+                    {"mode": "environmentVariable", "envKey": "GATEWAY_KEY"},
+                    {"mode": "externallyConfigured", "envKey": "EXTERNAL_KEY"},
+                ]
+            ],
+        ],
+        "defaultProviderId": "gcp",
+        "canChangeDefault": True,
+    }
+    response = ModelProviderListResponse.model_validate(wire)
+    assert response.model_dump(mode="json", by_alias=True) == wire
 
 
 def test_inline_review_delivery_round_trips_as_an_enum() -> None:

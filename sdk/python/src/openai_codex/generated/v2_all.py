@@ -1800,6 +1800,37 @@ class FuzzyFileSearchSessionUpdatedNotification(BaseModel):
     session_id: Annotated[str, Field(alias="sessionId")]
 
 
+class NoneGatewayAuth(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mode: Annotated[Literal["none"], Field(title="NoneGatewayAuthMode")]
+
+
+class EnvironmentVariableGatewayAuth(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    env_key: Annotated[str, Field(alias="envKey")]
+    mode: Annotated[
+        Literal["environmentVariable"], Field(title="EnvironmentVariableGatewayAuthMode")
+    ]
+
+
+class ExternallyConfiguredGatewayAuth(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    env_key: Annotated[str | None, Field(alias="envKey")] = None
+    mode: Annotated[Literal["externallyConfigured"], Field(title="ModeGatewayAuthMode")]
+
+
+class GatewayAuth(
+    RootModel[NoneGatewayAuth | EnvironmentVariableGatewayAuth | ExternallyConfiguredGatewayAuth]
+):
+    root: NoneGatewayAuth | EnvironmentVariableGatewayAuth | ExternallyConfiguredGatewayAuth
+
+
 class GatewayOAuthCancelResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2854,6 +2885,12 @@ class ModelProviderError(
     ]
 
 
+class ModelProviderListParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
 class ModelRerouteReason(RootModel[Literal["highRiskCyberActivity"]]):
     root: Literal["highRiskCyberActivity"]
 
@@ -3684,6 +3721,62 @@ class ProjectRoot(BaseModel):
 class ProjectSortKey(Enum):
     position = "position"
     recency_at = "recencyAt"
+
+
+class OpenaiProviderSettings(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    type: Annotated[Literal["openai"], Field(title="OpenaiProviderSettingsType")]
+
+
+class CustomGatewayProviderSettings(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    auth: GatewayAuth
+    type: Annotated[Literal["customGateway"], Field(title="CustomGatewayProviderSettingsType")]
+
+
+class BedrockProviderSettings(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    profile: str | None = None
+    region: str | None = None
+    type: Annotated[Literal["bedrock"], Field(title="BedrockProviderSettingsType")]
+
+
+class GcpProviderSettings(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    credential_file: Annotated[
+        str | None,
+        Field(
+            alias="credentialFile",
+            description="Path on the app-server host, without credential-file contents.",
+        ),
+    ] = None
+    location: str | None = None
+    project_id: Annotated[str | None, Field(alias="projectId")] = None
+    type: Annotated[Literal["gcp"], Field(title="GcpProviderSettingsType")]
+
+
+class ProviderSettings(
+    RootModel[
+        OpenaiProviderSettings
+        | CustomGatewayProviderSettings
+        | BedrockProviderSettings
+        | GcpProviderSettings
+    ]
+):
+    root: (
+        OpenaiProviderSettings
+        | CustomGatewayProviderSettings
+        | BedrockProviderSettings
+        | GcpProviderSettings
+    )
 
 
 class RateLimitReachedType(Enum):
@@ -7800,6 +7893,15 @@ class AccountGatewayOAuthCancelRequest(BaseModel):
     params: Annotated[None, Field(None)] = None
 
 
+class ModelProviderListRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["modelProvider/list"], Field(title="ModelProvider/listRequestMethod")]
+    params: ModelProviderListParams
+
+
 class ModelProviderCapabilitiesReadRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -9232,6 +9334,29 @@ class ModelListResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
         ),
     ] = None
+
+
+class ModelProviderSummary(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    base_url: Annotated[
+        str | None,
+        Field(
+            alias="baseUrl",
+            description="Null when the endpoint is absent or cannot be safely displayed.",
+        ),
+    ] = None
+    can_edit: Annotated[
+        bool,
+        Field(
+            alias="canEdit",
+            description="Whether a supported configuration field can be edited in the active user layer.",
+        ),
+    ]
+    id: str
+    name: str
+    settings: ProviderSettings
 
 
 class NewThreadModelDefaults(BaseModel):
@@ -11649,6 +11774,15 @@ class ListMcpServerStatusResponse(BaseModel):
     ] = None
 
 
+class ModelProviderListResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    can_change_default: Annotated[bool, Field(alias="canChangeDefault")]
+    data: list[ModelProviderSummary]
+    default_provider_id: Annotated[str, Field(alias="defaultProviderId")]
+
+
 class ModelsRequirements(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -13354,6 +13488,7 @@ class ClientRequest(
         | AccountGatewayOAuthReadRequest
         | AccountGatewayOAuthLoginRequest
         | AccountGatewayOAuthCancelRequest
+        | ModelProviderListRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
         | PermissionProfileListRequest
@@ -13463,6 +13598,7 @@ class ClientRequest(
         | AccountGatewayOAuthReadRequest
         | AccountGatewayOAuthLoginRequest
         | AccountGatewayOAuthCancelRequest
+        | ModelProviderListRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
         | PermissionProfileListRequest
