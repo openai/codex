@@ -12,6 +12,7 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio::time::timeout_at;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::debug;
 use tracing::warn;
 
@@ -50,15 +51,35 @@ use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket_with_readiness;
 use crate::noise_relay::noise_relay_websocket_config;
+use crate::relay::HARNESS_KEY_VALIDATION_TIMEOUT;
 use crate::relay::harness_connection_from_websocket;
 use crate::trace_context::current_rendezvous_headers;
 
 const MAX_STDIO_STDERR_LOG_LINE_LEN: u64 = 8 * 1024;
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 const INITIAL_REGISTRY_MAX_RETRIES: u32 = 4;
-const INITIAL_REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
+const REGISTRY_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
 const INITIAL_REGISTRY_OPERATION_TIMEOUT: Duration = Duration::from_secs(14);
 const PROVISIONED_ENVIRONMENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+// Leave time after executor validation for relay transit and RPC initialize.
+const NOISE_RECOVERY_INITIALIZE_TIMEOUT: Duration =
+    HARNESS_KEY_VALIDATION_TIMEOUT.saturating_add(Duration::from_secs(10));
+
+async fn connect_noise_bundle(
+    provider: &dyn NoiseRendezvousConnectProvider,
+    identity: &NoiseChannelIdentity,
+) -> Result<NoiseRendezvousConnectBundle, ExecServerError> {
+    timeout(
+        REGISTRY_REQUEST_TIMEOUT,
+        provider.connect_bundle(identity.public_key()),
+    )
+    .await
+    .map_err(|_| {
+        ExecServerError::EnvironmentRegistryRequest(
+            codex_http_client::RouteAwareRequestError::Timeout,
+        )
+    })?
+}
 
 pub(crate) async fn connect_websocket_request(
     request: http::Request<()>,
@@ -184,6 +205,7 @@ struct OpenNoiseRendezvousConnection {
     stream_id: String,
     handshake_started: Instant,
     connection: JsonRpcConnection,
+    pending_tasks: Vec<AbortOnDropHandle<()>>,
     options: ExecServerClientConnectOptions,
     handshake_ready: tokio::sync::oneshot::Receiver<()>,
 }
@@ -269,7 +291,6 @@ pub(crate) enum ExecServerReconnectStrategy {
         identity: NoiseChannelIdentity,
         client_name: String,
         connect_timeout: Duration,
-        initialize_timeout: Duration,
         http_client_factory: HttpClientFactory,
     },
 }
@@ -278,10 +299,12 @@ impl ExecServerReconnectStrategy {
     pub(crate) async fn resume(
         &self,
         session_id: &str,
+        stage: &mut &'static str,
     ) -> Result<ReconnectAttempt, ExecServerError> {
         match self {
             Self::Accepted(source) => source.next_connection(session_id).await,
             Self::WebSocket { args, http_headers } => {
+                *stage = "websocket_upgrade";
                 let mut args = args.clone();
                 args.resume_session_id = Some(session_id.to_string());
                 let connection =
@@ -294,10 +317,10 @@ impl ExecServerReconnectStrategy {
                 identity,
                 client_name,
                 connect_timeout,
-                initialize_timeout,
                 http_client_factory,
             } => {
-                let bundle = provider.connect_bundle(identity.public_key()).await?;
+                *stage = "registry_connect";
+                let bundle = connect_noise_bundle(provider.as_ref(), identity).await?;
                 if &bundle.executor_public_key != executor_public_key {
                     return Err(ExecServerError::Protocol(
                         "executor key changed during session recovery".to_string(),
@@ -305,18 +328,20 @@ impl ExecServerReconnectStrategy {
                 }
                 // An expired rendezvous URL can make the same executor register again.
                 // Initialization must still resume the original session on that executor.
+                *stage = "websocket_upgrade";
                 let opened = ExecServerClient::open_noise_rendezvous_connection(
                     NoiseRendezvousConnectArgs {
                         bundle,
                         harness_identity: identity.clone(),
                         client_name: client_name.clone(),
                         connect_timeout: *connect_timeout,
-                        initialize_timeout: *initialize_timeout,
+                        initialize_timeout: NOISE_RECOVERY_INITIALIZE_TIMEOUT,
                         resume_session_id: Some(session_id.to_string()),
                         http_client_factory: http_client_factory.clone(),
                     },
                 )
                 .await?;
+                *stage = "noise_handshake";
                 let ready = ExecServerClient::finish_noise_rendezvous_connection(opened).await?;
                 Ok(ReconnectAttempt::with_noise_context(
                     ready.connection,
@@ -399,7 +424,6 @@ impl ExecServerClient {
                     identity,
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
                     connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
-                    initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
                     http_client_factory,
                 };
                 return Self::connect_with_recovery_and_noise_context(
@@ -461,18 +485,7 @@ impl ExecServerClient {
         let retry_key = uuid::Uuid::new_v4().to_string();
         let mut retries = 0;
         let mut refreshed_unauthorized_bundle = false;
-        let connect_bundle = || async {
-            timeout(
-                INITIAL_REGISTRY_REQUEST_TIMEOUT,
-                provider.connect_bundle(identity.public_key()),
-            )
-            .await
-            .unwrap_or_else(|_| {
-                Err(ExecServerError::EnvironmentRegistryRequest(
-                    codex_http_client::RouteAwareRequestError::Timeout,
-                ))
-            })
-        };
+        let connect_bundle = || connect_noise_bundle(provider.as_ref(), identity);
         let mut result = connect_bundle().await;
         loop {
             let bundle = match result {
@@ -685,7 +698,7 @@ impl ExecServerClient {
         })?;
 
         let connection_label = format!("Noise exec-server rendezvous websocket {diagnostic_url}");
-        let connection = noise_harness_connection_from_websocket_with_readiness(
+        let mut connection = noise_harness_connection_from_websocket_with_readiness(
             stream,
             NoiseHarnessConnectionArgs {
                 connection_label,
@@ -696,12 +709,21 @@ impl ExecServerClient {
                 harness_key_authorization,
             },
         );
+        // Until RpcClient can take ownership, close the socket if the handshake
+        // fails or an enclosing deadline cancels the attempt.
+        let pending_tasks = connection
+            .connection
+            .task_handles
+            .drain(..)
+            .map(AbortOnDropHandle::new)
+            .collect();
         Ok(OpenNoiseRendezvousConnection {
             environment_id,
             executor_registration_id,
             stream_id: connection.stream_id,
             handshake_started: connection.handshake_started,
             connection: connection.connection,
+            pending_tasks,
             options: ExecServerClientConnectOptions {
                 client_name,
                 initialize_timeout,
@@ -790,15 +812,14 @@ impl ExecServerClient {
                     "Noise harness handshake failed before connection became ready: {reason}"
                 ));
             }
-            // Unlike the normal connect path, the connection has not reached
-            // RpcClient yet, so its Drop implementation cannot abort the
-            // transport task for us.
-            connection.connection.transport.terminate();
-            for task in &connection.connection.task_handles {
-                task.abort();
-            }
             return Err(error);
         }
+        connection.connection.task_handles.extend(
+            connection
+                .pending_tasks
+                .into_iter()
+                .map(AbortOnDropHandle::detach),
+        );
         let mut options = connection.options;
         options.initialize_timeout = deadline.saturating_duration_since(Instant::now());
         Ok(ReadyNoiseRendezvousConnection {

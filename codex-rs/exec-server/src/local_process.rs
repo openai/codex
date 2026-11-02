@@ -83,6 +83,7 @@ use crate::rpc_server_requests::RpcServerRequestSender;
 use crate::shell_snapshot::CapturePurpose;
 use crate::telemetry::ExecServerTelemetry;
 use crate::telemetry::ProcessMetricGuard;
+use crate::telemetry::record_recovery_retention_expired;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 // Each process/read chunk needs four JSON values. Keep retained replay below the
@@ -161,6 +162,7 @@ struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     requests: Arc<std::sync::RwLock<Option<RpcServerRequestSender>>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    rpc_output_retention: Option<Duration>,
     credential_brokers: codex_network_proxy::RemoteCredentialBrokerCache,
     #[cfg(unix)]
     shell_snapshots: crate::shell_snapshot::ShellSnapshotCache,
@@ -199,6 +201,7 @@ impl LocalProcess {
             RpcNotificationSender::new(outgoing_tx),
             ExecServerTelemetry::default(),
             runtime_paths,
+            /*rpc_output_retention*/ None,
         )
     }
 
@@ -206,14 +209,21 @@ impl LocalProcess {
         notifications: RpcNotificationSender,
         telemetry: ExecServerTelemetry,
         runtime_paths: ExecServerRuntimeOptions,
+        output_retention: Duration,
     ) -> Self {
-        Self::with_runtime_paths(notifications, telemetry, Some(runtime_paths))
+        Self::with_runtime_paths(
+            notifications,
+            telemetry,
+            Some(runtime_paths),
+            Some(output_retention),
+        )
     }
 
     fn with_runtime_paths(
         notifications: RpcNotificationSender,
         telemetry: ExecServerTelemetry,
         runtime_paths: Option<ExecServerRuntimeOptions>,
+        rpc_output_retention: Option<Duration>,
     ) -> Self {
         let requests = notifications.request_sender();
         Self {
@@ -221,6 +231,7 @@ impl LocalProcess {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 requests: Arc::new(std::sync::RwLock::new(Some(requests))),
                 processes: Mutex::new(HashMap::new()),
+                rpc_output_retention,
                 credential_brokers: codex_network_proxy::RemoteCredentialBrokerCache::default(),
                 #[cfg(unix)]
                 shell_snapshots: crate::shell_snapshot::ShellSnapshotCache::default(),
@@ -1212,17 +1223,31 @@ async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
 
     output_notify.notify_waiters();
     let cleanup_process_id = process_id.clone();
-    let cleanup_inner = Arc::clone(&inner);
+    let cleanup_inner = Arc::downgrade(&inner);
+    let retention = inner
+        .rpc_output_retention
+        .unwrap_or(EXITED_PROCESS_RETENTION);
     tokio::spawn(async move {
-        tokio::time::sleep(EXITED_PROCESS_RETENTION).await;
-        let mut processes = cleanup_inner.processes.lock().await;
-        match processes.entry(cleanup_process_id) {
-            Entry::Occupied(entry) => {
-                if matches!(entry.get(), ProcessEntry::Running(process) if process.closed) {
-                    entry.remove();
-                }
+        tokio::time::sleep(retention).await;
+        let Some(cleanup_inner) = cleanup_inner.upgrade() else {
+            return;
+        };
+        {
+            let mut processes = cleanup_inner.processes.lock().await;
+            let Entry::Occupied(entry) = processes.entry(cleanup_process_id) else {
+                return;
+            };
+            if !matches!(entry.get(), ProcessEntry::Running(process)
+                if process.closed && Arc::ptr_eq(&process.output_notify, &output_notify))
+            {
+                return;
             }
-            Entry::Vacant(_) => {}
+            entry.remove();
+        }
+        if cleanup_inner.rpc_output_retention.is_some()
+            && notification_sender(&cleanup_inner).is_none()
+        {
+            record_recovery_retention_expired("closed_output_timer", retention);
         }
     });
 
@@ -1318,6 +1343,7 @@ mod tests {
             RpcNotificationSender::new(outgoing_tx),
             ExecServerTelemetry::default(),
             /*runtime_paths*/ None,
+            /*rpc_output_retention*/ None,
         );
         let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
             enabled: true,
@@ -1427,6 +1453,7 @@ mod tests {
                 RpcNotificationSender::new(outgoing_tx),
                 telemetry,
                 /*runtime_paths*/ None,
+                /*rpc_output_retention*/ None,
             ),
             metrics,
             exporter,

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::process_telemetry::ProcessTelemetry;
 use codex_exec_server_protocol::JSONRPCErrorError;
 
@@ -26,9 +28,10 @@ impl ProcessHandler {
         notifications: RpcNotificationSender,
         telemetry: ExecServerTelemetry,
         runtime_paths: ExecServerRuntimeOptions,
+        output_retention: Duration,
     ) -> Self {
         Self {
-            process: LocalProcess::new(notifications, telemetry, runtime_paths),
+            process: LocalProcess::new(notifications, telemetry, runtime_paths, output_retention),
         }
     }
 

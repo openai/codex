@@ -58,7 +58,7 @@ const MAX_FAILED_NOISE_HANDSHAKES: usize = 8;
 const NOISE_HANDSHAKE_FAILURE_COOLDOWN: Duration = Duration::from_secs(10);
 const MAX_HARNESS_KEY_AUTHORIZATION_BYTES: usize = 4096;
 const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
-const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_HANDSHAKE_DIAGNOSTICS_PER_MINUTE: usize = 100;
 const HANDSHAKE_DIAGNOSTIC_WINDOW: Duration = Duration::from_secs(60);
 

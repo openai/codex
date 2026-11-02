@@ -87,6 +87,17 @@ impl ConnectionTransport {
     }
 }
 
+pub(crate) fn record_recovery_retention_expired(reason: &str, retention: Duration) {
+    tracing::event!(
+        target: "codex_otel.log_only",
+        parent: None,
+        tracing::Level::INFO,
+        event.name = "codex.exec_server.recovery_retention_expired",
+        reason,
+        retention_limit_ms = retention.as_millis() as u64,
+    );
+}
+
 #[derive(Clone, Default)]
 pub struct ExecServerTelemetry {
     inner: Option<Arc<ExecServerTelemetryInner>>,
