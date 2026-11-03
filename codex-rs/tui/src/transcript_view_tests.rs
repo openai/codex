@@ -1352,8 +1352,8 @@ fn spoken_prompt_selection_keeps_its_fallback_contrast() {
                     (
                         Some("one\n"),
                         Color::Red,
-                        Color::Reset,
-                        Color::DarkGray,
+                        Color::Rgb(238, 238, 238),
+                        Color::Rgb(68, 68, 68),
                         true
                     )
                 );

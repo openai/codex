@@ -41,8 +41,9 @@ pub fn best_color_for_level(target: (u8, u8, u8), color_level: StdoutColorLevel)
 }
 
 pub(crate) fn effective_stdout_color_level() -> StdoutColorLevel {
+    // A scoped probe result fixes the test terminal at truecolor, including a failed probe.
     #[cfg(test)]
-    if TEST_DEFAULT_COLORS.with(|colors| colors.get().flatten().is_some()) {
+    if TEST_DEFAULT_COLORS.with(|colors| colors.get().is_some()) {
         return StdoutColorLevel::TrueColor;
     }
 

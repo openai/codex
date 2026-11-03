@@ -52,9 +52,13 @@ fn prompt_margin_and_blank_background_survive_resize_without_changing_copy() {
     let message =
         "1234567890123456789012345678901234567890123456789012345678\n\n  界e\u{301}👩‍💻 trailing";
     let cell = new_user_prompt(message.into(), Vec::new(), Vec::new(), Vec::new());
-    // Fix the inherited style without changing the process-wide terminal palette.
-    let style = Style::default().on_dark_gray();
-    let initial_lines = styled_prompt_lines(&cell, /*width*/ 60, style);
+    let prompt_lines = |width| {
+        crate::terminal_palette::with_test_default_colors(/*colors*/ None, || {
+            cell.display_hyperlink_lines(width)
+        })
+    };
+    let initial_lines = prompt_lines(/*width*/ 60);
+    let style = initial_lines[0].line.style;
     let mut layout = TextLayout::new(initial_lines, /*width*/ 60);
     let expected_copy = format!("\n{message}\n");
 
@@ -64,7 +68,7 @@ fn prompt_margin_and_blank_background_survive_resize_without_changing_copy() {
         ("prompt_margin_restored", 60),
     ] {
         layout = layout.rewrap(width);
-        let fresh_lines = styled_prompt_lines(&cell, width, style);
+        let fresh_lines = prompt_lines(width);
         let area = Rect::new(
             /*x*/ 0,
             /*y*/ 0,
@@ -128,14 +132,4 @@ fn reserved_margin_uses_the_same_alignment_for_painting_and_selection() {
             .collect::<Vec<_>>(),
         vec![0, 0, 0, 0, 0, 1, 2, 2],
     );
-}
-
-fn styled_prompt_lines(cell: &dyn HistoryCell, width: u16, style: Style) -> Vec<HyperlinkLine> {
-    cell.display_hyperlink_lines(width)
-        .into_iter()
-        .map(|mut line| {
-            line.line.style = style;
-            line
-        })
-        .collect()
 }

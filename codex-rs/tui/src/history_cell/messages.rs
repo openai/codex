@@ -228,6 +228,20 @@ impl HistoryCell for UserHistoryCell {
     }
 
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let lines = self.transcript_hyperlink_lines(width);
+        if self.is_spoken() || !self.text_elements.is_empty() {
+            // Native history applies line styles over spans. Keep the prompt fill on the line
+            // while resolving its foreground onto the text, marker, and inline elements.
+            lines
+                .into_iter()
+                .map(HyperlinkLine::resolve_span_styles)
+                .collect()
+        } else {
+            lines
+        }
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         let sanitized_message = sanitize_user_text((&self.message).into());
         // Speech transcripts can begin with whitespace; the marker already supplies its separator.
         let message = if self.is_spoken() {
@@ -256,7 +270,7 @@ impl HistoryCell for UserHistoryCell {
                 .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
         ));
 
-        let mut wrapped_message =
+        let wrapped_message =
             if let UserMessagePresentation::AsyncReplies { replies, cwd } = &self.presentation {
                 super::async_replies::render(replies, cwd, usize::from(wrap_width))
             } else {
@@ -285,13 +299,6 @@ impl HistoryCell for UserHistoryCell {
                 lines.push(HyperlinkLine::new(Line::from("").style(style)));
             }
         }
-        if self.is_spoken()
-            && let Some(first) = wrapped_message.first_mut()
-        {
-            // Wrapping already applied the foreground to the text. Native history
-            // applies line styles over spans, so leave the voice marker's color intact.
-            first.line.style.fg = None;
-        }
         lines.extend(wrapped_message);
         lines.push(HyperlinkLine::new(Line::from("").style(style)));
         for source in lines.iter_mut().filter_map(|line| line.source.as_mut()) {
@@ -306,18 +313,6 @@ impl HistoryCell for UserHistoryCell {
 
     fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         self.transcript_hyperlink_lines(width)
-    }
-
-    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        let mut lines = self.display_hyperlink_lines(width);
-        if self.is_spoken() {
-            for line in &mut lines {
-                if let Some(source) = &line.source {
-                    line.line.style.fg = source.line_style.fg;
-                }
-            }
-        }
-        lines
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {

@@ -9,6 +9,27 @@ use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
 #[test]
+fn prompt_fallback_preserves_contrast_at_each_color_level() {
+    for level in [StdoutColorLevel::TrueColor, StdoutColorLevel::Ansi256] {
+        let style = super::super::history_prompt_fallback(level);
+        let resolve = |color| match (level, color) {
+            (StdoutColorLevel::TrueColor, Some(Color::Rgb(r, g, b))) => (r, g, b),
+            (StdoutColorLevel::Ansi256, Some(Color::Indexed(index))) if index >= 16 => {
+                XTERM_COLORS[usize::from(index)]
+            }
+            _ => panic!("expected a palette-independent color for {level:?}, got {color:?}"),
+        };
+        assert!(ratio(resolve(style.fg), resolve(style.bg)) >= MIN_TEXT_CONTRAST);
+    }
+    for level in [StdoutColorLevel::Ansi16, StdoutColorLevel::Unknown] {
+        assert_eq!(
+            super::super::history_prompt_fallback(level),
+            Style::default()
+        );
+    }
+}
+
+#[test]
 fn selection_text_stays_readable_after_palette_conversion() {
     for background in [
         (255, 255, 255),

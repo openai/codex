@@ -82,7 +82,9 @@ async fn deprecation_delivery_deduplicates_retained_transcript() -> Result<()> {
     let Some(Overlay::Transcript(overlay)) = app.overlay.as_mut() else {
         panic!("expected transcript")
     };
-    overlay.render(area, &mut buffer);
+    crate::terminal_palette::with_test_default_colors(/*colors*/ None, || {
+        overlay.render(area, &mut buffer);
+    });
     insta::assert_snapshot!("deduplicated_deprecation_transcript", format!("{buffer:?}"));
 
     for (summary, details) in [

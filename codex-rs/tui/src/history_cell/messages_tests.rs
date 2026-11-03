@@ -23,7 +23,14 @@ fn user_prompt_urls_keep_destinations_across_widths() {
     let mut snapshots = Vec::new();
     for width in [120, 60, 24] {
         let lines = cell.display_hyperlink_lines(width);
-        assert_eq!(cell.transcript_hyperlink_lines(width), lines);
+        let transcript = cell.transcript_hyperlink_lines(width);
+        assert_eq!(
+            transcript
+                .into_iter()
+                .map(HyperlinkLine::resolve_span_styles)
+                .collect::<Vec<_>>(),
+            lines
+        );
         assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
         for destination in [url, "https://example.test/a"] {
             let linked_text = lines
@@ -182,7 +189,10 @@ fn spoken_user_messages_have_a_red_chevron_without_changing_raw_text() {
         /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 3,
     );
     let mut buf = Buffer::empty(area);
-    Paragraph::new(spoken.display_lines(area.width)).render(area, &mut buf);
+    let lines = crate::terminal_palette::with_test_default_colors(/*colors*/ None, || {
+        spoken.display_lines(area.width)
+    });
+    Paragraph::new(lines).render(area, &mut buf);
     insta::assert_snapshot!("spoken_user_prompt", format!("{buf:?}"));
 }
 
