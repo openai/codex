@@ -1,5 +1,7 @@
 //! Exercise the production client against copied helper packages and startup libraries.
 
+mod common;
+
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -14,9 +16,9 @@ use codex_install_context::InstallContext;
 use codex_realtime_webrtc::SessionDescription;
 use codex_realtime_webrtc::VoiceHost;
 use codex_utils_cargo_bin::cargo_bin;
+use common::voice_host_command;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
-use tokio::process::Command;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -36,7 +38,7 @@ const DEADLINE: Duration = Duration::from_secs(/*secs*/ 10);
 async fn build_commit() -> Result<String> {
     let output = timeout(
         DEADLINE,
-        Command::new(cargo_bin("codex-voice-host")?)
+        voice_host_command()?
             .arg("--build-commit")
             .kill_on_drop(true)
             .output(),

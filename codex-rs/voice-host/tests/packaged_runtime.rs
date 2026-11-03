@@ -1,5 +1,7 @@
 //! Exercise native initialization with real prepared libraries in a relocated package.
 
+mod common;
+
 use std::fs;
 use std::time::Duration;
 
@@ -9,7 +11,7 @@ use anyhow::ensure;
 use codex_install_context::InstallContext;
 use codex_realtime_webrtc::VoiceHost;
 use codex_utils_cargo_bin::cargo_bin;
-use tokio::process::Command;
+use common::voice_host_command;
 use tokio::time::timeout;
 
 const DEADLINE: Duration = Duration::from_secs(/*secs*/ 10);
@@ -64,7 +66,7 @@ async fn relocated_runtime_initializes_closes_and_rejects_duplicate_initializati
     .context("package layout")?;
     let output = timeout(
         DEADLINE,
-        Command::new(&helper_source)
+        voice_host_command()?
             .arg("--build-commit")
             .kill_on_drop(true)
             .output(),
