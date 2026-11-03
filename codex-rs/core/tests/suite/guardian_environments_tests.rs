@@ -117,7 +117,7 @@ async fn direct_mcp_approval_uses_the_server_owners_denied_paths() -> Result<()>
     );
     // The step didn't see the deny rule. MCP receives it before preparing the call.
     tokio::try_join!(test.submit_text_turn("Call the files tool."), async {
-        parent.wait_for_request_count(1).await;
+        parent.wait_for_request_count(/*count*/ 1).await;
         test.codex.environment_ready(&owner, owner_config).await?;
         release.send(()).expect("let the model call the tool");
         Ok(())

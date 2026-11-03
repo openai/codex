@@ -557,7 +557,13 @@ fn automatic_upgrade_skips_known_name_mismatch_until_the_ref_or_revision_changes
     std::fs::write(&config_path, &config).unwrap();
     let reload = config_reloader(home);
     let upgrade = |mode| {
-        upgrade_configured_git_marketplaces_with_mode(home, &reload().unwrap(), None, mode, &reload)
+        upgrade_configured_git_marketplaces_with_mode(
+            home,
+            &reload().unwrap(),
+            /*marketplace_name*/ None,
+            mode,
+            &reload,
+        )
     };
 
     let first = upgrade(PluginGitMode::Automatic);
