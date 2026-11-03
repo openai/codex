@@ -116,10 +116,14 @@ impl LocalBoardHost {
             .upgrade()
             .ok_or_else(|| CodexErr::ThreadNotFound(caller))?;
         if let Some(connection) = &self.connection {
-            return manager.get_thread_for_board(caller, connection).await;
+            return manager
+                .get_thread_with_extension::<LocalBoardConnection>(caller, |other| {
+                    connection.same_board(other)
+                })
+                .await;
         }
         let actor = manager.get_thread(caller).await?;
-        if actor.session.session_id() != self.tree
+        if actor.startup_metadata().session_id != self.tree
             || actor
                 .thread_extension_data()
                 .get::<LocalBoardConnection>()
@@ -133,26 +137,16 @@ impl LocalBoardHost {
     }
 
     async fn registered_path(&self, actor: &CodexThread) -> Result<AgentPath> {
-        let caller = actor.session.thread_id;
+        let caller = actor.startup_metadata().thread_id;
         if let Some(connection) = &self.connection {
             return connection.caller_path(caller);
         }
         let path = actor
-            .session_source
+            .session_source()
             .get_agent_path()
             .or_else(|| (caller == ThreadId::from(self.tree)).then(AgentPath::root))
             .ok_or_else(|| CodexErr::InvalidRequest("agent has no tree path".into()))?;
-        let resolved = actor
-            .session
-            .services
-            .agent_control
-            .resolve(
-                caller,
-                actor.session_source.parent_thread_id(),
-                &actor.session_source,
-                path.as_str(),
-            )
-            .await?;
+        let resolved = actor.resolve_agent_reference(path.as_str()).await?;
         if resolved != caller {
             return Err(CodexErr::InvalidRequest(
                 "agent does not own its tree path".into(),
@@ -183,20 +177,10 @@ impl MessageBoardHost for LocalBoardHost {
                 return self
                     .actor(caller)
                     .await
-                    .map(|actor| actor.session.thread_id);
+                    .map(|actor| actor.startup_metadata().thread_id);
             }
             let actor = self.actor(self.caller).await?;
-            actor
-                .session
-                .services
-                .agent_control
-                .resolve(
-                    self.caller,
-                    actor.session_source.parent_thread_id(),
-                    &actor.session_source,
-                    path.as_str(),
-                )
-                .await
+            actor.resolve_agent_reference(path.as_str()).await
         })
     }
 
@@ -204,13 +188,7 @@ impl MessageBoardHost for LocalBoardHost {
         Box::pin(async move {
             let actor = self.actor(caller).await?;
             self.registered_path(&actor).await?;
-            actor
-                .session
-                .services
-                .time_provider
-                .current_time(caller)
-                .await
-                .map_err(|error| CodexErr::Io(std::io::Error::other(error)))
+            actor.current_time().await
         })
     }
 

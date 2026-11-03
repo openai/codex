@@ -1025,25 +1025,24 @@ impl ThreadManager {
         }
     }
 
-    /// Board hosts may reach internal runtimes only through a matching explicit connection.
-    pub(crate) async fn get_thread_for_board(
+    /// Finds a registered runtime whose host-owned extension data matches the supplied scope.
+    /// Unlike `get_thread`, this can return internal runtimes, but only after validating their
+    /// explicit extension attachment. It never loads a missing runtime.
+    pub async fn get_thread_with_extension<T: Send + Sync + 'static>(
         &self,
         thread_id: ThreadId,
-        connection: &codex_message_board::LocalBoardConnection,
+        matches: impl FnOnce(&T) -> bool,
     ) -> CodexResult<Arc<CodexThread>> {
-        self.state
-            .threads
-            .read()
-            .await
+        let threads = self.state.threads.read().await;
+        let thread = threads
             .get(&thread_id)
-            .filter(|thread| {
-                thread
-                    .thread_extension_data()
-                    .get::<codex_message_board::LocalBoardConnection>()
-                    .is_some_and(|other| connection.same_board(&other))
-            })
-            .cloned()
-            .ok_or(CodexErr::ThreadNotFound(thread_id))
+            .ok_or(CodexErr::ThreadNotFound(thread_id))?;
+        let extension = thread.thread_extension_data().get::<T>();
+        if extension.as_deref().is_some_and(matches) {
+            Ok(Arc::clone(thread))
+        } else {
+            Err(CodexErr::ThreadNotFound(thread_id))
+        }
     }
 
     /// Updates metadata for loaded and cold threads through one entrypoint.
