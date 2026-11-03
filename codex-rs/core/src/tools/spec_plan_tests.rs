@@ -1142,7 +1142,12 @@ async fn environment_tools_follow_the_step_context() {
             /*tool_suggest_candidates*/ None,
             /*wait_for_environment_tool_config*/ None,
         ),
-        super::hosted_model_tool_specs(turn.as_ref(), turn.model_info(), &[]),
+        super::hosted_model_tool_specs(
+            turn.as_ref(),
+            turn.model_info(),
+            turn.config.web_search_mode.value(),
+            &[],
+        ),
         &Default::default(),
     ));
 
@@ -2273,6 +2278,7 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
         super::hosted_model_tool_specs(
             first_step_context.turn.as_ref(),
             first_step_context.turn.model_info(),
+            first_step_context.turn.config.web_search_mode.value(),
             &[],
         ),
         &cache,
@@ -2307,6 +2313,7 @@ async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
         super::hosted_model_tool_specs(
             second_step_context.turn.as_ref(),
             second_step_context.turn.model_info(),
+            second_step_context.turn.config.web_search_mode.value(),
             &[],
         ),
         &cache,
@@ -2372,6 +2379,7 @@ async fn tool_search_cache_rebuilds_when_deferred_world_state_changes() {
             super::hosted_model_tool_specs(
                 step_context.turn.as_ref(),
                 step_context.turn.model_info(),
+                step_context.turn.config.web_search_mode.value(),
                 &[],
             ),
             &cache,

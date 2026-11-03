@@ -488,6 +488,39 @@ async fn handle_approved_mcp_tool_call(
     let mut tool_input = arguments_value
         .clone()
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
+    let is_search = prepared_call.is_host_owned_apps()
+        && codex_mcp::is_model_search_tool(prepared_call.tool_info());
+    let search = if is_search {
+        step_context
+            .extension_data
+            .get::<crate::model_search::ModelSearch>()
+    } else {
+        None
+    };
+    // Code Mode can retain this step past a later turn's first native call.
+    // A call rejected here never reaches the peer or acquires MCP attribution.
+    if matches!(
+        search.as_deref(),
+        Some(crate::model_search::ModelSearch::Hosted { .. })
+    ) && !crate::model_search::SearchOwner::admit(
+        &sess.services.thread_extension_data,
+        codex_protocol::openai_models::WebSearchProvider::SearchMcp,
+    ) {
+        let result = notify_mcp_tool_call_skip(
+            sess,
+            turn_context,
+            call_id,
+            invocation,
+            item_metadata,
+            "This thread is using native search".to_string(),
+            /*already_started*/ true,
+        )
+        .await;
+        return HandledMcpToolCall {
+            result: CallToolResult::from_result(result),
+            tool_input,
+        };
+    }
     let mut elicitation_type = None;
     let mut request_error_code = None;
     let result = async {
@@ -569,6 +602,32 @@ async fn handle_approved_mcp_tool_call(
                             serde_json::json!(turn_context.cyber_access_program),
                         );
                     }
+                    let request_meta = if let Some(crate::model_search::ModelSearch::Hosted {
+                        binding,
+                        context,
+                    }) = search.as_deref()
+                    {
+                        let mut meta = request_meta.unwrap_or_else(|| serde_json::json!({}));
+                        let turn_meta = meta
+                            .as_object_mut()
+                            .ok_or_else(|| anyhow::anyhow!("invalid MCP metadata"))?
+                            .entry(crate::X_CODEX_TURN_METADATA_HEADER)
+                            .or_insert_with(|| serde_json::json!({}));
+                        crate::model_search::with_search_context(turn_meta, context)?;
+                        let pin = binding
+                            .search_invocation_context(&prepared_call)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("Search MCP connection changed after discovery")
+                            })?;
+                        let apps = meta
+                            .get_mut(MCP_TOOL_CODEX_APPS_META_KEY)
+                            .and_then(serde_json::Value::as_object_mut)
+                            .ok_or_else(|| anyhow::anyhow!("missing hosted Apps call metadata"))?;
+                        apps.insert("invocation_context".to_string(), pin.clone());
+                        Some(meta)
+                    } else {
+                        request_meta
+                    };
                     let request_meta = with_mcp_tool_call_ids_meta(
                         request_meta,
                         &sess.thread_id.to_string(),
@@ -581,6 +640,17 @@ async fn handle_approved_mcp_tool_call(
                         request_meta,
                     )
                     .await?;
+                    if is_search
+                        && let Some(usage) = step_context
+                            .turn
+                            .extension_data
+                            .get::<crate::model_search::SearchTurnUsage>()
+                    {
+                        usage.record(
+                            &step_context.turn,
+                            codex_protocol::openai_models::WebSearchProvider::SearchMcp,
+                        );
+                    }
                     let mcp_call_trace = sess
                         .services
                         .rollout_thread_trace

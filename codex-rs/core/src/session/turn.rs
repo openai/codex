@@ -1872,6 +1872,11 @@ async fn run_sampling_request(
         if first_attempt && turn_context.config.notify.is_some() {
             notify_messages = legacy_notify_input_messages(&prompt.input);
         }
+        let _native_search = crate::model_search::SearchOwner::reserve_server_fallback(
+            &step_context.extension_data,
+            &sess.services.thread_extension_data,
+            &mut prompt.tools,
+        );
         let mut draining_for_mailbox = false;
         let err = match try_run_sampling_request(
             tool_runtime.clone(),

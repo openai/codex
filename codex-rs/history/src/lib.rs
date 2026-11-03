@@ -134,6 +134,10 @@ pub struct CodexHarnessMetadata {
     )]
     pub mcp_attribution: Option<McpAttribution>,
 
+    /// Native search ran during automatic fallback, so its browsing references stay on native.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_search_fallback_used: bool,
+
     /// Sender context captured by the host when this task message was accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_user_messages: Option<Box<SenderUserMessages>>,

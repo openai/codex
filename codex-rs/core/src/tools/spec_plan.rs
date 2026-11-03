@@ -159,6 +159,7 @@ pub(crate) fn build_tool_router(
         session.services.mcp_manager.shared_definitions(),
         &mut registry,
     );
+    let search = step_store.get::<crate::model_search::ModelSearch>();
     apply_mcp_tool_exposure_policy(
         turn_context,
         model_info,
@@ -172,12 +173,40 @@ pub(crate) fn build_tool_router(
         extension_tool_executors(session, step_store),
         &mut registry,
     );
+    let native_mode = match search.as_deref() {
+        None => Some(turn_context.config.web_search_mode.value()),
+        Some(crate::model_search::ModelSearch::Native { mode, .. }) => Some(*mode),
+        _ => None,
+    };
+    if matches!(
+        search.as_deref(),
+        Some(
+            crate::model_search::ModelSearch::Native { .. }
+                | crate::model_search::ModelSearch::Disabled
+        )
+    ) {
+        for tool in mcp
+            .tools()
+            .iter()
+            .filter(|tool| codex_mcp::is_model_search_tool(tool))
+        {
+            registry.remove(&tool.canonical_tool_name());
+        }
+    }
+    if native_mode.is_none() {
+        registry.remove(&ToolName::namespaced("web", "run"));
+    }
     append_dynamic_tool_runtimes(dynamic_tools, &mut registry);
-    let hosted_specs = hosted_model_tool_specs(
-        turn_context,
-        model_info,
-        standalone_web_search_tool.as_slice(),
-    );
+    let hosted_specs = if let Some(mode) = native_mode {
+        hosted_model_tool_specs(
+            turn_context,
+            model_info,
+            mode,
+            standalone_web_search_tool.as_slice(),
+        )
+    } else {
+        Vec::new()
+    };
 
     finalize_tool_router(
         turn_context,
@@ -324,6 +353,7 @@ pub(crate) fn append_source_tools(
     hosted_model_tool_specs(
         turn_context,
         model_info,
+        turn_context.config.web_search_mode.value(),
         standalone_web_search_tool.as_slice(),
     )
 }
@@ -647,6 +677,7 @@ fn spec_for_model_request(
 fn hosted_model_tool_specs(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
+    mode: WebSearchMode,
     registered_extension_tool_names: &[ToolName],
 ) -> Vec<ToolSpec> {
     // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
@@ -661,7 +692,7 @@ fn hosted_model_tool_specs(
     // and the provider supports hosted search. `None` prevents emitting a hosted search tool.
     let web_search_mode = (!standalone_web_search_available
         && turn_context.provider.capabilities().web_search)
-        .then_some(turn_context.config.web_search_mode.value());
+        .then_some(mode);
     let web_search_config = web_search_mode
         .as_ref()
         .and(turn_context.config.web_search_config.as_ref());

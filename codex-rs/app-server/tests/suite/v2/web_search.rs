@@ -27,6 +27,7 @@ use codex_app_server_protocol::WebSearchItem;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use core_test_support::responses;
 use core_test_support::responses::strip_response_item_ids_from_json;
@@ -608,4 +609,405 @@ async fn search_request(server: &MockServer, search_path: &str) -> Result<wiremo
         .into_iter()
         .find(|request| request.url.path() == search_path)
         .context("expected standalone search request")
+}
+
+const XATU_V99: &str = "SonicBrowserToolV99";
+const PAPER_MODEL_TOOLS: &[&str] = &["literature_search_query", "other_model_tool"];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearchPolicy {
+    Standard,
+    HostedOnly,
+    RequireNative,
+    RequireNativeClientMcp,
+    RequireNativeCached,
+    RequireNativeTelemetry,
+    RequireNativeDomainPolicy,
+    HostAllowedDomains(&'static [&'static str]),
+    Standalone(WebSearchMode),
+    Disabled,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiscoveryFailure {
+    Rpc(i32),
+    Http(u16),
+}
+
+/// Model Lab selection is resolved for the active turn on the same app-server used by both clients.
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::Standard, false; "xatu_literature_treatment")]
+#[test_case::test_case(XATU_V99, (&[], false), None, SearchPolicy::Standard, false; "xatu_control")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), Some(DiscoveryFailure::Rpc(-32603)), SearchPolicy::Standard, false; "critical_discovery_error")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), Some(DiscoveryFailure::Rpc(-32602)), SearchPolicy::Standard, false; "invalid_discovery_request")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), Some(DiscoveryFailure::Http(503)), SearchPolicy::Standard, false; "service_unavailable_after_retries_allows_fallback")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), Some(DiscoveryFailure::Http(403)), SearchPolicy::Standard, false; "forbidden_discovery_disables_search")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::HostedOnly, false; "work_hosted_only")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), Some(DiscoveryFailure::Rpc(-32603)), SearchPolicy::HostedOnly, false; "work_prohibits_native_fallback")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::Standard, true; "failed_invocation_never_replays_on_native")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, false), None, SearchPolicy::Standard, false; "host_disables_literature_only")]
+#[test_case::test_case(XATU_V99, (&["other_model_tool"], false), None, SearchPolicy::Standard, false; "model_with_other_supported_tools")]
+#[test_case::test_case("SonicBrowserToolV66", (PAPER_MODEL_TOOLS, false), None, SearchPolicy::Standard, false; "inherit_connector_version")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::RequireNative, false; "managed_native_requirement")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::RequireNativeClientMcp, false; "native_requirement_overrides_client_mcp_without_model_preference")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::RequireNativeCached, false; "native_requirement_enforces_cached_turn")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::RequireNativeTelemetry, false; "native_requirement_with_telemetry_and_no_search_connector")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::RequireNativeDomainPolicy, false; "native_requirement_cannot_bypass_connector_domain_policy")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::Standalone(WebSearchMode::Cached), false; "standalone_model_honors_cached_turn")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::Standalone(WebSearchMode::Live), false; "desktop_installation_id_preserves_standalone_search")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), Some(DiscoveryFailure::Rpc(-32603)), SearchPolicy::HostAllowedDomains(&[]), false; "empty_host_and_native_domain_lists_deny_fallback")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), Some(DiscoveryFailure::Rpc(-32603)), SearchPolicy::HostAllowedDomains(&["example.com"]), false; "matching_query_filter_cannot_authorize_cached_navigation")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::Standalone(WebSearchMode::Disabled), false; "standalone_model_honors_disabled_turn")]
+#[test_case::test_case(XATU_V99, (PAPER_MODEL_TOOLS, true), None, SearchPolicy::Disabled, false; "metadata_cannot_authorize_search")]
+#[tokio::test]
+async fn model_lab_search_provider(
+    pinned_type: &str,
+    (supported_tools, pinned_literature): (&[&str], bool),
+    error: Option<DiscoveryFailure>,
+    policy: SearchPolicy,
+    invocation_error: bool,
+) -> Result<()> {
+    use core_test_support::apps_test_server::AppsTestServer;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    let server = responses::start_mock_server().await;
+    let tool = json!({
+        "name": "search_service.web_run", "description": "Search", "annotations": {"readOnlyHint": true},
+        "inputSchema": {"type":"object","properties":{"system2_search_query":{"type":"array"},"open":{"type":"array"}}},
+        "_meta": {"connector_id": codex_mcp::SEARCH_CONNECTOR, "connector_name":"search_service"}
+    });
+    let catalog_tools = if policy == SearchPolicy::RequireNativeTelemetry {
+        vec![]
+    } else {
+        vec![tool.clone()]
+    };
+    let apps =
+        AppsTestServer::mount_with_tools(&server, Arc::new(Mutex::new(catalog_tools))).await?;
+    let mut pinned = tool;
+    let search_query = if pinned_type == "SonicBrowserToolV66" {
+        let properties = pinned["inputSchema"]["properties"]
+            .as_object_mut()
+            .context("search schema")?;
+        let query = properties
+            .remove("system2_search_query")
+            .context("query schema")?;
+        properties.insert("system1_search_query".into(), query);
+        "system1_search_query"
+    } else {
+        "system2_search_query"
+    };
+    if pinned_literature {
+        pinned["inputSchema"]["properties"]["literature_search_query"] =
+            json!({"type":"array","items":{"type":"object"}});
+    }
+    let profile =
+        json!({"config":{"tool_type":pinned_type,"allow_literature_search":pinned_literature}});
+    pinned["_meta"]["_codex_apps"] = json!({"invocation_context":profile});
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "method":"tools/list","params":{"_meta":{"x-codex-turn-metadata":{"mcp_request_meta":{
+                "openai/search_context":{"model_supported_tools":supported_tools}
+            }}}}
+        })))
+        .respond_with(move |r: &wiremock::Request| {
+            let req: Value = r.body_json().expect("JSON-RPC request");
+            let mut response = json!({"jsonrpc":"2.0","id":req["id"]});
+            match error {
+                Some(DiscoveryFailure::Http(status)) => return ResponseTemplate::new(status),
+                Some(DiscoveryFailure::Rpc(code)) => {
+                    response["error"] = json!({"code":code,"message":"discovery failed"});
+                }
+                None => response["result"] = json!({"tools":[pinned]}),
+            }
+            ResponseTemplate::new(200).set_body_json(response)
+        })
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let namespace = "mcp__codex_apps__search_service";
+    let key = if pinned_literature {
+        "literature_search_query"
+    } else {
+        search_query
+    };
+    let commands = json!({(key): [{"q":"plasma biomarkers"}]});
+    let mut steps = Vec::new();
+    let native = matches!(
+        policy,
+        SearchPolicy::RequireNative
+            | SearchPolicy::RequireNativeClientMcp
+            | SearchPolicy::RequireNativeCached
+            | SearchPolicy::RequireNativeTelemetry
+            | SearchPolicy::Standalone(WebSearchMode::Cached | WebSearchMode::Live)
+    ) || (matches!(
+        error,
+        Some(DiscoveryFailure::Rpc(-32603) | DiscoveryFailure::Http(503))
+    ) && policy == SearchPolicy::Standard);
+    if let SearchPolicy::HostAllowedDomains(domains) = policy
+        && !domains.is_empty()
+    {
+        // A stale model call must not reach native, even for a URL already in its cache.
+        steps.push(responses::sse(vec![
+            responses::ev_function_call_with_namespace(
+                "outside",
+                "web",
+                "run",
+                &json!({"open":[{"ref_id":"https://outside.example/paper"}]}).to_string(),
+            ),
+            responses::ev_completed("outside"),
+        ]));
+    }
+    if native {
+        mount_search_response(&server, "/v1/alpha/search", /*expected_calls*/ 1).await;
+        steps.push(responses::sse(vec![
+            responses::ev_function_call_with_namespace(
+                "native-search",
+                "web",
+                "run",
+                &commands.to_string(),
+            ),
+            responses::ev_completed("native"),
+        ]));
+    }
+    let allow_hosted = matches!(
+        policy,
+        SearchPolicy::Standard | SearchPolicy::HostedOnly | SearchPolicy::HostAllowedDomains(_)
+    );
+    let hosted = allow_hosted && error.is_none();
+    if hosted {
+        steps.push(responses::sse(vec![
+            responses::ev_tool_search_call(
+                "find-search",
+                &json!({"query": "search_service web_run"}),
+            ),
+            responses::ev_completed("discovered"),
+        ]));
+        steps.push(responses::sse(vec![
+            responses::ev_function_call_with_namespace(
+                "search-1",
+                namespace,
+                "_web_run",
+                &commands.to_string(),
+            ),
+            responses::ev_completed("resp-1"),
+        ]));
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::body_partial_json(json!({
+                "method": "tools/call",
+                "params": {"name": "search_service.web_run"}
+            })))
+            .respond_with(move |r: &wiremock::Request| {
+                let body: Value = r.body_json().expect("JSON-RPC request");
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "isError": invocation_error,
+                        "content": [{"type": "text", "text": "search result"}]
+                    }
+                }))
+            })
+            .with_priority(1)
+            .mount(&server)
+            .await;
+    }
+    steps.push(responses::sse(vec![
+        responses::ev_assistant_message("msg", "Done"),
+        responses::ev_completed("resp-final"),
+    ]));
+    let responses = responses::mount_sse_sequence(&server, steps).await;
+    let home = TempDir::new()?;
+    let mut model = model_info_from_slug("mock-model");
+    model.web_search_provider = match policy {
+        SearchPolicy::RequireNativeClientMcp => None,
+        SearchPolicy::Standalone(_) => {
+            Some(codex_protocol::openai_models::WebSearchProvider::Standalone)
+        }
+        _ => Some(codex_protocol::openai_models::WebSearchProvider::SearchMcp),
+    };
+    model.supports_search_tool = true;
+    model.use_responses_lite = true;
+    model.experimental_supported_tools = supported_tools
+        .iter()
+        .map(|tool| (*tool).to_owned())
+        .collect();
+    let catalog = home.path().join("models.json");
+    std::fs::write(&catalog, serde_json::to_vec(&json!({"models":[model]}))?)?;
+    let mode = if matches!(policy, SearchPolicy::HostedOnly | SearchPolicy::Disabled) {
+        "disabled"
+    } else {
+        "live"
+    };
+    if matches!(
+        policy,
+        SearchPolicy::RequireNative
+            | SearchPolicy::RequireNativeClientMcp
+            | SearchPolicy::RequireNativeCached
+            | SearchPolicy::RequireNativeTelemetry
+            | SearchPolicy::RequireNativeDomainPolicy
+    ) {
+        std::fs::write(
+            home.path().join("requirements.toml"),
+            "[feature_requirements]\nstandalone_web_search = true\n",
+        )?;
+    }
+    let client_provider = if policy == SearchPolicy::RequireNativeClientMcp {
+        "search_mcp"
+    } else {
+        "standalone"
+    };
+    let domain_config = match policy {
+        SearchPolicy::HostAllowedDomains(domains) => format!(
+            "\ntools.web_search.allowed_domains = {}",
+            serde_json::to_string(domains)?
+        ),
+        _ => String::new(),
+    };
+    MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!(
+            "chatgpt_base_url = {}\nmodel_catalog_json = {}\nweb_search = \"{mode}\"\ntools.client_search_provider = \"{client_provider}\"{domain_config}",
+            serde_json::to_string(&apps.chatgpt_base_url)?,
+            serde_json::to_string(&catalog)?,
+        ))
+        .with_model_provider("openai-custom")
+        .with_provider_name("OpenAI")
+        .with_provider_config("requires_openai_auth = true")
+        .with_features(&[
+            (Feature::Apps, !matches!(policy, SearchPolicy::Standalone(_))),
+            (Feature::StandaloneWebSearch, true),
+            (Feature::HostedSearchPolicy, policy == SearchPolicy::HostedOnly),
+        ].into())
+        .with_provider_config("supports_websockets = false")
+        .with_provider_config("supports_standalone_web_search = true")
+        .write(home.path())?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("test-account-token").account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized()
+        .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id,
+        responsesapi_client_metadata: match policy {
+            SearchPolicy::HostedOnly | SearchPolicy::Disabled => Some(json!({"mode":"live"})),
+            SearchPolicy::RequireNativeCached => Some(json!({"mode":"cached"})),
+            SearchPolicy::RequireNativeTelemetry => {
+                Some(json!({"telemetry_attributes":{"source":"test"}}))
+            }
+            SearchPolicy::RequireNativeDomainPolicy => {
+                Some(json!({"allowed_domains":["example.org"]}))
+            }
+            SearchPolicy::HostAllowedDomains([]) => Some(json!({"allowed_domains":[]})),
+            SearchPolicy::HostAllowedDomains(domains) => {
+                Some(json!({"mode":"cached","allowed_domains":domains}))
+            }
+            SearchPolicy::Standalone(mode) => Some(json!({"mode":mode})),
+            _ => None,
+        }
+        .map(|context| {
+            let mut meta = json!({"openai/search_context":context});
+            if matches!(
+                policy,
+                SearchPolicy::Standalone(_) | SearchPolicy::RequireNativeTelemetry
+            ) {
+                meta["openai/codex_installation_id"] = json!("desktop-installation");
+            }
+            [("mcp_request_meta".to_string(), meta.to_string())].into()
+        }),
+        input: vec![V2UserInput::Text {
+            text: "Search papers".into(),
+            text_elements: vec![],
+        }],
+        ..Default::default()
+    })
+    .await?;
+    let requests = responses.requests();
+    let received = server
+        .received_requests()
+        .await
+        .context("recorded search requests")?;
+    let rpc: Vec<Value> = received
+        .iter()
+        .filter_map(|r| r.body_json::<Value>().ok())
+        .filter(|r| r.get("method").is_some())
+        .collect();
+    let scoped_lists = rpc
+        .iter()
+        .filter(|r| r["method"] == "tools/list")
+        .filter_map(|r| {
+            r.pointer("/params/_meta/x-codex-turn-metadata/mcp_request_meta/openai~1search_context")
+        })
+        .filter(|ctx| ctx["model_supported_tools"] == json!(supported_tools))
+        .count();
+    if error == Some(DiscoveryFailure::Http(503)) {
+        assert!(scoped_lists > 1, "fallback should follow a discovery retry");
+    } else {
+        assert_eq!(scoped_lists, usize::from(allow_hosted));
+    }
+    let request = requests[0].body_json();
+    let tools = request["input"]
+        .as_array()
+        .context("Lite input")?
+        .iter()
+        .find(|item| item["type"] == "additional_tools")
+        .context("Lite additional_tools")?;
+    let find_tool = |ns: &str, name: &str| responses::namespace_child_tool(tools, ns, name);
+    assert_eq!(find_tool("web", "run").is_some(), native);
+    assert!(!has_hosted_web_search(&request));
+    assert!(find_tool(namespace, "_web_run").is_none());
+    if hosted {
+        let found = requests[1].tool_search_output("find-search");
+        let tool = responses::namespace_child_tool(&found, namespace, "_web_run")
+            .context("profiled search tool in the lookup result")?;
+        assert_eq!(
+            tool.pointer("/parameters/properties/literature_search_query")
+                .is_some(),
+            pinned_literature
+        );
+        assert!(
+            requests[2]
+                .function_call_output("search-1")
+                .to_string()
+                .contains("search result")
+        );
+    }
+    assert_eq!(
+        received
+            .iter()
+            .filter(|r| r.url.path().ends_with("/alpha/search"))
+            .count(),
+        usize::from(native)
+    );
+    if matches!(
+        policy,
+        SearchPolicy::Standalone(WebSearchMode::Cached)
+            | SearchPolicy::RequireNativeCached
+            | SearchPolicy::RequireNativeTelemetry
+    ) {
+        let body = search_request(&server, "/v1/alpha/search")
+            .await?
+            .body_json::<Value>()?;
+        assert_eq!(
+            body["settings"]["external_web_access"],
+            policy == SearchPolicy::RequireNativeTelemetry
+        );
+    }
+    let calls = core_test_support::apps_test_server::recorded_apps_tool_calls(&server).await;
+    assert_eq!(calls.len(), usize::from(hosted));
+    if let Some(call) = calls.first() {
+        assert_eq!(call["params"]["arguments"], commands);
+        assert_eq!(
+            call.pointer("/params/_meta/x-codex-turn-metadata/mcp_request_meta/openai~1search_context/model_supported_tools"),
+            Some(&json!(supported_tools))
+        );
+        assert_eq!(
+            call.pointer("/params/_meta/_codex_apps/invocation_context"),
+            Some(&profile)
+        );
+    }
+    Ok(())
 }
