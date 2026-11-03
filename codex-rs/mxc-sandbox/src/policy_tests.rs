@@ -313,6 +313,12 @@ fn volume_expansion_does_not_turn_read_only_child_writable() -> Result<()> {
         expected_write_paths.insert(1, missing.to_str().unwrap());
         assert!(denied.parent().unwrap().is_dir());
         assert!(!denied.exists());
+        for directory in [&missing, &missing.join("parent")] {
+            assert_eq!(std::fs::read(directory.join(".chatgptcreated"))?, b"");
+        }
+        for directory in [root, readonly.as_path(), writable.as_path()] {
+            assert!(!directory.join(".chatgptcreated").exists());
+        }
     }
     assert_eq!(request.policy.readwrite_paths, expected_write_paths);
     assert_eq!(request.policy.denied_paths, vec![denied.to_str().unwrap()]);
@@ -576,7 +582,42 @@ fn denied_parents_are_created_before_glob_expansion() -> Result<()> {
                 missing.join("child").to_str().unwrap()
             ]
         );
+        let sentinel = missing.join(".chatgptcreated");
+        assert_eq!(std::fs::read(&sentinel)?, b"");
+        std::fs::write(&sentinel, "preserve existing contents")?;
+        build_request(&command(&profile, &root), &root, Vec::new(), &[], &[])?;
+        assert_eq!(
+            std::fs::read_to_string(&sentinel)?,
+            "preserve existing contents"
+        );
+        std::fs::remove_file(sentinel)?;
         std::fs::remove_dir(&missing)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn deny_parent_cannot_use_sentinel_name() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = canonical_root(&temp)?;
+    let missing = root.join("missing");
+    for name in [".chatgptcreated", ".CHATGPTCREATED", ".chatgptcreated. "] {
+        let denied = missing.join(name).join("secret");
+        let fs = FileSystemSandboxPolicy::restricted(vec![
+            entry(&root, FileSystemAccessMode::Write)?,
+            entry(&denied, FileSystemAccessMode::Deny)?,
+        ]);
+        let profile =
+            PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted);
+        let error = build_request(&command(&profile, &root), &root, Vec::new(), &[], &[])
+            .expect_err("sentinel directory names must be rejected before creating parents");
+        assert!(
+            error
+                .to_string()
+                .contains("reserved directory name .chatgptcreated")
+        );
+        assert!(!missing.exists());
     }
     Ok(())
 }

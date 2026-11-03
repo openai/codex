@@ -1,6 +1,6 @@
 //! Translate canonical permissions into MXC path grants.
 //! Denies and read-only carveouts remain separate kernel policy lists.
-//! Missing deny parents are created before deny globs and volume grants are expanded.
+//! Missing deny parents are created and marked before deny globs and volume grants are expanded.
 //! Alias limitations are documented in the crate README.
 
 use std::collections::HashMap;
@@ -132,13 +132,49 @@ pub(super) fn build_request(
     let policy = materialize_temporary_paths(permissions.file_system_sandbox_policy(), &env)?;
     #[cfg(windows)]
     for denied in policy.get_unreadable_roots_with_cwd(cwd) {
-        if let Some(parent) = denied.as_path().parent()
-            && matches!(parent.try_exists(), Ok(false))
-        {
-            std::fs::create_dir_all(parent).map_err(|error| {
+        let Some(parent) = denied.as_path().parent() else {
+            continue;
+        };
+        if parent.components().any(|component| {
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .trim_end_matches(['.', ' '])
+                .eq_ignore_ascii_case(".chatgptcreated")
+        }) {
+            return Err(PolicyError::PolicyResolution(format!(
+                "MXC deny path {} uses the reserved directory name .chatgptcreated",
+                denied.display()
+            )));
+        }
+        let mut missing = parent
+            .ancestors()
+            .take_while(|path| matches!(path.try_exists(), Ok(false)))
+            .collect::<Vec<_>>();
+        missing.reverse();
+        for directory in missing {
+            // Only mark directories this launcher actually created.
+            match std::fs::create_dir(directory) {
+                Ok(()) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::AlreadyExists && directory.is_dir() =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    return Err(PolicyError::PolicyResolution(format!(
+                        "MXC currently requires deny paths to have existing parent directories. Could not create {}: {error}. Create this directory manually or correct the path/permissions, then retry.",
+                        directory.display()
+                    )));
+                }
+            }
+            let sentinel = directory.join(".chatgptcreated");
+            std::fs::File::create_new(&sentinel).map_err(|error| {
+                // Leave a failed preparation retryable when the directory is still empty.
+                let _ = std::fs::remove_dir(directory);
                 PolicyError::PolicyResolution(format!(
-                    "MXC currently requires deny paths to have existing parent directories. Could not create {}: {error}. Create this directory manually or correct the path/permissions, then retry.",
-                    parent.display()
+                    "cannot create MXC directory sentinel {}: {error}",
+                    sentinel.display()
                 ))
             })?;
         }
