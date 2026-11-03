@@ -7,6 +7,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
+use base64::Engine;
 use codex_app_server_protocol::GeneratedImageRef;
 use codex_app_server_protocol::ImageGenerationFailure;
 use codex_app_server_protocol::ImageGenerationInputImage;
@@ -46,6 +47,8 @@ use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
 
 const RESULT: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+// Two one-pixel frames, red then blue, with a 200 ms frame duration.
+const ANIMATED_RESULT: &str = "R0lGODlhAQABAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAFAAAACwAAAAAAQABAAAIBAABBAQAIfkEARQAAQAsAAAAAAEAAQCBAAD/AAAAAAAAAAAACAQAAQQEADs=";
 const TINY_PNG_BYTES: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
     0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0,
@@ -66,15 +69,22 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[test_case(Some(true), "transparent"; "transparent")]
-#[test_case(Some(false), "opaque"; "opaque")]
-#[test_case(None, "opaque"; "omitted_defaults_to_opaque")]
+#[test_case(Some(true), "transparent", false; "transparent")]
+#[test_case(Some(false), "opaque", false; "opaque")]
+#[test_case(None, "opaque", false; "omitted_defaults_to_opaque")]
+#[test_case(None, "opaque", true; "gif")]
 #[tokio::test]
 async fn standalone_image_generation_returns_saved_path_hint_to_model(
     requested_transparent_background: Option<bool>,
     expected_background: &str,
+    gif_enabled: bool,
 ) -> Result<()> {
     let call_id = "image-run-1";
+    let (result, extension) = if gif_enabled {
+        (ANIMATED_RESULT, "gif")
+    } else {
+        (RESULT, "png")
+    };
     let server = responses::start_mock_server().await;
     Mock::given(method("POST"))
         .and(path("/api/codex/images/generations"))
@@ -85,7 +95,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
                     "created": 1,
                     "background": "opaque",
                     "data": [
-                        {"b64_json": RESULT, "generation_id": "gen-image-123"},
+                        {"b64_json": result, "generation_id": "gen-image-123"},
                         {"b64_json": "ignored", "generation_id": "gen-other"},
                     ],
                 })),
@@ -93,7 +103,11 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
         .expect(1)
         .mount(&server)
         .await;
-    let arguments = imagegen_arguments("paint a blue whale", requested_transparent_background);
+    let mut arguments = imagegen_arguments("paint a blue whale", requested_transparent_background);
+
+    if gif_enabled {
+        arguments["gif"] = json!({"frame_count": 2, "frame_duration_ms": 200});
+    }
 
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -125,19 +139,23 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
+    let mut config = std::collections::HashMap::from([(
+        "responses_api_metadata".to_string(),
+        json!({
+            "display_name": "Image test 🚀",
+        }),
+    )]);
+    if gif_enabled {
+        config.insert(
+            "features.image_generation_animation".to_string(),
+            json!(true),
+        );
+    }
     let turn_id = start_turn(
         &mut mcp,
         ThreadStartParams {
             service_name: Some("chatgpt_cca".to_string()),
-            config: Some(
-                [(
-                    "responses_api_metadata".to_string(),
-                    json!({
-                        "display_name": "Image test 🚀",
-                    }),
-                )]
-                .into(),
-            ),
+            config: Some(config),
             ..Default::default()
         },
         TurnStartParams {
@@ -180,11 +198,18 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
     assert_eq!(
         image,
         GeneratedImageRef::Inline {
-            result: RESULT.to_string(),
+            result: result.to_string(),
         }
     );
     assert_eq!(transparent_background, Some(false));
-    assert_eq!(std::fs::read(&saved_path)?, TINY_PNG_BYTES);
+    assert_eq!(
+        std::fs::read(&saved_path)?,
+        base64::engine::general_purpose::STANDARD.decode(result)?
+    );
+    assert_eq!(
+        saved_path.extension().and_then(|ext| ext.to_str()),
+        Some(extension)
+    );
 
     let image_request = server
         .received_requests()
@@ -193,15 +218,21 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
         .into_iter()
         .find(|request| request.url.path() == "/api/codex/images/generations")
         .context("image generation request should be sent")?;
+    let mut expected_request = json!({
+        "prompt": "paint a blue whale",
+        "background": expected_background,
+        "model": "gpt-image-2",
+        "quality": "auto",
+        "size": "auto",
+    });
+    if gif_enabled {
+        expected_request["output_format"] = json!("gif");
+        expected_request["frame_count"] = json!(2);
+        expected_request["frame_duration_ms"] = json!(200);
+    }
     assert_eq!(
         image_request.body_json::<serde_json::Value>()?,
-        json!({
-            "prompt": "paint a blue whale",
-            "background": expected_background,
-            "model": "gpt-image-2",
-            "quality": "auto",
-            "size": "auto",
-        })
+        expected_request
     );
     assert_eq!(
         image_request
@@ -226,14 +257,16 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model(
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
     let output = requests[1].function_call_output(call_id);
-    assert_eq!(
-        output["output"][0],
-        json!({
-            "type": "input_image",
-            "image_url": format!("data:image/png;base64,{RESULT}"),
-            "detail": "high",
-        })
-    );
+    if !gif_enabled {
+        assert_eq!(
+            output["output"][0],
+            json!({
+                "type": "input_image",
+                "image_url": format!("data:image/png;base64,{RESULT}"),
+                "detail": "high",
+            })
+        );
+    }
     let output_hint = output["output"][1]["text"]
         .as_str()
         .context("image output should include model-visible path hint")?;
@@ -1070,6 +1103,176 @@ generatedImage(result);
         })
     );
 
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gif_edit_from_code_mode_preserves_animation_and_api_defaults() -> Result<()> {
+    let call_id = "code-mode-gif-edit";
+    let server = responses::start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/images/edits"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "created": 1,
+            "background": "opaque",
+            "data": [{"b64_json": ANIMATED_RESULT}],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_custom_tool_call(
+                    call_id,
+                    "exec",
+                    r#"
+const result = await tools.image_gen__imagegen({
+  prompt: "animate the attached image",
+  gif: {},
+  num_last_images_to_include: 1,
+});
+text(result.image_url);
+generatedImage(result);
+"#,
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        ImagegenTestMode::CodeModeOnly,
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    start_turn(
+        &mut mcp,
+        ThreadStartParams {
+            config: Some(
+                [(
+                    "features.image_generation_animation".to_string(),
+                    json!(true),
+                )]
+                .into(),
+            ),
+            ..Default::default()
+        },
+        TurnStartParams {
+            input: vec![
+                V2UserInput::Text {
+                    text: "Animate the attached image".to_string(),
+                    text_elements: Vec::new(),
+                },
+                V2UserInput::Image {
+                    image: V2ImageReference::Inline {
+                        url: TINY_PNG_DATA_URL.to_string(),
+                    },
+                    detail: None,
+                },
+            ],
+            ..Default::default()
+        },
+    )
+    .await?;
+    let completed = wait_for_image_generation_completed(&mut mcp).await?;
+    mcp.read_stream_until_notification_message("turn/completed")
+        .await?;
+
+    let ThreadItemPayload::ImageGeneration(image) = completed.item.payload else {
+        panic!("expected a completed image generation item");
+    };
+    let saved_path = image.saved_path.clone().context("GIF should be saved")?;
+    assert_eq!(
+        image,
+        ImageGenerationItem {
+            id: image.id.clone(),
+            status: "completed".to_string(),
+            revised_prompt: Some("animate the attached image".to_string()),
+            image: GeneratedImageRef::Inline {
+                result: ANIMATED_RESULT.to_string(),
+            },
+            transparent_background: Some(false),
+            failure: None,
+            saved_path: Some(saved_path.clone()),
+            input_images: Vec::new(),
+            imagegen_request_id: None,
+            generation_id: None,
+        }
+    );
+    assert_eq!(
+        saved_path.extension().and_then(|ext| ext.to_str()),
+        Some("gif")
+    );
+    assert_eq!(
+        std::fs::read(&saved_path)?,
+        base64::engine::general_purpose::STANDARD.decode(ANIMATED_RESULT)?
+    );
+
+    let image_request = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?
+        .into_iter()
+        .find(|request| request.url.path() == "/api/codex/images/edits")
+        .context("image edit request should be sent")?;
+    // Empty GIF options leave frame count and duration to the Images API defaults.
+    assert_eq!(
+        image_request.body_json::<serde_json::Value>()?,
+        json!({
+            "prompt": "animate the attached image",
+            "images": [{"image_url": TINY_PNG_DATA_URL}],
+            "output_format": "gif",
+            "background": "opaque",
+            "model": "gpt-image-2",
+            "quality": "auto",
+            "size": "auto",
+        })
+    );
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].body_contains_text("gif?:"));
+    let output = requests[1].custom_tool_call_output(call_id);
+    assert_eq!(
+        output["output"][1],
+        json!({
+            "type": "input_text",
+            "text": format!("data:image/gif;base64,{ANIMATED_RESULT}"),
+        })
+    );
+    // generatedImage() retains the animation for the user and gives the model a still preview.
+    assert_eq!(output["output"][2]["type"], "input_image");
+    assert!(
+        output["output"][2]["image_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("data:image/png;base64,"))
+    );
+    assert!(
+        output["output"][3]["text"]
+            .as_str()
+            .is_some_and(|hint| hint.contains(&saved_path.display().to_string()))
+    );
+    assert_eq!(output["output"].as_array().map(Vec::len), Some(4));
     Ok(())
 }
 

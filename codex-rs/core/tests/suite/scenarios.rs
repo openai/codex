@@ -40,6 +40,7 @@ use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_history::RolloutItem;
+use codex_image_generation_extension::install as install_image_generation_extension;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -55,6 +56,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::CodeModeToolMessages;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
@@ -380,6 +382,114 @@ fn configure_catalog_plugin_scenario(config: &mut Config) {
     )
     .expect("isolated plugin scenario config")
     .with_cloud_config_binding(stack.cloud_config_binding().cloned());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gif_generation_preserves_animation_and_replays_a_still_preview() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    // Two one-pixel frames, red then blue, with a 200 ms frame duration.
+    let gif = "R0lGODlhAQABAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAFAAAACwAAAAAAQABAAAIBAABBAQAIfkEARQAAQAsAAAAAAEAAQCBAAD/AAAAAAAAAAAACAQAAQQEADs=";
+    let server = start_mock_server().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/images/generations"))
+        .and(wiremock::matchers::body_json(json!({
+            "prompt": "A pixel alternating between red and blue.",
+            "background": "opaque",
+            "model": "gpt-image-2",
+            "quality": "auto",
+            "size": "auto",
+            "output_format": "gif",
+            "frame_count": 2,
+            "frame_duration_ms": 200,
+        })))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "created": 1,
+            "data": [{"b64_json": gif}],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_image_generation_extension(
+        &mut extensions,
+        codex_core::test_support::auth_manager_from_auth(auth.clone()),
+        |_config| None,
+    );
+    let image_store = Arc::new(RecordingFileAttachmentStore::default());
+    let test = test_codex()
+        .with_auth(auth)
+        .with_extensions(Arc::new(extensions.build()))
+        .with_image_store(image_store.clone())
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config
+                .features
+                .enable(Feature::ImageGenerationAnimation)
+                .unwrap();
+        })
+        .with_model_info_override("gpt-5.4", |model| {
+            model.use_responses_lite = true;
+            model.input_modalities = vec![InputModality::Text, InputModality::Image];
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "gif-generation",
+                    "image_gen",
+                    "imagegen",
+                    &json!({
+                        "prompt": "A pixel alternating between red and blue.",
+                        "gif": {"frame_count": 2, "frame_duration_ms": 200},
+                    })
+                    .to_string(),
+                ),
+                ev_completed("generated"),
+            ]),
+            sse(vec![
+                ev_assistant_message("preview", "Here is the two-frame GIF."),
+                ev_completed("previewed"),
+            ]),
+            sse(vec![
+                ev_assistant_message("timing", "Each frame lasts 200 ms."),
+                ev_completed("answered"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_text_turn("Generate a two-frame GIF of a pixel alternating red and blue.")
+        .await?;
+    test.submit_text_turn("How long does each frame last?")
+        .await?;
+
+    let uploads = image_store.uploads.lock().expect("uploads lock");
+    let [animation, preview] = uploads.as_slice() else {
+        panic!("expected an animated artifact and a separate model preview");
+    };
+    assert_eq!(animation.data, BASE64_STANDARD.decode(gif)?);
+    assert_eq!(image::guess_format(&preview.data)?, image::ImageFormat::Png);
+    assert_eq!(
+        image::load_from_memory(&preview.data)?
+            .to_rgba8()
+            .get_pixel(0, 0)
+            .0,
+        [255, 0, 0, 255]
+    );
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "GIF generation exposes animation controls and guidance, preserves the animated artifact, and replays a still preview through a follow-up turn.",
+        &requests,
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .include_request_settings(),
+    ));
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

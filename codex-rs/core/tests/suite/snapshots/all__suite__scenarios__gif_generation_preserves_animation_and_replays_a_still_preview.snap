@@ -1,0 +1,44 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"GIF generation exposes animation controls and guidance, preserves the animated artifact, and replays a still preview through a follow-up turn.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: GIF generation exposes animation controls and guidance, preserves the animated artifact, and replays a still preview through a follow-up turn.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.4"
+  parallel_tool_calls: false
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"context":"all_turns","effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=650d9374d11dab9f):
+        - namespace/functions; hash=101d32aa59ea258b
+          - function/exec_command
+          - function/write_stdin
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+        - namespace/image_gen: Tools in the image_gen namespace.; hash=7f9a214246396279
+          - function/imagegen
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Generate a two-frame GIF of a pixel alternating red and blue.
+-- request 2 (turn) --
+05:function_call/image_gen.imagegen:{"gif":{"frame_count":2,"frame_duration_ms":200},"prompt":"A pixel alternating between red and blue."}
+06:function_call_output:<input_image>
+-- request 3 (turn) --
+07:message/assistant:
+    Here is the two-frame GIF.
+08:message/user:
+    How long does each frame last?

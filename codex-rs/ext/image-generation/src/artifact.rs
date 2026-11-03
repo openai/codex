@@ -5,11 +5,37 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 const MAX_IMAGE_GENERATION_OUTPUT_HINT_BYTES: usize = 1024;
 
+/// Identify GIFs from their encoded header so transport and filenames preserve animation.
+#[derive(Clone, Copy)]
+pub(crate) enum GeneratedImageFormat {
+    Png,
+    Gif,
+}
+
+impl GeneratedImageFormat {
+    pub(crate) fn from_base64(result: &str) -> Self {
+        let result = result.trim();
+        if result.starts_with("R0lGODdh") || result.starts_with("R0lGODlh") {
+            Self::Gif
+        } else {
+            Self::Png
+        }
+    }
+
+    pub(crate) fn mime_type(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Gif => "image/gif",
+        }
+    }
+}
+
 /// Returns the extension-owned artifact path for a generated image.
 pub(crate) fn image_generation_artifact_path(
     save_root: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
+    format: GeneratedImageFormat,
 ) -> AbsolutePathBuf {
     let sanitize = |value: &str| {
         let mut sanitized: String = value
@@ -28,10 +54,14 @@ pub(crate) fn image_generation_artifact_path(
         sanitized
     };
 
+    let extension = match format {
+        GeneratedImageFormat::Png => "png",
+        GeneratedImageFormat::Gif => "gif",
+    };
     save_root
         .join(GENERATED_IMAGE_ARTIFACTS_DIR)
         .join(sanitize(session_id))
-        .join(format!("{}.png", sanitize(call_id)))
+        .join(format!("{}.{extension}", sanitize(call_id)))
 }
 
 /// Returns the model-facing generated-image path hint, or omits it if it is too large.

@@ -384,6 +384,8 @@ pub enum Feature {
     ExternalMigration,
     /// Enable extension-backed image generation.
     ImageGeneration,
+    /// Allow the image-generation tool to request a backend-assembled GIF.
+    ImageGenerationAnimation,
     /// Omit inline image and audio content from app-server item notifications.
     OmitAppServerNotificationMedia,
     /// Tell the model when a prompt image was resized and include its dimensions.
@@ -630,6 +632,11 @@ impl Features {
 
     pub fn enabled(&self, f: Feature) -> bool {
         self.enabled.contains(&f)
+    }
+
+    /// Whether to advertise GIF output in the image-generation tool.
+    pub fn image_generation_animation_enabled(&self) -> bool {
+        self.enabled(Feature::ImageGenerationAnimation)
     }
 
     /// Whether a routing tier is enabled, independently of model catalog support.
@@ -1961,6 +1968,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "image_generation",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ImageGenerationAnimation,
+        key: "image_generation_animation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::OmitAppServerNotificationMedia,
