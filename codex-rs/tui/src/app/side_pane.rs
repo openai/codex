@@ -33,10 +33,16 @@ pub(super) fn layout(app: &App, tui: &crate::tui::Tui, area: Rect) -> Option<Sid
         return None;
     }
     let active = app.current_displayed_thread_id()?;
-    let side = app.side_threads.get(&active);
-    let passive_thread = match side {
-        Some(child) => child.parent_thread_id,
-        None => app.side_thread_for_parent(active)?,
+    let child = app.side_pair_key(active)?;
+    let side = app.side_threads.get(&child)?;
+    if !side.pane_open {
+        return None;
+    }
+    let focused_child = active == child;
+    let passive_thread = if focused_child {
+        side.parent_thread_id
+    } else {
+        child
     };
     if !app.side_companions.contains_key(&passive_thread) {
         return None;
@@ -46,7 +52,7 @@ pub(super) fn layout(app: &App, tui: &crate::tui::Tui, area: Rect) -> Option<Sid
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(child_width)])
             .spacing(2)
             .areas(area);
-    let (focused, passive) = if side.is_some() {
+    let (focused, passive) = if focused_child {
         (child, parent)
     } else {
         (parent, child)

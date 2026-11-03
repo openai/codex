@@ -69,8 +69,7 @@ impl ChatWidget {
             }
         }
         if let Some(activated_at) = handoff.active_at() {
-            self.bottom_pane
-                .suppress_current_view_key_until_release(handoff.activation_key, activated_at);
+            self.suppress_current_view_key_until_release(handoff.activation_key, activated_at);
         }
         self.bottom_pane.config_editor_opened();
     }

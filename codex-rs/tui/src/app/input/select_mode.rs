@@ -24,7 +24,7 @@ impl App {
         if !select_mode {
             return false;
         }
-        let contexts = self.active_keymap_contexts();
+        let contexts = self.key_chord_contexts(tui);
         let search_editing = matches!(
             &self.overlay,
             Some(Overlay::Transcript(overlay)) if overlay.is_search_editing()

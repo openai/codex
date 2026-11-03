@@ -87,6 +87,15 @@ impl ChatWidget {
         std::mem::take(&mut self.bottom_pane.key_chord_reset_requested)
     }
 
+    pub(crate) fn suppress_current_view_key_until_release(
+        &mut self,
+        key: KeyBinding,
+        activated_at: Instant,
+    ) {
+        self.bottom_pane
+            .suppress_current_view_key_until_release(key, activated_at);
+    }
+
     pub(crate) fn consume_view_transition_key_event(&mut self, key_event: KeyEvent) -> bool {
         self.bottom_pane
             .consume_view_transition_key_event(key_event)

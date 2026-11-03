@@ -54,6 +54,7 @@ const RAW_KEY_CAPTURE: u32 = 1 << 18;
 const VOICE_TOGGLE_BLOCKED: u32 = 1 << 19;
 const TRANSCRIPT_ACTIONS: u32 = 1 << 20;
 const BACKEND_CYCLING: u32 = 1 << 21;
+const SIDE_PANE: u32 = 1 << 22;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
@@ -156,10 +157,17 @@ impl KeymapContextSet {
         }
     }
 
+    pub(crate) const fn with_side_pane(self) -> Self {
+        Self(self.0 | SIDE_PANE)
+    }
+
     /// Whether this input path can dispatch the action, including focus-specific exclusions.
     pub(crate) fn contains_action(self, action: KeymapActionId) -> bool {
         if action.context == KeymapContext::Global && action.action == "change_host" {
             return self.0 & BACKEND_CYCLING != 0;
+        }
+        if action.is_side_pane() {
+            return self.0 & SIDE_PANE != 0;
         }
         if action.context == KeymapContext::Chat && action.action == "open_presets" {
             return self.contains(KeymapContext::Chat)

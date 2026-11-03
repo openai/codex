@@ -103,12 +103,21 @@ pub(crate) struct KeymapActionId {
 }
 
 impl KeymapActionId {
+    pub(crate) fn is_side_pane(self) -> bool {
+        self.context == KeymapContext::Global && self.action == "hide_pane"
+    }
+
     /// Whether two actions can be active together, including list-specific exceptions.
     pub(super) fn overlaps(self, other: Self) -> bool {
         use KeymapContext::Chat;
         use KeymapContext::Global;
         use KeymapContext::List;
 
+        if self.is_side_pane() && matches!(other.context, List | KeymapContext::Pager)
+            || other.is_side_pane() && matches!(self.context, List | KeymapContext::Pager)
+        {
+            return true;
+        }
         match (self.context, other.context) {
             // Presets cannot open while a list owns input.
             (Chat, List) => self.action != "open_presets",
@@ -290,6 +299,7 @@ define_runtime_action_bindings! {
         find_transcript,
         select_transcript,
         focus_activity,
+        hide_pane,
         open_warnings => runtime_only,
         open_external_editor,
         copy,

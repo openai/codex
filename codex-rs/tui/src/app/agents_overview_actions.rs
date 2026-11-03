@@ -84,7 +84,7 @@ async fn run_lifecycle_modal<T>(
                     }
                     tui::TuiEvent::Key(_) | tui::TuiEvent::Paste(_) | tui::TuiEvent::FocusLost | tui::TuiEvent::Mouse(_) => {}
                     tui::TuiEvent::Draw | tui::TuiEvent::Resize(_) | tui::TuiEvent::Resume | tui::TuiEvent::FocusGained => {
-                        app.expire_pending_key_chord();
+                        app.expire_pending_key_chord(tui);
                         app.render_chat_widget_frame(tui, screen_size)?;
                     }
                 }

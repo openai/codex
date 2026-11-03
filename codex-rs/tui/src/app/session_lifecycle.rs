@@ -742,6 +742,11 @@ impl App {
             });
         }
         self.render_thread_snapshot(tui, app_server, thread_id, snapshot, !is_replay_only)?;
+        if self.side_retention_enabled(tui)
+            && let Some(side) = self.side_threads.get_mut(&thread_id)
+        {
+            side.pane_open = true;
+        }
         if is_replay_only
             && self
                 .thread_event_channels

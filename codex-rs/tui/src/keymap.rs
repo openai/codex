@@ -104,6 +104,7 @@ pub(crate) struct RuntimeKeymap {
 pub(crate) struct AppKeymap {
     /// Change where a new conversation runs.
     pub(crate) change_host: Vec<KeyBinding>,
+    pub(crate) hide_pane: Vec<KeyBinding>,
     /// Open the agent command center.
     pub(crate) open_agents: Vec<KeyBinding>,
     /// Open transcript overlay.
@@ -654,7 +655,7 @@ impl RuntimeKeymap {
 
         DEFAULTS
             .get_or_init(|| {
-                Self::resolve(&TuiKeymap::default()).unwrap_or_else(|error| {
+                Self::resolve(&TuiKeymap::default(), /*workspace*/ false).unwrap_or_else(|error| {
                     panic!("built-in keymap defaults must be valid: {error}")
                 })
             })
@@ -675,10 +676,18 @@ impl RuntimeKeymap {
         if keymap == &TuiKeymap::default() {
             return Ok(Self::defaults());
         }
-        Self::resolve(keymap)
+        Self::resolve(keymap, /*workspace*/ false)
     }
 
-    fn resolve(keymap: &TuiKeymap) -> Result<Self, String> {
+    pub(crate) fn for_session(keymap: &TuiKeymap, workspace: bool) -> Result<Self, String> {
+        if workspace {
+            Self::resolve(keymap, workspace)
+        } else {
+            Self::from_config(keymap)
+        }
+    }
+
+    fn resolve(keymap: &TuiKeymap, workspace: bool) -> Result<Self, String> {
         let defaults = Self::built_in_defaults();
         let chords = Arc::new(RuntimeChordKeymap::from_config(keymap)?);
         let side_toggle_default_is_shadowed = keymap.global.toggle_side_conversation.is_none()
@@ -729,6 +738,11 @@ impl RuntimeKeymap {
                 keymap.global.change_host.as_ref(),
                 &defaults.app.change_host,
                 "tui.keymap.global.change_host",
+            )?,
+            hide_pane: resolve_bindings(
+                keymap.global.hide_pane.as_ref(),
+                &[],
+                "tui.keymap.global.hide_pane",
             )?,
             open_agents: resolve_bindings(
                 keymap.global.open_agents.as_ref(),
@@ -1678,7 +1692,7 @@ impl RuntimeKeymap {
             }
         }
         resolved.configure_search(keymap)?;
-        chords::leader_defaults::register(keymap, &mut resolved);
+        chords::leader_defaults::register(keymap, &mut resolved, workspace);
         resolved.validate_conflicts()?;
         chords::validate_chord_conflicts(&resolved)?;
         chords::install_dispatch_bindings(&mut resolved)?;
@@ -1705,6 +1719,7 @@ impl RuntimeKeymap {
         Self {
             app: AppKeymap {
                 change_host: Vec::new(),
+                hide_pane: Vec::new(),
                 open_agents: default_bindings![],
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 find_transcript: default_bindings![plain(KeyCode::F(3))],
@@ -2056,6 +2071,7 @@ impl RuntimeKeymap {
         for (action, bindings) in [
             ("global.change_host", &self.app.change_host),
             ("global.open_agents", &self.app.open_agents),
+            ("global.hide_pane", &self.app.hide_pane),
             ("chat.open_presets", &self.chat.open_presets),
             ("chat.toggle_voice", &self.chat.toggle_voice),
         ] {
@@ -2085,6 +2101,7 @@ impl RuntimeKeymap {
 
         let main_bindings = [
             ("change_host", self.app.change_host.as_slice()),
+            ("hide_pane", self.app.hide_pane.as_slice()),
             ("open_agents", self.app.open_agents.as_slice()),
             ("open_transcript", self.app.open_transcript.as_slice()),
             ("find_transcript", self.app.find_transcript.as_slice()),
@@ -2253,6 +2270,7 @@ impl RuntimeKeymap {
         validate_no_shadow_with_allowed_overlaps(
             "main",
             [
+                ("hide_pane", self.app.hide_pane.as_slice()),
                 ("open_agents", self.app.open_agents.as_slice()),
                 ("open_transcript", self.app.open_transcript.as_slice()),
                 ("find_transcript", self.app.find_transcript.as_slice()),
@@ -2378,6 +2396,7 @@ impl RuntimeKeymap {
         validate_unique(
             "transcript",
             [
+                ("global.hide_pane", self.app.hide_pane.as_slice()),
                 (
                     "global.select_transcript",
                     self.app.select_transcript.as_slice(),
@@ -2410,6 +2429,7 @@ impl RuntimeKeymap {
         validate_unique(
             "activity",
             context_bindings(KeymapContext::List).chain([
+                ("global.hide_pane", self.app.hide_pane.as_slice()),
                 ("global.focus_activity", self.app.focus_activity.as_slice()),
                 (
                     "global.find_transcript",
@@ -3871,6 +3891,27 @@ mod tests {
 
     #[test]
     fn toggle_side_conversation_can_be_remapped_and_rejects_conflicts() {
+        for (section, action) in [("pager", "page_up"), ("list", "move_down")] {
+            let config: TuiKeymap = toml::from_str(&format!(
+                "[global]\nhide_pane = 'f8'\n[{section}]\n{action} = 'f8'"
+            ))
+            .unwrap();
+            let error = RuntimeKeymap::for_session(&config, /*workspace*/ true).unwrap_err();
+            assert!(
+                error.contains("global.hide_pane") && error.contains(action),
+                "{error}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            let mut config = TuiKeymap::default();
+            config.global.hide_pane = Some(one("ctrl-z"));
+            assert!(
+                RuntimeKeymap::for_session(&config, /*workspace*/ true)
+                    .unwrap_err()
+                    .contains("suspend")
+            );
+        }
         let mut keymap = TuiKeymap::default();
         keymap.global.toggle_side_conversation = Some(one("f12"));
 
@@ -4063,6 +4104,13 @@ mod tests {
         keymap.composer.toggle_shortcuts = Some(KeybindingsSpec::Many(vec![]));
         let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
         assert!(runtime.composer.toggle_shortcuts.is_empty());
+        keymap.global.hide_pane = Some(KeybindingsSpec::Many(vec![]));
+        let runtime = RuntimeKeymap::for_session(&keymap, /*workspace*/ true).unwrap();
+        assert!(
+            runtime
+                .primary_hint(KeymapContext::Global, "hide_pane")
+                .is_none()
+        );
     }
 
     #[test]

@@ -222,6 +222,8 @@ pub(super) struct SideThreadState {
     pub(super) parent_thread_id: ThreadId,
     /// Parent-thread condition that changed while this side thread is visible.
     pub(super) parent_status: Option<SideParentStatus>,
+    /// A hidden pane keeps its child and parked display for the next focus switch.
+    pub(super) pane_open: bool,
 }
 
 impl SideThreadState {
@@ -229,6 +231,7 @@ impl SideThreadState {
         Self {
             parent_thread_id,
             parent_status: None,
+            pane_open: true,
         }
     }
 }
@@ -316,9 +319,18 @@ impl App {
     }
 
     pub(super) fn side_retention_enabled(&self, tui: &tui::Tui) -> bool {
-        self.config.features.enabled(Feature::TuiWorkspace)
-            && self.local_settings.transcript_mode.is_owned()
-            && tui.is_owned_screen()
+        self.local_settings.workspace_enabled(&self.config) && tui.is_owned_screen()
+    }
+
+    pub(super) fn side_pane_shortcuts_available(&self, tui: &tui::Tui) -> bool {
+        self.side_retention_enabled(tui)
+            && !self.reconnect.offline
+            && self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
+            && self
+                .current_displayed_thread_id()
+                .and_then(|id| self.side_pair_key(id))
+                .is_some()
     }
 
     pub(super) fn side_pair_key(&self, thread_id: ThreadId) -> Option<ThreadId> {
@@ -447,6 +459,30 @@ impl App {
         if self.active_thread_id == Some(target_thread_id)
             && self.active_side_parent_thread_id().is_none()
         {
+            self.surface_pending_inactive_thread_interactive_requests()
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn hide_focused_side_pane(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+    ) -> Result<()> {
+        let Some(child) = self.current_displayed_thread_id() else {
+            return Ok(());
+        };
+        let Some(side) = self.side_threads.get(&child) else {
+            return Ok(());
+        };
+        let parent = side.parent_thread_id;
+        self.select_agent_thread(tui, app_server, parent).await?;
+        if self.current_displayed_thread_id() == Some(parent)
+            && let Some(side) = self.side_threads.get_mut(&child)
+        {
+            side.pane_open = false;
+            tui.frame_requester().schedule_frame();
             self.surface_pending_inactive_thread_interactive_requests()
                 .await?;
         }

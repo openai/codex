@@ -2,6 +2,7 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
+Hide Pane | leader - (ctrl-x -) | Global hide_pane Hide Pane Hide the focused sidebar pane. leader - (ctrl-x -) Default
 Open Agents | unbound | Global open_agents Open Agents Open the agent command center. unbound Default
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
 Find Transcript | f3 | Global find_transcript Find Transcript Find text in the full transcript. f3 Default

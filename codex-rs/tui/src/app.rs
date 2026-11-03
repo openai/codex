@@ -966,7 +966,7 @@ impl App {
             &event,
             TuiEvent::Key(_) | TuiEvent::Mouse(_) | TuiEvent::Paste(_) | TuiEvent::FocusLost
         ) {
-            self.expire_pending_key_chord();
+            self.expire_pending_key_chord(tui);
             self.handle_draw_pre_render(tui, screen_size)?;
         }
 
@@ -992,7 +992,7 @@ impl App {
 
         let mut event = if let TuiEvent::Key(mut key_event) = event {
             let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-            if self.should_recover_vim_insert_escape(key_event)
+            if self.should_recover_vim_insert_escape(tui, key_event)
                 && !(tui.is_owned_screen()
                     && crate::transcript_view::JumpTarget::from_key(key_event).is_some())
             {
@@ -1012,6 +1012,23 @@ impl App {
         };
 
         self.cancel_primed_browsing_for_event(&event);
+        if let TuiEvent::Key(key) = &event
+            && self.keymap.app.hide_pane.is_pressed(*key)
+            && self.side_pane_shortcuts_available(tui)
+        {
+            if key.kind == KeyEventKind::Press {
+                let activation = self
+                    .routed_key_activation
+                    .take()
+                    .unwrap_or_else(|| KeyBinding::from_event(*key));
+                if let Err(err) = self.hide_focused_side_pane(tui, app_server).await {
+                    self.chat_widget.add_error_message(err.to_string());
+                }
+                self.chat_widget
+                    .suppress_current_view_key_until_release(activation, Instant::now());
+            }
+            return Ok(AppRunControl::Continue);
+        }
         let voice_toggle = |app: &Self, key: KeyEvent| {
             key.kind == KeyEventKind::Press
                 && app

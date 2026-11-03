@@ -1,4 +1,4 @@
-//! Install implicit preset and selection shortcuts only for free leader chords.
+//! Install implicit backend, preset, selection, and side-pane shortcuts for free leader chords.
 //! Explicit bindings, including an explicit unbind, always take priority.
 //! Implicit chords fit within the shared leader expansion limit.
 
@@ -13,7 +13,11 @@ use super::runtime_action_bindings;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
 
-pub(in crate::keymap) fn register(keymap: &TuiKeymap, resolved: &mut RuntimeKeymap) {
+pub(in crate::keymap) fn register(
+    keymap: &TuiKeymap,
+    resolved: &mut RuntimeKeymap,
+    workspace: bool,
+) {
     let mut remaining = MAX_LEADER_CHORD_BINDINGS.saturating_sub(
         resolved
             .chords
@@ -22,36 +26,29 @@ pub(in crate::keymap) fn register(keymap: &TuiKeymap, resolved: &mut RuntimeKeym
             .filter(|binding| binding.is_leader())
             .count(),
     );
-    for (configured, context, action, completion, spec) in [
-        (
-            keymap.global.change_host.as_ref(),
-            KeymapContext::Global,
-            "change_host",
-            'b',
-            "leader b",
-        ),
-        (
-            keymap.global.select_transcript.as_ref(),
-            KeymapContext::Global,
-            "select_transcript",
-            '[',
-            "leader [",
-        ),
-        (
-            keymap.chat.open_presets.as_ref(),
-            KeymapContext::Chat,
-            "open_presets",
-            'p',
-            "leader p",
-        ),
+    use KeymapContext::Chat;
+    use KeymapContext::Global;
+    for (context, name, completion) in [
+        (Global, "change_host", 'b'),
+        (Global, "select_transcript", '['),
+        (Chat, "open_presets", 'p'),
+        (Global, "hide_pane", '-'),
     ] {
         if remaining == 0 {
             break;
         }
-        if configured.is_some() {
+        let action = KeymapActionId {
+            context,
+            action: name,
+        };
+        if (!workspace && action.is_side_pane())
+            || !matches!(
+                super::configured_binding_for_action(keymap, action),
+                Some(None)
+            )
+        {
             continue;
         }
-        let action = KeymapActionId { context, action };
         for prefix in resolved.chords.leader.clone() {
             let binding = RuntimeChordBinding {
                 action,
@@ -59,7 +56,7 @@ pub(in crate::keymap) fn register(keymap: &TuiKeymap, resolved: &mut RuntimeKeym
                     prefix,
                     completion: crate::key_hint::plain(KeyCode::Char(completion)),
                 },
-                spec: spec.into(),
+                spec: format!("leader {completion}"),
             };
             if !resolved.chords.bindings.iter().any(|existing| {
                 binding.overlaps(existing.action) && existing.chord == binding.chord

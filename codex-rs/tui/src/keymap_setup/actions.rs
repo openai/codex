@@ -36,12 +36,14 @@ pub(super) struct KeymapActionDescriptor {
 enum KeymapActionFeature {
     FastMode,
     MultiBackend,
+    Workspace,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct KeymapActionFilter {
     pub(crate) fast_mode_enabled: bool,
     pub(crate) multi_backend_enabled: bool,
+    pub(crate) workspace_enabled: bool,
 }
 
 impl KeymapActionDescriptor {
@@ -50,6 +52,7 @@ impl KeymapActionDescriptor {
             None => true,
             Some(KeymapActionFeature::FastMode) => filter.fast_mode_enabled,
             Some(KeymapActionFeature::MultiBackend) => filter.multi_backend_enabled,
+            Some(KeymapActionFeature::Workspace) => filter.workspace_enabled,
         }
     }
 }
@@ -115,6 +118,7 @@ macro_rules! define_keymap_actions {
 define_keymap_actions! {
     global "Global" {
         change_host [MultiBackend] => "Change where a new conversation runs.",
+        hide_pane [Workspace] => "Hide the focused sidebar pane.",
         open_agents => "Open the agent command center.",
         open_transcript => "Open the transcript overlay.",
         find_transcript => "Find text in the full transcript.",

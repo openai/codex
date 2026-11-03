@@ -3363,16 +3363,14 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     app.runtime_permission_profile_override = Some(RuntimePermissionProfileOverride::from_config(
         app.chat_widget.config_ref(),
     ));
-    app.select_permission_profile(
-        &mut app_server,
-        PermissionProfileSelection {
-            profile_id: ":read-only".into(),
-            approval_policy: Some(AskForApproval::OnRequest),
-            approvals_reviewer: Some(ApprovalsReviewer::User),
-            display_label: "Read Only".into(),
-        },
-    )
-    .await;
+    let read_only = PermissionProfileSelection {
+        profile_id: ":read-only".into(),
+        approval_policy: Some(AskForApproval::OnRequest),
+        approvals_reviewer: Some(ApprovalsReviewer::User),
+        display_label: "Read Only".into(),
+    };
+    app.select_permission_profile(&mut app_server, read_only.clone())
+        .await;
 
     let control = Box::pin(app.handle_start_side(
         &mut tui,
@@ -3530,6 +3528,28 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         ))
     );
 
+    macro_rules! keys {
+        ($($key:expr),+) => {{
+            for key in [$($key),+] {
+                boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key))).await?;
+            }
+            drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+        }};
+    }
+    let leader = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+    let [minus, repeat, release] = [
+        KeyEventKind::Press,
+        KeyEventKind::Repeat,
+        KeyEventKind::Release,
+    ]
+    .map(|kind| KeyEvent::new_with_kind(KeyCode::Char('-'), KeyModifiers::NONE, kind));
+    assert!(app.side_pane_shortcuts_available(&tui));
+    // Hide is consumed on the parent without closing the visible pane or typing its completion.
+    keys!(leader, minus, repeat, release);
+    assert!(!app.chat_widget.is_in_paste_burst());
+    assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "parent draft");
+
     for width in [100, 99, 100] {
         let frame = side_frame(&mut app, &mut tui, Size::new(width, /*height*/ 18))?;
         assert!(
@@ -3580,8 +3600,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     let inactive = composer_gutter(&mut app, &mut tui)?;
 
     let toggle = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
-    boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(toggle))).await?;
-    drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+    keys!(toggle);
     assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
     let wide = side_frame(&mut app, &mut tui, size)?;
     assert!(
@@ -3594,6 +3613,82 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         "side_composer_gutter",
         format!("Inactive\n{inactive}\n\nFocused\n{focused}")
     );
+
+    // The pending permission change refuses a parent switch even though selection returns Ok.
+    app.pending_server_profiles
+        .insert(side_thread_id, read_only);
+    keys!(leader, minus, repeat, release);
+    assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "child draft!");
+    assert!(!app.chat_widget.is_in_paste_burst());
+    let refused = side_frame(&mut app, &mut tui, size)?;
+    assert!(
+        refused.contains(parent_row) && refused.contains(child_row) && refused.contains('│'),
+        "{refused}"
+    );
+    app.pending_server_profiles.remove(&side_thread_id);
+
+    let channel = Arc::clone(&app.thread_event_channels[&side_thread_id].store);
+    let mut frames = Vec::new();
+    for width in [100, 99] {
+        let size = Size::new(width, /*height*/ 18);
+        side_frame(&mut app, &mut tui, size)?;
+        let prefix = if width == 100 {
+            leader
+        } else {
+            app.local_settings.tui.keymap = toml::from_str("[global]\nleader = 'f12'")?;
+            enable_side_retention(&mut app)?;
+            KeyCode::F(12).into()
+        };
+        assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
+        keys!(prefix, minus);
+        assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
+        keys!(repeat, release);
+        assert!(!app.chat_widget.is_in_paste_burst());
+        let hidden = side_frame(&mut app, &mut tui, size)?;
+        assert!(
+            hidden.contains(parent_row) && !hidden.contains(child_row) && !hidden.contains('│'),
+            "{hidden}"
+        );
+        if width == 100 {
+            frames.push(format!("{width} columns, hidden\n{hidden}"));
+            assert_eq!(app.chat_widget.composer_text_with_pending(), "parent draft");
+            // A new physical press after release belongs to the parent, including its final raw key.
+            keys!(minus, toggle);
+        } else {
+            assert_eq!(
+                app.chat_widget.composer_text_with_pending(),
+                "parent draft-"
+            );
+            boxed_future!(app.handle_start_side(
+                &mut tui,
+                &mut app_server,
+                parent_thread_id,
+                /*user_message*/ None
+            ))
+            .await?;
+            drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+        }
+        assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+        assert!(Arc::ptr_eq(
+            &channel,
+            &app.thread_event_channels[&side_thread_id].store
+        ));
+        assert!(app.transcript_view.is_select_mode());
+        app.transcript_view.end_select_mode();
+        let reopened = side_frame(&mut app, &mut tui, size)?;
+        assert!(
+            reopened.contains(child_row) && reopened.contains("child draft!"),
+            "{reopened}"
+        );
+        assert_eq!(
+            reopened.contains("parent draft-"),
+            width == 100,
+            "{reopened}"
+        );
+        frames.push(format!("{width} columns, reopened\n{reopened}"));
+    }
+    assert_app_snapshot!("hide_and_reopen_side_conversation", frames.join("\n\n"));
 
     read_side_history(&mut app, &mut tui, "child")?;
     // The upload finishes before the app event loop can park the now-inactive child.
