@@ -15,7 +15,8 @@ use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 
-pub(crate) const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str =
+/// Shared namespace description for native tools and host extensions.
+pub const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str =
     "Tools for spawning and managing sub-agents.";
 
 pub(super) fn multi_agent_v2_handler(

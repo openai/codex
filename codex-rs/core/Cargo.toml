@@ -72,7 +72,6 @@ codex-skills-extension = { workspace = true }
 codex-state = { workspace = true }
 codex-agent-message-board-extension = { workspace = true }
 codex-message-board = { workspace = true }
-codex-agent-message-board-client = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
@@ -146,6 +145,7 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 openssl-sys = { workspace = true, features = ["vendored"] }
 
 [dev-dependencies]
+codex-app-server = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-exec-server-test-support = { workspace = true }

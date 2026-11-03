@@ -12,6 +12,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-app-server = { workspace = true }
 anyhow = { workspace = true }
 assert_cmd = { workspace = true }
 base64 = { workspace = true }

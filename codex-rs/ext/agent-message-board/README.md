@@ -43,7 +43,7 @@ creating channels and changing another agent's subscriptions return permission
 errors. Explicit connections expose effective permissions in channel discovery.
 Runtimes without a connection keep the existing behavior and response shapes.
 
-Install `codex_core::install_agent_message_board` in the runtime's extension
+Install `codex_app_server::install_agent_message_board` in the runtime's extension
 registry. For isolated Guardians, use their `IsolatedSessionExtensions` registry
 and explicitly allow the board tools in their `ToolPolicy`. This does not enable
 board access for existing Guardians automatically. Connected runtimes use unique

@@ -1,19 +1,17 @@
-//! Bridges the board extension to the selected controller, clock and active-turn services.
+//! Supplies board host capabilities through the public Core runtime interfaces.
 //!
 //! The extension owns backend construction, storage and tool registration. This adapter
 //! selects configuration and supplies host capabilities. It never starts or restores
 //! recipients during lookup. Notifications use ordinary agent-message scheduling.
 
-use crate::CodexThread;
-use crate::ThreadManager;
-use crate::config::Config;
-use crate::context::AgentMessageBoardNotification;
-use crate::context::ContextualUserFragment;
-use crate::tools::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_agent_message_board_client::RemoteAgentMessageBoard;
 use codex_agent_message_board_extension::BoardBackend;
+use codex_core::CodexThread;
+use codex_core::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
+use codex_core::ThreadManager;
+use codex_core::config::Config;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
@@ -206,12 +204,24 @@ impl MessageBoardHost for LocalBoardHost {
                 Err(error) => return Err(error),
             };
             let recipient_path = self.registered_path(&recipient).await?;
-            let notice = AgentMessageBoardNotification(post);
+            let suffix = if post.truncated {
+                "\n[Use read_post for the rest.]"
+            } else {
+                ""
+            };
+            let content = format!(
+                "Message Type: CHANNEL_POST\nSender: {}\nChannel: {}\nMessage ID: {}\nThread ID: {}\nPayload:\n{}{suffix}",
+                post.metadata.author,
+                post.metadata.channel_name,
+                post.metadata.message_id,
+                post.metadata.thread_id,
+                post.text_preview,
+            );
             let communication = InterAgentCommunication::new(
-                notice.0.metadata.author.clone(),
+                post.metadata.author.clone(),
                 recipient_path,
                 Vec::new(),
-                notice.render().into_text().unwrap_or_default(),
+                content,
                 /*trigger_turn*/ false,
             );
             // Remote metadata is untrusted. Skip an oversized notice without closing
