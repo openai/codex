@@ -147,6 +147,10 @@ async fn critical_path_reaches_turn_event(finish: Finish, capture: Capture) -> R
     ];
     if matches!(capture, Capture::Enabled) {
         assert_eq!(p["critical_path_status"], "complete");
+        assert_eq!(
+            p.get("critical_path_auto_review_overhead_ms"),
+            Some(&json!(0))
+        );
         let inference = p["critical_path_inference_ms"]
             .as_u64()
             .expect("inference duration");
@@ -181,6 +185,10 @@ async fn critical_path_reaches_turn_event(finish: Finish, capture: Capture) -> R
         );
     } else {
         assert_eq!(p["critical_path_status"], "disabled");
+        assert_eq!(
+            p.get("critical_path_auto_review_overhead_ms"),
+            Some(&serde_json::Value::Null)
+        );
         assert_eq!(
             p.get("critical_path_inference_ms"),
             Some(&serde_json::Value::Null)

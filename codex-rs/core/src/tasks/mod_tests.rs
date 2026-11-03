@@ -678,6 +678,7 @@ async fn turn_critical_path_metrics_count_each_capture_once() {
         sampling_ms: 31,
         compaction_ms: 0,
         auto_review_ms: 2,
+        auto_review_overhead_ms: None,
         tools_ms: 10,
         user_wait_ms: 0,
         overhead_ms: 14,

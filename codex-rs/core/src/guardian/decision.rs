@@ -50,7 +50,7 @@ pub(crate) fn decide_approval(
     reasons: ApprovalRequestReasons,
     mut options: GuardianReviewOptions,
 ) -> futures::future::BoxFuture<'static, Option<ReviewDecision>> {
-    let context: GuardianReviewContext = context.into();
+    let mut context: GuardianReviewContext = context.into();
     let request: ReviewAction = request.into();
     // Bind the invocation before scheduling. Async review cleanup can outlive
     // the decision, but must not extend the time blocking this tool.
@@ -90,6 +90,9 @@ pub(crate) fn decide_approval(
     } else {
         None
     };
+    context.review_execution = review_timing
+        .as_ref()
+        .and_then(codex_direct_tool_timing::ToolBlockingTimingGuard::review_execution);
     Box::pin(async move {
         let _review_timing = review_timing;
         let (_, history_reset) = session.history_reset().await;

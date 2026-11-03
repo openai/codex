@@ -6,6 +6,7 @@ use super::super::ToolBatchTiming;
 use super::*;
 use codex_utils_critical_path::CriticalPath;
 use codex_utils_critical_path::PathDurations;
+use codex_utils_critical_path::ReviewExecution;
 use codex_utils_critical_path::WorkKind;
 use pretty_assertions::assert_eq;
 use std::future::Future;
@@ -43,9 +44,9 @@ async fn lock_handoff_publishes_review_history_before_admitting_waiter(admission
         let mut state = timings.state();
         let work = state.unique_work("releasing").unwrap();
         work.record_until(start + Duration::from_secs(2));
-        work.active_auto_reviews = 1;
+        work.active_auto_reviews = vec![ReviewExecution::default()];
         work.record_until(start + Duration::from_secs(5));
-        work.active_auto_reviews = 0;
+        work.active_auto_reviews.clear();
     }
     let waiting_work = timings.start_turn_direct_call(
         "waiting",

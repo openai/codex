@@ -334,6 +334,11 @@ async fn run_review_on_session(
         false
     };
     if should_compact {
+        let mut execution_attempt =
+            crate::turn_timing::review_execution::ReviewExecutionObservation::install(
+                Arc::clone(&review_session.session),
+                params.parent_context.review_execution.clone(),
+            );
         let compact_submission = run_before_review_deadline(
             deadline,
             params.external_cancel.as_ref(),
@@ -369,6 +374,7 @@ async fn run_review_on_session(
             &mut analytics_result,
         )
         .await;
+        execution_attempt.finish(result.turn_completed);
         if !matches!(
             result.outcome,
             GuardianReviewSessionOutcome::Completed(Ok(_))
@@ -572,6 +578,11 @@ async fn run_review_on_session(
         .insert(super::PendingReviewRouting(
             params.parent_context.parent_response.clone(),
         ));
+    let mut execution_attempt =
+        crate::turn_timing::review_execution::ReviewExecutionObservation::install(
+            Arc::clone(&review_session.session),
+            params.parent_context.review_execution.clone(),
+        );
     let request = codex_guardian_reviewer::ReviewerTurn {
         items,
         environments: codex_protocol::protocol::TurnEnvironmentSelections::new(
@@ -625,6 +636,7 @@ async fn run_review_on_session(
                 .services
                 .thread_extension_data
                 .remove::<super::PendingReviewRouting>();
+
             review_session
                 .session
                 .services
@@ -653,8 +665,19 @@ async fn run_review_on_session(
         &mut analytics_result,
     )
     .await;
+    execution_attempt.finish(turn_result.turn_completed);
     let turn_result = match reconsideration {
         Some(request) => {
+            if let GuardianReviewSessionOutcome::Completed(Ok(Some(response))) =
+                &turn_result.outcome
+                && response.assessment().is_ok_and(|assessment| {
+                    assessment.outcome == codex_protocol::protocol::GuardianAssessmentOutcome::Deny
+                })
+                && let Some(execution) = &params.parent_context.review_execution
+            {
+                // Reconsideration's second turn does not yet have an execution observer.
+                execution.mark_unknown();
+            }
             // The new turn does not own the first turn's retained evidence backup.
             // Keep that evidence intact; an over-budget follow-up keeps the denial.
             let store = &review_session.session.services.thread_extension_data;
@@ -684,6 +707,7 @@ async fn run_review_on_session(
         .services
         .thread_extension_data
         .remove::<super::PendingReviewRouting>();
+
     // Finalizing input consumes this context; failures before admission leave it pending.
     let transcript_admitted = review_session
         .session

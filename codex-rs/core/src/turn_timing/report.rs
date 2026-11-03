@@ -23,6 +23,7 @@ pub(super) fn completed_critical_path(state: &TurnProfileState, end: Instant) ->
         sampling_ms: duration_to_u64_ms(totals.sampling),
         compaction_ms: duration_to_u64_ms(totals.compaction),
         auto_review_ms: duration_to_u64_ms(totals.auto_review),
+        auto_review_overhead_ms: totals.auto_review_overhead.map(duration_to_u64_ms),
         user_wait_ms: duration_to_u64_ms(totals.user_wait),
         tools_ms: duration_to_u64_ms(totals.tools),
         overhead_ms: duration_to_u64_ms(totals.overhead),

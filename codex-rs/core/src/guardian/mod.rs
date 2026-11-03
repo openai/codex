@@ -95,6 +95,7 @@ pub(crate) struct GuardianReviewContext {
     /// The latest response ID and its connection affinity when review was requested.
     pub(crate) parent_response: Option<Arc<ParentResponse>>,
     turn: Arc<TurnContext>,
+    review_execution: Option<codex_direct_tool_timing::ReviewExecution>,
     environments: TurnEnvironmentSnapshot,
     project_instructions: Option<Arc<LoadedAgentsMd>>,
     // Model and reasoning inputs are carried for the follow-up Guardian and V2 migrations.
@@ -136,6 +137,7 @@ impl GuardianReviewContext {
     ) -> Self {
         Self {
             serving_assessment: None,
+            review_execution: None,
             parent_response: turn.extension_data.get::<ParentResponse>(),
             environments: environments.clone(),
             project_instructions: None,
@@ -162,6 +164,7 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
     fn from(step: &Arc<StepContext>) -> Self {
         Self {
             serving_assessment: step.serving_assessment.clone(),
+            review_execution: None,
             parent_response: step.turn.extension_data.get::<ParentResponse>(),
             turn: Arc::clone(&step.turn),
             environments: step.environments.clone(),
@@ -180,6 +183,7 @@ impl From<Arc<TurnContext>> for GuardianReviewContext {
     fn from(turn: Arc<TurnContext>) -> Self {
         Self {
             serving_assessment: None,
+            review_execution: None,
             parent_response: turn.extension_data.get::<ParentResponse>(),
             environments: turn.initial_environments.clone(),
             project_instructions: None,

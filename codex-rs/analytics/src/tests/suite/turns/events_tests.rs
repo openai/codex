@@ -194,6 +194,7 @@ fn turn_event_serializes_expected_shape() {
                 "critical_path_sampling_ms": null,
                 "critical_path_compaction_ms": null,
                 "critical_path_auto_review_ms": null,
+                "critical_path_auto_review_overhead_ms": null,
                 "critical_path_user_wait_ms": null,
                 "critical_path_tools_ms": null,
                 "critical_path_overhead_ms": null,
@@ -1010,6 +1011,7 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     sampling_ms: 500,
                     compaction_ms: 200,
                     auto_review_ms: 200,
+                    auto_review_overhead_ms: Some(40),
                     user_wait_ms: 100,
                     tools_ms: 150,
                     overhead_ms: 80,
@@ -1024,6 +1026,7 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     sampling_ms: 1234,
                     compaction_ms: 0,
                     auto_review_ms: 0,
+                    auto_review_overhead_ms: Some(0),
                     user_wait_ms: 0,
                     tools_ms: 0,
                     overhead_ms: 0,
@@ -1044,6 +1047,10 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
             )
             .await;
             let mut profile = sample_turn_profile();
+            let expected_review_overhead = match &critical_path {
+                TurnCriticalPath::Complete(value) => value.auto_review_overhead_ms,
+                _ => None,
+            };
             profile.critical_path = critical_path;
             reducer
                 .ingest(
@@ -1086,6 +1093,10 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     params["critical_path_unknown_ms"],
                 ]),
                 expected
+            );
+            assert_eq!(
+                params.get("critical_path_auto_review_overhead_ms"),
+                Some(&json!(expected_review_overhead))
             );
             assert_eq!(params["tool_blocking_ms"], json!(250));
             assert_eq!(params["duration_ms"], json!(1234));

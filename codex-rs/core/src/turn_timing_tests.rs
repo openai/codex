@@ -291,6 +291,7 @@ fn turn_profile_counts_compaction_as_an_exclusive_phase() {
                     sampling_ms: 300,
                     compaction_ms: 500,
                     auto_review_ms: 0,
+                    auto_review_overhead_ms: Some(0),
                     user_wait_ms: 0,
                     tools_ms: 0,
                     overhead_ms: 300,
@@ -338,6 +339,7 @@ async fn turn_profile_and_duration_share_a_completion_instant() {
             sampling_ms: 0,
             compaction_ms: 0,
             auto_review_ms: 0,
+            auto_review_overhead_ms: Some(0),
             user_wait_ms: 0,
             tools_ms: 0,
             overhead_ms: duration_ms.unwrap() as u64,
@@ -393,6 +395,7 @@ fn capture_preserves_phases_and_freezes_missing_dependencies() {
             sampling_ms: 10,
             compaction_ms: 0,
             auto_review_ms: 0,
+            auto_review_overhead_ms: None,
             user_wait_ms: 0,
             tools_ms: 0,
             overhead_ms: 20,
@@ -490,10 +493,40 @@ fn critical_path_report_retains_fractional_millisecond_rounding_and_compaction()
             sampling_ms: 0,
             compaction_ms: 1,
             auto_review_ms: 0,
+            auto_review_overhead_ms: Some(0),
             user_wait_ms: 0,
             tools_ms: 0,
             overhead_ms: 0,
             unknown_ms: 0,
         })
     );
+}
+
+#[test_case::test_case(false; "child_capture_disabled")]
+#[test_case::test_case(true; "child_capture_enabled")]
+#[tokio::test]
+async fn review_execution_uses_frozen_profile_window(capture_enabled: bool) {
+    let timing = super::TurnTimingState::default();
+    let execution = codex_direct_tool_timing::ReviewExecution::default();
+    execution.observe();
+    timing.observe_review_execution(execution.clone()).await;
+    if capture_enabled {
+        timing.enable_critical_path();
+    }
+    let start = Instant::now() - Duration::from_millis(25);
+    timing.mark_turn_started(start).await;
+    let first = timing.complete_profile_and_duration_ms().await;
+    let end = timing.state.lock().await.completed_at.unwrap().0;
+    assert_eq!(timing.complete_profile_and_duration_ms().await, first);
+    execution.seal();
+    let review_start = start - Duration::from_millis(100);
+    let review_end = end + Duration::from_millis(200);
+    let path = CriticalPath::default().auto_review(review_start, review_end, vec![execution]);
+    let totals = path.durations(review_start, review_end);
+    assert_eq!(
+        totals.auto_review_overhead,
+        Some(Duration::from_millis(300))
+    );
+    assert_eq!(totals.auto_review, review_end.duration_since(review_start));
+    assert_eq!(first.1, Some(end.duration_since(start).as_millis() as i64));
 }

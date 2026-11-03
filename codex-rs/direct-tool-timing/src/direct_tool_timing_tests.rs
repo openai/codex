@@ -27,9 +27,9 @@ fn parallel_winner_retains_its_review_and_shared_initial_path() {
         let mut state = timings.state();
         let work = state.unique_work("winner").unwrap();
         work.record_until(start + Duration::from_secs(2));
-        work.active_auto_reviews = 1;
+        work.active_auto_reviews = vec![ReviewExecution::default()];
         work.record_until(start + Duration::from_secs(5));
-        work.active_auto_reviews = 0;
+        work.active_auto_reviews.clear();
     }
     drop(losing);
     assert!(batch.completed().is_none());
@@ -65,7 +65,8 @@ fn duplicate_ids_and_late_review_drop_do_not_complete_another_invocation() {
             .state()
             .unique_work("same")
             .unwrap()
-            .active_auto_reviews,
+            .active_auto_reviews
+            .len(),
         0
     );
     assert!(batch.completed().is_none());
@@ -165,7 +166,7 @@ fn human_wait_takes_precedence_over_reviews_and_overlapping_waits() {
     let mut state = timings.state();
     let work = state.unique_work("call").unwrap();
     work.record_until(at(1));
-    work.active_auto_reviews = 1;
+    work.active_auto_reviews = vec![ReviewExecution::default()];
     work.record_until(at(2));
     work.active_user_waits = 1;
     work.record_until(at(3));
@@ -175,7 +176,7 @@ fn human_wait_takes_precedence_over_reviews_and_overlapping_waits() {
     work.record_until(at(5));
     work.active_user_waits = 0;
     work.record_until(at(6));
-    work.active_auto_reviews = 0;
+    work.active_auto_reviews.clear();
     work.record_until(at(7));
     assert_eq!(
         work.path.as_ref().unwrap().durations(start, at(7)),
@@ -237,4 +238,80 @@ fn user_wait_guards_balance_and_do_not_follow_reused_call_ids() {
     );
     drop(next);
     assert!(batch.completed().is_some());
+}
+
+#[test]
+fn observed_cached_review_is_all_overhead_and_human_wait_has_no_observer() {
+    let timings = DirectToolTimings::default();
+    let batch = ToolBatchTiming::default();
+    let start = Instant::now();
+    let invocation =
+        timings.start_direct_call("cached", batch, start, Some(CriticalPath::default()));
+    let first = invocation.start_review().unwrap();
+    let second = invocation.start_review().unwrap();
+    let first_observer = first.review_execution().unwrap();
+    let second_observer = second.review_execution().unwrap();
+    assert_ne!(first_observer, second_observer);
+    let human = invocation.start_user_wait().unwrap();
+    assert!(human.review_execution().is_none());
+    drop(first);
+    assert_eq!(
+        timings
+            .state()
+            .unique_work("cached")
+            .unwrap()
+            .active_auto_reviews,
+        vec![second_observer]
+    );
+    drop(human);
+    drop(second);
+    let completed = invocation.finish().unwrap();
+    let durations = completed.path.unwrap().durations(start, completed.ended_at);
+    assert_eq!(durations.auto_review_overhead, Some(durations.auto_review));
+    assert!(durations.auto_review > Duration::ZERO);
+    assert!(durations.user_wait > Duration::ZERO);
+}
+
+#[test]
+fn invocation_finish_freezes_unfinished_review_and_id_reuse_gets_new_observation() {
+    let timings = DirectToolTimings::default();
+    let batch = ToolBatchTiming::default();
+    let start = Instant::now();
+    let first =
+        timings.start_direct_call("same", batch.clone(), start, Some(CriticalPath::default()));
+    let old_guard = first.start_review().unwrap();
+    let old_observer = old_guard.review_execution().unwrap();
+    let child_start = Instant::now();
+    old_observer.started(child_start);
+    let first_result = first.finish().unwrap();
+    let old_path = first_result.path.unwrap();
+    let old_durations = old_path.durations(start, first_result.ended_at);
+    assert_eq!(old_durations.auto_review_overhead, None);
+
+    let next_start = Instant::now();
+    let next = timings.start_direct_call("same", batch, next_start, Some(CriticalPath::default()));
+    let next_guard = next.start_review().unwrap();
+    let next_observer = next_guard.review_execution().unwrap();
+    assert_ne!(old_observer, next_observer);
+    old_observer.completed(child_start, Instant::now());
+    drop(old_guard);
+    assert_eq!(
+        old_path.durations(start, first_result.ended_at),
+        old_durations
+    );
+    assert_eq!(
+        timings
+            .state()
+            .unique_work("same")
+            .unwrap()
+            .active_auto_reviews,
+        vec![next_observer]
+    );
+    drop(next_guard);
+    let next_result = next.finish().unwrap();
+    let durations = next_result
+        .path
+        .unwrap()
+        .durations(next_start, next_result.ended_at);
+    assert_eq!(durations.auto_review_overhead, Some(durations.auto_review));
 }

@@ -95,6 +95,7 @@ pub(crate) struct TurnTimingState {
 
 #[derive(Debug, Default)]
 struct TurnTimingStateInner {
+    review_execution: Option<codex_direct_tool_timing::ReviewExecution>,
     started_at: Option<Instant>,
     started_at_unix_secs: Option<i64>,
     completed_at: Option<(Instant, i64)>,
@@ -164,9 +165,19 @@ impl TurnTimingState {
         }
     }
 
+    pub(crate) async fn observe_review_execution(
+        &self,
+        execution: codex_direct_tool_timing::ReviewExecution,
+    ) {
+        self.state.lock().await.review_execution = Some(execution);
+    }
+
     pub(crate) async fn mark_turn_started(&self, started_at: Instant) -> i64 {
         let started_at_unix_ms = now_unix_timestamp_ms();
         let mut state = self.state.lock().await;
+        if let Some(execution) = &state.review_execution {
+            execution.started(started_at);
+        }
         state.started_at = Some(started_at);
         state.completed_at = None;
         state.started_at_unix_secs = Some(started_at_unix_ms / 1000);
@@ -211,6 +222,9 @@ impl TurnTimingState {
             )
             .unwrap_or(i64::MAX)
         });
+        if let (Some(execution), Some(started_at)) = (&state.review_execution, state.started_at) {
+            execution.completed(started_at, completed_at_instant);
+        }
         let profile = self.profile_state().complete(completed_at_instant);
         (Some(completed_at), duration_ms, profile)
     }
@@ -567,6 +581,7 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
 }
 
 mod report;
+pub(crate) mod review_execution;
 
 #[cfg(test)]
 #[path = "turn_timing_tests.rs"]

@@ -1126,3 +1126,122 @@ async fn parent_checkpoint_recovery_stops_after_one_restart() {
     assert_eq!(observed_spawns.load(Ordering::SeqCst), 2);
     assert!(pool.trunk().await.is_none());
 }
+
+#[test_case::test_case(None; "single_review")]
+#[test_case::test_case(Some(r#"{"outcome":"allow"}"#); "reconsideration_allows")]
+#[test_case::test_case(Some("invalid assessment"); "reconsideration_keeps_denial")]
+#[tokio::test]
+async fn compaction_and_review_submissions_share_execution_observer(
+    reconsidered_assessment: Option<&str>,
+) {
+    let (review_session, events, submissions) = test_review_session().await;
+    let child_session = Arc::clone(&review_session.session);
+    let mut params = test_review_params().await;
+    params
+        .spawn_config
+        .features
+        .enable(Feature::TokenBudget)
+        .unwrap();
+    params.spawn_config.model_auto_compact_token_limit = Some(0);
+    params.spawn_config.token_budget = None;
+    if reconsidered_assessment.is_some() {
+        params
+            .spawn_config
+            .features
+            .enable(Feature::GuardianDenialReconsideration)
+            .unwrap();
+    }
+    let turn = Arc::get_mut(&mut params.parent_context.turn).expect("unshared turn fixture");
+    turn.configured_token_budget = None;
+    turn.use_model_token_budget_defaults = false;
+    let execution = codex_direct_tool_timing::ReviewExecution::default();
+    execution.observe();
+    params.parent_context.review_execution = Some(execution.clone());
+    let review = tokio::spawn(async move {
+        run_review_on_session(
+            &review_session,
+            &params,
+            GuardianReviewSessionKind::TrunkReused,
+            codex_guardian_reviewer::ReviewDeadline::At(
+                tokio::time::Instant::now() + Duration::from_secs(30),
+            ),
+        )
+        .await
+    });
+    let start = std::time::Instant::now();
+    let mut child_intervals = vec![(10, 30), (40, 70)];
+    if reconsidered_assessment.is_some() {
+        child_intervals.push((75, 90));
+    }
+    for (index, (left, right)) in child_intervals.into_iter().enumerate() {
+        let submission = tokio::time::timeout(Duration::from_secs(10), submissions.recv())
+            .await
+            .expect("child submission deadline")
+            .expect("child submission");
+        if index == 0 {
+            assert!(matches!(submission.op, Op::Compact));
+        } else {
+            let Op::TurnInput { reply, .. } = submission.op else {
+                panic!("expected review input after compaction");
+            };
+            reply
+                .send(Ok(TurnInputSubmission::Started {
+                    root_turn_id: submission.id.clone(),
+                    turn_id: submission.id.clone(),
+                }))
+                .unwrap();
+        }
+        let pending = child_session
+            .services
+            .thread_extension_data
+            .remove::<crate::turn_timing::review_execution::PendingReviewExecution>();
+        if index < 2 {
+            let pending = pending.expect("instrumented child");
+            assert_eq!(pending.0, execution);
+            let child_start = start + Duration::from_millis(left);
+            pending.0.started(child_start);
+            pending
+                .0
+                .completed(child_start, start + Duration::from_millis(right));
+        } else {
+            assert!(pending.is_none());
+        }
+        let assessment = match (index, reconsidered_assessment) {
+            (1, Some(_)) => r#"{"outcome":"deny"}"#,
+            (2, Some(assessment)) => assessment,
+            _ => "complete",
+        };
+        events
+            .send(turn_complete_event(
+                &submission.id,
+                Some(assessment),
+                /*time_to_first_token_ms*/ None,
+            ))
+            .await
+            .unwrap();
+    }
+    let result = review.await.unwrap();
+    assert!(matches!(
+        result.outcome,
+        GuardianReviewSessionOutcome::Completed(Ok(_))
+    ));
+    assert!(
+        child_session
+            .services
+            .thread_extension_data
+            .get::<crate::turn_timing::review_execution::PendingReviewExecution>()
+            .is_none()
+    );
+    execution.seal();
+    let end = start + Duration::from_millis(100);
+    let totals = codex_utils_critical_path::CriticalPath::default()
+        .auto_review(start, end, vec![execution])
+        .durations(start, end);
+    assert_eq!(totals.auto_review, Duration::from_millis(100));
+    assert_eq!(
+        totals.auto_review_overhead,
+        reconsidered_assessment
+            .is_none()
+            .then_some(Duration::from_millis(50))
+    );
+}
