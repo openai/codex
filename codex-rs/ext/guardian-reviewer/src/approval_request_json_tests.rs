@@ -24,6 +24,15 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json
             open_world_hint: None,
             read_only_hint: Some(false),
         }),
+        prompt_permissions: Some((
+            "owner".to_string(),
+            std::sync::Arc::new(
+                codex_file_system::FileSystemSandboxContext::from_permission_profile(
+                    codex_protocol::models::PermissionProfile::read_only(),
+                    PathUri::parse("file:///workspace").expect("valid executor path"),
+                ),
+            ),
+        )),
     };
 
     assert_eq!(

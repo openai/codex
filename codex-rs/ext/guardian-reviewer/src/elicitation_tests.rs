@@ -69,6 +69,7 @@ fn guardian_elicitation_review_request_builds_mcp_tool_call(
                 tool_title: Some("Access browser origin".to_owned()),
                 tool_description: None,
                 annotations: None,
+                prompt_permissions: None,
             }),
         }
     );

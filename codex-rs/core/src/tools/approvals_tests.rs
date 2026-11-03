@@ -210,6 +210,7 @@ async fn explicit_mcp_reviewer_override_takes_precedence_over_action_context() {
         approval_mode: AppToolApproval::Prompt,
         allow_session_remember: false,
         allow_persistent_approval: false,
+        prompt_permissions: None,
     };
     let mut review_context = GuardianReviewContext::from(&turn);
     review_context.approval_policy = AskForApproval::OnRequest;

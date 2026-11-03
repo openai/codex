@@ -197,12 +197,21 @@ pub struct PreparedMcpCall {
 pub enum McpPermissionSource<'a> {
     Environment {
         environment_id: &'a str,
-        sandbox: &'a FileSystemSandboxContext,
+        sandbox: &'a Arc<FileSystemSandboxContext>,
     },
     Thread {
         profile: &'a PermissionProfile,
         host_cwd: &'a AbsolutePathBuf,
     },
+}
+
+impl<'a> McpPermissionSource<'a> {
+    pub fn profile(&self) -> &'a PermissionProfile {
+        match self {
+            Self::Environment { sandbox, .. } => &sandbox.permissions,
+            Self::Thread { profile, .. } => profile,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -291,11 +300,7 @@ impl PreparedMcpCall {
 
     /// Returns the owner permissions validated when this immutable call was prepared.
     pub fn permission_profile(&self) -> &PermissionProfile {
-        let Some(permission_profile) = self.config.permission_profile_for_server(&self.server_name)
-        else {
-            unreachable!("prepared MCP calls retain their immutable permission authority");
-        };
-        permission_profile
+        self.permission_source().profile()
     }
 
     /// Attach policy aliases and the server-host launcher, replacing stale authority.

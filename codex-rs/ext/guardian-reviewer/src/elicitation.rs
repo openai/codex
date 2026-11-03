@@ -130,6 +130,7 @@ pub fn guardian_elicitation_review_request(
             tool_title: metadata_owned_string(meta, MCP_ELICITATION_TOOL_TITLE_KEY),
             tool_description: metadata_owned_string(meta, MCP_ELICITATION_TOOL_DESCRIPTION_KEY),
             annotations: None,
+            prompt_permissions: None,
         }),
     }
 }

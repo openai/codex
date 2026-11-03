@@ -32,8 +32,6 @@ use super::GUARDIAN_MAX_TOOL_ENTRY_TOKENS;
 use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
 
-// Bound both JSON and permission evidence without restricting manual approvals.
-const MAX_GUARDIAN_ENVIRONMENT_ID_BYTES: usize = 256;
 pub(super) use codex_guardian_reviewer::GUARDIAN_TRANSCRIPT_START;
 
 /// Selects transcript evidence using the checkpoint already loaded by the reviewer.
@@ -103,12 +101,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
         GuardianTranscriptHistory::Retained(history) => (history, false),
         GuardianTranscriptHistory::LoadedParentCheckpoint(history) => (history, true),
     };
-    if request
-        .target_environment_id()
-        .is_some_and(|id| id.len() > MAX_GUARDIAN_ENVIRONMENT_ID_BYTES)
-    {
-        anyhow::bail!("approval environment id exceeds Guardian's 256-byte limit");
-    }
+    super::permissions::check_environment_id(request.target_environment_id())?;
     let evidence_mode = parent_context
         .map(|context| node_repl_review_evidence_mode(context.turn()))
         .unwrap_or(NodeReplReviewEvidenceMode::Disabled);
@@ -133,11 +126,20 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
         &request,
         reasons.retry.or(reasons.approval),
     )?;
-    let permissions = parent_context
-        .map(|context| {
-            super::permissions::for_environment(context, request.target_environment_id())
-        })
-        .transpose()?;
+    let permissions = match request {
+        GuardianApprovalRequest::McpToolCall {
+            prompt_permissions: Some((environment_id, sandbox)),
+            ..
+        } => Some(super::permissions::for_mcp_environment(
+            &environment_id,
+            &sandbox,
+        )?),
+        _ => parent_context
+            .map(|context| {
+                super::permissions::for_environment(context, request.target_environment_id())
+            })
+            .transpose()?,
+    };
     let node_repl_snapshot = if node_repl_transcripts_enabled {
         session
             .services

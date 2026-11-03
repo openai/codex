@@ -205,6 +205,7 @@ pub fn guardian_approval_request_to_json(
             tool_title,
             tool_description,
             annotations,
+            prompt_permissions: _,
         } => serialize_guardian_action(McpToolCallApprovalAction {
             tool: "mcp_tool_call",
             server,

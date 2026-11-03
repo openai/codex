@@ -40,6 +40,7 @@ use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
+use codex_mcp::McpPermissionSource;
 use codex_mcp::McpToolRequestMetaHook;
 use codex_mcp::PreparedMcpCall;
 use codex_mcp::SandboxState;
@@ -78,7 +79,6 @@ use codex_protocol::mcp_approval_meta::TOOL_NAME_KEY as MCP_TOOL_APPROVAL_TOOL_N
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_DISPLAY_KEY as MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_TOOL_APPROVAL_TOOL_TITLE_KEY;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::McpInvocation;
@@ -292,7 +292,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &hook_tool_name,
         &metadata,
         prepared_call.config(),
-        prepared_call.permission_profile(),
+        prepared_call.permission_source(),
         prepared_call.server_environment_id(),
         approval_policy,
     )
@@ -1557,7 +1557,7 @@ async fn maybe_request_mcp_tool_approval(
     hook_tool_name: &HookToolName,
     metadata: &McpToolApprovalMetadata,
     config: &codex_mcp::McpConfig,
-    permission_profile: &PermissionProfile,
+    permission_source: McpPermissionSource<'_>,
     environment_id: &str,
     policy: McpToolApprovalPolicy,
 ) -> Option<McpToolApproval> {
@@ -1577,7 +1577,7 @@ async fn maybe_request_mcp_tool_approval(
     if !strict_auto_review
         && mcp_permission_prompt_is_auto_approved(
             config.approval_policy.value(),
-            permission_profile,
+            permission_source.profile(),
             McpPermissionPromptAutoApproveContext {
                 tool_approval_mode: Some(policy.mode),
             },
@@ -1637,6 +1637,13 @@ async fn maybe_request_mcp_tool_approval(
         approval_mode: policy.mode,
         allow_session_remember: session_approval_key.is_some(),
         allow_persistent_approval: persistent_approval_key.is_some(),
+        prompt_permissions: match permission_source {
+            McpPermissionSource::Environment {
+                environment_id,
+                sandbox,
+            } => Some((environment_id.to_owned(), Arc::clone(sandbox))),
+            McpPermissionSource::Thread { .. } => None,
+        },
     };
     let approval_context = ApprovalContext {
         exec_requirement: None,
@@ -1898,6 +1905,7 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
                 open_world_hint: annotations.open_world_hint,
                 read_only_hint: annotations.read_only_hint,
             }),
+        prompt_permissions: None,
     }
 }
 

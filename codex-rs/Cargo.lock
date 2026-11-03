@@ -3669,6 +3669,7 @@ dependencies = [
  "codex-extension-api",
  "codex-features",
  "codex-feedback",
+ "codex-file-system",
  "codex-guardian-context",
  "codex-history",
  "codex-mcp",

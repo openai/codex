@@ -278,6 +278,7 @@ fn guardian_mcp_request(server: &str, tool_name: &str) -> GuardianApprovalReques
             open_world_hint: Some(true),
             read_only_hint: None,
         }),
+        prompt_permissions: None,
     }
 }
 
