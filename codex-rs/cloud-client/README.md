@@ -20,11 +20,14 @@ stopping the thread or answering approvals. Streams end after their first error.
 Resume and Attach setup have a 150-second local deadline; live streams have no idle
 deadline. Setup does not send a gRPC deadline that would expire a healthy stream.
 
-Event variants distinguish notifications and server requests; payloads remain the
-complete nested protobuf message bytes, preserving unknown fields. These are not
-ProtoJSON or app-server JSON-RPC. Native status code, message and binary details
-are available explicitly; credentials, event and error diagnostics are redacted.
-Full payload typing, history, approval replies and reconnect are subsequent slices.
+`Event::Transcript` decodes selected text, command output, patch, and turn updates.
+It validates the thread ID and exposes the decoded fields. Turn updates include
+start time, completion time, and duration when the server provides them.
+Other notifications and server requests remain opaque protobuf payloads, preserving
+unknown fields. These are not ProtoJSON or app-server JSON-RPC. Native status
+code, message and binary details are available explicitly; credentials, event
+and error diagnostics are redacted. History, approval replies and reconnect
+are subsequent slices.
 The minimal envelopes in `wire.rs` and `ResumeRequest` mirror ThreadService field
 numbers; no monorepo checkout or protobuf compiler is required to build this crate.
 

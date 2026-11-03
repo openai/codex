@@ -4,9 +4,20 @@
 //! a timeout or disconnect can leave Resume admitted. Attach delivers live events only;
 //! dropping its stream detaches without interrupting the thread or answering approvals.
 
+mod transcript;
+mod transcript_wire;
 mod types;
 mod wire;
 
+pub use transcript::FileUpdate;
+pub use transcript::ItemDelta;
+pub use transcript::PatchKind;
+pub use transcript::PatchUpdate;
+pub use transcript::TranscriptEvent;
+pub use transcript::TranscriptUpdate;
+pub use transcript::TurnFailure;
+pub use transcript::TurnStatus;
+pub use transcript::TurnSummary;
 pub use types::Credentials;
 pub use types::Error;
 pub use types::Event;
@@ -160,10 +171,16 @@ impl Client {
         .map_err(|_| Error::Timeout)?
         .map_err(Error::from)?;
         let mut stream = response.into_inner();
+        let thread_id = thread_id.to_owned();
         Ok(async_stream::try_stream! {
             while let Some(message) = stream.message().await.map_err(Error::from)? {
                 yield match message.event.ok_or(Error::InvalidResponse)? {
-                    wire::Payload::Notification(bytes) => Event::Notification(bytes),
+                    wire::Payload::Notification(bytes) => {
+                        match TranscriptEvent::decode(&thread_id, &bytes)? {
+                            Some(event) => Event::Transcript(Box::new(event)),
+                            None => Event::Notification(bytes),
+                        }
+                    },
                     wire::Payload::ServerRequest(bytes) => Event::ServerRequest(bytes),
                 };
             }

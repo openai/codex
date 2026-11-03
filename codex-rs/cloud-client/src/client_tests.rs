@@ -346,3 +346,5 @@ async fn https_enforces_unmanaged_endpoint_restrictions_before_connecting() {
     .await
     .unwrap();
 }
+#[path = "transcript_tests.rs"]
+mod transcript;

@@ -46,11 +46,11 @@ pub struct ResumeRequest {
     pub shared_access: bool,
 }
 
-/// An Attach event containing the complete nested protobuf message bytes.
-/// Payloads are native Notification/ServerRequest messages, not JSON-RPC or ProtoJSON.
-/// Keeping them opaque preserves unknown fields until full payload typing is added.
+/// An Attach event with selected typed transcript updates and otherwise opaque payloads.
+/// The opaque variants carry the original native Notification or ServerRequest protobuf bytes.
 pub enum Event {
     Notification(Bytes),
+    Transcript(Box<crate::TranscriptEvent>),
     ServerRequest(Bytes),
 }
 
@@ -58,6 +58,7 @@ impl fmt::Debug for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Notification(_) => "Notification([redacted])",
+            Self::Transcript(_) => "Transcript([redacted])",
             Self::ServerRequest(_) => "ServerRequest([redacted])",
         })
     }
