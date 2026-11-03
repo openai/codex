@@ -26,7 +26,7 @@ impl ChatWidget {
 #[derive(Debug)]
 pub(crate) enum Notification {
     AgentTurnComplete { response: String },
-    ExecApprovalRequested { command: String },
+    ExecApprovalRequested { subject: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
     ElicitationRequested { server_name: String },
     PlanModePrompt { title: String },
@@ -40,11 +40,8 @@ impl Notification {
                 Notification::agent_turn_preview(response)
                     .unwrap_or_else(|| "Agent turn complete".to_string())
             }
-            Notification::ExecApprovalRequested { command } => {
-                format!(
-                    "Approval requested: {}",
-                    truncate_text(command, /*max_graphemes*/ 30)
-                )
+            Notification::ExecApprovalRequested { subject } => {
+                format!("Approval requested: {subject}")
             }
             Notification::EditApprovalRequested { cwd, changes } => {
                 format!(

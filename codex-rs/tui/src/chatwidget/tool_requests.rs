@@ -4,6 +4,7 @@
 //! that block on user decisions.
 
 use super::*;
+use codex_app_server_protocol::CommandExecutionApprovalKind;
 
 impl ChatWidget {
     pub(super) fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
@@ -282,9 +283,14 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_approval_now(&mut self, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
-        let command = shlex::try_join(ev.command.iter().map(String::as_str))
-            .unwrap_or_else(|_| ev.command.join(" "));
-        self.notify(Notification::ExecApprovalRequested { command });
+        let subject = if ev.kind == CommandExecutionApprovalKind::WriteStdin {
+            "send terminal input".to_string()
+        } else if let Some(network) = &ev.network_approval_context {
+            format!("network access to {}", network.host)
+        } else {
+            strip_bash_lc_and_escape(&ev.command)
+        };
+        self.notify(Notification::ExecApprovalRequested { subject });
 
         let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec(ExecApprovalRequest {

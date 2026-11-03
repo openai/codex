@@ -49,8 +49,9 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     );
 }
 
-#[test]
-fn app_server_exec_approval_request_splits_shell_wrapped_command() {
+#[tokio::test]
+async fn app_server_exec_approval_request_splits_shell_wrapped_command() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let script = r#"python3 -c 'print("Hello, world!")'"#;
     let request = exec_approval_request_from_params(
         AppServerCommandExecutionRequestApprovalParams {
@@ -85,6 +86,12 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
             script.to_string(),
         ]
     );
+
+    handle_exec_approval_request(&mut chat, "approval-1", request);
+    assert_snapshot!(
+        chat.pending_notification.as_ref().expect("approval notification").display(),
+        @r#"Approval requested: python3 -c 'print("Hello, world!")'"#
+    );
 }
 
 #[tokio::test]
@@ -116,6 +123,10 @@ async fn app_server_write_stdin_approval_renders_terminal_input() {
     );
 
     handle_exec_approval_request(&mut chat, "approval-1", event);
+    assert_snapshot!(
+        chat.pending_notification.as_ref().expect("approval notification").display(),
+        @"Approval requested: send terminal input"
+    );
 
     let area = Rect::new(0, 0, 80, chat.desired_height(/*width*/ 80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -221,6 +232,10 @@ async fn network_exec_approval_history_describes_session_host_allowance() {
     );
 
     handle_exec_approval_request(&mut chat, "sub-network", request);
+    assert_snapshot!(
+        chat.pending_notification.as_ref().expect("approval notification").display(),
+        @"Approval requested: network access to example.com"
+    );
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
 
     let decision = drain_insert_history(&mut rx)

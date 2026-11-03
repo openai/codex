@@ -744,6 +744,7 @@ pub enum NotificationMethod {
     #[default]
     Auto,
     Osc9,
+    Osc777,
     Bel,
 }
 
@@ -752,6 +753,7 @@ impl fmt::Display for NotificationMethod {
         match self {
             NotificationMethod::Auto => write!(f, "auto"),
             NotificationMethod::Osc9 => write!(f, "osc9"),
+            NotificationMethod::Osc777 => write!(f, "osc777"),
             NotificationMethod::Bel => write!(f, "bel"),
         }
     }
