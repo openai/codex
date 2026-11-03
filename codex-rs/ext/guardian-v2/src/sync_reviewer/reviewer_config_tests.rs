@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 async fn guardian_review_session_config_allows_pinned_disabled_feature() {
     let home = tempfile::tempdir().expect("create temp dir");
     let mut parent_config = core_test_support::load_default_config_for_test(&home).await;
-    parent_config.features = ManagedFeatures::from_configured(
+    parent_config.features = ManagedFeatures::from_configured_with_warnings(
         parent_config.features.get().clone(),
         Some(Sourced {
             value: FeatureRequirementsToml {
@@ -22,6 +22,7 @@ async fn guardian_review_session_config_allows_pinned_disabled_feature() {
             },
             source: RequirementSource::Unknown,
         }),
+        &mut parent_config.startup_warnings,
     )
     .expect("managed features");
 
