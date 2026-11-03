@@ -195,6 +195,8 @@ pub enum Feature {
     WebSearchCached,
     /// Expose the extension-backed standalone web search tool.
     StandaloneWebSearch,
+    /// Let the host authorize MCP search independently of native search through per-turn policy.
+    HostedSearchPolicy,
     /// Use the legacy Landlock Linux sandbox fallback instead of the default
     /// bubblewrap pipeline.
     UseLegacyLandlock,
@@ -1390,6 +1392,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::StandaloneWebSearch,
         key: "standalone_web_search",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::HostedSearchPolicy,
+        key: "hosted_search_policy",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -493,8 +493,7 @@ web_search = true
         cfg.tools,
         Some(ToolsToml {
             web_search: None,
-            experimental_request_user_input: None,
-            update_plan: None,
+            ..Default::default()
         })
     );
 }
@@ -513,8 +512,7 @@ web_search = false
         cfg.tools,
         Some(ToolsToml {
             web_search: None,
-            experimental_request_user_input: None,
-            update_plan: None,
+            ..Default::default()
         })
     );
 }
@@ -531,9 +529,8 @@ fn tools_experimental_request_user_input_defaults_to_enabled() {
     assert_eq!(
         cfg.tools,
         Some(ToolsToml {
-            web_search: None,
             experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: true }),
-            update_plan: None,
+            ..Default::default()
         })
     );
 }
@@ -551,9 +548,8 @@ enabled = false
     assert_eq!(
         cfg.tools,
         Some(ToolsToml {
-            web_search: None,
             experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: false }),
-            update_plan: None,
+            ..Default::default()
         })
     );
 }
@@ -569,6 +565,7 @@ async fn load_config_resolves_experimental_request_user_input_enabled() -> std::
                     enabled: false,
                 }),
                 update_plan: None,
+                ..Default::default()
             }),
             ..ConfigToml::default()
         },

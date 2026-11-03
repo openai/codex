@@ -7081,6 +7081,11 @@ class WebSearchMode(Enum):
     live = "live"
 
 
+class WebSearchProvider(Enum):
+    standalone = "standalone"
+    search_mcp = "search_mcp"
+
+
 class WebSearchToolConfig(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -11595,6 +11600,12 @@ class Config(BaseModel):
         ),
     ] = None
     browser_use: BrowserUseConfig | None = None
+    client_search_provider: Annotated[
+        WebSearchProvider | None,
+        Field(
+            description="Effective tools.client_search_provider hint. Model-selected providers take precedence."
+        ),
+    ] = None
     compact_prompt: str | None = None
     computer_use: ComputerUseConfig | None = None
     desktop: dict[str, Any] | None = None

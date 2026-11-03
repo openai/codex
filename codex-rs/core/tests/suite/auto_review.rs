@@ -673,6 +673,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         availability_nux: None,
         apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
         web_search_tool_type: Default::default(),
+        web_search_provider: None,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,
         context_window: Some(272_000),

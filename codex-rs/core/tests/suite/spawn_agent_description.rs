@@ -119,6 +119,7 @@ fn test_model_info(
         availability_nux: None,
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
+        web_search_provider: None,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,
         context_window: Some(272_000),

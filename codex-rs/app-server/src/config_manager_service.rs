@@ -161,8 +161,12 @@ impl ConfigManager {
 
         let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;
-        let config: ApiConfig = serde_json::from_value(json_value)
+        let mut config: ApiConfig = serde_json::from_value(json_value)
             .map_err(|err| ConfigManagerError::json("failed to deserialize configuration", err))?;
+        config.client_search_provider = effective_config_toml
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.client_search_provider);
 
         let mut origins = layers.origins_with_path_filter(|segments| {
             layers

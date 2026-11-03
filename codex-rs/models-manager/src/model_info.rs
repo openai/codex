@@ -123,6 +123,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         default_verbosity: None,
         apply_patch_tool_type: None,
         web_search_tool_type: WebSearchToolType::Text,
+        web_search_provider: None,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,
         context_window: Some(272_000),

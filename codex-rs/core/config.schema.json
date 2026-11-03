@@ -1104,6 +1104,9 @@
             "hooks": {
               "type": "boolean"
             },
+            "hosted_search_policy": {
+              "type": "boolean"
+            },
             "image_detail_original": {
               "type": "boolean"
             },
@@ -5056,6 +5059,14 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "client_search_provider": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WebSearchProvider"
+            }
+          ],
+          "description": "Client provider preference when the model does not select a provider."
+        },
         "experimental_request_user_input": {
           "$ref": "#/definitions/ExperimentalRequestUserInput"
         },
@@ -7342,6 +7353,14 @@
       ],
       "type": "string"
     },
+    "WebSearchProvider": {
+      "description": "Provider preference selected by the resolved model catalog entry.",
+      "enum": [
+        "standalone",
+        "search_mcp"
+      ],
+      "type": "string"
+    },
     "WebSearchToolConfig": {
       "additionalProperties": false,
       "properties": {
@@ -7843,6 +7862,9 @@
           "$ref": "#/definitions/FeatureToml_for_GuardianV3ConfigToml"
         },
         "hooks": {
+          "type": "boolean"
+        },
+        "hosted_search_policy": {
           "type": "boolean"
         },
         "image_detail_original": {

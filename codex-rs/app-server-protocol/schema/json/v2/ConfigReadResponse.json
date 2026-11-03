@@ -511,6 +511,17 @@
             }
           ]
         },
+        "client_search_provider": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Effective tools.client_search_provider hint. Model-selected providers take precedence."
+        },
         "compact_prompt": {
           "type": [
             "string",
@@ -1113,6 +1124,14 @@
         "cached",
         "indexed",
         "live"
+      ],
+      "type": "string"
+    },
+    "WebSearchProvider": {
+      "description": "Provider preference selected by the resolved model catalog entry.",
+      "enum": [
+        "standalone",
+        "search_mcp"
       ],
       "type": "string"
     },
