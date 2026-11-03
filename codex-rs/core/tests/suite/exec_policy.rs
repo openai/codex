@@ -324,7 +324,7 @@ async fn granular_dangerous_command_approval_preserves_permissions(
                 }));
             config
                 .permissions
-                .set_permission_profile(permission_profile.clone())
+                .set_permission_profile(permission_profile)
                 .unwrap();
             config.approvals_reviewer = ApprovalsReviewer::User;
         }))
