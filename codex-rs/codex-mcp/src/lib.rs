@@ -1,4 +1,5 @@
 pub use binding::McpBinding;
+pub use binding::McpPermissionSource;
 pub use binding::PreparedMcpCall;
 pub use client_capabilities::client_mcp_extensions;
 pub use client_tool_catalog::CodexAppsToolSnapshot;
@@ -60,6 +61,7 @@ pub use catalog::ResolvedMcpServer;
 pub use mcp::CODEX_APPS_MCP_SERVER_NAME;
 pub use mcp::DEFAULT_OPTIONAL_MCP_STARTUP_GRACE;
 pub use mcp::McpConfig;
+pub use mcp::McpServerPermissions;
 pub use mcp::ToolPluginContext;
 pub use server::EffectiveMcpServer;
 

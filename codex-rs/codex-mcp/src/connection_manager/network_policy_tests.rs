@@ -2,11 +2,14 @@
 
 use super::*;
 use crate::MCP_NETWORK_POLICY_META_CAPABILITY;
+use crate::McpServerPermissions;
 use crate::NetworkPolicyMetadata;
 use crate::NetworkPolicyMetadataProvider;
 use crate::catalog::McpServerRegistration;
 use crate::catalog::ResolvedMcpCatalog;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_network_proxy::NetworkMode;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResponse;
@@ -151,9 +154,14 @@ async fn tool_calls_deliver_only_negotiated_trusted_network_policy() -> anyhow::
         let policy = Arc::new(CapturedPolicy::default());
         let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
         config.permission_profile = PermissionProfile::Disabled;
-        config
-            .server_permission_profiles
-            .insert("docs".to_string(), PermissionProfile::read_only());
+        let sandbox = FileSystemSandboxContext::from_permission_profile(
+            PermissionProfile::read_only(),
+            PathUri::from_host_native_path(std::env::temp_dir())?,
+        );
+        config.server_permissions.insert(
+            "docs".to_string(),
+            McpServerPermissions::Environment(Arc::new(sandbox)),
+        );
         let config = Arc::new(config);
         let mut manager = McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true);
         manager.config = Some(Arc::clone(&config));

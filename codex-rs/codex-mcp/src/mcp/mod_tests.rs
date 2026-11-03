@@ -1,5 +1,6 @@
 use super::*;
 use crate::McpPluginAttribution;
+use crate::McpServerPermissions;
 use crate::McpServerRegistration;
 use crate::connection_manager::tests::create_ready_async_managed_client;
 use crate::mcp::auth::McpAuthStatusEntry;
@@ -225,12 +226,13 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         skill_mcp_dependency_install_enabled: true,
         approval_policy: Constrained::allow_any(AskForApproval::OnRequest),
         permission_profile: PermissionProfile::default(),
+        host_cwd: AbsolutePathBuf::current_dir().expect("test working directory"),
         config_layer_stack: codex_config::ConfigLayerStack::default(),
         plugins: Default::default(),
         approvals_reviewer: codex_config::types::ApprovalsReviewer::default(),
         environment_cwds: HashMap::new(),
         environment_use_mxc: HashMap::new(),
-        server_permission_profiles: HashMap::new(),
+        server_permissions: HashMap::new(),
         codex_self_exe: None,
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
@@ -255,10 +257,10 @@ pub(crate) fn test_elicitation_config(
 ) -> Arc<McpConfig> {
     let mut config = test_mcp_config(PathBuf::new());
     config.approval_policy = Constrained::allow_any(approval_policy);
-    config.permission_profile = permission_profile.clone();
+    config.permission_profile = permission_profile;
     config
-        .server_permission_profiles
-        .insert(server_name.to_string(), permission_profile);
+        .server_permissions
+        .insert(server_name.to_string(), McpServerPermissions::Thread);
     Arc::new(config)
 }
 
@@ -355,7 +357,7 @@ fn mcp_server_permissions_handle_unattached_and_threadless_servers() {
     config.mcp_server_catalog = catalog.build();
     let servers = effective_mcp_servers(&config, /*auth*/ None);
     assert_eq!(config.permission_profile_for_server("selected"), None);
-    config.set_server_permission_profiles(&servers, std::iter::empty());
+    config.set_server_permissions(&servers, std::iter::empty());
 
     assert_eq!(
         config.permission_profile_for_server("selected"),

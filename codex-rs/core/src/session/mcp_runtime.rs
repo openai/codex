@@ -313,6 +313,7 @@ impl Session {
         } = mcp_projection;
         config.approval_policy = desired.config.permissions.approval_policy.clone();
         config.permission_profile = desired.config.permissions.effective_permission_profile();
+        config.host_cwd = desired.config.cwd.clone();
         config.approvals_reviewer = desired.config.approvals_reviewer;
         config.environment_cwds = desired
             .environments
@@ -348,12 +349,17 @@ impl Session {
                         == SandboxType::WindowsMxc,
             );
         let mcp_servers = effective_mcp_servers(&config, auth.as_ref());
-        config.set_server_permission_profiles(
+        config.set_server_permissions(
             &mcp_servers,
             desired.environments.turn_environments().map(|environment| {
+                // Freeze the executor paths used to interpret this profile with the MCP call.
+                let mut sandbox = environment.sandbox_context(/*additional_permissions*/ None);
+                sandbox.permissions = sandbox
+                    .permissions
+                    .materialize_project_roots_with_path_uris(&sandbox.workspace_roots);
                 (
                     environment.selection.environment_id.clone(),
-                    environment.permission_profile_with_workspace_roots(),
+                    Arc::new(sandbox),
                 )
             }),
         );

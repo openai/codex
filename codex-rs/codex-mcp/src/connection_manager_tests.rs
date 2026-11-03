@@ -2,6 +2,7 @@ use super::*;
 #[path = "connection_manager/network_policy_tests.rs"]
 mod network_policy_tests;
 use crate::McpBinding;
+use crate::McpServerPermissions;
 use crate::client_tool_catalog::ClientToolCatalog;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestManager;
@@ -235,10 +236,10 @@ fn store_current_tools(cache_context: &ConnectorRuntimeContext<ToolInfo>, tools:
 
 async fn capture_binding(manager: &Arc<McpConnectionSet>) -> McpBinding {
     let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
-    config.server_permission_profiles = manager
+    config.server_permissions = manager
         .servers
         .keys()
-        .map(|name| (name.clone(), PermissionProfile::default()))
+        .map(|name| (name.clone(), McpServerPermissions::Thread))
         .collect();
     manager
         .capture_binding_with_metadata(
@@ -560,8 +561,8 @@ async fn prepared_call_timeout_includes_trusted_access_lookup() {
     ));
     config.mcp_server_catalog = catalog.build();
     config
-        .server_permission_profiles
-        .insert("docs".to_string(), PermissionProfile::default());
+        .server_permissions
+        .insert("docs".to_string(), McpServerPermissions::Thread);
     manager.tool_plugin_context = Arc::new(crate::tool_plugin_context(&config));
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     manager.trusted_access = Some(TrustedAccessContext::new(
@@ -2710,9 +2711,9 @@ async fn hard_refresh_keeps_client_catalog_local_when_shared_cache_loses_race() 
     );
 
     let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-    config.server_permission_profiles.insert(
+    config.server_permissions.insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        PermissionProfile::default(),
+        McpServerPermissions::Thread,
     );
     let manager_a_for_refresh = Arc::clone(&manager_a);
     let config_for_refresh = config.clone();
@@ -3294,8 +3295,8 @@ async fn capture_binding_waits_for_optional_startup_when_shared_grace_is_disable
     let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
     config.optional_mcp_startup_grace = Duration::ZERO;
     config
-        .server_permission_profiles
-        .insert("optional".to_string(), PermissionProfile::default());
+        .server_permissions
+        .insert("optional".to_string(), McpServerPermissions::Thread);
     let manager = Arc::new(manager);
     let mut capture = tokio::spawn(async move {
         manager

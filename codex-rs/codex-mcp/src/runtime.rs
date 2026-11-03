@@ -1147,7 +1147,6 @@ pub(crate) fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &st
 
 #[cfg(test)]
 mod tests {
-    use codex_protocol::models::PermissionProfile;
     use codex_utils_path_uri::PathUri;
     use std::collections::HashMap;
 
@@ -1160,6 +1159,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::McpServerPermissions;
 
     fn stdio_server(environment_id: &str) -> McpServerConfig {
         McpServerConfig {
@@ -1226,9 +1226,9 @@ mod tests {
         // Complete the fixture's shared startup future before testing stable reuse.
         connections.list_all_tools().await;
         let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-        config.server_permission_profiles.insert(
+        config.server_permissions.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            PermissionProfile::default(),
+            McpServerPermissions::Thread,
         );
         let published = Arc::new(PublishedMcpRuntime {
             connections: Arc::clone(&connections),
