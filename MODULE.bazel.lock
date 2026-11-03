@@ -262,8 +262,8 @@
     "https://bcr.bazel.build/modules/zlib/1.3.1.bcr.8/MODULE.bazel": "772c674bb78a0342b8caf32ab5c25085c493ca4ff08398208dcbe4375fe9f776",
     "https://bcr.bazel.build/modules/zlib/1.3.1.bcr.8/source.json": "cf377d76800dfc3d3b71e9dd4a8c53a62837cbce37cc4f25e6207b15fc1e8f2b",
     "https://bcr.bazel.build/modules/zlib/1.3.1/MODULE.bazel": "751c9940dcfe869f5f7274e1295422a34623555916eb98c174c1e945594bf198",
-    "https://bcr.bazel.build/modules/zstd/1.5.7/MODULE.bazel": "f5780cdbd6f4c5bb985a20f839844316fe48fb5e463056f372dbc37cfabdf450",
-    "https://bcr.bazel.build/modules/zstd/1.5.7/source.json": "f72c48184b6528ffc908a5a2bcbf3070c6684f3db03da2182c8ca999ae5f5cfd"
+    "https://bcr.bazel.build/modules/zstd/1.5.7.bcr.2/MODULE.bazel": "d20bf700aacefca7c09840baa4bae9b347ddb31bd9125f4e592998f80b980cd7",
+    "https://bcr.bazel.build/modules/zstd/1.5.7.bcr.2/source.json": "19cf972e5efc777e24008b90c2d819a4c814d33d1326c62d736ed97544817bf0"
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {

@@ -383,7 +383,7 @@ crate.from_cargo(
     ],
 )
 
-bazel_dep(name = "zstd", version = "1.5.7")
+bazel_dep(name = "zstd", version = "1.5.7.bcr.2")
 
 crate.annotation(
     # Keep Windows proxy authentication aligned with codex-rs/.cargo/config.toml.
@@ -411,11 +411,8 @@ crate.annotation(
 )
 crate.annotation(
     crate = "zstd-sys",
-    gen_build_script = "on",
-    patch_args = ["-p1"],
-    patches = [
-        "//patches:zstd-sys_windows_msvc_include_dirs.patch",
-    ],
+    gen_build_script = "off",
+    deps = ["@zstd"],
 )
 crate.annotation(
     crate = "ring",
