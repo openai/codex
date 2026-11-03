@@ -675,6 +675,8 @@ async fn turn_critical_path_metrics_count_each_capture_once() {
     let complete = TurnCriticalPath::Complete(TurnCriticalPathDurations {
         duration_ms: 60,
         inference_ms: 31,
+        sampling_ms: 31,
+        compaction_ms: 0,
         auto_review_ms: 2,
         tools_ms: 10,
         user_wait_ms: 0,

@@ -415,11 +415,8 @@ impl TurnProfileState {
 
     fn extend_path(&self, path: CriticalPath, previous: Instant, now: Instant) -> CriticalPath {
         match self.active_phase {
-            // Compaction is model-related elapsed work, including local bookkeeping;
-            // the existing profile still exposes its separate compaction_ms duration.
-            Some(TurnProfilePhase::Sampling | TurnProfilePhase::Compaction) => {
-                path.work(previous, now, WorkKind::Inference)
-            }
+            Some(TurnProfilePhase::Sampling) => path.work(previous, now, WorkKind::Sampling),
+            Some(TurnProfilePhase::Compaction) => path.work(previous, now, WorkKind::Compaction),
             Some(TurnProfilePhase::ToolBlocking) => {
                 let dependency = self
                     .tool_dependency

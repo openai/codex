@@ -2834,22 +2834,7 @@ async fn inter_agent_communication_waits_for_confirmed_delivery_persistence() {
 
 #[tokio::test]
 async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
-    let (mut session, mut turn_context) = make_session_and_context().await;
-    Arc::make_mut(&mut turn_context.config)
-        .features
-        .enable(Feature::CriticalPathTiming)
-        .unwrap();
-    turn_context.turn_timing_state.enable_critical_path();
-    turn_context
-        .turn_timing_state
-        .mark_turn_started(std::time::Instant::now())
-        .await;
-    assert!(
-        turn_context
-            .turn_timing_state
-            .snapshot_path(std::time::Instant::now())
-            .is_some()
-    );
+    let (mut session, turn_context) = make_session_and_context().await;
     let rollout_path = attach_thread_persistence(&mut session).await;
     let communication = InterAgentCommunication::new(
         AgentPath::root().join("worker").expect("worker path"),
@@ -2870,12 +2855,6 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
         .record_inter_agent_communication(&turn_context, turn_context.model_info(), communication)
         .await;
 
-    assert!(
-        turn_context
-            .turn_timing_state
-            .snapshot_path(std::time::Instant::now())
-            .is_none()
-    );
     let recorded_history = session.clone_history().await;
     let recorded_items = raw_history_items(&recorded_history);
     let create_time = recorded_items[0]

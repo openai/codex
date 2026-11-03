@@ -191,6 +191,8 @@ fn turn_event_serializes_expected_shape() {
                 "critical_path_status": "disabled",
                 "critical_path_duration_ms": null,
                 "critical_path_inference_ms": null,
+                "critical_path_sampling_ms": null,
+                "critical_path_compaction_ms": null,
                 "critical_path_auto_review_ms": null,
                 "critical_path_user_wait_ms": null,
                 "critical_path_tools_ms": null,
@@ -982,35 +984,52 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
         for (critical_path, expected) in [
             (
                 TurnCriticalPath::Disabled,
-                json!(["disabled", null, null, null, null, null, null, null]),
+                json!([
+                    "disabled", null, null, null, null, null, null, null, null, null
+                ]),
             ),
             (
                 TurnCriticalPath::Incomplete,
-                json!(["incomplete", null, null, null, null, null, null, null]),
+                json!([
+                    "incomplete",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+                ]),
             ),
             (
                 TurnCriticalPath::Complete(TurnCriticalPathDurations {
                     duration_ms: 1234,
                     inference_ms: 700,
+                    sampling_ms: 500,
+                    compaction_ms: 200,
                     auto_review_ms: 200,
                     user_wait_ms: 100,
                     tools_ms: 150,
                     overhead_ms: 80,
                     unknown_ms: 4,
                 }),
-                json!(["complete", 1234, 700, 200, 100, 150, 80, 4]),
+                json!(["complete", 1234, 700, 500, 200, 200, 100, 150, 80, 4]),
             ),
             (
                 TurnCriticalPath::Complete(TurnCriticalPathDurations {
                     duration_ms: 1234,
                     inference_ms: 1234,
+                    sampling_ms: 1234,
+                    compaction_ms: 0,
                     auto_review_ms: 0,
                     user_wait_ms: 0,
                     tools_ms: 0,
                     overhead_ms: 0,
                     unknown_ms: 0,
                 }),
-                json!(["complete", 1234, 1234, 0, 0, 0, 0, 0]),
+                json!(["complete", 1234, 1234, 1234, 0, 0, 0, 0, 0, 0]),
             ),
         ] {
             let mut reducer = AnalyticsReducer::default();
@@ -1058,6 +1077,8 @@ async fn critical_path_payload_preserves_capture_status_and_emits_once() {
                     params["critical_path_status"],
                     params["critical_path_duration_ms"],
                     params["critical_path_inference_ms"],
+                    params["critical_path_sampling_ms"],
+                    params["critical_path_compaction_ms"],
                     params["critical_path_auto_review_ms"],
                     params["critical_path_user_wait_ms"],
                     params["critical_path_tools_ms"],

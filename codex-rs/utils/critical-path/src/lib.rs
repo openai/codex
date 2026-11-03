@@ -10,8 +10,10 @@ const MAX_PATH_DEPTH: usize = 16_384;
 /// Category attributed to an observed segment of dependency work.
 #[derive(Clone, Copy, Debug)]
 pub enum WorkKind {
-    /// Model inference work on the selected dependency path.
-    Inference,
+    /// Model sampling work on the selected dependency path.
+    Sampling,
+    /// Compaction work, including its local bookkeeping.
+    Compaction,
     /// Automatic review work, such as reviewing a tool call before execution.
     AutoReview,
     /// Time awaiting a human answer or approval on the selected dependency path.
@@ -66,7 +68,8 @@ struct Node {
 /// Exclusive time attributed to each category within the requested interval.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PathDurations {
-    pub inference: Duration,
+    pub sampling: Duration,
+    pub compaction: Duration,
     pub auto_review: Duration,
     pub user_wait: Duration,
     pub tools: Duration,
@@ -77,7 +80,8 @@ pub struct PathDurations {
 impl PathDurations {
     fn record(&mut self, kind: WorkKind, duration: Duration) {
         let total = match kind {
-            WorkKind::Inference => &mut self.inference,
+            WorkKind::Sampling => &mut self.sampling,
+            WorkKind::Compaction => &mut self.compaction,
             WorkKind::AutoReview => &mut self.auto_review,
             WorkKind::UserWait => &mut self.user_wait,
             WorkKind::Tools => &mut self.tools,

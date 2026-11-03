@@ -143,7 +143,7 @@ pub async fn observe_turn_timing(
         timing.snapshot_path(end).map(|path| {
             let totals = path.durations(start, end);
             [
-                totals.inference,
+                totals.sampling.saturating_add(totals.compaction),
                 totals.auto_review,
                 totals.tools,
                 totals.overhead,

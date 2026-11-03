@@ -19,7 +19,9 @@ pub(super) fn completed_critical_path(state: &TurnProfileState, end: Instant) ->
     let totals = path.durations(start, end);
     TurnCriticalPath::Complete(TurnCriticalPathDurations {
         duration_ms: duration_to_u64_ms(end.saturating_duration_since(start)),
-        inference_ms: duration_to_u64_ms(totals.inference),
+        inference_ms: duration_to_u64_ms(totals.sampling.saturating_add(totals.compaction)),
+        sampling_ms: duration_to_u64_ms(totals.sampling),
+        compaction_ms: duration_to_u64_ms(totals.compaction),
         auto_review_ms: duration_to_u64_ms(totals.auto_review),
         user_wait_ms: duration_to_u64_ms(totals.user_wait),
         tools_ms: duration_to_u64_ms(totals.tools),

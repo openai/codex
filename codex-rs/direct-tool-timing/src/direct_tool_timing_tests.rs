@@ -8,7 +8,7 @@ fn parallel_winner_retains_its_review_and_shared_initial_path() {
     let now = Instant::now();
     let start = now - Duration::from_secs(10);
     let shared_initial_path =
-        CriticalPath::default().work(start, start + Duration::from_secs(1), WorkKind::Inference);
+        CriticalPath::default().work(start, start + Duration::from_secs(1), WorkKind::Sampling);
     let batch = ToolBatchTiming::default();
     let timings = DirectToolTimings::default();
     let losing = timings.start_direct_call(
@@ -38,7 +38,7 @@ fn parallel_winner_retains_its_review_and_shared_initial_path() {
     assert_eq!(
         completed.path.unwrap().durations(start, completed.ended_at),
         PathDurations {
-            inference: Duration::from_secs(1),
+            sampling: Duration::from_secs(1),
             auto_review: Duration::from_secs(3),
             tools: completed.ended_at.duration_since(start) - Duration::from_secs(4),
             ..PathDurations::default()

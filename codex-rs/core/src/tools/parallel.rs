@@ -61,15 +61,16 @@ struct DirectToolTiming {
     batch: ToolBatchTiming,
 }
 
-// Remove this boundary when CodeMode and subagent dependencies have runtime capture.
+// Direct spawn and wait calls use this turn's tool time; child work stays on its own turn.
+// CodeMode and follow-up agent operations still lack runtime capture.
 fn direct_path_supported(tool_name: &codex_tools::ToolName, source: &ToolCallSource) -> bool {
     !(matches!(source, ToolCallSource::CodeMode { .. })
         || (tool_name.is_default_namespace()
             && matches!(tool_name.name.as_str(),
                 crate::tools::code_mode::PUBLIC_TOOL_NAME | crate::tools::code_mode::WAIT_TOOL_NAME))
         // Multi-agent tool namespaces can be overridden by the tool catalog.
-        || matches!(tool_name.name.as_str(), "spawn_agent" | "send_input"
-            | "close_agent" | "resume_agent" | "wait_agent" | "list_agents"
+        || matches!(tool_name.name.as_str(), "send_input"
+            | "close_agent" | "resume_agent" | "list_agents"
             | "followup_task" | "interrupt_agent" | "send_message"))
 }
 
@@ -630,7 +631,7 @@ mod tests {
     use tracing_test::internal::MockWriter;
 
     #[test]
-    fn unsupported_handlers_remain_incomplete_after_namespace_resolution() {
+    fn direct_tool_support_follows_namespace_resolution() {
         let handler = crate::tools::multi_agent_tool::multi_agent_v2_handler(
             crate::tools::handlers::multi_agents_v2::WaitAgentHandler::default(),
             Some("custom_collaboration"),
@@ -644,13 +645,15 @@ mod tests {
                 "wait_agent",
             ))
             .unwrap();
-        assert!(!direct_path_supported(
+        assert!(direct_path_supported(
             &registered.runtime.tool_name(),
             &ToolCallSource::Direct
         ));
         for name in [
             crate::tools::code_mode::PUBLIC_TOOL_NAME,
             crate::tools::code_mode::WAIT_TOOL_NAME,
+            "followup_task",
+            "send_message",
         ] {
             assert!(!direct_path_supported(
                 &codex_tools::ToolName::plain(name).with_default_namespace(),

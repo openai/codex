@@ -288,6 +288,8 @@ fn turn_profile_counts_compaction_as_an_exclusive_phase() {
                 codex_analytics::TurnCriticalPathDurations {
                     duration_ms: 1100,
                     inference_ms: 800,
+                    sampling_ms: 300,
+                    compaction_ms: 500,
                     auto_review_ms: 0,
                     user_wait_ms: 0,
                     tools_ms: 0,
@@ -311,7 +313,8 @@ fn turn_profile_counts_compaction_as_an_exclusive_phase() {
         .as_ref()
         .unwrap()
         .durations(started_at, started_at + Duration::from_millis(1_100));
-    assert_eq!(totals.inference, Duration::from_millis(800));
+    assert_eq!(totals.sampling, Duration::from_millis(300));
+    assert_eq!(totals.compaction, Duration::from_millis(500));
     assert_eq!(totals.overhead, Duration::from_millis(300));
     assert_eq!(totals.user_wait, Duration::ZERO);
 }
@@ -332,6 +335,8 @@ async fn turn_profile_and_duration_share_a_completion_instant() {
         codex_analytics::TurnCriticalPath::Complete(codex_analytics::TurnCriticalPathDurations {
             duration_ms: duration_ms.unwrap() as u64,
             inference_ms: 0,
+            sampling_ms: 0,
+            compaction_ms: 0,
             auto_review_ms: 0,
             user_wait_ms: 0,
             tools_ms: 0,
@@ -373,7 +378,7 @@ fn capture_preserves_phases_and_freezes_missing_dependencies() {
             .unwrap()
             .durations(started_at, time_after_turn_start(60)),
         PathDurations {
-            inference: Duration::from_millis(10),
+            sampling: Duration::from_millis(10),
             unknown: Duration::from_millis(30),
             overhead: Duration::from_millis(20),
             ..PathDurations::default()
@@ -384,6 +389,8 @@ fn capture_preserves_phases_and_freezes_missing_dependencies() {
         codex_analytics::TurnCriticalPath::Complete(codex_analytics::TurnCriticalPathDurations {
             duration_ms: 60,
             inference_ms: 10,
+            sampling_ms: 10,
+            compaction_ms: 0,
             auto_review_ms: 0,
             user_wait_ms: 0,
             tools_ms: 0,
@@ -467,7 +474,10 @@ fn critical_path_report_retains_fractional_millisecond_rounding_and_compaction()
         ..Default::default()
     };
     state.start(start);
-    state.begin_compaction(start);
+    state.begin_sampling(start);
+    let compact_at = start + Duration::from_nanos(999_999);
+    state.end_phase(compact_at, TurnProfilePhase::Sampling);
+    state.begin_compaction(compact_at);
     let end = start + Duration::from_nanos(1_999_999);
     state.end_phase(end, TurnProfilePhase::Compaction);
     let profile = state.complete(end);
@@ -476,6 +486,8 @@ fn critical_path_report_retains_fractional_millisecond_rounding_and_compaction()
         codex_analytics::TurnCriticalPath::Complete(codex_analytics::TurnCriticalPathDurations {
             duration_ms: 1,
             inference_ms: 1,
+            sampling_ms: 0,
+            compaction_ms: 1,
             auto_review_ms: 0,
             user_wait_ms: 0,
             tools_ms: 0,

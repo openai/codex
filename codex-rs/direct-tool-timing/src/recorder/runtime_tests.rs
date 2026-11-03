@@ -21,7 +21,7 @@ use tokio_util::either::Either;
 async fn lock_handoff_publishes_review_history_before_admitting_waiter(admission: ToolAdmission) {
     let start = Instant::now() - Duration::from_secs(10);
     let tool_start = start + Duration::from_secs(1);
-    let shared_initial_path = CriticalPath::default().work(start, tool_start, WorkKind::Inference);
+    let shared_initial_path = CriticalPath::default().work(start, tool_start, WorkKind::Sampling);
     let timings = DirectToolTimings::default();
     let batch = ToolBatchTiming::default();
     let gate = ToolGateTiming::default();
@@ -89,7 +89,7 @@ async fn lock_handoff_publishes_review_history_before_admitting_waiter(admission
     assert_eq!(
         completed.path.unwrap().durations(start, completed.ended_at),
         PathDurations {
-            inference: Duration::from_secs(1),
+            sampling: Duration::from_secs(1),
             auto_review: Duration::from_secs(3),
             tools: completed.ended_at.duration_since(start) - Duration::from_secs(4),
             ..PathDurations::default()

@@ -137,7 +137,8 @@ async fn critical_path_reaches_turn_event(finish: Finish, capture: Capture) -> R
     );
     let fields = [
         "critical_path_duration_ms",
-        "critical_path_inference_ms",
+        "critical_path_sampling_ms",
+        "critical_path_compaction_ms",
         "critical_path_auto_review_ms",
         "critical_path_user_wait_ms",
         "critical_path_tools_ms",
@@ -146,6 +147,16 @@ async fn critical_path_reaches_turn_event(finish: Finish, capture: Capture) -> R
     ];
     if matches!(capture, Capture::Enabled) {
         assert_eq!(p["critical_path_status"], "complete");
+        let inference = p["critical_path_inference_ms"]
+            .as_u64()
+            .expect("inference duration");
+        let phases = p["critical_path_sampling_ms"]
+            .as_u64()
+            .expect("sampling duration")
+            + p["critical_path_compaction_ms"]
+                .as_u64()
+                .expect("compaction duration");
+        assert!(phases <= inference && inference - phases <= 1);
         assert_eq!(p[fields[0]], p["duration_ms"]);
         let total = p[fields[0]]
             .as_u64()
@@ -158,7 +169,7 @@ async fn critical_path_reaches_turn_event(finish: Finish, capture: Capture) -> R
                     .expect("complete capture has numeric categories")
             })
             .sum();
-        assert!(sum <= total && total - sum <= 5);
+        assert!(sum <= total && total - sum <= 6);
         assert_eq!(
             json!([
                 p["critical_path_user_wait_ms"],
@@ -171,8 +182,12 @@ async fn critical_path_reaches_turn_event(finish: Finish, capture: Capture) -> R
     } else {
         assert_eq!(p["critical_path_status"], "disabled");
         assert_eq!(
+            p.get("critical_path_inference_ms"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
             fields.map(|key| p.get(key)),
-            [Some(&serde_json::Value::Null); 7]
+            [Some(&serde_json::Value::Null); 8]
         );
     }
     Ok(())

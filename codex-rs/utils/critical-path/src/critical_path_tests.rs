@@ -10,7 +10,7 @@ fn join_replaces_overlapping_work_with_the_full_winning_branch() {
     let shared_initial_path = CriticalPath::default().work(
         time_after_turn_start(0),
         time_after_turn_start(100),
-        WorkKind::Inference,
+        WorkKind::Sampling,
     );
     let reviewed_tool_path = shared_initial_path
         .clone()
@@ -33,7 +33,7 @@ fn join_replaces_overlapping_work_with_the_full_winning_branch() {
         .work(
             time_after_turn_start(100),
             time_after_turn_start(200),
-            WorkKind::Inference,
+            WorkKind::Sampling,
         )
         .join(
             time_after_turn_start(200),
@@ -43,7 +43,7 @@ fn join_replaces_overlapping_work_with_the_full_winning_branch() {
     assert_eq!(
         critical_path.durations(time_after_turn_start(0), time_after_turn_start(700)),
         PathDurations {
-            inference: Duration::from_millis(100),
+            sampling: Duration::from_millis(100),
             tools: Duration::from_millis(600),
             ..PathDurations::default()
         }
@@ -57,7 +57,7 @@ fn nested_serial_dependencies_preserve_exclusive_categories() {
     let shared_initial_path = CriticalPath::default().work(
         time_after_turn_start(0),
         time_after_turn_start(100),
-        WorkKind::Inference,
+        WorkKind::Sampling,
     );
     let child_path = shared_initial_path
         .clone()
@@ -74,13 +74,13 @@ fn nested_serial_dependencies_preserve_exclusive_categories() {
         .work(
             time_after_turn_start(400),
             time_after_turn_start(500),
-            WorkKind::Inference,
+            WorkKind::Compaction,
         );
     let critical_path = shared_initial_path
         .work(
             time_after_turn_start(100),
             time_after_turn_start(200),
-            WorkKind::Inference,
+            WorkKind::Sampling,
         )
         .join(
             time_after_turn_start(200),
@@ -90,7 +90,8 @@ fn nested_serial_dependencies_preserve_exclusive_categories() {
     assert_eq!(
         critical_path.durations(time_after_turn_start(0), time_after_turn_start(600)),
         PathDurations {
-            inference: Duration::from_millis(200),
+            sampling: Duration::from_millis(100),
+            compaction: Duration::from_millis(100),
             auto_review: Duration::from_millis(200),
             tools: Duration::from_millis(200),
             ..PathDurations::default()
@@ -104,7 +105,7 @@ fn equal_finish_times_select_one_path_without_double_counting() {
     let turn_end = turn_start + Duration::from_millis(100);
     let reviewed_tool_path =
         CriticalPath::default().work(turn_start, turn_end, WorkKind::AutoReview);
-    let inference_path = CriticalPath::default().work(turn_start, turn_end, WorkKind::Inference);
+    let inference_path = CriticalPath::default().work(turn_start, turn_end, WorkKind::Sampling);
     // A tie has multiple valid paths. Stable left selection does not sum both.
     assert_eq!(
         reviewed_tool_path
@@ -123,7 +124,7 @@ fn path_retention_exhaustion_marks_unknown_instead_of_claiming_zero() {
         critical_path = critical_path.work(
             turn_start + Duration::from_micros(segment_index as u64),
             turn_start + Duration::from_micros(segment_index as u64 + 1),
-            WorkKind::Inference,
+            WorkKind::Sampling,
         );
     }
     let turn_end = turn_start + Duration::from_micros(MAX_PATH_DEPTH as u64 + 1);
@@ -143,7 +144,7 @@ fn reviewed_branch_wins_even_when_some_review_overlapped_parent_inference() {
     let shared_initial_path = CriticalPath::default().work(
         time_after_turn_start(0),
         time_after_turn_start(100),
-        WorkKind::Inference,
+        WorkKind::Sampling,
     );
     let reviewed_tool_path = shared_initial_path
         .clone()
@@ -166,7 +167,7 @@ fn reviewed_branch_wins_even_when_some_review_overlapped_parent_inference() {
         .work(
             time_after_turn_start(100),
             time_after_turn_start(200),
-            WorkKind::Inference,
+            WorkKind::Sampling,
         )
         .join(
             time_after_turn_start(200),
@@ -176,7 +177,7 @@ fn reviewed_branch_wins_even_when_some_review_overlapped_parent_inference() {
     assert_eq!(
         critical_path.durations(time_after_turn_start(0), time_after_turn_start(400)),
         PathDurations {
-            inference: Duration::from_millis(100),
+            sampling: Duration::from_millis(100),
             auto_review: Duration::from_millis(200),
             tools: Duration::from_millis(100),
             ..Default::default()
@@ -192,7 +193,7 @@ fn durations_clip_work_to_the_window_and_attribute_gaps_to_overhead() {
         .work(
             time_after_turn_start(10),
             time_after_turn_start(30),
-            WorkKind::Inference,
+            WorkKind::Sampling,
         )
         .work(
             time_after_turn_start(50),
@@ -203,7 +204,7 @@ fn durations_clip_work_to_the_window_and_attribute_gaps_to_overhead() {
     assert_eq!(
         critical_path.durations(time_after_turn_start(0), time_after_turn_start(100)),
         PathDurations {
-            inference: Duration::from_millis(20),
+            sampling: Duration::from_millis(20),
             auto_review: Duration::from_millis(40),
             overhead: Duration::from_millis(40),
             ..PathDurations::default()
@@ -212,7 +213,7 @@ fn durations_clip_work_to_the_window_and_attribute_gaps_to_overhead() {
     assert_eq!(
         critical_path.durations(time_after_turn_start(20), time_after_turn_start(80)),
         PathDurations {
-            inference: Duration::from_millis(10),
+            sampling: Duration::from_millis(10),
             auto_review: Duration::from_millis(30),
             overhead: Duration::from_millis(20),
             ..PathDurations::default()
@@ -228,7 +229,7 @@ fn overlapping_work_only_attributes_time_after_the_existing_path() {
         .work(
             time_after_turn_start(0),
             time_after_turn_start(10),
-            WorkKind::Inference,
+            WorkKind::Sampling,
         )
         .work(
             time_after_turn_start(5),
@@ -239,7 +240,7 @@ fn overlapping_work_only_attributes_time_after_the_existing_path() {
     assert_eq!(
         critical_path.durations(time_after_turn_start(0), time_after_turn_start(20)),
         PathDurations {
-            inference: Duration::from_millis(10),
+            sampling: Duration::from_millis(10),
             tools: Duration::from_millis(10),
             ..PathDurations::default()
         }
@@ -274,7 +275,7 @@ fn long_path_debug_output_is_bounded_on_a_small_stack() {
                 path = path.work(
                     start + Duration::from_micros(index),
                     start + Duration::from_micros(index + 1),
-                    WorkKind::Inference,
+                    WorkKind::Sampling,
                 );
             }
             assert!(format!("{path:?}").len() < 512);
@@ -295,7 +296,7 @@ fn retained_prefixes_can_be_released_concurrently_on_small_stacks() {
             path = path.work(
                 start + Duration::from_micros(index as u64),
                 start + Duration::from_micros(index as u64 + 1),
-                WorkKind::Inference,
+                WorkKind::Sampling,
             );
             prefixes[index % 2].push(path.clone());
         }
@@ -328,7 +329,7 @@ fn human_wait_is_retained_only_on_the_selected_parallel_path() {
     let start = Instant::now();
     let time_after_turn_start = |milliseconds| start + Duration::from_millis(milliseconds);
     let prefix =
-        CriticalPath::default().work(start, time_after_turn_start(100), WorkKind::Inference);
+        CriticalPath::default().work(start, time_after_turn_start(100), WorkKind::Sampling);
     let reviewed_tool = prefix
         .clone()
         .work(
@@ -359,7 +360,7 @@ fn human_wait_is_retained_only_on_the_selected_parallel_path() {
     assert_eq!(
         path.durations(start, time_after_turn_start(600)),
         PathDurations {
-            inference: Duration::from_millis(100),
+            sampling: Duration::from_millis(100),
             auto_review: Duration::from_millis(100),
             user_wait: Duration::from_millis(300),
             tools: Duration::from_millis(100),

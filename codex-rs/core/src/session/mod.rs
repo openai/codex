@@ -4461,14 +4461,6 @@ impl Session {
         communication: impl Into<crate::PendingAgentMessage>,
     ) {
         let communication = communication.into();
-        // Agent-message dependencies are not captured by direct-tool timing.
-        if turn_context
-            .config
-            .features
-            .enabled(Feature::CriticalPathTiming)
-        {
-            turn_context.turn_timing_state.invalidate_critical_path();
-        }
         let mut response_item = communication.to_model_input_item();
         if let ResponseItem::AgentMessage {
             content,

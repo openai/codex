@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use codex_async_utils::OrCancelExt;
 use codex_extension_api::TurnStartPhase;
+use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
 
@@ -56,7 +59,11 @@ impl SessionTask for RegularTask {
             .config
             .features
             .enabled(codex_features::Feature::CriticalPathTiming)
-            && !ctx.session_source.is_non_root_agent()
+            && !matches!(
+                ctx.session_source,
+                SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
+                    | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation)
+            )
         {
             ctx.turn_timing_state.enable_critical_path();
         }
