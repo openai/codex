@@ -295,3 +295,6 @@ fn notification_selection_handles_many_fragments_and_obsolete_malformed_messages
 
 #[path = "item_tests.rs"]
 mod items;
+
+#[path = "history_tests.rs"]
+mod history;

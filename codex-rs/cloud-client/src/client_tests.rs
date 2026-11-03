@@ -22,15 +22,20 @@ impl Drop for Fixture {
     }
 }
 async fn fixture(response: http::Response<Body>) -> Fixture {
+    fixture_responses(vec![response]).await
+}
+async fn fixture_responses(responses: Vec<http::Response<Body>>) -> Fixture {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let (sender, requests) = mpsc::unbounded_channel();
-    let response = std::sync::Arc::new(std::sync::Mutex::new(Some(response)));
+    let responses = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from(
+        responses,
+    )));
     let task = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
         let service = service_fn(move |request: http::Request<hyper::body::Incoming>| {
             let sender = sender.clone();
-            let response = response.lock().unwrap().take().unwrap();
+            let response = responses.lock().unwrap().pop_front().unwrap();
             async move {
                 let (parts, body) = request.into_parts();
                 sender

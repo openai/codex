@@ -215,17 +215,17 @@ pub(crate) fn summary(item: wire::Item) -> Result<Option<ItemSummary>, DecodeFai
                 .into_iter()
                 .map(command_action)
                 .collect::<Result<_, _>>()?,
+            status: required(value.status)?.into(),
             source: match value.source {
                 None | Some(1) => CommandExecutionSource::Agent,
                 Some(2) => CommandExecutionSource::UserShell,
                 Some(3) => CommandExecutionSource::UnifiedExecStartup,
                 Some(4) => CommandExecutionSource::UnifiedExecInteraction,
-                Some(_) => return Err(DecodeFailure::UnsupportedCommandSource),
+                Some(_) => return Ok(None),
             },
             aggregated_output: value.output,
             duration_ms: value.duration_ms,
             exit_code: value.exit_code,
-            status: required(value.status)?.into(),
         }),
         Some(wire::Value::FileChange(value)) => ItemSummary::FileChange {
             id: required(value.id)?,

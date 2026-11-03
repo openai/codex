@@ -4,6 +4,8 @@
 //! a timeout or disconnect can leave Resume admitted. Attach delivers live events only;
 //! dropping its stream detaches without interrupting the thread or answering approvals.
 
+mod history;
+mod history_wire;
 mod item_wire;
 mod items;
 mod transcript;
@@ -12,6 +14,14 @@ mod turns_wire;
 mod types;
 mod wire;
 
+pub use history::HistoryAccess;
+pub use history::HistoryItem;
+pub use history::HistoryOrder;
+pub use history::HistoryPage;
+pub use history::HistoryQuery;
+pub use history::HistoryTurn;
+pub use history::ListItemsRequest;
+pub use history::ListTurnsRequest;
 pub use items::AgentQuestion;
 pub use items::CommandAction;
 pub use items::CommandExecutionSource;

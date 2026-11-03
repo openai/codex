@@ -29,7 +29,7 @@ code, message and binary details are available explicitly; credentials, event
 and error diagnostics are redacted. Item lifecycle updates report supported
 message, command, and file-change summaries. Agent message summaries retain
 structured questions even when their text is empty. Unsupported item kinds stay opaque.
-History, approval replies and reconnect are subsequent slices.
+Approval replies and reconnect are subsequent slices.
 The minimal envelopes in `wire.rs` and `ResumeRequest` mirror ThreadService field
 numbers; no monorepo checkout or protobuf compiler is required to build this crate.
 
@@ -43,3 +43,19 @@ cargo run -p codex-cloud-client --example attach -- "$CODEX_CLOUD_GRPC_ENDPOINT"
 Use an existing authorized thread and native gRPC origin. No production URL is
 assumed. Public native ingress is a rollout assumption, not proved by fixture
 tests. This change does not publish a package to a registry.
+
+History reads use native `ListTurns` (stored turn metadata) and `ListItems` (one
+turn or the whole thread). Calls return one page with forward/backward opaque
+cursors, preserve server order and retain raw responses and rows. Reuse a cursor
+with the same account, thread and filters. Keep the sort order for `next_cursor`
+and reverse it for `backwards_cursor`. Calls never paginate or retry automatically.
+Items with an unknown variant or command source remain in the page with no typed summary.
+
+History pages and Attach have no shared revision or replay cursor. A page is not
+an atomic history/live boundary, and timestamps are not event offsets. Do not
+append buffered deltas to a fetched snapshot: it may already include that text.
+Full item snapshots can replace matching account/host/thread/turn/item identities;
+they must not create duplicate transcript rows. Disconnects, untyped recovery
+notifications and uncertain overlap require authoritative history reload. This
+crate exposes the read primitives; a coordinated resync/display state machine is
+still required before claiming lossless resume or live/history reconciliation.

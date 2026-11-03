@@ -108,7 +108,6 @@ const ITEM_FILE_CHANGE_PATCH_UPDATED: u32 = 40;
 
 pub(super) enum DecodeFailure {
     MissingField,
-    UnsupportedCommandSource,
     InvalidResponse,
 }
 
@@ -125,7 +124,7 @@ impl TranscriptEvent {
     pub(crate) fn decode(thread_id: &str, payload: &[u8]) -> Result<Option<Self>, Error> {
         match Self::decode_present_fields(thread_id, payload) {
             Ok(event) => Ok(event),
-            Err(DecodeFailure::MissingField | DecodeFailure::UnsupportedCommandSource) => Ok(None),
+            Err(DecodeFailure::MissingField) => Ok(None),
             Err(DecodeFailure::InvalidResponse) => Err(Error::InvalidResponse),
         }
     }
@@ -185,31 +184,7 @@ impl TranscriptEvent {
             TURN_STARTED | TURN_COMPLETED => {
                 let envelope = wire::merge_messages::<wire::Envelope<wire::TurnUpdate>>(values)?;
                 let params = required(envelope.params)?;
-                let turn = required(params.turn)?;
-                let status = match required(turn.status)? {
-                    1 => TurnStatus::Completed,
-                    2 => TurnStatus::Interrupted,
-                    3 => TurnStatus::Failed,
-                    4 => TurnStatus::InProgress,
-                    value => TurnStatus::Unknown(value),
-                };
-                let error = turn
-                    .error
-                    .map(|error| {
-                        Ok::<_, DecodeFailure>(TurnFailure {
-                            message: required(error.message)?,
-                            additional_details: error.additional_details,
-                        })
-                    })
-                    .transpose()?;
-                let summary = TurnSummary {
-                    id: required(turn.id)?,
-                    status,
-                    started_at: turn.started_at,
-                    completed_at: turn.completed_at,
-                    duration_ms: turn.duration_ms,
-                    error,
-                };
+                let summary = TurnSummary::try_from(required(params.turn)?)?;
                 let update = if tag == TURN_STARTED {
                     TranscriptUpdate::TurnStarted(summary)
                 } else {
@@ -251,6 +226,37 @@ impl TryFrom<wire::Change> for FileUpdate {
             path: required(change.path)?,
             diff: required(change.diff)?,
             kind,
+        })
+    }
+}
+
+impl TryFrom<wire::Turn> for TurnSummary {
+    type Error = DecodeFailure;
+
+    fn try_from(turn: wire::Turn) -> Result<Self, DecodeFailure> {
+        let status = match required(turn.status)? {
+            1 => TurnStatus::Completed,
+            2 => TurnStatus::Interrupted,
+            3 => TurnStatus::Failed,
+            4 => TurnStatus::InProgress,
+            value => TurnStatus::Unknown(value),
+        };
+        let error = turn
+            .error
+            .map(|error| {
+                Ok::<_, DecodeFailure>(TurnFailure {
+                    message: required(error.message)?,
+                    additional_details: error.additional_details,
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            id: required(turn.id)?,
+            status,
+            started_at: turn.started_at,
+            completed_at: turn.completed_at,
+            duration_ms: turn.duration_ms,
+            error,
         })
     }
 }
