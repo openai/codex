@@ -514,6 +514,71 @@ impl WorkspaceRoutingResolver for RoutingPolicy {
 }
 
 #[tokio::test]
+async fn sampling_uses_new_credentials_after_logout_and_login() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let home = tempfile::tempdir()?;
+    let auth = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("initial-key"),
+        home.path().to_path_buf(),
+    );
+    let server = responses::start_mock_server().await;
+    let requests = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_output_text_delta("low"),
+                responses::ev_completed("before-logout"),
+            ]),
+            responses::sse(vec![
+                responses::ev_output_text_delta("low"),
+                responses::ev_completed("after-login"),
+            ]),
+        ],
+    )
+    .await;
+    let mut config = sampler_config(format!("{}/v1", server.uri()));
+    config.provider = create_model_provider(config.provider.info().clone(), Some(auth.clone()));
+    let sampler = LunaSampler::new(config);
+    // Keep both requests on HTTP without starting background WebSocket opens.
+    *sampler.connections.retry_after.lock().unwrap() = Some(Instant::now() + CONNECT_COOLDOWN);
+    assert_eq!(
+        sampler
+            .sample(sample_request("before-logout"))
+            .await
+            .expect("sample before logout"),
+        "low"
+    );
+
+    auth.logout().await?;
+    codex_login::login_with_api_key(
+        home.path(),
+        "replacement-key",
+        codex_login::AuthCredentialsStoreMode::File,
+        codex_login::AuthKeyringBackendKind::default(),
+    )?;
+    auth.reload().await;
+
+    assert_eq!(
+        sampler
+            .sample(sample_request("after-login"))
+            .await
+            .expect("sample after signing in again"),
+        "low"
+    );
+    let requests = requests.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].header("authorization").as_deref(),
+        Some("Bearer initial-key")
+    );
+    assert_eq!(
+        requests[1].header("authorization").as_deref(),
+        Some("Bearer replacement-key")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_cache_preserves_no_constraint_redirect_policy_and_configured_headers() -> Result<()> {
     let base_url = "https://localhost:9/backend-api/codex".to_owned();
     let auth =

@@ -129,10 +129,9 @@ async fn responses_stream_includes_subagent_header_on_review() {
     );
 
     let client = ModelClient::new(
-        /*auth_manager*/ None,
+        codex_model_provider::create_model_provider(provider.clone(), /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        provider.clone(),
         session_source.clone(),
         "test_originator".to_string(),
         config.model_verbosity,
@@ -279,10 +278,9 @@ async fn responses_stream_includes_subagent_header_on_other() {
     );
 
     let client = ModelClient::new(
-        /*auth_manager*/ None,
+        codex_model_provider::create_model_provider(provider.clone(), /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        provider.clone(),
         session_source.clone(),
         "test_originator".to_string(),
         config.model_verbosity,
@@ -414,10 +412,9 @@ async fn responses_respects_model_info_overrides_from_config() {
     );
 
     let client = ModelClient::new(
-        /*auth_manager*/ None,
+        codex_model_provider::create_model_provider(provider.clone(), /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        provider.clone(),
         session_source.clone(),
         "test_originator".to_string(),
         config.model_verbosity,

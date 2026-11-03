@@ -157,6 +157,7 @@ codex-protocol-test-support = { workspace = true }
 codex-test-binary-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-redacted-string = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
 codex-web-search-extension = { workspace = true }
 codex-windows-sandbox-test-support = { workspace = true }
 core_test_support = { workspace = true }
@@ -166,6 +167,7 @@ maplit = { workspace = true }
 opentelemetry = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+rcgen = { workspace = true }
 test-case = "3.3.1"
 opentelemetry_sdk = { workspace = true, features = [
     "experimental_metrics_custom_reader",
@@ -174,6 +176,7 @@ opentelemetry_sdk = { workspace = true, features = [
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+tokio-rustls = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }

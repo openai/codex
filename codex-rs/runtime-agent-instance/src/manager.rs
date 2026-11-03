@@ -9,6 +9,7 @@ use crate::RuntimeAuth;
 use crate::RuntimeRegistration;
 use crate::RuntimeRegistrationClient;
 use crate::RuntimeRegistrationMetadata;
+use codex_agent_identity::ChatGptEnvironment;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::NetworkPolicyDenied;
 use codex_login::AuthChangeState;
@@ -23,10 +24,50 @@ use url::Url;
 /// Owned alongside an AuthManager, not created for every thread or request.
 pub struct RuntimeAuthManager {
     credentials: Arc<AuthManager>,
-    host: AgentHostAuthorization,
+    registration: RegistrationTarget,
     metadata: RuntimeRegistrationMetadata,
-    registration_url: Url,
     state: Mutex<Option<CachedRuntime>>,
+}
+
+enum RegistrationTarget {
+    Explicit {
+        host: AgentHostAuthorization,
+        url: Url,
+    },
+    ChatGpt {
+        installation_id: String,
+        base_url: String,
+    },
+}
+
+impl RegistrationTarget {
+    fn host(&self) -> Result<AgentHostAuthorization, RegistrationError> {
+        match self {
+            Self::Explicit { host, .. } => Ok(host.clone()),
+            Self::ChatGpt {
+                installation_id, ..
+            } => Ok(AgentHostAuthorization::InstallationId {
+                installation_id: installation_id
+                    .parse()
+                    .map_err(|_| RegistrationError::InvalidRequest)?,
+            }),
+        }
+    }
+
+    fn url(&self) -> Result<Url, RegistrationError> {
+        match self {
+            Self::Explicit { url, .. } => Ok(url.clone()),
+            Self::ChatGpt { base_url, .. } => {
+                let url = match ChatGptEnvironment::from_chatgpt_base_url(base_url)
+                    .map_err(|_| RegistrationError::InvalidEndpoint)?
+                {
+                    ChatGptEnvironment::Production => crate::DEFAULT_REGISTRATION_URL,
+                    ChatGptEnvironment::Staging => "https://auth.api.openai.org/agent/register",
+                };
+                url.parse().map_err(|_| RegistrationError::InvalidEndpoint)
+            }
+        }
+    }
 }
 
 struct CachedRuntime {
@@ -61,9 +102,29 @@ impl RuntimeAuthManager {
     ) -> Self {
         Self {
             credentials,
-            host,
+            registration: RegistrationTarget::Explicit {
+                host,
+                url: registration_url,
+            },
             metadata,
-            registration_url,
+            state: Mutex::new(None),
+        }
+    }
+
+    /// Resolve the ChatGPT registration origin only when a first-party request needs a runtime.
+    pub fn for_chatgpt(
+        credentials: Arc<AuthManager>,
+        installation_id: String,
+        base_url: String,
+        metadata: RuntimeRegistrationMetadata,
+    ) -> Self {
+        Self {
+            credentials,
+            registration: RegistrationTarget::ChatGpt {
+                installation_id,
+                base_url,
+            },
+            metadata,
             state: Mutex::new(None),
         }
     }
@@ -149,7 +210,7 @@ impl RuntimeAuthManager {
                 state: RuntimeState::Pending {
                     registration: RuntimeRegistration::new(
                         actor_auth.clone(),
-                        self.host.clone(),
+                        self.registration.host()?,
                         self.metadata.clone(),
                     )
                     .map_err(|_| RuntimeAuthError::KeyGeneration)?,
@@ -172,10 +233,8 @@ impl RuntimeAuthManager {
                 registration
             }
         };
-        let client = RuntimeRegistrationClient::new(
-            http_client_factory.clone(),
-            self.registration_url.clone(),
-        )?;
+        let client =
+            RuntimeRegistrationClient::new(http_client_factory.clone(), self.registration.url()?)?;
         let result = client.register(registration).await;
         if self.auth_state(&auth)?.source_generation != change_state.source_generation {
             // A late response must not publish an old identity after a credential switch.

@@ -113,8 +113,12 @@ async fn publication_harness(
     });
     harness.manager = ThreadManager::new(
         &harness.config,
-        harness.manager.auth_manager(),
-        harness.manager.get_models_manager(),
+        crate::build_startup_models(
+            &harness.config,
+            harness.manager.auth_manager(),
+            "spawn-publication-cleanup-test".to_string(),
+            crate::test_support::fixed_model_catalog(harness.manager.get_models_manager()),
+        ),
         crate::CodexAppsToolsCache::default(),
         SessionSource::Exec,
         harness.manager.environment_manager(),
@@ -124,7 +128,6 @@ async fn publication_harness(
         harness.manager.image_store(),
         crate::ThreadStoreBuilder::from_config(&harness.config, harness.state_db.clone()).build(),
         Some(graph.clone()),
-        "spawn-publication-cleanup-test".to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     )

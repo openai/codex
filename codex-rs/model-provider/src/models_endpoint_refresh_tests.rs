@@ -6,6 +6,8 @@ use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthRouteConfig;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::OpenAiModelsManager;
 use codex_runtime_agent_instance::AgentHostAuthorization;
 use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
 use codex_runtime_agent_instance::RuntimeRole;
@@ -20,6 +22,15 @@ use wiremock::matchers::path;
 
 #[tokio::test]
 async fn catalog_timeout_preserves_refreshed_tokens_with_and_without_runtime_auth() {
+    check_catalog_timeout_preserves_refreshed_tokens(/*refresh_after_auth_change*/ false).await;
+}
+
+#[tokio::test]
+async fn catalog_startup_timeout_preserves_refreshed_tokens() {
+    check_catalog_timeout_preserves_refreshed_tokens(/*refresh_after_auth_change*/ true).await;
+}
+
+async fn check_catalog_timeout_preserves_refreshed_tokens(refresh_after_auth_change: bool) {
     for mode in [
         None,
         Some(RuntimeAuthMode::DualHeader),
@@ -138,20 +149,40 @@ async fn catalog_timeout_preserves_refreshed_tokens_with_and_without_runtime_aut
         });
         let mut info = ModelProviderInfo::create_openai_provider(Some(server.uri()));
         info.env_http_headers = None;
-        let endpoint = OpenAiModelsEndpoint::new(
-            info,
-            Some(Arc::clone(&credentials)),
-            /*gateway_auth_manager*/ None,
-        )
-        .with_runtime_auth(runtime_auth);
-        let error = endpoint
-            .list_models("test", factory.clone())
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error.details(),
-            codex_protocol::error::CodexErrorDetails::RequestTimeout
-        ));
+        let endpoint = Arc::new(
+            OpenAiModelsEndpoint::new(
+                info,
+                Some(Arc::clone(&credentials)),
+                /*gateway_auth_manager*/ None,
+            )
+            .with_runtime_auth(runtime_auth),
+        );
+        if refresh_after_auth_change {
+            let manager = OpenAiModelsManager::new_without_cache(
+                endpoint.clone(),
+                Some(Arc::clone(&credentials)),
+            );
+            manager.refresh_after_auth_change(factory.clone()).await;
+        } else {
+            let error = endpoint
+                .list_models("test", factory.clone())
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error.details(),
+                codex_protocol::error::CodexErrorDetails::RequestTimeout
+            ));
+        }
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|request| request.url.path() == "/oauth/token")
+                .count(),
+            1,
+        );
 
         // Wait through the existing refresh lock; this must reuse the completed refresh.
         let current = timeout(Duration::from_secs(5), credentials.auth())

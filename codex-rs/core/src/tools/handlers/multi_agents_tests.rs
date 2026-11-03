@@ -37,6 +37,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::manager::ModelCatalogSettings;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_otel::MULTI_AGENT_SPAWN_FAILURE_METRIC;
 use codex_otel::MetricsClient;
@@ -4319,8 +4320,12 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let manager = ThreadManager::new(
         &config,
-        auth_manager.clone(),
-        crate::thread_manager::build_models_manager(&config, auth_manager),
+        crate::build_startup_models(
+            &config,
+            auth_manager.clone(),
+            "11111111-1111-4111-8111-111111111111".to_string(),
+            Arc::new(ModelCatalogSettings::disk(config.codex_home.to_path_buf())),
+        ),
         crate::CodexAppsToolsCache::default(),
         SessionSource::Exec,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -4330,7 +4335,6 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         crate::thread_manager::passthrough_image_store(),
         ThreadStoreBuilder::from_config(&config, state_db.clone()).build(),
         local_agent_graph_store_from_state_db(state_db.as_ref()),
-        "11111111-1111-4111-8111-111111111111".to_string(),
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );

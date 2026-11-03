@@ -183,10 +183,12 @@ pub use thread_manager::InternalSessionParent;
 pub use thread_manager::NewThread;
 pub use thread_manager::PromptCacheKey;
 pub use thread_manager::StartThreadOptions;
+pub use thread_manager::StartupModels;
 pub use thread_manager::ThreadManager;
 pub use thread_manager::ThreadRegistration;
 pub use thread_manager::ThreadShutdownReport;
 pub use thread_manager::build_models_manager;
+pub use thread_manager::build_startup_models;
 pub use thread_manager::local_agent_graph_store_from_state_db;
 pub use thread_manager::passthrough_image_store;
 pub use thread_store_builder::ThreadStoreBuilder;
@@ -281,3 +283,6 @@ pub mod otel_init;
 // Captured environment bindings can be passed back to ThreadManager by internal reviewers.
 pub use environment_selection::TurnEnvironmentSnapshot;
 pub use environment_selection::validate_environment_ids_and_cwds;
+
+mod runtime_auth;
+pub use runtime_auth::build_runtime_auth_manager;

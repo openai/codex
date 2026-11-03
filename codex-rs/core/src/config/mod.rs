@@ -76,6 +76,7 @@ use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::NetworkProxyConfigToml;
+use codex_features::RuntimeAuthMode;
 use codex_features::SleepToolMode;
 use codex_features::TokenBudgetConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
@@ -1166,6 +1167,8 @@ pub struct Config {
     pub current_time_reminder: Option<CurrentTimeReminderConfig>,
     /// How the sleep tool is selected when its feature gate is enabled.
     pub sleep_tool_mode: SleepToolMode,
+    /// Authentication mode used when runtime agent instances are enabled.
+    pub runtime_auth_mode: RuntimeAuthMode,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
@@ -4033,6 +4036,15 @@ impl Config {
                 FeatureToml::Config(config) => config.mode,
             })
             .unwrap_or_default();
+        let runtime_auth_mode = cfg
+            .features
+            .as_ref()
+            .and_then(|features| features.runtime_agent_instances.as_ref())
+            .and_then(|feature| match feature {
+                FeatureToml::Enabled(_) => None,
+                FeatureToml::Config(config) => config.mode,
+            })
+            .unwrap_or_default();
         let terminal_resize_reflow = resolve_terminal_resize_reflow_config(&cfg);
 
         let agent_roles =
@@ -4754,6 +4766,7 @@ impl Config {
             rollout_budget,
             current_time_reminder,
             sleep_tool_mode,
+            runtime_auth_mode,
             features,
             runtime_feature_defaults: BTreeMap::new(),
             suppress_unstable_features_warning: cfg

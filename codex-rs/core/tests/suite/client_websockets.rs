@@ -2828,6 +2828,28 @@ async fn websocket_harness_with_provider_options_and_auth(
     enabled_features: &[Feature],
     auth: Option<CodexAuth>,
 ) -> WebsocketTestHarness {
+    websocket_harness_with_provider_factory(
+        provider,
+        runtime_metrics_enabled,
+        concurrent_reasoning_summaries_enabled,
+        enabled_features,
+        auth,
+        |provider, auth| codex_model_provider::create_model_provider(provider, auth),
+    )
+    .await
+}
+
+async fn websocket_harness_with_provider_factory(
+    provider: ModelProviderInfo,
+    runtime_metrics_enabled: bool,
+    concurrent_reasoning_summaries_enabled: bool,
+    enabled_features: &[Feature],
+    auth: Option<CodexAuth>,
+    provider_factory: impl FnOnce(
+        ModelProviderInfo,
+        Option<Arc<AuthManager>>,
+    ) -> codex_model_provider::SharedModelProvider,
+) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
@@ -2898,10 +2920,9 @@ async fn websocket_harness_with_provider_options_and_auth(
         )
     });
     let client = ModelClient::new(
-        client_auth_manager,
+        provider_factory(provider.clone(), client_auth_manager),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        provider.clone(),
         SessionSource::Exec,
         "test_originator".to_string(),
         config.model_verbosity,

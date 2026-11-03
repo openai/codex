@@ -12,7 +12,6 @@ use codex_features::Feature;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_model_provider::create_model_provider;
 
 use super::decisions::DecisionsError;
 use super::decisions::DecisionsSampler;
@@ -78,7 +77,6 @@ pub(super) fn decisions_api_key(
 
 pub(super) async fn sampler_config(
     input: &ThreadStartInput<'_, Config>,
-    auth_manager: Arc<AuthManager>,
     manager: Option<Arc<ThreadManager>>,
 ) -> LunaSamplerConfig {
     let luna_model = if let Some(thread_manager) = manager {
@@ -102,6 +100,11 @@ pub(super) async fn sampler_config(
                 )
             });
     let luna_compaction_hash = luna_model.and_then(|model| model.comp_hash.clone());
+    #[expect(clippy::expect_used, reason = "Required thread startup invariant")]
+    let auth = input
+        .thread_store
+        .get::<codex_model_provider::ProviderAuthContext>()
+        .expect("Core installs provider auth before starting Guardian");
     LunaSamplerConfig {
         api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::from_config(input.config),
         workspace_routing: input
@@ -109,7 +112,7 @@ pub(super) async fn sampler_config(
             .get_or_init(|| input.config.workspace_routing_context())
             .as_ref()
             .clone(),
-        provider: create_model_provider(input.config.model_provider.clone(), Some(auth_manager)),
+        provider: auth.model_provider(input.config.model_provider.clone()),
         http_client_factory: input.config.http_client_factory(),
         agent_identity_policy: if input.config.features.enabled(Feature::UseAgentIdentity) {
             AgentIdentityAuthPolicy::ChatGptAuth

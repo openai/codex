@@ -2189,7 +2189,20 @@ async fn run_debug_models_command(
             .await?;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await?;
-        let models_manager = build_models_manager(&config, auth_manager);
+        let runtime_auth = if config
+            .features
+            .enabled(codex_features::Feature::RuntimeAgentInstances)
+        {
+            let installation_id = codex_core::resolve_installation_id(&config.codex_home).await?;
+            codex_core::build_runtime_auth_manager(
+                &config,
+                Arc::clone(&auth_manager),
+                &installation_id,
+            )
+        } else {
+            None
+        };
+        let models_manager = build_models_manager(&config, auth_manager, runtime_auth);
         models_manager
             .raw_model_catalog(
                 RefreshStrategy::OnlineIfUncached,

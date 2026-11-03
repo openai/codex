@@ -5,6 +5,7 @@ use codex_exec_server::ExecServerRuntimeOptions;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::UserInstructionsProvider;
 use codex_login::AuthManager;
+use codex_models_manager::manager::ModelCatalogSettings;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
@@ -44,10 +45,15 @@ pub async fn build_prompt_input(
 
     let thread_store = ThreadStoreBuilder::from_config(&config, state_db.clone()).build();
     let installation_id = resolve_installation_id(&config.codex_home).await?;
-    let thread_manager = ThreadManager::new(
+    let startup = crate::build_startup_models(
         &config,
         Arc::clone(&auth_manager),
-        crate::thread_manager::build_models_manager(&config, Arc::clone(&auth_manager)),
+        installation_id,
+        Arc::new(ModelCatalogSettings::disk(config.codex_home.to_path_buf())),
+    );
+    let thread_manager = ThreadManager::new(
+        &config,
+        startup,
         crate::CodexAppsToolsCache::default(),
         SessionSource::Exec,
         Arc::new(
@@ -65,7 +71,6 @@ pub async fn build_prompt_input(
         crate::thread_manager::passthrough_image_store(),
         thread_store,
         crate::local_agent_graph_store_from_state_db(state_db.as_ref()),
-        installation_id,
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     );

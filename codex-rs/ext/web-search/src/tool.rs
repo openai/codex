@@ -29,8 +29,6 @@ use codex_login::default_client::create_transport_for_routes_async;
 use codex_model_provider::ACCOUNT_ROUTING_HEADER;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::WorkspaceRoutingContext;
-use codex_model_provider::prepare_provider_request;
-use codex_model_provider::provider_uses_first_party_auth_path;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WebSearchBeginEvent;
@@ -113,45 +111,38 @@ impl WebSearchTool {
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let commands = parse_commands(call.function_arguments()?, self.supports_literature_search)?;
         let command_action = command_action(&commands);
-        let provider = self.provider.as_ref();
-        let first_party = provider_uses_first_party_auth_path(provider.info());
-        let client = prepare_provider_request(provider, first_party, |_| async {
-            let routing_auth = if first_party {
-                provider.auth().await
-            } else {
-                None
-            };
-            let (endpoint, api_auth) = provider.api_provider_and_auth().await?;
-            let resolved = provider
-                .route_responses_api_provider(
-                    endpoint,
-                    routing_auth.as_ref(),
-                    &self.workspace_routing,
-                )
-                .await?;
-            let endpoint = resolved.provider;
-            let transport = if resolved.redirect_policy == ClientRedirectPolicy::Reject
-                || endpoint.headers.contains_key(ACCOUNT_ROUTING_HEADER)
-            {
-                create_client_for_route_async(
-                    self.http_client_factory.clone(),
-                    endpoint.url_for_path("alpha/search"),
-                    ClientRouteClass::Api,
-                    ClientRedirectPolicy::Reject,
-                )
-                .await
-                .map(ReqwestTransport::from_http_client)
-            } else {
-                create_transport_for_routes_async(
-                    self.http_client_factory.clone(),
-                    ClientRouteClass::Api,
-                )
-                .await
-            }?;
-            Ok(SearchClient::new(transport, endpoint, api_auth))
-        })
+        let setup = codex_model_provider::resolve_request(
+            self.provider.as_ref(),
+            /*scope*/ None,
+            Some(&self.workspace_routing),
+            self.http_client_factory.clone(),
+        )
         .await
         .map_err(|err| FunctionCallError::RespondToModel(search_error_message(err)))?;
+        let transport = if setup.redirect_policy == ClientRedirectPolicy::Reject
+            || setup
+                .api_provider
+                .headers
+                .contains_key(ACCOUNT_ROUTING_HEADER)
+        {
+            create_client_for_route_async(
+                setup.http_client_factory,
+                setup.api_provider.url_for_path("alpha/search"),
+                ClientRouteClass::Api,
+                ClientRedirectPolicy::Reject,
+            )
+            .await
+            .map(ReqwestTransport::from_http_client)
+        } else {
+            create_transport_for_routes_async(
+                setup.http_client_factory,
+                ClientRouteClass::Api,
+                setup.redirect_policy,
+            )
+            .await
+        }
+        .map_err(|err| FunctionCallError::RespondToModel(search_error_message(err)))?;
+        let client = SearchClient::new(transport, setup.api_provider, setup.api_auth);
         let request = SearchRequest {
             id: self.session_id.clone(),
             model: call.model.clone(),

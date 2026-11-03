@@ -58,12 +58,33 @@ async fn runtime_harness(
 ) -> (WebsocketTestHarness, Arc<Credentials>) {
     provider.requires_openai_auth = true;
     let initial = CodexAuth::from_api_key("key-a");
-    let mut harness = websocket_harness_with_provider_options_and_auth(
+    let registration_url = format!("{}/register", registration.uri()).parse().unwrap();
+    let harness = websocket_harness_with_provider_factory(
         provider,
         /*runtime_metrics_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         &[],
         Some(initial.clone()),
+        move |provider, credentials| {
+            let credentials = credentials.expect("runtime fixture requires credentials");
+            let runtime = Arc::new(RuntimeAuthManager::new(
+                Arc::clone(&credentials),
+                AgentHostAuthorization::InstallationId {
+                    installation_id: Uuid::nil(),
+                },
+                RuntimeRegistrationMetadata {
+                    harness: Some("codex".into()),
+                    harness_version: None,
+                    role: RuntimeRole::OrchestratorAndExecutor,
+                },
+                registration_url,
+            ));
+            codex_model_provider::test_support::runtime_model_provider(
+                provider,
+                credentials,
+                (runtime, mode),
+            )
+        },
     )
     .await;
     let credentials = Arc::new(Credentials(RwLock::new(initial)));
@@ -72,19 +93,6 @@ async fn runtime_harness(
         .set_external_auth(credentials.clone())
         .await
         .unwrap();
-    let runtime = Arc::new(RuntimeAuthManager::new(
-        harness.auth_manager.clone(),
-        AgentHostAuthorization::InstallationId {
-            installation_id: Uuid::nil(),
-        },
-        RuntimeRegistrationMetadata {
-            harness: Some("codex".into()),
-            harness_version: None,
-            role: RuntimeRole::OrchestratorAndExecutor,
-        },
-        format!("{}/register", registration.uri()).parse().unwrap(),
-    ));
-    harness.client = harness.client.with_runtime_auth(runtime, mode).unwrap();
     (harness, credentials)
 }
 

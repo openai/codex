@@ -218,6 +218,10 @@ impl Session {
                 published: false,
             };
             let auth = self.services.auth_manager.auth().await;
+            // Capture after claiming the refresh so a new invalidation cannot be consumed
+            // with the environment snapshot taken before its permissions changed.
+            let environments = self.services.turn_environments.snapshot().await;
+            let environment_selections = environments.all_selections();
             let desired = self.latest_mcp_desired_state(auth, environments).await;
             let selected_capability_roots = self
                 .resolve_selected_capability_roots_for_step(&desired.environments)

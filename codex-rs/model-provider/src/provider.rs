@@ -16,6 +16,7 @@ use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
+use codex_models_manager::manager::ModelCatalogSettings;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
@@ -37,6 +38,7 @@ use crate::auth::uses_fedramp_api_key;
 use crate::combined_auth::compose_auth;
 use crate::gcp::GcpModelProvider;
 use crate::models_endpoint::OpenAiModelsEndpoint;
+use crate::request_setup::resolve_request_auth;
 use crate::workspace_routing::WorkspaceRoutingContext;
 
 /// Current app-visible account state for a model provider.
@@ -353,12 +355,30 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         }
     }
 
+    /// Resolve the endpoint before headers for providers whose setup may refresh credentials.
+    fn request_provider_and_auth(
+        &self,
+        scope: Option<ProviderAuthScope>,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<(Provider, ResolvedProviderAuth)>>
+    {
+        Box::pin(async move { Ok((self.api_provider().await?, self.request_auth(scope).await?)) })
+    }
+
     /// Creates the model manager implementation appropriate for this provider.
     fn models_manager(
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager;
+
+    /// Build a thread catalog with the same cache and live discovery policy as its harness.
+    fn models_manager_with_settings(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+        _settings: ModelCatalogSettings,
+    ) -> SharedModelsManager {
+        self.models_manager_without_cache(config_model_catalog)
+    }
 
     /// Creates a model manager with caching disabled.
     ///
@@ -462,12 +482,6 @@ struct ConfiguredModelProvider {
     catalog_runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
 }
 
-enum ModelsCacheConfig {
-    Disk { codex_home: PathBuf },
-    Disabled,
-    Custom(Arc<dyn ModelsCache>),
-}
-
 impl ConfiguredModelProvider {
     fn new(
         info: ModelProviderInfo,
@@ -513,73 +527,15 @@ impl ConfiguredModelProvider {
         &self,
         scope: Option<ProviderAuthScope>,
     ) -> codex_protocol::error::Result<ResolvedProviderAuth> {
-        let resolved = if let Some((runtime, mode)) = &self.runtime_auth {
-            crate::validate_runtime_destination(self.info.base_url.as_deref())?;
-            crate::validate_runtime_provider(&self.info, self.auth_manager.as_ref(), runtime)?;
-            let headers = self.info.build_header_map()?;
-            let selected = crate::runtime_auth::select_runtime_auth(runtime, &headers)
-                .await
-                .map_err(|error| self.map_api_error(error.into()))?;
-            crate::validate_runtime_selectors(&headers, selected.runtime().actor().info())?;
-            ResolvedProviderAuth {
-                auth: selected.clone().into_auth_provider(*mode),
-                agent_identity_telemetry: None,
-                runtime: Some(selected),
-            }
-        } else {
-            let auth = self.auth().await;
-            match scope {
-                Some(scope) if provider_uses_first_party_auth_path(&self.info) => {
-                    resolve_provider_auth_for_scope(
-                        self.auth_manager.clone(),
-                        auth.as_ref(),
-                        &self.info,
-                        scope,
-                    )
-                    .await?
-                }
-                _ => ResolvedProviderAuth::new(resolve_provider_auth(auth.as_ref(), &self.info)?),
-            }
-        };
+        let resolved = resolve_request_auth(
+            self.info.clone(),
+            self.auth_manager.clone(),
+            self.runtime_auth.clone(),
+            scope,
+            self.info.base_url.clone(),
+        )
+        .await?;
         self.compose_auth(resolved).await
-    }
-
-    fn create_models_manager(
-        &self,
-        config_model_catalog: Option<ModelsResponse>,
-        cache: ModelsCacheConfig,
-    ) -> SharedModelsManager {
-        if let Some(model_catalog) = config_model_catalog {
-            return Arc::new(StaticModelsManager::new(
-                self.auth_manager.clone(),
-                model_catalog,
-                codex_models_manager::ModelOrigin::ExplicitConfig,
-            ));
-        }
-        let endpoint = Arc::new(
-            OpenAiModelsEndpoint::new(
-                self.info.clone(),
-                self.auth_manager.clone(),
-                self.gateway_auth_manager.clone(),
-            )
-            .with_runtime_auth(self.catalog_runtime_auth.clone()),
-        );
-        let auth_manager = self.auth_manager.clone();
-        let manager = match cache {
-            ModelsCacheConfig::Disk { codex_home } => {
-                OpenAiModelsManager::new(codex_home, endpoint, auth_manager)
-            }
-            ModelsCacheConfig::Disabled => {
-                OpenAiModelsManager::new_without_cache(endpoint, auth_manager)
-            }
-            ModelsCacheConfig::Custom(cache) => {
-                OpenAiModelsManager::new_with_cache(cache, endpoint, auth_manager)
-            }
-        };
-        match &self.info.model_catalog_url {
-            Some(_) => Arc::new(manager.with_provider_catalog()),
-            None => Arc::new(manager),
-        }
     }
 }
 
@@ -641,6 +597,18 @@ impl ModelProvider for ConfiguredModelProvider {
         scope: Option<ProviderAuthScope>,
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
         Box::pin(self.resolve_auth(scope))
+    }
+
+    fn request_provider_and_auth(
+        &self,
+        scope: Option<ProviderAuthScope>,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<(Provider, ResolvedProviderAuth)>>
+    {
+        Box::pin(async move {
+            let resolved = self.resolve_auth(scope).await?;
+            let provider = self.api_provider_for_auth(resolved.credential.as_ref())?;
+            Ok((provider, resolved))
+        })
     }
 
     fn api_auth(
@@ -733,14 +701,45 @@ impl ModelProvider for ConfiguredModelProvider {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        self.create_models_manager(config_model_catalog, ModelsCacheConfig::Disk { codex_home })
+        self.models_manager_with_settings(
+            config_model_catalog,
+            ModelCatalogSettings::disk(codex_home),
+        )
+    }
+
+    fn models_manager_with_settings(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+        settings: ModelCatalogSettings,
+    ) -> SharedModelsManager {
+        if let Some(model_catalog) = config_model_catalog {
+            return Arc::new(StaticModelsManager::new(
+                self.auth_manager.clone(),
+                model_catalog,
+                codex_models_manager::ModelOrigin::ExplicitConfig,
+            ));
+        }
+        let endpoint = Arc::new(
+            OpenAiModelsEndpoint::new(
+                self.info.clone(),
+                self.auth_manager.clone(),
+                self.gateway_auth_manager.clone(),
+            )
+            .with_runtime_auth(self.catalog_runtime_auth.clone()),
+        );
+        let auth_manager = self.auth_manager.clone();
+        let manager = OpenAiModelsManager::with_settings(settings, endpoint, auth_manager);
+        match &self.info.model_catalog_url {
+            Some(_) => Arc::new(manager.with_provider_catalog()),
+            None => Arc::new(manager),
+        }
     }
 
     fn models_manager_without_cache(
         &self,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        self.create_models_manager(config_model_catalog, ModelsCacheConfig::Disabled)
+        self.models_manager_with_settings(config_model_catalog, ModelCatalogSettings::default())
     }
 
     fn models_manager_with_cache(
@@ -748,7 +747,10 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
         cache: Arc<dyn ModelsCache>,
     ) -> SharedModelsManager {
-        self.create_models_manager(config_model_catalog, ModelsCacheConfig::Custom(cache))
+        self.models_manager_with_settings(
+            config_model_catalog,
+            ModelCatalogSettings::with_cache(cache),
+        )
     }
 }
 

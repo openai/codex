@@ -125,10 +125,9 @@ fn test_model_client_with_thread_id(
 ) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     ModelClient::new(
-        /*auth_manager*/ None,
+        codex_model_provider::create_model_provider(provider, /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        provider,
         session_source,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
@@ -227,13 +226,14 @@ async fn workspace_routed_http_rejects_redirects_without_a_routing_header(
             format!("{}/register", registration.uri()).parse().unwrap(),
         ));
         let mut client = test_model_client(SessionSource::Exec);
-        Arc::get_mut(&mut client.state).unwrap().provider = create_model_provider(
-            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-            Some(manager),
-        );
-        if let Some(mode) = runtime_mode {
-            client = client.with_runtime_auth(runtime, mode).unwrap();
-        }
+        Arc::get_mut(&mut client.state).unwrap().provider =
+            codex_model_provider::ProviderAuthContext {
+                credentials: manager,
+                runtime_auth: runtime_mode.map(|mode| (runtime, mode)),
+            }
+            .model_provider(ModelProviderInfo::create_openai_provider(
+                /*base_url*/ None,
+            ));
         let mut setup = client
             .current_client_setup(super::ClientRouting::Workspace)
             .await
@@ -246,7 +246,7 @@ async fn workspace_routed_http_rejects_redirects_without_a_routing_header(
         }
         // Exercise the resolved route's redirect policy against loopback HTTP servers.
         setup.api_provider.base_url = origin.uri();
-        let transport = setup.build_api_transport("/responses").unwrap();
+        let transport = setup.http_transport("/responses").unwrap();
         let request = setup
             .api_provider
             .build_request(http::Method::POST, "/responses")
@@ -2147,10 +2147,9 @@ fn model_client_with_counting_attestation(
         )
     };
     let model_client = ModelClient::new(
-        auth_manager,
+        codex_model_provider::create_model_provider(provider, auth_manager),
         AgentIdentityAuthPolicy::JwtOnly,
         ThreadId::new(),
-        provider,
         SessionSource::Exec,
         "test_originator".to_string(),
         /*model_verbosity*/ None,

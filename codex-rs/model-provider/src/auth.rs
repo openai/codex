@@ -12,6 +12,7 @@ use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
 use codex_features::RuntimeAuthMode;
 use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -74,6 +75,8 @@ impl AgentIdentitySessionFallback {
 /// Provider auth resolved for a request, plus metadata describing the effective auth.
 #[derive(Clone)]
 pub struct ResolvedProviderAuth {
+    /// Login selected with these headers; routing must use the same credential.
+    pub credential: Option<CodexAuth>,
     pub auth: SharedAuthProvider,
     pub agent_identity_telemetry: Option<AgentIdentityTelemetry>,
     pub runtime: Option<RuntimeAuth>,
@@ -82,15 +85,45 @@ pub struct ResolvedProviderAuth {
 impl ResolvedProviderAuth {
     pub(crate) fn new(auth: SharedAuthProvider) -> Self {
         Self {
+            credential: None,
             auth,
             agent_identity_telemetry: None,
             runtime: None,
         }
     }
 
+    pub(crate) fn for_runtime(selected: RuntimeAuth, mode: RuntimeAuthMode) -> Self {
+        Self {
+            credential: Some(selected.auth().clone()),
+            auth: selected.clone().into_auth_provider(mode),
+            agent_identity_telemetry: None,
+            runtime: Some(selected),
+        }
+    }
+
+    /// Preserve the caller's transport configuration and bind it to the selected login.
+    pub fn bind_http_client_factory(
+        &self,
+        factory: HttpClientFactory,
+    ) -> Result<HttpClientFactory, AuthError> {
+        match &self.runtime {
+            Some(runtime) => runtime.bind_http_client_factory(factory),
+            None => Ok(factory),
+        }
+    }
+
+    /// Reject account selectors that disagree with the selected runtime.
+    pub fn validate_headers(&self, headers: &HeaderMap) -> codex_protocol::error::Result<()> {
+        if let Some(runtime) = &self.runtime {
+            crate::validate_runtime_selectors(headers, runtime.runtime().actor().info())?;
+        }
+        Ok(())
+    }
+
     fn for_agent_identity(auth: AgentIdentityAuth) -> Self {
         let agent_identity_telemetry = agent_identity_telemetry(&auth);
         Self {
+            credential: None,
             auth: Arc::new(AgentIdentityAuthProvider { auth }),
             agent_identity_telemetry: Some(agent_identity_telemetry),
             runtime: None,

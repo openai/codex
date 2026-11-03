@@ -2,6 +2,7 @@ pub(crate) mod startup;
 
 use crate::PromptCacheKey;
 use crate::WithTurnExtensionData;
+use crate::runtime_auth::RuntimeAuthSlot;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -235,7 +236,6 @@ use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
 use codex_config::types::McpServerConfig;
-use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
@@ -509,6 +509,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) instructions: SessionInstructions,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) runtime_auth: RuntimeAuthSlot,
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) git_root_discovery: Arc<GitRootDiscovery>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -630,6 +631,7 @@ impl Session {
             instructions,
             installation_id,
             auth_manager,
+            runtime_auth,
             models_manager,
             git_root_discovery,
             environment_manager,
@@ -758,12 +760,19 @@ impl Session {
         };
 
         let mut config = Arc::new(config);
+        let configured_runtime = crate::runtime_auth::runtime_for_config(
+            &runtime_auth,
+            config.as_ref(),
+            Arc::clone(&auth_manager),
+            &installation_id,
+        );
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
             codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
         };
-        if config.model.is_none()
+        if configured_runtime.is_some()
+            || config.model.is_none()
             || !matches!(
                 refresh_strategy,
                 codex_models_manager::manager::RefreshStrategy::Offline
@@ -951,12 +960,15 @@ impl Session {
         let enable_full_access_form_input = !root_capabilities_restricted
             && matches!(thread_source.as_ref(), Some(ThreadSource::User))
             && client_mcp_extensions.contains(OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID);
+        let provider_auth = codex_model_provider::ProviderAuthContext {
+            credentials: Arc::clone(&auth_manager),
+            runtime_auth: configured_runtime.map(|runtime| (runtime, config.runtime_auth_mode)),
+        };
+        // Replace any inherited context before startup hooks see this thread's effective auth.
+        thread_extension_init.insert(provider_auth.clone());
         let session_configuration = SessionConfiguration {
             turn_extension_init,
-            provider: create_model_provider(
-                config.model_provider.clone(),
-                Some(Arc::clone(&auth_manager)),
-            ),
+            provider: provider_auth.model_provider(config.model_provider.clone()),
             step_settings: Arc::new(StepSettings {
                 collaboration_mode,
                 reasoning_summary: config.model_reasoning_summary,
@@ -1014,6 +1026,7 @@ impl Session {
             instructions,
             installation_id,
             auth_manager.clone(),
+            runtime_auth,
             models_manager.clone(),
             git_root_discovery,
             model_info,

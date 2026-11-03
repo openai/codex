@@ -25,6 +25,9 @@ use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
 use codex_api::build_session_headers;
 use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::NetworkPolicy;
+use codex_login::AuthChangeState;
 use codex_login::CodexAuth;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::add_originator_header;
@@ -33,7 +36,6 @@ use codex_login::default_client::default_headers;
 use codex_model_provider::ACCOUNT_ROUTING_HEADER;
 use codex_model_provider::AgentIdentitySessionFallback;
 use codex_model_provider::ProviderAuthScope;
-use codex_model_provider::ResolvedResponsesProvider;
 use codex_model_provider::ResponsesConnectionKey;
 use codex_protocol::ThreadId;
 use codex_websocket_client::WebSocketConnector;
@@ -76,6 +78,7 @@ pub(super) struct ConnectionPool {
 
 struct HttpTransport {
     url: String,
+    network_policy: NetworkPolicy,
     redirect_policy: ClientRedirectPolicy,
     transport: OnceCell<ReqwestTransport>,
 }
@@ -86,17 +89,21 @@ pub(super) struct PooledConnection {
     // The bridge routes by thread ID, so each socket needs its own identity.
     pub(super) thread_id: String,
     pub(super) expires_at: Instant,
-    auth_changes: Option<tokio::sync::watch::Receiver<u64>>,
+    auth_changes: Option<tokio::sync::watch::Receiver<AuthChangeState>>,
     key: ResponsesConnectionKey,
+    runtime_id: Option<String>,
     _permit: OwnedSemaphorePermit,
 }
 
 struct ClientSetup {
     provider: Provider,
+    http_client_factory: HttpClientFactory,
+    runtime_id: Option<String>,
+    request_kind: RequestMode,
     auth: SharedAuthProvider,
     redirect_policy: ClientRedirectPolicy,
     key: ResponsesConnectionKey,
-    auth_changes: Option<tokio::sync::watch::Receiver<u64>>,
+    auth_changes: Option<tokio::sync::watch::Receiver<AuthChangeState>>,
 }
 
 enum Connection {
@@ -218,6 +225,9 @@ impl ConnectionPool {
         let ClientSetup {
             mut provider,
             auth,
+            http_client_factory,
+            runtime_id,
+            request_kind,
             redirect_policy,
             key,
             auth_changes,
@@ -232,6 +242,7 @@ impl ConnectionPool {
             match idle {
                 Some(connection)
                     if connection.key == key
+                        && connection.runtime_id == runtime_id
                         && connection
                             .auth_changes
                             .as_ref()
@@ -264,7 +275,6 @@ impl ConnectionPool {
                 self.replenish();
                 // Sampling owns the retry budget across both transports.
                 provider.retry.max_attempts = 0;
-                let request_kind = self.responses_request_kind().await;
                 let url = provider.url_for_path("/responses");
                 let redirect_policy = if provider.headers.contains_key(ACCOUNT_ROUTING_HEADER) {
                     ClientRedirectPolicy::Reject
@@ -279,11 +289,13 @@ impl ConnectionPool {
                     if let Some(transport) = cached.as_ref()
                         && transport.url == url
                         && transport.redirect_policy == redirect_policy
+                        && transport.network_policy == *http_client_factory.network_policy()
                     {
                         Arc::clone(transport)
                     } else {
                         let transport = Arc::new(HttpTransport {
                             url: url.clone(),
+                            network_policy: http_client_factory.network_policy().clone(),
                             redirect_policy,
                             transport: OnceCell::new(),
                         });
@@ -295,7 +307,7 @@ impl ConnectionPool {
                     .transport
                     .get_or_try_init(|| async {
                         let client = create_client_for_route_async(
-                            self.config.http_client_factory.clone(),
+                            http_client_factory.clone(),
                             url,
                             ClientRouteClass::Api,
                             redirect_policy,
@@ -353,45 +365,41 @@ impl ConnectionPool {
     }
 
     async fn client_setup(&self) -> Result<ClientSetup, LunaSamplerError> {
+        let setup = codex_model_provider::resolve_request(
+            self.config.provider.as_ref(),
+            Some(ProviderAuthScope {
+                agent_identity_policy: self.config.agent_identity_policy,
+                session_source: self.config.session_source.clone(),
+                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
+            }),
+            Some(&self.config.workspace_routing),
+            self.config.http_client_factory.clone(),
+        )
+        .await
+        .map_err(LunaSamplerError::Provider)?;
         let mut auth_changes = self
             .config
             .provider
             .auth_manager()
-            .map(|manager| manager.auth_change_receiver());
-        let revision = auth_changes.as_mut().map(|auth| *auth.borrow_and_update());
-        let ResolvedResponsesProvider {
-            provider,
-            redirect_policy,
-        } = self
-            .config
-            .provider
-            .responses_api_provider(&self.config.workspace_routing)
-            .await
-            .map_err(LunaSamplerError::Provider)?;
-        let auth = self
-            .config
-            .provider
-            .api_auth_for_scope(ProviderAuthScope {
-                agent_identity_policy: self.config.agent_identity_policy,
-                session_source: self.config.session_source.clone(),
-                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-            })
-            .await
-            .map_err(LunaSamplerError::Provider)?
-            .auth;
+            .map(|manager| manager.auth_change_state_receiver());
         if auth_changes
-            .as_ref()
-            .is_some_and(|auth| auth.has_changed().unwrap_or(true))
+            .as_mut()
+            .map(|auth| auth.borrow_and_update().generation)
+            != setup.auth_revision
         {
             return Err(LunaSamplerError::Api(ApiError::Stream(
                 "authentication changed while resolving routing".into(),
             )));
         }
-        let key = ResponsesConnectionKey::new(&provider, revision);
+        let key = ResponsesConnectionKey::new(&setup.api_provider, setup.auth_revision);
+        let request_kind = self.responses_request_kind(setup.auth.as_ref());
         Ok(ClientSetup {
-            provider,
-            auth,
-            redirect_policy,
+            provider: setup.api_provider,
+            auth: setup.api_auth,
+            redirect_policy: setup.redirect_policy,
+            http_client_factory: setup.http_client_factory,
+            runtime_id: setup.runtime_id,
+            request_kind,
             key,
             auth_changes,
         })
@@ -430,15 +438,9 @@ impl ConnectionPool {
         }
         Ok(headers)
     }
-    async fn responses_request_kind(&self) -> RequestMode {
+    fn responses_request_kind(&self, auth: Option<&CodexAuth>) -> RequestMode {
         let provider = self.config.provider.info();
-        if self
-            .config
-            .provider
-            .auth()
-            .await
-            .as_ref()
-            .is_some_and(CodexAuth::uses_codex_backend)
+        if auth.is_some_and(CodexAuth::uses_codex_backend)
             && provider.is_openai()
             && provider.requires_openai_auth
             && provider.env_key.is_none()
@@ -459,12 +461,14 @@ impl ConnectionPool {
         let ClientSetup {
             provider,
             auth,
+            http_client_factory,
+            runtime_id,
+            request_kind,
             redirect_policy: _,
             key,
             auth_changes,
         } = self.client_setup().await?;
         let thread_id = ThreadId::new().to_string();
-        let request_kind = self.responses_request_kind().await;
         let mut headers = self.headers(&thread_id, request_kind)?;
         headers.insert(
             "openai-beta",
@@ -488,9 +492,17 @@ impl ConnectionPool {
                         })
                 })
                 .await?;
+            let connector = connector
+                .with_account_binding(http_client_factory.network_policy())
+                .ok_or_else(|| {
+                    ApiError::Transport(TransportError::Build(
+                        "websocket credentials and transport have different account policies"
+                            .into(),
+                    ))
+                })?;
             client
                 .connect_with_connector(
-                    connector,
+                    &connector,
                     headers,
                     default_headers(),
                     /*turn_state*/ None,
@@ -532,6 +544,7 @@ impl ConnectionPool {
             expires_at: Instant::now() + MAX_WEBSOCKET_AGE,
             auth_changes,
             key,
+            runtime_id,
             _permit: permit,
         })
     }

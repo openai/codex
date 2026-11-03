@@ -18,7 +18,7 @@ use http::HeaderMap;
 use std::sync::Arc;
 
 /// Select the runtime for the resource scope carried by the model request.
-pub async fn select_runtime_auth(
+pub(crate) async fn select_runtime_auth(
     manager: &RuntimeAuthManager,
     headers: &HeaderMap,
 ) -> Result<RuntimeAuth, AuthError> {

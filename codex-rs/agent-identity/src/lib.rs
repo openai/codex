@@ -54,22 +54,23 @@ pub enum ChatGptEnvironment {
 
 impl ChatGptEnvironment {
     pub fn from_chatgpt_base_url(chatgpt_base_url: &str) -> Result<Self> {
-        match chatgpt_base_url.trim_end_matches('/') {
-            "https://chatgpt.com"
-            | "https://chatgpt.com/backend-api"
-            | "https://chatgpt.com/codex"
-            | "https://chatgpt.com/backend-api/codex"
-            | "https://chat.openai.com"
-            | "https://chat.openai.com/backend-api"
-            | "https://chat.openai.com/codex"
-            | "https://chat.openai.com/backend-api/codex" => Ok(Self::Production),
-            "https://chatgpt-staging.com"
-            | "https://chatgpt-staging.com/backend-api"
-            | "https://chatgpt-staging.com/codex"
-            | "https://chatgpt-staging.com/backend-api/codex" => Ok(Self::Staging),
-            _ => anyhow::bail!(
-                "Agent Identity only supports production and staging ChatGPT environments"
-            ),
+        let url = codex_http_client::validate_endpoint_url(chatgpt_base_url, "chatgpt_base_url")
+            .map_err(anyhow::Error::msg)?;
+        let host = url.host_str().unwrap_or_default();
+        anyhow::ensure!(
+            codex_http_client::is_allowed_chatgpt_host(host)
+                && url.port_or_known_default() == Some(443)
+                && url.query().is_none()
+                && matches!(
+                    url.path().trim_end_matches('/'),
+                    "" | "/backend-api" | "/codex" | "/backend-api/codex"
+                ),
+            "Agent Identity only supports production and staging ChatGPT environments"
+        );
+        if host == "chatgpt-staging.com" || host.ends_with(".chatgpt-staging.com") {
+            Ok(Self::Staging)
+        } else {
+            Ok(Self::Production)
         }
     }
 
@@ -893,12 +894,34 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
             ChatGptEnvironment::Staging.agent_identity_authapi_base_url(),
             "https://auth.api.openai.org/api/accounts"
         );
+        assert_eq!(
+            ChatGptEnvironment::from_chatgpt_base_url("https://us.chatgpt.com/backend-api")?,
+            ChatGptEnvironment::Production
+        );
+        assert_eq!(
+            ChatGptEnvironment::from_chatgpt_base_url(
+                "https://us.chatgpt-staging.com/backend-api"
+            )?,
+            ChatGptEnvironment::Staging
+        );
         Ok(())
     }
 
     #[test]
     fn chatgpt_environment_rejects_custom_urls() {
-        assert!(ChatGptEnvironment::from_chatgpt_base_url("http://localhost:8080").is_err(),);
+        for base in [
+            "http://localhost:8080",
+            "http://us.chatgpt.com",
+            "https://chatgpt.com.evil.example",
+            "https://us.chatgpt.com:8443",
+            "https://u@us.chatgpt.com",
+            "https://chatgpt.com/custom",
+        ] {
+            assert!(
+                ChatGptEnvironment::from_chatgpt_base_url(base).is_err(),
+                "{base}"
+            );
+        }
     }
 
     #[test]

@@ -129,13 +129,28 @@ async fn model_requests_keep_the_selected_project_while_reusing_one_runtime() {
                 headers.insert("openai-project".into(), project.into());
             }
             info.http_headers = Some(headers);
-            let auth = context
-                .model_provider(info.clone())
-                .api_auth()
-                .await
-                .unwrap();
+            let provider = context.model_provider(info.clone());
+            let request = crate::resolve_request(
+                provider.as_ref(),
+                /*scope*/ None,
+                /*routing*/ None,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await
+            .unwrap();
+            assert_eq!(request.runtime_id.as_deref(), Some("runtime-a"));
+            assert_eq!(
+                request
+                    .api_provider
+                    .headers
+                    .get("openai-project")
+                    .map(|value| value.to_str().unwrap()),
+                project,
+            );
             assert!(
-                auth.to_auth_headers()
+                request
+                    .api_auth
+                    .to_auth_headers()
                     .unwrap()
                     .contains_key("authorization")
             );

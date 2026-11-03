@@ -184,12 +184,14 @@ impl WorkspaceRoutingResolver for ChangedBootstrap {
 #[tokio::test]
 async fn idle_classifier_retains_the_owning_threads_workspace_binding() -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
-    let server = responses::start_mock_server().await;
-    let test = core_test_support::test_codex::test_codex()
-        .build_with_auto_env(&server)
-        .await?;
     let auth =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let thread_server = responses::start_mock_server().await;
+    let test = core_test_support::test_codex::test_codex()
+        .with_auth_manager(Arc::clone(&auth))
+        .build_with_auto_env(&thread_server)
+        .await?;
+    let server = responses::start_mock_server().await;
     let resolver: Arc<dyn WorkspaceRoutingResolver> =
         Arc::new(ChangedBootstrap(AtomicBool::new(/*v*/ true)));
     auth.set_workspace_routing_resolver(Arc::downgrade(&resolver));
@@ -213,8 +215,7 @@ async fn idle_classifier_retains_the_owning_threads_workspace_binding() -> Resul
         .thread_store
         .get::<codex_model_provider::WorkspaceRoutingContext>()
         .expect("Core seeds the owning thread's routing context before extensions start");
-    let classifier =
-        crate::async_scorer::startup::sampler_config(&input, auth.clone(), /*manager*/ None).await;
+    let classifier = crate::async_scorer::startup::sampler_config(&input, /*manager*/ None).await;
     classifier
         .provider
         .responses_api_provider(&owning_context)

@@ -39,12 +39,11 @@ use codex_runtime_agent_instance::RuntimeAuthManager;
 use http::HeaderMap;
 use tokio::time::timeout;
 
-use crate::auth::ResolvedProviderAuth;
 use crate::auth::agent_identity_telemetry;
-use crate::auth::resolve_provider_auth;
 use crate::auth::uses_fedramp_api_key;
 use crate::combined_auth::compose_auth;
 use crate::provider::resolve_api_provider;
+use crate::request_setup::resolve_request_auth;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
@@ -90,9 +89,15 @@ impl OpenAiModelsEndpoint {
     }
 
     async fn auth(&self) -> Option<CodexAuth> {
-        match self.auth_manager.as_ref() {
-            Some(auth_manager) => auth_manager.auth().await,
-            None => None,
+        let auth_manager = self.auth_manager.clone()?;
+        // Catalog startup has its own deadline. Let rotating credentials finish
+        // saving even when that caller stops waiting.
+        match tokio::spawn(async move { auth_manager.auth().await }).await {
+            Ok(auth) => auth,
+            Err(error) => {
+                tracing::warn!(?error, "model catalog authentication task failed");
+                None
+            }
         }
     }
 
@@ -121,48 +126,20 @@ impl OpenAiModelsEndpoint {
         client_version: &str,
         http_client_factory: HttpClientFactory,
     ) -> CoreResult<ModelsEndpointResponse> {
-        let provider_info = self.provider_info.clone();
-        let auth_manager = self.auth_manager.clone();
-        let runtime_auth = self.runtime_auth.clone();
-        // A timed-out catalog fetch must not discard a rotated refresh token before
-        // it is saved. Keep credential refresh and registration owned until they finish.
-        let (auth, selected_runtime_auth) = tokio::spawn(async move {
-            let selected_runtime_auth = match runtime_auth {
-                Some((runtime, mode)) => {
-                    crate::validate_runtime_destination(
-                        provider_info
-                            .model_catalog_url
-                            .as_deref()
-                            .map(String::as_str)
-                            .or(provider_info.base_url.as_deref()),
-                    )?;
-                    crate::validate_runtime_provider(
-                        &provider_info,
-                        auth_manager.as_ref(),
-                        &runtime,
-                    )?;
-                    Some((
-                        crate::runtime_auth::select_runtime_auth(
-                            &runtime,
-                            &provider_info.build_header_map()?,
-                        )
-                        .await
-                        .map_err(|error| map_api_error(error.into()))?,
-                        mode,
-                    ))
-                }
-                None => None,
-            };
-            let auth = match &selected_runtime_auth {
-                Some((selected_runtime_auth, _)) => Some(selected_runtime_auth.auth().clone()),
-                None => match auth_manager {
-                    Some(auth_manager) => auth_manager.auth().await,
-                    None => None,
-                },
-            };
-            Ok::<_, CodexErr>((auth, selected_runtime_auth))
-        })
-        .await??;
+        let resolved = resolve_request_auth(
+            self.provider_info.clone(),
+            self.auth_manager.clone(),
+            self.runtime_auth.clone(),
+            /*scope*/ None,
+            self.provider_info
+                .model_catalog_url
+                .as_deref()
+                .map(String::as_str)
+                .or(self.provider_info.base_url.as_deref())
+                .map(str::to_owned),
+        )
+        .await?;
+        let auth = resolved.credential.clone();
         let metric_auth_mode = if self.has_provider_api_key()
             || auth.as_ref().is_some_and(CodexAuth::is_api_key_auth)
         {
@@ -192,25 +169,14 @@ impl OpenAiModelsEndpoint {
             }
             .to_string();
         }
-        let http_client_factory = match &selected_runtime_auth {
-            Some((selected_runtime_auth, _)) => selected_runtime_auth
-                .bind_http_client_factory(http_client_factory)
-                .map_err(|error| map_api_error(error.into()))?,
-            None => http_client_factory,
-        };
-        let primary = if let Some((selected_runtime_auth, mode)) = selected_runtime_auth {
-            crate::validate_runtime_selectors(
-                &api_provider.headers,
-                selected_runtime_auth.runtime().actor().info(),
-            )?;
-            selected_runtime_auth.into_auth_provider(mode)
-        } else {
-            resolve_provider_auth(auth.as_ref(), &self.provider_info)?
-        };
+        let http_client_factory = resolved
+            .bind_http_client_factory(http_client_factory)
+            .map_err(|error| map_api_error(error.into()))?;
+        resolved.validate_headers(&api_provider.headers)?;
         let resolved = compose_auth(
             &self.provider_info,
             self.gateway_auth_manager.as_ref(),
-            ResolvedProviderAuth::new(primary),
+            resolved,
         )
         .await?;
         let api_auth = resolved.auth;

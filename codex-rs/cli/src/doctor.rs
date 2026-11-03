@@ -41,6 +41,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::LoaderOverrides;
 use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
+use codex_features::Feature;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -2343,14 +2344,38 @@ async fn websocket_reachability_check(
         provider.websocket_connect_timeout().as_millis()
     ));
 
-    let runtime_provider = create_model_provider(provider.clone(), auth_manager);
-    let auth = runtime_provider.auth().await;
-    details.push(format!(
-        "auth mode: {}",
-        auth.as_ref().map(auth_mode_name).unwrap_or("none")
-    ));
-
-    let (api_provider, api_auth) = match runtime_provider.api_provider_and_auth().await {
+    let setup = async {
+        let runtime_auth = if config.features.enabled(Feature::RuntimeAgentInstances)
+            && let Some(credentials) = &auth_manager
+        {
+            let installation_id = codex_core::resolve_installation_id(&config.codex_home).await?;
+            codex_core::build_runtime_auth_manager(
+                config,
+                Arc::clone(credentials),
+                &installation_id,
+            )
+            .map(|runtime| (runtime, config.runtime_auth_mode))
+        } else {
+            None
+        };
+        let runtime_provider = match auth_manager {
+            Some(credentials) => codex_model_provider::ProviderAuthContext {
+                credentials,
+                runtime_auth,
+            }
+            .model_provider(provider.clone()),
+            None => create_model_provider(provider.clone(), /*auth_manager*/ None),
+        };
+        codex_model_provider::resolve_request(
+            runtime_provider.as_ref(),
+            /*scope*/ None,
+            Some(&config.workspace_routing_context()),
+            config.http_client_factory(),
+        )
+        .await
+    }
+    .await;
+    let setup = match setup {
         Ok(setup) => setup,
         Err(err) => {
             return websocket_probe_warning(
@@ -2360,6 +2385,11 @@ async fn websocket_reachability_check(
             );
         }
     };
+    details.push(format!(
+        "auth mode: {}",
+        setup.auth.as_ref().map(auth_mode_name).unwrap_or("none")
+    ));
+    let api_provider = setup.api_provider;
     match api_provider.websocket_url_for_path("responses") {
         Ok(url) => {
             details.push(format!("endpoint: {url}"));
@@ -2383,8 +2413,8 @@ async fn websocket_reachability_check(
         OPENAI_BETA_HEADER,
         HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
     );
-    let client = ResponsesWebsocketClient::new(api_provider, api_auth);
-    let http_client_factory = config.http_client_factory();
+    let client = ResponsesWebsocketClient::new(api_provider, setup.api_auth);
+    let http_client_factory = setup.http_client_factory;
     match tokio::time::timeout(
         provider.websocket_connect_timeout(),
         client.probe_handshake(

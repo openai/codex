@@ -78,18 +78,26 @@ impl CodexImagesBackend {
 
     /// Resolves the provider and auth required for the current image API request.
     async fn client(&self) -> Result<ImagesClient<ReqwestTransport>, ImageBackendError> {
-        let (provider, auth) = self
-            .provider
-            .api_provider_and_auth()
-            .await
-            .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
-        let transport = create_transport_for_routes_async(
+        let setup = codex_model_provider::resolve_request(
+            self.provider.as_ref(),
+            /*scope*/ None,
+            /*routing*/ None,
             self.http_client_factory.clone(),
-            ClientRouteClass::Api,
         )
         .await
         .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
-        Ok(ImagesClient::new(transport, provider, auth))
+        let transport = create_transport_for_routes_async(
+            setup.http_client_factory,
+            ClientRouteClass::Api,
+            setup.redirect_policy,
+        )
+        .await
+        .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
+        Ok(ImagesClient::new(
+            transport,
+            setup.api_provider,
+            setup.api_auth,
+        ))
     }
 
     /// Sends a standalone image generation request through the configured Images client.

@@ -90,6 +90,7 @@ use codex_feedback::CodexFeedback;
 use codex_goal_extension::GoalService;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
+use codex_models_manager::manager::ModelCatalogSettings;
 use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -372,10 +373,15 @@ impl MessageProcessor {
                     Arc::clone(&extension_event_sink),
                 ))
             });
-            let manager = ThreadManager::new(
+            let startup = codex_core::build_startup_models(
                 config.as_ref(),
                 auth_manager.clone(),
-                codex_core::build_models_manager(config.as_ref(), auth_manager.clone()),
+                installation_id,
+                Arc::new(ModelCatalogSettings::disk(config.codex_home.to_path_buf())),
+            );
+            let manager = ThreadManager::new(
+                config.as_ref(),
+                startup,
                 codex_core::CodexAppsToolsCache::default(),
                 session_source,
                 environment_manager,
@@ -405,7 +411,6 @@ impl MessageProcessor {
                 codex_core::passthrough_image_store(),
                 Arc::clone(&thread_store),
                 codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
-                installation_id,
                 Some(app_server_attestation_provider(
                     outgoing.clone(),
                     thread_state_manager.clone(),
@@ -425,8 +430,7 @@ impl MessageProcessor {
             config_manager.clone(),
             startup_cwd,
             Arc::clone(&config),
-            thread_manager.get_models_manager(),
-            Arc::clone(&auth_manager),
+            Arc::clone(&thread_manager),
         ));
         let models_refresh_worker = crate::models_refresh_worker::spawn(&model_catalog);
         let turn_cost_worker =

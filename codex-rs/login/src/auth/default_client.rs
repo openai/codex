@@ -383,6 +383,7 @@ async fn create_client_for_route_async_with_builder(
 pub async fn create_transport_for_routes_async(
     http_client_factory: HttpClientFactory,
     route_class: ClientRouteClass,
+    redirect_policy: ClientRedirectPolicy,
 ) -> std::io::Result<ReqwestTransport> {
     let permit = ROUTE_AWARE_CLIENT_BUILD_PERMIT
         .acquire()
@@ -395,7 +396,8 @@ pub async fn create_transport_for_routes_async(
             http_client_factory.outbound_proxy_policy(),
             OutboundProxyPolicy::ReqwestDefault
         );
-        if !http_client_factory.network_policy().is_managed()
+        if redirect_policy == ClientRedirectPolicy::Default
+            && !http_client_factory.network_policy().is_managed()
             && !http_client_factory.protects_sensitive_headers()
             && (transport_default_proxy || sandboxed)
         {
@@ -405,7 +407,10 @@ pub async fn create_transport_for_routes_async(
         let mut pool = RouteAwareClientPool::with_builder(
             http_client_factory,
             route_class,
-            default_http_client_builder(),
+            match redirect_policy {
+                ClientRedirectPolicy::Default => default_http_client_builder(),
+                ClientRedirectPolicy::Reject => default_http_client_builder().without_redirects(),
+            },
         );
         if sandboxed {
             pool = pool.with_legacy_direct_proxy_and_custom_ca_fallback();

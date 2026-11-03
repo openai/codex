@@ -895,10 +895,12 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
     let thread_id = ThreadId::try_from("00000000-0000-4000-8000-000000000001")
         .expect("test thread id should be valid");
     crate::client::ModelClient::new(
-        /*auth_manager*/ None,
+        codex_model_provider::create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        ),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
@@ -7077,6 +7079,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
+        runtime_auth: Default::default(),
         openai_file_upload_client_pool: RouteAwareClientPool::new_without_request_logging(
             config.http_client_factory(),
             ClientRouteClass::Api,
@@ -7116,10 +7119,12 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         attestation_provider: None,
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
-            Some(auth_manager.clone()),
+            codex_model_provider::create_model_provider(
+                session_configuration.provider.info().clone(),
+                Some(auth_manager.clone()),
+            ),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
-            session_configuration.provider.info().clone(),
             session_configuration.session_source.clone(),
             session_configuration.originator.clone(),
             config.model_verbosity,
@@ -7350,6 +7355,7 @@ async fn make_session_with_config_and_rx(
         SessionInstructions::default(),
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
+        /*runtime_auth*/ Default::default(),
         models_manager,
         Arc::default(),
         model_info,
@@ -7489,6 +7495,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         SessionInstructions::default(),
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
+        /*runtime_auth*/ Default::default(),
         models_manager,
         Arc::default(),
         model_info,
@@ -9407,6 +9414,7 @@ where
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
+        runtime_auth: Default::default(),
         openai_file_upload_client_pool: RouteAwareClientPool::new_without_request_logging(
             config.http_client_factory(),
             ClientRouteClass::Api,
@@ -9446,10 +9454,12 @@ where
         attestation_provider: None,
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
         model_client: ModelClient::new(
-            Some(Arc::clone(&auth_manager)),
+            codex_model_provider::create_model_provider(
+                session_configuration.provider.info().clone(),
+                Some(Arc::clone(&auth_manager)),
+            ),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
-            session_configuration.provider.info().clone(),
             session_configuration.session_source.clone(),
             session_configuration.originator.clone(),
             config.model_verbosity,

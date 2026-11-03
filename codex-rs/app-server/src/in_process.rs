@@ -393,6 +393,7 @@ pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHand
         });
     }
     let initialize = args.initialize.clone();
+    // Keep embedded startup state off callers' stacks, which are smaller on Windows.
     let client = Box::pin(start_uninitialized(args)).await?;
 
     let initialize_response = client

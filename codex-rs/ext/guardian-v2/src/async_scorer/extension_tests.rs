@@ -265,8 +265,13 @@ async fn installed_extension_warms_connections_without_blocking_thread_start() -
 async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("original"));
+    auth_manager
+        .set_external_auth(Arc::new(RefreshableAuth(std::sync::Mutex::new("original"))))
+        .await?;
     let thread_server = responses::start_mock_server().await;
     let test = test_codex()
+        .with_auth_manager(Arc::clone(&auth_manager))
         .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::AutoReview)
         .build_with_auto_env(&thread_server)
         .await?;
@@ -281,10 +286,6 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
     let server = responses::start_websocket_server(connections).await;
     let http = responses::start_mock_server().await;
     let http_mock = responses::mount_sse_once(&http, responses::sse(events)).await;
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("original"));
-    auth_manager
-        .set_external_auth(Arc::new(RefreshableAuth(std::sync::Mutex::new("original"))))
-        .await?;
     let mut config = test.config.clone();
     config.model_provider = ModelProviderInfo::create_openai_provider(Some(
         proxy_websocket_servers_with_http(
