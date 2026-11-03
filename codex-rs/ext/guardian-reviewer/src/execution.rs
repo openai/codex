@@ -16,6 +16,7 @@ use codex_protocol::turn_input::TurnInputSubmission;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::GuardianReviewResponse;
 use crate::GuardianReviewSessionOutcome;
 use crate::SessionDisposition;
 
@@ -133,7 +134,9 @@ pub async fn wait_for_guardian_review(
                                 };
                             }
                             return ReviewTurnResult {
-                                outcome: GuardianReviewSessionOutcome::Completed(Ok(turn_complete.last_agent_message)),
+                                outcome: GuardianReviewSessionOutcome::Completed(Ok(
+                                    turn_complete.last_agent_message.map(GuardianReviewResponse::new),
+                                )),
                                 disposition: SessionDisposition::Reusable,
                                 turn_completed: true,
                             };

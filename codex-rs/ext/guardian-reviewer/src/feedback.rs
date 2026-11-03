@@ -2,7 +2,6 @@
 //! The host supplies captured context; records outlive short-lived reviewer sessions.
 
 use crate::GuardianReviewSessionOutcome;
-use crate::parse_guardian_assessment;
 use codex_feedback::GuardianReviewRecord;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
@@ -62,13 +61,13 @@ impl<'a> FailedReviewFeedback<'a> {
             return None;
         }
         let (status, decision) = match outcome {
-            GuardianReviewSessionOutcome::Completed(Ok(Some(decision))) => {
-                match parse_guardian_assessment(decision) {
+            GuardianReviewSessionOutcome::Completed(Ok(Some(response))) => {
+                match response.assessment() {
                     Ok(assessment) if assessment.outcome == GuardianAssessmentOutcome::Allow => {
                         return None;
                     }
-                    Ok(_) => ("denied", Some(decision.as_str())),
-                    Err(_) => ("invalid_decision", Some(decision.as_str())),
+                    Ok(_) => ("denied", Some(response.raw())),
+                    Err(_) => ("invalid_decision", Some(response.raw())),
                 }
             }
             GuardianReviewSessionOutcome::Completed(Ok(None)) => ("missing_decision", None),

@@ -1,14 +1,21 @@
 use super::*;
+use crate::GuardianReviewResponse;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-#[test]
-fn capture_honors_privacy_and_keeps_oversized_context_action_and_decision() -> anyhow::Result<()> {
+#[test_case::test_case(r#"{"outcome":"deny","rationale":"Missing approval."}"#, "denied"; "denial")]
+#[test_case::test_case(r#"preface {"outcome":"deny"}"#, "denied"; "wrapped denial")]
+#[test_case::test_case("not valid guardian json", "invalid_decision"; "invalid response")]
+fn capture_honors_privacy_and_keeps_oversized_context_action_and_decision(
+    decision: &str,
+    status: &str,
+) -> anyhow::Result<()> {
     let thread_id = ThreadId::new();
     let reviewer_thread_id = ThreadId::new();
-    let decision = r#"{"outcome":"deny","rationale":"Missing approval."}"#;
     let action = r#"{"command":"git push"}"#;
-    let outcome = GuardianReviewSessionOutcome::Completed(Ok(Some(decision.to_owned())));
+    let outcome = GuardianReviewSessionOutcome::Completed(Ok(Some(GuardianReviewResponse::new(
+        decision.to_owned(),
+    ))));
     for settings in [
         ReviewFeedbackSettings {
             enabled: false,
@@ -49,7 +56,7 @@ fn capture_honors_privacy_and_keeps_oversized_context_action_and_decision() -> a
             "target_item_id": "push-call",
             "reviewer_thread_id": reviewer_thread_id,
             "model": "review-model",
-            "status": "denied",
+            "status": status,
             "decision": decision,
             "action": action,
             "action_truncated": false,

@@ -1,4 +1,5 @@
-//! Distinguishes completed assessments from failures without assigning risk to errors.
+//! Retains parsed reviewer responses through feedback capture and distinguishes
+//! completed assessments from failures without assigning risk to errors.
 
 use crate::GuardianAssessment;
 use codex_analytics::GuardianReviewFailureReason;
@@ -79,7 +80,7 @@ impl GuardianReviewError {
 
 #[derive(Debug)]
 pub enum GuardianReviewSessionOutcome {
-    Completed(anyhow::Result<Option<String>>),
+    Completed(anyhow::Result<Option<GuardianReviewResponse>>),
     PromptBuildFailed(anyhow::Error),
     InputBudgetExceeded,
     SessionFailed {
@@ -92,12 +93,43 @@ pub enum GuardianReviewSessionOutcome {
     StaleAuthorization,
 }
 
+/// A completed response parsed once, with its original text retained for feedback.
+/// Invalid JSON remains a completed response so history and session reuse are unchanged.
+pub struct GuardianReviewResponse {
+    raw: String,
+    assessment: anyhow::Result<GuardianAssessment>,
+}
+
+impl GuardianReviewResponse {
+    pub fn new(raw: String) -> Self {
+        let assessment = crate::parse_guardian_assessment(&raw);
+        Self { raw, assessment }
+    }
+
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    pub fn assessment(&self) -> Result<&GuardianAssessment, &anyhow::Error> {
+        self.assessment.as_ref()
+    }
+}
+
+impl std::fmt::Debug for GuardianReviewResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GuardianReviewResponse")
+            .field("valid", &self.assessment.is_ok())
+            .finish_non_exhaustive()
+    }
+}
+
 impl GuardianReviewSessionOutcome {
     /// Extract the assessment produced by one reviewer session, preserving failures.
     pub fn into_assessment(self) -> Result<GuardianAssessment, GuardianReviewError> {
         match self {
-            Self::Completed(Ok(Some(message))) => {
-                crate::parse_guardian_assessment(&message).map_err(GuardianReviewError::parse)
+            Self::Completed(Ok(Some(response))) => {
+                response.assessment.map_err(GuardianReviewError::parse)
             }
             Self::Completed(Ok(None)) => Err(GuardianReviewError::session(anyhow::anyhow!(
                 "guardian review completed without an assessment payload"

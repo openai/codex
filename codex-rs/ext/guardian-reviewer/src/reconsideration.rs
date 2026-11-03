@@ -7,7 +7,6 @@ use crate::ReviewDeadline;
 use crate::ReviewTurnResult;
 use crate::ReviewerRuntime;
 use crate::SessionDisposition;
-use crate::parse_guardian_assessment;
 use crate::start_review_turn;
 use crate::wait_for_guardian_review;
 use codex_analytics::GuardianReviewAnalyticsResult;
@@ -28,10 +27,11 @@ pub async fn reconsider_denial(
     analytics: &mut GuardianReviewAnalyticsResult,
     telemetry: &SessionTelemetry,
 ) -> ReviewTurnResult {
-    let GuardianReviewSessionOutcome::Completed(Ok(Some(message))) = &first.outcome else {
+    let GuardianReviewSessionOutcome::Completed(Ok(Some(response))) = &first.outcome else {
         return first;
     };
-    if !parse_guardian_assessment(message)
+    if !response
+        .assessment()
         .is_ok_and(|assessment| assessment.outcome == GuardianAssessmentOutcome::Deny)
     {
         return first;
@@ -53,9 +53,7 @@ pub async fn reconsider_denial(
     // aggregate token usage from the same session after both passes finish.
     analytics.time_to_first_token_ms = first_token_ms;
     let assessment = match &second.outcome {
-        GuardianReviewSessionOutcome::Completed(Ok(Some(message))) => {
-            parse_guardian_assessment(message).ok()
-        }
+        GuardianReviewSessionOutcome::Completed(Ok(Some(response))) => response.assessment().ok(),
         GuardianReviewSessionOutcome::Completed(Ok(None) | Err(_))
         | GuardianReviewSessionOutcome::PromptBuildFailed(_)
         | GuardianReviewSessionOutcome::InputBudgetExceeded
@@ -64,7 +62,7 @@ pub async fn reconsider_denial(
         | GuardianReviewSessionOutcome::TimedOut
         | GuardianReviewSessionOutcome::Aborted => None,
     };
-    let outcome = match assessment.as_ref().map(|assessment| assessment.outcome) {
+    let outcome = match assessment.map(|assessment| assessment.outcome) {
         Some(GuardianAssessmentOutcome::Allow) => "allow",
         Some(GuardianAssessmentOutcome::Deny) => "deny",
         None => match &second.outcome {
