@@ -1,26 +1,23 @@
-//! Configured thread-store construction and permanent-deletion cleanup.
-//! Host cleanup runs after agent-board cleanup under the store's existing deletion locks.
+//! Configured thread-store construction and host-owned permanent-deletion cleanup.
+//! Host cleanup runs under the store's existing deletion locks.
 
 use crate::config::Config;
 use crate::config::ThreadStoreConfig;
-use codex_agent_message_board_extension::local_board_options;
 use codex_features::Feature;
-use codex_message_board::LocalAgentMessageBoard;
 use codex_protocol::ThreadId;
 use codex_rollout::state_db::StateDbHandle;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ThreadStore;
-use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreFuture;
 use std::sync::Arc;
 use tracing::warn;
 
 type AdditionalCleanup = dyn Fn(Vec<ThreadId>) -> ThreadStoreFuture<'static, ()> + Send + Sync;
 
-/// Builds the configured thread store with its existing agent-board cleanup.
-/// Hosts can supply additional cleanup before the store is shared with callers.
+/// Builds the configured thread store with optional host-owned data cleanup.
+/// Hosts install cleanup for their services before sharing the store with callers.
 pub struct ThreadStoreBuilder<'config> {
     config: &'config Config,
     state_db: Option<StateDbHandle>,
@@ -37,7 +34,7 @@ impl<'config> ThreadStoreBuilder<'config> {
     }
 
     /// Sets host-owned cleanup for permanent deletion in local stores.
-    /// Runs after successful agent-board cleanup and before deleting rollouts, under the same locks.
+    /// Runs before deleting rollouts, under the store's existing deletion locks.
     /// Cleanup must be idempotent because later deletion steps can fail and be retried.
     ///
     /// Cleanup must not call, or await work that calls, thread-store operations that reacquire
@@ -69,31 +66,11 @@ impl<'config> ThreadStoreBuilder<'config> {
                     .features
                     .enabled(Feature::BackgroundPaginatedRolloutMigration);
                 let has_state_db = state_db.is_some();
-                let sqlite = config.sqlite_config().clone();
                 let store = Arc::new(
                     LocalThreadStore::new(LocalThreadStoreConfig::from_config(config), state_db)
                         .with_thread_data_cleanup(move |thread_ids| {
-                            let sqlite = sqlite.clone();
                             let additional_cleanup = additional_cleanup.clone();
                             Box::pin(async move {
-                                let boards = thread_ids
-                                    .iter()
-                                    .copied()
-                                    .map(Into::into)
-                                    .collect::<Vec<_>>();
-                                LocalAgentMessageBoard::delete_boards(
-                                    &sqlite,
-                                    &local_board_options(),
-                                    &boards,
-                                )
-                                .await
-                                .map_err(|err| {
-                                    ThreadStoreError::Internal {
-                                        message: format!(
-                                            "failed to delete agent message boards: {err}"
-                                        ),
-                                    }
-                                })?;
                                 if let Some(cleanup) = additional_cleanup {
                                     cleanup(thread_ids).await?;
                                 }

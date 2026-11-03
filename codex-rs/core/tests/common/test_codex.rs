@@ -844,10 +844,17 @@ impl TestCodexBuilder {
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let state_db = codex_core::init_state_db(&config).await;
-        let thread_store = self
-            .thread_store
-            .clone()
-            .unwrap_or_else(|| ThreadStoreBuilder::from_config(&config, state_db.clone()).build());
+        let thread_store = self.thread_store.clone().unwrap_or_else(|| {
+            let sqlite = config.sqlite_config().clone();
+            ThreadStoreBuilder::from_config(&config, state_db.clone())
+                .with_additional_cleanup(move |thread_ids| {
+                    let sqlite = sqlite.clone();
+                    Box::pin(async move {
+                        codex_app_server::delete_agent_message_boards(&sqlite, &thread_ids).await
+                    })
+                })
+                .build()
+        });
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let user_instructions_provider =
             self.user_instructions_provider.clone().unwrap_or_else(|| {

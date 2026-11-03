@@ -3,11 +3,13 @@
 //! The extension owns backend construction, storage and tool registration. This adapter
 //! selects configuration and supplies host capabilities. It never starts or restores
 //! recipients during lookup. Notifications use ordinary agent-message scheduling.
+//! Permanent board deletion uses the thread store's existing host cleanup callback.
 
 use chrono::DateTime;
 use chrono::Utc;
 use codex_agent_message_board_client::RemoteAgentMessageBoard;
 use codex_agent_message_board_extension::BoardBackend;
+use codex_agent_message_board_extension::local_board_options;
 use codex_core::CodexThread;
 use codex_core::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
 use codex_core::ThreadManager;
@@ -15,6 +17,7 @@ use codex_core::config::Config;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
+use codex_message_board::LocalAgentMessageBoard;
 use codex_message_board::LocalBoardConnection;
 use codex_message_board::MessageBoardHost;
 use codex_message_board::NotificationDelivery;
@@ -27,6 +30,9 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
+use codex_state::SqliteConfig;
+use codex_thread_store::ThreadStoreError;
+use codex_thread_store::ThreadStoreResult;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -96,6 +102,24 @@ pub fn install_agent_message_board(
             ))
         },
     );
+}
+
+/// Removes persisted agent-board data through the thread store's deletion callback.
+/// Cleanup also applies when the board feature is currently disabled.
+pub async fn delete_agent_message_boards(
+    sqlite: &SqliteConfig,
+    thread_ids: &[ThreadId],
+) -> ThreadStoreResult<()> {
+    let boards = thread_ids
+        .iter()
+        .copied()
+        .map(Into::into)
+        .collect::<Vec<_>>();
+    LocalAgentMessageBoard::delete_boards(sqlite, &local_board_options(), &boards)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to delete agent message boards: {err}"),
+        })
 }
 
 #[derive(Clone)]

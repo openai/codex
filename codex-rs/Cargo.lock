@@ -2953,7 +2953,6 @@ dependencies = [
  "bm25",
  "chrono",
  "codex-agent-graph-store",
- "codex-agent-message-board-extension",
  "codex-agent-roles",
  "codex-analytics",
  "codex-api",
