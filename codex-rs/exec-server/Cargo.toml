@@ -80,7 +80,7 @@ codex-linux-sandbox = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 codex-uds = { workspace = true }
 libc = { workspace = true }
-rustix = { workspace = true, features = ["fs"] }
+rustix = { workspace = true, features = ["fs", "process"] }
 tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

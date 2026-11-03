@@ -567,6 +567,38 @@ impl AuthProvider for StaticBearerAuthProvider {
     }
 }
 
+/// Read a single newline-terminated registration bearer from a parent-owned pipe.
+pub fn registration_auth_from_stdin() -> std::io::Result<SharedAuthProvider> {
+    use std::io::BufRead;
+    use std::io::Read;
+
+    // Deny same-user access to the pipe and credential memory before reading.
+    #[cfg(target_os = "linux")]
+    rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)?;
+
+    let mut token = String::new();
+    std::io::stdin()
+        .lock()
+        .take(16 * 1024)
+        .read_line(&mut token)?;
+    if token.pop() != Some('\n') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "expected a newline-terminated registration bearer of at most 16 KiB",
+        ));
+    }
+    if token.ends_with('\r') {
+        token.pop();
+    }
+    if token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid registration bearer",
+        ));
+    }
+    static_bearer_auth_provider(token, /*chatgpt_account_id*/ None).map_err(std::io::Error::other)
+}
+
 fn static_bearer_auth_provider(
     bearer_token: String,
     chatgpt_account_id: Option<String>,

@@ -106,6 +106,15 @@ pub struct ExecServerCommand {
     )]
     use_agent_identity_auth: bool,
 
+    /// Read one registration bearer from stdin.
+    #[arg(
+        long,
+        requires = "exec_server_remote",
+        conflicts_with_all = ["use_agent_identity_auth", "executor_credential_stdin", "aws_sigv4"],
+        global = true
+    )]
+    registration_bearer_stdin: bool,
+
     /// Read rotating executor credentials from stdin; exit when the pipe closes.
     #[arg(
         long = "executor-credential-stdin",
@@ -194,6 +203,10 @@ impl ExecServerCommand {
             let environment_id = self.environment_id.take().ok_or_else(|| {
                 anyhow::anyhow!("--environment-id is required when --remote is set")
             })?;
+            let registration_auth = self
+                .registration_bearer_stdin
+                .then(codex_exec_server::registration_auth_from_stdin)
+                .transpose()?;
             let config =
                 load_exec_server_config(root_config_overrides, strict_config, enable_cloud_config)
                     .await?;
@@ -228,6 +241,8 @@ impl ExecServerCommand {
                     config.http_client_factory(),
                 )
                 .await?
+            } else if let Some(provider) = registration_auth {
+                provider
             } else {
                 load_exec_server_remote_auth_provider(
                     &config,
@@ -247,7 +262,7 @@ impl ExecServerCommand {
                 auth_provider,
                 config.http_client_factory(),
             )?;
-            if self.executor_credential_stdin {
+            if self.executor_credential_stdin || self.registration_bearer_stdin {
                 remote_config = remote_config.with_executor_credential_auth()?;
             }
             if let Some(name) = self.name {
@@ -342,6 +357,7 @@ impl ExecServerCommand {
         self.remote.is_some()
             && self.command.is_none()
             && !self.executor_credential_stdin
+            && !self.registration_bearer_stdin
             && !self.aws_sigv4
             && !self.use_agent_identity_auth
     }

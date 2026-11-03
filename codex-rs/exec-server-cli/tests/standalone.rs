@@ -21,6 +21,110 @@ use std::process::Stdio;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+
+#[tokio::test]
+async fn registration_bearer_rejects_plaintext_remote_registry() -> anyhow::Result<()> {
+    let binary = cargo_bin("codex-exec-server")?;
+    let home = tempfile::tempdir()?;
+    let mut child = tokio::process::Command::from(background_command(&binary))
+        .args([
+            "--remote",
+            "http://registry.example.invalid",
+            "--environment-id",
+            "test",
+            "--registration-bearer-stdin",
+        ])
+        .env("CODEX_HOME", home.path())
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .context("registration stdin")?
+        .write_all(b"registration-placeholder\n")
+        .await?;
+    let output = child.wait_with_output().await?;
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)?.contains("requires https for non-loopback endpoints")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn registration_uses_its_bearer_before_and_after_desktop_sign_in() -> anyhow::Result<()> {
+    let binary = cargo_bin("codex-exec-server")?;
+    let home = tempfile::tempdir()?;
+    for (desktop_token, account_id) in [
+        ("access_token_initial", None),
+        ("signed-in-token", Some("desktop-account")),
+    ] {
+        std::fs::write(
+            home.path().join("auth.json"),
+            serde_json::to_vec(&json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "id_token": "eyJhbGciOiJub25lIn0.e30.signature",
+                    "access_token": desktop_token,
+                    "refresh_token": "refresh_token",
+                    "account_id": account_id
+                }
+            }))?,
+        )?;
+        let registry = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/test/register"))
+            .and(header("Authorization", "Bearer registration-placeholder"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "environment_id": "test",
+                "url": format!("{}/relay", registry.uri().replacen("http://", "ws://", 1)),
+                "security_profile": "noise_hybrid_ik_v1",
+                "executor_registration_id": "registration-1"
+            })))
+            .mount(&registry)
+            .await;
+        // Connecting to the returned relay proves the executor accepted registration.
+        let relay = Mock::given(method("GET"))
+            .and(path("/relay"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount_as_scoped(&registry)
+            .await;
+        let mut server = tokio::process::Command::from(background_command(&binary))
+            .args(["--remote", &registry.uri(), "--environment-id", "test"])
+            .arg("--registration-bearer-stdin")
+            .stdin(Stdio::piped())
+            .env("CODEX_HOME", home.path())
+            .kill_on_drop(true)
+            .spawn()?;
+        server
+            .stdin
+            .take()
+            .context("registration stdin")?
+            .write_all(b"registration-placeholder\n")
+            .await?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            relay.wait_until_satisfied(),
+        )
+        .await?;
+        #[cfg(target_os = "linux")]
+        {
+            let pid = server.id().context("executor PID")?;
+            let error = std::fs::File::open(format!("/proc/{pid}/environ")).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn standalone_initializes_reports_version_and_runs_helpers() -> anyhow::Result<()> {

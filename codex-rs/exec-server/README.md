@@ -63,6 +63,12 @@ Tokens require `wss://` or a loopback destination, are redacted in diagnostics, 
 
 Remote mode registers the local exec-server with the environment registry,
 then reconnects to the service-provided rendezvous websocket as the environment.
+To supply registration credentials independently of Codex login, pass
+`--registration-bearer-stdin` and write one newline-terminated bearer to the
+executor's stdin. Exec-server reads it once and requires an HTTPS registry URL
+or an HTTP loopback address. For rotating credentials, use
+`--executor-credential-stdin`. Local configuration
+and plugins still come from the usual Codex home.
 Remote communication uses the Noise relay contract; the registry and harness
 must support it.
 Forward mode uses the same registration and Noise relay, but opens an independent

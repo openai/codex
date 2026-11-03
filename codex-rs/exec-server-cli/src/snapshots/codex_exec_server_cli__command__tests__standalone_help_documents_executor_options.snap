@@ -93,6 +93,9 @@ Options:
           Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote
           registration
 
+      --registration-bearer-stdin
+          Read one registration bearer from stdin
+
       --executor-credential-stdin
           Read rotating executor credentials from stdin; exit when the pipe
           closes
