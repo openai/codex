@@ -1889,8 +1889,10 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
                 misalignment: None,
-                message: "Reconnecting... 1/5".to_string(),
-                codex_error_info: Some(CodexErrorInfo::Other),
+                message: "Reconnecting... 2/5".to_string(),
+                codex_error_info: Some(CodexErrorInfo::ResponseStreamDisconnected {
+                    http_status_code: Some(429),
+                }),
                 additional_details: None,
             },
             will_retry: true,
@@ -1900,6 +1902,11 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         /*replay_kind*/ None,
     );
     drain_insert_history(&mut rx);
+
+    insta::assert_snapshot!(
+        chat.bottom_pane.status_widget().unwrap().header(),
+        @"Server is busy, reconnecting 2/5"
+    );
 
     chat.handle_server_notification(
         ServerNotification::AgentMessageDelta(
