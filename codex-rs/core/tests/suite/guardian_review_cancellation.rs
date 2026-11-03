@@ -62,7 +62,7 @@ async fn cancelling_tool_aborts_its_guardian_review(
                 config
                     .features
                     .enable(Feature::GuardianDenialReconsideration)
-                    .unwrap();
+                    .expect("enable Guardian denial reconsideration");
             }
             config
                 .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())

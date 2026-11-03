@@ -64,7 +64,7 @@ async fn guardian_denial_reconsideration(
             config
                 .permissions
                 .set_permission_profile(PermissionProfile::read_only())
-                .unwrap();
+                .expect("set read-only permission profile");
             config.guardian_denial_reconsideration_prompt = prompt.map(str::to_owned);
             if second == Some(SecondPass::Timeout) {
                 config.guardian_review_timeout = Some(Duration::from_secs(10));
@@ -82,7 +82,7 @@ async fn guardian_denial_reconsideration(
                 config
                     .features
                     .enable(Feature::GuardianDenialReconsideration)
-                    .unwrap();
+                    .expect("enable Guardian denial reconsideration");
             }
         });
     let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
