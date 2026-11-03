@@ -7,11 +7,12 @@ use crate::context::AdditionalContextToolOutput;
 use crate::context::AdditionalContextUserFragment;
 use crate::context::ContextualUserFragment;
 use codex_context_fragments::MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS;
+use codex_history::CodexHarnessMetadata;
+use codex_history::ResponseItemEnvelope;
 use codex_otel::ADDITIONAL_CONTEXT_COUNT_METRIC;
 use codex_otel::ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS;
 use codex_otel::ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC;
 use codex_otel::SessionTelemetry;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
 use codex_utils_string::truncate_middle_with_token_budget;
@@ -52,7 +53,7 @@ impl AdditionalContextStore {
         values: BTreeMap<String, AdditionalContextEntry>,
         format: AdditionalContextFormat,
         telemetry: &SessionTelemetry,
-    ) -> Vec<ResponseItem> {
+    ) -> Vec<ResponseItemEnvelope> {
         for entry in values.values() {
             Self::record_metrics(entry, telemetry);
         }
@@ -83,15 +84,26 @@ impl AdditionalContextStore {
             .iter()
             .filter(|(key, value)| self.values.get(*key) != Some(*value))
             .map(|(key, entry)| match entry {
-                StoredAdditionalContext::ToolOutput(output) => output.clone().into(),
-                StoredAdditionalContext::Message(entry) => match entry.kind {
-                    AdditionalContextKind::Untrusted => ContextualUserFragment::into(
-                        AdditionalContextUserFragment::new(key.clone(), entry.value.clone()),
-                    ),
-                    AdditionalContextKind::Application => ContextualUserFragment::into(
-                        AdditionalContextDeveloperFragment::new(key.clone(), entry.value.clone()),
-                    ),
+                StoredAdditionalContext::ToolOutput(output) => ResponseItemEnvelope {
+                    item: output.clone().into(),
+                    metadata: Some(CodexHarnessMetadata {
+                        additional_context_tool_output: true,
+                        ..Default::default()
+                    }),
                 },
+                StoredAdditionalContext::Message(entry) => {
+                    ResponseItemEnvelope::new(match entry.kind {
+                        AdditionalContextKind::Untrusted => ContextualUserFragment::into(
+                            AdditionalContextUserFragment::new(key.clone(), entry.value.clone()),
+                        ),
+                        AdditionalContextKind::Application => {
+                            ContextualUserFragment::into(AdditionalContextDeveloperFragment::new(
+                                key.clone(),
+                                entry.value.clone(),
+                            ))
+                        }
+                    })
+                }
             })
             .collect();
         self.values = values;

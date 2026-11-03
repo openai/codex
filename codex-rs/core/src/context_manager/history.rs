@@ -115,6 +115,7 @@ pub(crate) struct ContextManager {
     rejected_audio_file_ids: Arc<BTreeSet<String>>,
     /// Reviewer policy travels with the history snapshot, independently of capture.
     guardian_review_mode: GuardianContextMode,
+    guardian_include_additional_context: bool,
     retain_inherited_user_messages: bool,
     /// Bumped whenever history is rewritten, such as compaction or rollback.
     history_version: u64,
@@ -151,6 +152,7 @@ struct SharedConversationHistory {
     review_history: Option<TranscriptHistory>,
     retained_context: Arc<RetainedContext>,
     guardian_review_mode: GuardianContextMode,
+    guardian_include_additional_context: bool,
     history_version: u64,
     user_message_revision: u64,
     guardian_review_context_revision: u64,
@@ -189,10 +191,17 @@ impl ConversationHistorySnapshot for SharedConversationHistory {
     ) -> Box<dyn Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_>
     {
         if self.guardian_review_mode != GuardianContextMode::ThreadOwned {
-            let items = self
-                .review_history
-                .as_ref()
-                .map_or_else(|| self.items(), SectionHistory::items);
+            let items = self.review_history.as_ref().map_or_else(
+                || self.items(),
+                |history| {
+                    Box::new(
+                        history
+                            .reviewable_items()
+                            .filter(|item| self.allows_additional_context(item))
+                            .map(|item| &item.item),
+                    )
+                },
+            );
             return Box::new(items.map(|item| (item, None)));
         }
         Box::new(self.items_with_sources())
@@ -226,12 +235,21 @@ impl ConversationHistorySnapshot for SharedConversationHistory {
 }
 
 impl SharedConversationHistory {
+    fn allows_additional_context(&self, item: &ResponseItemEnvelope) -> bool {
+        self.guardian_include_additional_context
+            || !item
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.additional_context_tool_output)
+    }
+
     fn items_with_sources(
         &self,
     ) -> impl Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_
     {
         self.items
             .iter()
+            .filter(|envelope| self.allows_additional_context(envelope))
             .filter(|envelope| !is_guardian_context_message(&envelope.item))
             .filter(|envelope| !codex_guardian_context::is_inherited_manual_approval(envelope))
             .map(|envelope| {
@@ -260,6 +278,8 @@ impl ContextManager {
             retained_context: Arc::default(),
             rejected_audio_file_ids: Arc::default(),
             guardian_review_mode: GuardianContextMode::ThreadOwned,
+            guardian_include_additional_context: Feature::GuardianIncludeAdditionalContext
+                .default_enabled(),
             retain_inherited_user_messages: false,
             history_version: 0,
             reset_version: 0,
@@ -279,6 +299,7 @@ impl ContextManager {
             review_history: self.review_history.clone(),
             retained_context: Arc::clone(&self.retained_context),
             guardian_review_mode: self.guardian_review_mode,
+            guardian_include_additional_context: self.guardian_include_additional_context,
             history_version: self.history_version,
             user_message_revision: self.user_message_revision,
             guardian_review_context_revision: self.guardian_review_context_revision,
@@ -296,6 +317,8 @@ impl ContextManager {
         let independent = !features.enabled(Feature::GuardianReuseParentCompaction);
         Self {
             retain_inherited_user_messages: !root_capabilities_restricted,
+            guardian_include_additional_context: features
+                .enabled(Feature::GuardianIncludeAdditionalContext),
             guardian_review_mode: if independent {
                 GuardianContextMode::Independent
             } else {

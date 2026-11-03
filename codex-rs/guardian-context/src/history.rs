@@ -234,6 +234,14 @@ impl TranscriptHistory {
         )
     }
 
+    /// Reviewable evidence with its host provenance still attached.
+    pub fn reviewable_items(&self) -> impl Iterator<Item = &ResponseItemEnvelope> + Send + '_ {
+        self.items
+            .iter()
+            .map(|(item, _)| item.as_ref())
+            .filter(|item| !crate::is_inherited_manual_approval(item))
+    }
+
     /// Generation of the retained prefix, independent of parent compaction.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -242,12 +250,7 @@ impl TranscriptHistory {
 
 impl SectionHistory for TranscriptHistory {
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
-        Box::new(
-            self.items
-                .iter()
-                .filter(|(item, _)| !crate::is_inherited_manual_approval(item))
-                .map(|(item, _)| &item.item),
-        )
+        Box::new(self.reviewable_items().map(|item| &item.item))
     }
 }
 

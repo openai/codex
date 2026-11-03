@@ -1,26 +1,41 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_core::config::Config;
+use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_otel::ADDITIONAL_CONTEXT_COUNT_METRIC;
 use codex_otel::ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
+use codex_protocol::TranscriptFormat;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::turn_input::TurnInput;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::received_responses_requests;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -28,8 +43,10 @@ use opentelemetry_sdk::metrics::data::AggregatedMetrics;
 use opentelemetry_sdk::metrics::data::MetricData;
 use opentelemetry_sdk::metrics::data::ScopeMetrics;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
+use wiremock::matchers::body_partial_json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Result<()> {
@@ -263,6 +280,297 @@ async fn additional_context_trust_controls_message_role(tool_outputs: bool) -> R
         assert!(request.inputs_of_type("function_call_output").is_empty());
     }
 
+    Ok(())
+}
+
+fn assert_browser_context_actor_output(output: &Value) {
+    let mut output = output.clone();
+    let fields = output.as_object_mut().expect("function call output object");
+    fields.remove("id");
+    // Existing turn stamps vary between requests. Compare every other raw field, including
+    // any new metadata that a normal request snapshot would discard.
+    if let Some(Value::Object(metadata)) =
+        fields.get_mut("internal_chat_message_metadata_passthrough")
+    {
+        metadata.remove("turn_id");
+        metadata.remove("create_time");
+        if metadata.is_empty() {
+            fields.remove("internal_chat_message_metadata_passthrough");
+        }
+    }
+    assert_eq!(
+        output,
+        json!({
+            "type": "function_call_output",
+            "namespace": "agent",
+            "name": "browser_info",
+            "output": "tab one",
+        })
+    );
+}
+
+fn browser_context_turn() -> TurnInputRequest {
+    TurnInputRequest::user_input(vec![UserInput::Text {
+        text: "inspect context".to_owned(),
+        text_elements: Vec::new(),
+    }])
+    .with_additional_context(BTreeMap::from([(
+        "browser_info".to_owned(),
+        AdditionalContextEntry::new("tab one".to_owned(), AdditionalContextKind::Untrusted),
+    )]))
+}
+
+fn ordinary_browser_output() -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: Some("browser_info".to_owned()),
+        namespace: Some("agent".to_owned()),
+        output: FunctionCallOutputPayload::from_text("ordinary tool evidence".to_owned()),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn configure_context_review(config: &mut Config, tool_outputs: bool) {
+    config.include_environment_context = false;
+    config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config
+        .features
+        .set_enabled(Feature::UntrustedAsToolOutput, tool_outputs)
+        .expect("configure additional-context rendering");
+}
+
+#[test_case::test_case(false, true, TranscriptFormat::Line; "legacy_default")]
+#[test_case::test_case(false, false, TranscriptFormat::Json; "legacy_flag_off")]
+#[test_case::test_case(true, true, TranscriptFormat::Line; "tool_output_default")]
+#[test_case::test_case(true, false, TranscriptFormat::Json; "tool_output_flag_off")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_filters_additional_context_after_restart(
+    tool_outputs: bool,
+    include_additional_context: bool,
+    format: TranscriptFormat,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(
+        Ok(()),
+        "Guardian approval actions require host-native paths"
+    );
+
+    let server = start_mock_server().await;
+    let captured = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed("recorded")]),
+            sse(vec![
+                ev_function_call(
+                    "inspect",
+                    "exec_command",
+                    r#"{"cmd":"true","sandbox_permissions":"require_escalated"}"#,
+                ),
+                ev_completed("actor"),
+            ]),
+            sse(vec![
+                ev_assistant_message("review", r#"{"outcome":"deny"}"#),
+                ev_completed("review"),
+            ]),
+            sse(vec![ev_completed("done")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(move |config| {
+        configure_context_review(config, tool_outputs);
+        config
+            .features
+            .set_enabled(
+                Feature::GuardianIncludeAdditionalContext,
+                !include_additional_context,
+            )
+            .expect("start with the opposite inclusion setting");
+    });
+    let original = builder.build_with_auto_env(&server).await?;
+    original
+        .codex
+        .start_or_steer_turn(browser_context_turn())
+        .await?;
+    wait_for_event_match(&original.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_)).then_some(())
+    })
+    .await;
+
+    let resumed = builder
+        .with_config(move |config| {
+            configure_context_review(config, tool_outputs);
+            config.guardian_transcript_mode = format;
+            if !include_additional_context {
+                config
+                    .features
+                    .disable(Feature::GuardianIncludeAdditionalContext)
+                    .expect("disable inclusion on resume");
+            }
+        })
+        .restart_with_auto_env(&server, &original)
+        .await?;
+    resumed
+        .codex
+        .start_or_steer_turn(TurnInputRequest::new(TurnInput::ResponseItem(
+            ordinary_browser_output(),
+        )))
+        .await?;
+    wait_for_event_match(&resumed.codex, |event| match event {
+        EventMsg::ExecApprovalRequest(_) => panic!("expected Guardian review"),
+        EventMsg::Error(error) => panic!("resumed turn failed: {error:?}"),
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let requests = captured.requests();
+    assert_eq!(requests.len(), 4);
+    if tool_outputs {
+        for request in &requests[..2] {
+            let outputs = request.inputs_of_type("function_call_output");
+            let output = outputs
+                .iter()
+                .find(|item| item["output"] == "tab one")
+                .expect("actor retains its additional-context output");
+            assert_browser_context_actor_output(output);
+        }
+    }
+    let guardian = &requests[2];
+    assert_eq!(
+        guardian.body_json()["client_metadata"]["x-openai-subagent"],
+        "guardian"
+    );
+    let transcript = guardian.message_input_texts("user").join("\n");
+    assert!(transcript.contains("inspect context"), "{transcript}");
+    assert!(
+        transcript.contains("ordinary tool evidence"),
+        "{transcript}"
+    );
+    assert_eq!(
+        transcript.contains("tab one"),
+        tool_outputs && include_additional_context,
+        "{transcript}"
+    );
+    Ok(())
+}
+
+#[test_case::test_case(true; "inclusion_default")]
+#[test_case::test_case(false; "exclusion")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_guardian_filters_additional_context(include_additional_context: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const ACTOR_MODEL: &str = "guardian-context-actor";
+    let server = start_mock_server().await;
+    mount_sse_once_match(
+        &server,
+        body_partial_json(json!({"model": "gpt-5.6-luna"})),
+        sse(vec![
+            ev_assistant_message("score", "high"),
+            ev_completed("score"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        body_partial_json(json!({"client_metadata": {"x-openai-subagent": "guardian"}})),
+        sse(vec![
+            ev_assistant_message("review", r#"{"outcome":"deny"}"#),
+            ev_completed("review"),
+        ]),
+    )
+    .await;
+    for events in [
+        vec![
+            ev_function_call(
+                "permissions",
+                "request_permissions",
+                r#"{"reason":"inspect network","permissions":{"network":{"enabled":true}}}"#,
+            ),
+            ev_completed("actor"),
+        ],
+        vec![ev_completed("done")],
+    ] {
+        mount_sse_once_match(
+            &server,
+            body_partial_json(json!({"model": ACTOR_MODEL})),
+            sse(events),
+        )
+        .await;
+    }
+
+    let test = test_codex()
+        .with_model(ACTOR_MODEL)
+        .with_model_info_override(ACTOR_MODEL, |model| {
+            model.guardian = None;
+            model.auto_review_model_override = Some("gpt-5.5".to_owned());
+        })
+        .with_pre_build_hook(|home| {
+            std::fs::write(
+                home.join("config.toml"),
+                "[features.guardianv2]\nenabled = true\n[features.guardianv2.review_scope]\ncomputer_use_only = false\n",
+            )
+            .expect("write Guardian V2 configuration");
+        })
+        .with_config(move |config| {
+            configure_context_review(config, /*tool_outputs*/ true);
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("enable the permission request fixture");
+            if !include_additional_context {
+                config
+                    .features
+                    .disable(Feature::GuardianIncludeAdditionalContext)
+                    .expect("disable additional-context inclusion");
+            }
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("set read-only permissions");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    Box::pin(
+        test.codex
+            .inject_response_items(vec![ordinary_browser_output()]),
+    )
+    .await?;
+    test.codex
+        .start_or_steer_turn(browser_context_turn())
+        .await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(error) => panic!("actor turn failed: {error:?}"),
+        EventMsg::TurnComplete(_) => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let requests = received_responses_requests(&server).await;
+    let classifier_requests = requests
+        .iter()
+        .filter(|request| request.body_json()["model"] == "gpt-5.6-luna")
+        .collect::<Vec<_>>();
+    let [request] = classifier_requests.as_slice() else {
+        panic!(
+            "expected a single Guardian V2 request, got {}",
+            classifier_requests.len()
+        );
+    };
+    let transcript = request.message_input_texts("user").join("\n");
+    assert!(transcript.contains("inspect context"), "{transcript}");
+    assert!(
+        transcript.contains("ordinary tool evidence"),
+        "{transcript}"
+    );
+    assert_eq!(
+        transcript.contains("tab one"),
+        include_additional_context,
+        "{transcript}"
+    );
     Ok(())
 }
 

@@ -537,6 +537,79 @@ fn conversation_history_snapshot_excludes_contextual_user_messages() {
     );
 }
 
+#[test_case(true; "include_on_resume")]
+#[test_case(false; "exclude_on_resume")]
+fn guardian_checkpoint_applies_additional_context_policy_after_resume(include: bool) {
+    let mut features = ManagedFeatures::from(codex_features::Features::with_defaults());
+    features
+        .disable(Feature::GuardianReuseParentCompaction)
+        .unwrap();
+    features
+        .set_enabled(Feature::GuardianIncludeAdditionalContext, !include)
+        .unwrap();
+    let mut history =
+        ContextManager::for_session(/*root_capabilities_restricted*/ false, &features);
+    let additional_context: ResponseItem = crate::context::AdditionalContextToolOutput::new(
+        "browser_info",
+        /*name*/ None,
+        "captured page",
+    )
+    .into();
+    let ordinary_output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: Some("browser_info".to_owned()),
+        namespace: Some("agent".to_owned()),
+        output: FunctionCallOutputPayload::from_text("ordinary result".to_owned()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    history.record_annotated_items(
+        &mut [
+            ResponseItemEnvelope {
+                item: additional_context.clone(),
+                metadata: Some(CodexHarnessMetadata {
+                    additional_context_tool_output: true,
+                    ..Default::default()
+                }),
+            },
+            ResponseItemEnvelope::new(ordinary_output.clone()),
+        ],
+        TruncationPolicy::Tokens(10_000),
+    );
+    let compacted = vec![ResponseItemEnvelope::new(ordinary_output.clone())];
+    history.replace_compacted(compacted.clone(), /*reviewer_compaction_hash*/ None);
+    let checkpoint: GuardianHistoryCheckpoint = serde_json::from_str(
+        &serde_json::to_string(&history.guardian_history_checkpoint().unwrap()).unwrap(),
+    )
+    .unwrap();
+
+    features
+        .set_enabled(Feature::GuardianIncludeAdditionalContext, include)
+        .unwrap();
+    let mut resumed =
+        ContextManager::for_session(/*root_capabilities_restricted*/ false, &features);
+    resumed.replace_annotated(compacted);
+    resumed.restore_review_context(
+        /*retained_context*/ None,
+        Some(&checkpoint),
+        /*reviewer_compaction_hash*/ None,
+    );
+    let snapshot = resumed.conversation_history_snapshot();
+    assert_eq!(
+        snapshot.items().cloned().collect::<Vec<_>>(),
+        vec![ordinary_output.clone()]
+    );
+    let expected = if include {
+        vec![additional_context, ordinary_output]
+    } else {
+        vec![ordinary_output]
+    };
+    assert_eq!(
+        snapshot.review_items().cloned().collect::<Vec<_>>(),
+        expected
+    );
+}
+
 struct TestWorldStateSection;
 
 impl WorldStateSection for TestWorldStateSection {
