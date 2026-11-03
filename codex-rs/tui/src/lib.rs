@@ -1899,8 +1899,7 @@ async fn run_ratatui_app(
     if config.model_provider_id != startup_model_provider {
         startup_account = None;
         if matches!(&app_server_target, AppServerTarget::Embedded) {
-            // App-server providers are fixed at startup, so onboarding cannot
-            // reuse a server initialized before it persisted another provider.
+            // Rebuild the embedded server with the final local configuration.
             shutdown_app_server_if_present(app_server.take()).await;
         }
     }
@@ -2520,7 +2519,12 @@ fn should_show_provider_setup_wizard(
     app_server_target: &AppServerTarget,
     feature: Feature,
 ) -> bool {
-    matches!(app_server_target, AppServerTarget::Embedded)
+    let supported_target = match app_server_target {
+        AppServerTarget::Embedded => true,
+        AppServerTarget::LocalDaemon { .. } => feature == Feature::BedrockSetupWizard,
+        AppServerTarget::Remote { .. } => false,
+    };
+    supported_target
         && should_show_login_screen(login_status, requires_openai_auth)
         && config.features.enabled(feature)
         && config.model_provider_id == "openai"

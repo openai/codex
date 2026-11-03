@@ -573,17 +573,13 @@ pub(super) async fn run_main_inner(
         && !app_server_target.uses_remote_workspace();
     if auto_start_daemon
         && daemon_exclusion.is_none()
-        && [Feature::BedrockSetupWizard, Feature::GcpSetupWizard]
-            .into_iter()
-            .any(|feature| {
-                should_show_provider_setup_wizard(
-                    LoginStatus::NotAuthenticated,
-                    config.model_provider.requires_openai_auth,
-                    &config,
-                    &AppServerTarget::Embedded,
-                    feature,
-                )
-            })
+        && should_show_provider_setup_wizard(
+            LoginStatus::NotAuthenticated,
+            config.model_provider.requires_openai_auth,
+            &config,
+            &AppServerTarget::Embedded,
+            Feature::GcpSetupWizard,
+        )
         && startup_draft
             .run_until(
                 config
@@ -595,8 +591,8 @@ pub(super) async fn run_main_inner(
             .flatten()
             .is_none()
     {
-        // Provider setup wizards configure their provider through the embedded server.
-        daemon_exclusion = Some("Cloud provider sign-in");
+        // GCP setup resolves credential paths and runs gcloud in the launch environment.
+        daemon_exclusion = Some("GCP sign-in");
         app_server_target = AppServerTarget::Embedded;
     }
     if auto_start_daemon
@@ -803,7 +799,7 @@ pub(super) async fn run_main_inner(
                         "config_override"
                     }
                 }
-                Some("Bedrock sign-in") => "bedrock_sign_in",
+                Some("GCP sign-in") => "gcp_sign_in",
                 Some(daemon_startup::WSL_DRVFS_EXCLUSION) => "wsl_drvfs",
                 Some("this Windows launcher") => "windows_detach_restricted",
                 Some("daemon feature settings") => "daemon_compatibility",

@@ -154,7 +154,7 @@ async fn restrictive_launcher_uses_embedded_if_daemon_cannot_start() -> Result<(
 
 #[tokio::test]
 #[cfg(unix)]
-async fn bedrock_onboarding_leaves_a_running_daemon_untouched() -> Result<()> {
+async fn bedrock_onboarding_discovers_credentials_on_the_running_daemon() -> Result<()> {
     daemon_startup("bedrock-running").await
 }
 
@@ -250,6 +250,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
             | "agents-untrusted"
             | "agents-untrusted-new"
             | "discovered"
+            | "bedrock"
             | "bedrock-running"
             | "restrictive-job"
     ) || mismatch
@@ -283,6 +284,14 @@ async fn daemon_startup(command: &str) -> Result<()> {
         let mut existing_daemon = if matches!(command, "bedrock-running" | "discovered" | "agents-no-daemon")
             || (mismatch && !disabling)
         {
+            if command == "bedrock-running" {
+                // This Unix-only case uses a daemon-only token and no ambient profiles.
+                env.insert("AWS_CONFIG_FILE".into(), "/dev/null".into());
+                env.insert("AWS_SHARED_CREDENTIALS_FILE".into(), "/dev/null".into());
+                env.remove("AWS_ACCESS_KEY_ID");
+                env.remove("AWS_SECRET_ACCESS_KEY");
+                env.insert("AWS_BEARER_TOKEN_BEDROCK".into(), "daemon-only-test-token".into());
+            }
             let started = Command::new(&codex)
                 .env_clear()
                 .envs(&env)
@@ -363,6 +372,11 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 steps.push_back(("GPT-5.6-Terra", b"/status\r"));
                 if restart { "Server:Localbackgroundserver" } else { "Model:" }
             }
+        } else if command == "bedrock-running" {
+            env.remove("AWS_BEARER_TOKEN_BEDROCK");
+            steps.push_back(("UseanAPIkeyoranotherprovider", b"3"));
+            steps.push_back(("UseAmazonBedrock", b"2"));
+            "Continuewithdetectedcredentials"
         } else if bedrock_onboarding {
             // With GCP disabled, only Bedrock makes the sign-in menu advertise another provider.
             "UseanAPIkeyoranotherprovider"
@@ -445,7 +459,18 @@ async fn daemon_startup(command: &str) -> Result<()> {
         // A fresh disable request includes both cold daemon startup and its confirmed restart.
         let timeout = Duration::from_secs(if disabling { 90 } else { 45 });
         let result = tokio::time::timeout(timeout, async {
-            while let Some(bytes) = stdout.recv().await {
+            loop {
+                let bytes = tokio::select! {
+                    bytes = stdout.recv() => bytes,
+                    // The first onboarding draw precedes its typeahead drain. Retry the
+                    // main menu shortcut until the submenu appears (it has no option 3).
+                    () = tokio::time::sleep(Duration::from_millis(/*millis*/ 250)),
+                        if steps.front().is_some_and(|(ready, _)| *ready == "UseAmazonBedrock") => {
+                            writer.send(b"3".to_vec()).await?;
+                            continue;
+                        }
+                };
+                let Some(bytes) = bytes else { break };
                 output.push_str(&String::from_utf8_lossy(&bytes));
                 screen.process(&bytes);
                 for (query, reply) in &mut queries {
@@ -564,9 +589,11 @@ async fn daemon_startup(command: &str) -> Result<()> {
                     } else if elevated_launch {
                         ensure!(!home.path().join("app-server-daemon").exists());
                         ensure!(!home.path().join("packages/app-server-daemon").exists());
-                    } else if bedrock_onboarding || command == "restrictive-job" {
+                    } else if bedrock_onboarding {
+                        ensure!(pid_file.exists() != elevated);
+                    } else if command == "restrictive-job" {
                         ensure!(!pid_file.exists());
-                        if command == "restrictive-job" && !elevated {
+                        if !elevated {
                             let contents = screen.screen().contents();
                             let warning = contents.lines()
                                 .find(|line| line.contains("Running without the shared background server:"))

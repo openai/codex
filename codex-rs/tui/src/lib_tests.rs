@@ -165,7 +165,7 @@ gcp_setup_wizard = true
                 allow_embedded_fallback: true,
                 endpoint: shared_endpoint.clone(),
             },
-            [false, false],
+            [true, false],
         ),
         (
             "remote app server",
