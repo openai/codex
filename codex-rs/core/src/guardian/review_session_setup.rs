@@ -1,6 +1,7 @@
 //! Captures action-time parent context and starts or recovers its Guardian reviewer.
 //! Checkpoint recovery allows one fresh attempt under the original review deadline.
 //! Both attempts share captured context and use separate recovery flags.
+//! Completed assessments are revalidated before checkpoint publication and failed-review capture.
 //! Checkpoints are captured before final authorization validation and published without yielding.
 //! Recorded reviewer items and interruptions are forwarded to the parent's raw-event subscription.
 
@@ -265,11 +266,6 @@ impl ReviewerRequest for PreparedReview {
         if recovery_requested {
             result.disposition = SessionDisposition::Discard;
         }
-        if self.context.reviewer_selection == ReviewerSelection::FreshParentCheckpoint
-            || !recovery_requested
-        {
-            record_failed_review(&session.session, &self.params, &result.outcome).await;
-        }
         let checkpoint = if result.disposition == SessionDisposition::Reusable
             && matches!(result.outcome, GuardianReviewSessionOutcome::Completed(_))
             && !matches!(kind, GuardianReviewSessionKind::EphemeralForked)
@@ -281,12 +277,10 @@ impl ReviewerRequest for PreparedReview {
             None
         };
         // All checkpoint capture and lock acquisition must precede validation. No await
-        // may follow a valid allow before publication; new guidance during capture must
-        // invalidate the attempt without overwriting the last committed review.
+        // may follow a valid assessment before publication; new guidance during capture
+        // invalidates either verdict without overwriting the last committed review.
         if let GuardianReviewSessionOutcome::Completed(Ok(Some(response))) = &result.outcome
-            && response.assessment().is_ok_and(|assessment| {
-                assessment.outcome == super::super::GuardianAssessmentOutcome::Allow
-            })
+            && response.assessment().is_ok()
             && let Some(authorization) = &self.params.authorization
             && let Some(invalidation) = authorization
                 .invalidation(
@@ -319,6 +313,11 @@ impl ReviewerRequest for PreparedReview {
                     .get::<CheckpointRecovery>()
                     .as_deref(),
             );
+        }
+        if self.context.reviewer_selection == ReviewerSelection::FreshParentCheckpoint
+            || !recovery_requested
+        {
+            record_failed_review(&session.session, &self.params, &result.outcome).await;
         }
         result
     }

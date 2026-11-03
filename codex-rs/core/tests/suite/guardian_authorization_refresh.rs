@@ -1,4 +1,4 @@
-//! Reproduces parent input racing a subagent's in-flight Guardian approval.
+//! Reproduces parent input racing a subagent's in-flight Guardian assessment.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -9,6 +9,7 @@ use codex_history::RolloutItem;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::Op;
@@ -34,7 +35,9 @@ enum Change {
     None,
     Status,
     Revoke,
+    Grant,
     Repeated,
+    RepeatedDenial,
     Cancel,
     RootReset,
 }
@@ -42,7 +45,9 @@ enum Change {
 #[test_case(Change::None; "unchanged authorization")]
 #[test_case(Change::Status; "parent status message")]
 #[test_case(Change::Revoke; "parent revokes authorization")]
+#[test_case(Change::Grant; "parent grants authorization during denial")]
 #[test_case(Change::Repeated; "repeated parent updates exhaust budget")]
+#[test_case(Change::RepeatedDenial; "repeated stale denials exhaust budget")]
 #[test_case(Change::Cancel; "explicit worker cancellation")]
 #[test_case(Change::RootReset; "root history reset")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -58,7 +63,8 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
         Change::None => (1, 0, GuardianAssessmentStatus::Approved),
         Change::Status => (2, 1, GuardianAssessmentStatus::Approved),
         Change::Revoke => (2, 1, GuardianAssessmentStatus::Denied),
-        Change::Repeated => (3, 3, GuardianAssessmentStatus::Denied),
+        Change::Grant => (2, 1, GuardianAssessmentStatus::Approved),
+        Change::Repeated | Change::RepeatedDenial => (3, 3, GuardianAssessmentStatus::Denied),
         Change::Cancel => (1, 0, GuardianAssessmentStatus::Aborted),
         Change::RootReset => (1, 1, GuardianAssessmentStatus::Aborted),
     };
@@ -89,7 +95,10 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
     for attempt in 0..attempts {
         let (tx, rx) = oneshot::channel();
         gates.push_back(tx);
-        let outcome = if matches!(change, Change::Revoke) && attempt > 0 {
+        let outcome = if (matches!(change, Change::Revoke) && attempt > 0)
+            || (matches!(change, Change::Grant) && attempt == 0)
+            || matches!(change, Change::RepeatedDenial)
+        {
             "deny"
         } else {
             "allow"
@@ -101,7 +110,7 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
                     "assessment",
                     &json!({
                         "risk_level": "low", "user_authorization": "high", "outcome": outcome,
-                        "rationale": "Decision for the current authorization snapshot.",
+                        "rationale": format!("Decision for authorization snapshot {attempt}."),
                     })
                     .to_string(),
                 ),
@@ -136,6 +145,7 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
         })
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url);
+            config.feedback_enabled = true;
             for feature in [Feature::Collab, Feature::MultiAgentV2] {
                 config
                     .features
@@ -199,14 +209,21 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
             review["client_metadata"]["x-openai-subagent"], "guardian",
             "attempt {attempt}: expected a fresh review rather than worker continuation"
         );
+        let review_text = review.to_string();
+        for previous in 0..attempt {
+            assert!(
+                !review_text.contains(&format!("Decision for authorization snapshot {previous}.")),
+                "refreshed review retained an invalidated assessment"
+            );
+        }
         if let Some(message) = &latest_message {
             assert!(
-                review.to_string().contains(message),
+                review_text.contains(message),
                 "refreshed review omitted latest parent input"
             );
         }
         // Each retry reviews the same action. The executor has not run it yet.
-        assert!(review.to_string().contains("guardian-parent-refresh.txt"));
+        assert!(review_text.contains("guardian-parent-refresh.txt"));
         assert_eq!(
             test.fs()
                 .get_metadata(&marker, Default::default(), /*sandbox*/ None)
@@ -222,6 +239,8 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
         if attempt < updates {
             let message = if matches!(change, Change::Revoke) {
                 "Do not write the marker after all.".to_owned()
+            } else if matches!(change, Change::Grant) {
+                "I approve writing the requested marker exactly once.".to_owned()
             } else {
                 format!("Status update {attempt}: how is the worker doing?")
             };
@@ -259,6 +278,11 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
             tokio::time::timeout(Duration::from_secs(/*secs*/ 10), worker.next_event()).await??;
         match event.msg {
             EventMsg::GuardianAssessment(assessment) => statuses.push(assessment.status),
+            EventMsg::Error(error) => assert_ne!(
+                error.codex_error_info,
+                Some(CodexErrorInfo::TooManyDenials),
+                "invalidated assessments must not count toward the denial limit"
+            ),
             EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => worker_finished = true,
             _ => {}
         }
@@ -295,6 +319,17 @@ async fn guardian_refreshes_subagent_authorization(change: Change) -> Result<()>
         .shutdown_all_threads_bounded(Duration::from_secs(/*secs*/ 10))
         .await;
     assert!(shutdown.timed_out.is_empty());
+    if matches!(change, Change::Grant | Change::RepeatedDenial) {
+        let state_db = codex_state::StateRuntime::init(
+            test.config.sqlite.clone(),
+            test.config.model_provider_id.clone(),
+        )
+        .await?;
+        assert!(
+            state_db.list_guardian_review_records().await?.is_empty(),
+            "invalidated denials must not be retained as failed-review feedback"
+        );
+    }
     streaming.shutdown().await;
     Ok(())
 }
