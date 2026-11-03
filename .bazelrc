@@ -4,7 +4,9 @@ common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
 common --xcode_version_config=//:disable_xcode
 
 common --disk_cache=~/.cache/bazel-disk-cache
+common --experimental_disk_cache_gc_max_age=7d
 common --repo_contents_cache=~/.cache/bazel-repo-contents-cache
+common --repo_contents_cache_gc_max_age=7d
 common --repository_cache=~/.cache/bazel-repo-cache
 common --remote_cache_compression
 startup --experimental_remote_repo_contents_cache
