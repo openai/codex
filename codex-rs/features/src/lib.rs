@@ -420,6 +420,8 @@ pub enum Feature {
     SendMessageToUserAsync,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
+    /// Include standalone additional-context tool outputs in Guardian review history.
+    GuardianIncludeAdditionalContext,
     /// Forward private reviewer items and interruptions to raw-event observers.
     GuardianRecordedItems,
     /// Removed compatibility flag for always-on thread-owned Guardian context.
@@ -2088,6 +2090,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianApproval,
         key: "guardian_approval",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::GuardianIncludeAdditionalContext,
+        key: "guardian_include_additional_context",
         stage: Stage::Stable,
         default_enabled: true,
     },
