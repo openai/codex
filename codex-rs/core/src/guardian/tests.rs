@@ -3,14 +3,12 @@ use super::*;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::Constrained;
-use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::environment_selection::EnvironmentAttachment;
 use crate::environment_selection::TurnEnvironmentState;
-use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::guardian::review::guardian_review_session_config;
 use crate::session::session::Session;
 use crate::session::tests::update_turn_settings_for_test;
@@ -18,7 +16,6 @@ use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::ConfigLayerStack;
-use codex_config::FeatureRequirementsToml;
 use codex_config::NetworkConstraints;
 use codex_config::NetworkDomainPermissionToml;
 use codex_config::NetworkDomainPermissionsToml;
@@ -90,7 +87,6 @@ use core_test_support::test_path_buf;
 use insta::Settings;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -504,68 +500,6 @@ async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> an
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::Result<()> {
-    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
-    seed_guardian_parent_history(&session, &turn).await;
-    let context = GuardianReviewContext::from(&turn);
-    let approval_reason = format!("policy-start {} policy-end", "x".repeat(10_000));
-    let expected_reason = codex_utils_output_truncation::truncate_text(
-        &approval_reason,
-        codex_utils_output_truncation::TruncationPolicy::Tokens(/*tokens*/ 512),
-    );
-
-    let collected = collect_guardian_prompt_items_with_parent_turn(
-        session.as_ref(),
-        GuardianTranscriptHistory::Retained(session.conversation_history_snapshot().await.as_ref()),
-        Some(&context),
-        ApprovalRequestReasons {
-            approval: Some(approval_reason),
-            retry: None,
-        },
-        GuardianApprovalRequest::ExecCommand {
-            id: "shell-1".to_string(),
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            command: vec!["git".to_string(), "push".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs().into(),
-            guardian_cwd: native_guardian_cwd("/repo/codex-rs/core"),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: None,
-            tty: false,
-        },
-        GuardianPromptMode::Full,
-        /*reviewed_node_repl_evidence_sequence*/ 0,
-    )
-    .await?;
-    let prompt = codex_guardian_reviewer::compose_guardian_prompt(
-        collected.sections,
-        &collected.profile,
-        collected.mode,
-        collected.history_version,
-        &collected.session_id,
-        collected.node_repl_evidence_sequence,
-    )?;
-
-    let items = prompt.context.into_user_inputs()?;
-    let reason_item = items
-        .iter()
-        .find_map(|item| match item {
-            codex_protocol::user_input::UserInput::Text { text, .. }
-                if text.contains("tokens truncated") =>
-            {
-                Some(text)
-            }
-            _ => None,
-        })
-        .expect("oversized approval reason should include a truncation marker");
-    assert!(reason_item.starts_with("policy-start"));
-    assert!(reason_item.ends_with("policy-end\n\n"));
-    assert_eq!(reason_item, &format!("{expected_reason}\n\n"));
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Result<()> {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.thread_id = fixed_guardian_parent_session_id();
@@ -880,154 +814,6 @@ async fn guardian_mcp_uses_thread_permissions_for_an_unavailable_captured_enviro
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyhow::Result<()> {
-    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
-    seed_guardian_parent_history(&session, &turn).await;
-    session
-        .record_conversation_items(
-            turn.as_ref(),
-            turn.model_info(),
-            &[
-                ResponseItem::Message {
-                    status: None,
-                    encrypted_content: None,
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "Please also push the second docs fix.".to_string(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                },
-                ResponseItem::Message {
-                    status: None,
-                    encrypted_content: None,
-                    id: None,
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::OutputText {
-                        annotations: None,
-                        logprobs: None,
-                        text: "I need approval for the second push.".to_string(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                },
-            ],
-        )
-        .await;
-
-    let prompt = build_guardian_prompt_items(
-        session.as_ref(),
-        /*retry_reason*/ None,
-        GuardianApprovalRequest::ExecCommand {
-            id: "shell-2".to_string(),
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            command: vec!["git".to_string(), "push".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs().into(),
-            guardian_cwd: native_guardian_cwd("/repo/codex-rs/core"),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Need to push the second docs fix.".to_string()),
-            tty: false,
-        },
-        GuardianPromptMode::Delta {
-            cursor: GuardianTranscriptCursor {
-                parent_history_version: 0,
-                transcript_entry_count: 4,
-            },
-        },
-    )
-    .await?;
-
-    let text = guardian_prompt_text(&prompt.context.into_user_inputs()?);
-    assert!(text.contains("added since your last approval assessment"));
-    assert!(text.contains(">>> TRANSCRIPT DELTA START\n"));
-    assert!(text.contains("[5] user: Please also push the second docs fix."));
-    assert!(text.contains("[6] assistant: I need approval for the second push."));
-    assert!(text.contains(">>> TRANSCRIPT DELTA END\n"));
-    assert!(text.contains("The Codex agent has requested the following next action:\n"));
-    assert!(!text.contains("[1] user: Please check the repo visibility"));
-    assert_eq!(prompt.transcript_cursor.transcript_entry_count, 6);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn build_guardian_prompt_delta_mode_handles_empty_delta() -> anyhow::Result<()> {
-    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
-    seed_guardian_parent_history(&session, &turn).await;
-
-    let prompt = build_guardian_prompt_items(
-        session.as_ref(),
-        /*retry_reason*/ None,
-        GuardianApprovalRequest::ExecCommand {
-            id: "shell-2".to_string(),
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            command: vec!["git".to_string(), "push".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs().into(),
-            guardian_cwd: native_guardian_cwd("/repo/codex-rs/core"),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Need to push the second docs fix.".to_string()),
-            tty: false,
-        },
-        GuardianPromptMode::Delta {
-            cursor: GuardianTranscriptCursor {
-                parent_history_version: 0,
-                transcript_entry_count: 4,
-            },
-        },
-    )
-    .await?;
-
-    let text = guardian_prompt_text(&prompt.context.into_user_inputs()?);
-    assert!(text.contains(">>> TRANSCRIPT DELTA START\n"));
-    assert!(text.contains("<no retained transcript delta entries>"));
-    assert!(text.contains(">>> TRANSCRIPT DELTA END\n"));
-    assert_eq!(prompt.transcript_cursor.transcript_entry_count, 4);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn build_guardian_prompt_stale_delta_cursor_falls_back_to_full_prompt() -> anyhow::Result<()>
-{
-    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
-    seed_guardian_parent_history(&session, &turn).await;
-
-    let prompt = build_guardian_prompt_items(
-        session.as_ref(),
-        /*retry_reason*/ None,
-        GuardianApprovalRequest::ExecCommand {
-            id: "shell-3".to_string(),
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            command: vec!["git".to_string(), "push".to_string()],
-            cwd: test_path_buf("/repo/codex-rs/core").abs().into(),
-            guardian_cwd: native_guardian_cwd("/repo/codex-rs/core"),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: Some("Need to push the docs fix.".to_string()),
-            tty: false,
-        },
-        GuardianPromptMode::Delta {
-            cursor: GuardianTranscriptCursor {
-                parent_history_version: 0,
-                transcript_entry_count: 99,
-            },
-        },
-    )
-    .await?;
-
-    let text = guardian_prompt_text(&prompt.context.into_user_inputs()?);
-    assert!(text.contains("whose request action you are assessing"));
-    assert!(text.contains(">>> TRANSCRIPT START\n"));
-    assert!(!text.contains("TRANSCRIPT DELTA"));
-    assert_eq!(prompt.transcript_cursor.transcript_entry_count, 4);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -> anyhow::Result<()>
 {
     let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
@@ -1194,127 +980,6 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
     );
 }
 
-#[test]
-fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
-    let mut items = vec![
-        ResponseItem::Message {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "check the repo".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::FunctionCall {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            name: "read_file".to_string(),
-            namespace: None,
-            arguments: "{\"path\":\"README.md\"}".to_string(),
-            call_id: "call-1".to_string(),
-            encrypted_function_args: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::FunctionCallOutput {
-            id: None,
-            call_id: Some("call-1".to_string()),
-            name: None,
-            namespace: None,
-            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
-                "repo is public".to_string(),
-            ),
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::Message {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                annotations: None,
-                logprobs: None,
-                text: "I need to push a fix".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-    ];
-
-    let entries = collect_guardian_transcript_entries(&items, GUARDIAN_MAX_TOOL_ENTRY_TOKENS);
-
-    assert_eq!(entries.len(), 4);
-    assert_eq!(
-        entries[1],
-        ConversationTranscriptEntry {
-            kind: ConversationTranscriptEntryKind::ToolCall("tool read_file call".to_string()),
-            content: codex_guardian_context::TranscriptContent::Text(
-                "{\"path\":\"README.md\"}".to_string()
-            ),
-            original_bytes: "{\"path\":\"README.md\"}".len(),
-            retained_source: None,
-        }
-    );
-    assert_eq!(
-        entries[2],
-        ConversationTranscriptEntry {
-            kind: ConversationTranscriptEntryKind::ToolOutput("tool read_file result".to_string()),
-            content: codex_guardian_context::TranscriptContent::Text("repo is public".to_string()),
-            original_bytes: "repo is public".len(),
-            retained_source: None,
-        }
-    );
-    if let ResponseItem::FunctionCall { namespace, .. } = &mut items[1] {
-        *namespace = Some("mcp__node_repl__".to_string());
-    }
-    assert!(matches!(
-        collect_guardian_transcript_entries(&items, GUARDIAN_MAX_TOOL_ENTRY_TOKENS)[2].kind,
-        ConversationTranscriptEntryKind::NodeReplToolOutput(_)
-    ));
-
-    let oversized_result = "é🙂".repeat(/*n*/ 10_000);
-    if let ResponseItem::FunctionCallOutput { output, .. } = &mut items[2] {
-        *output =
-            codex_protocol::models::FunctionCallOutputPayload::from_text(oversized_result.clone());
-    }
-    for token_cap in [
-        GUARDIAN_MAX_TOOL_ENTRY_TOKENS,
-        GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS,
-    ] {
-        let entries = collect_guardian_transcript_entries(&items, token_cap);
-        assert_eq!(
-            entries[2],
-            ConversationTranscriptEntry {
-                kind: ConversationTranscriptEntryKind::NodeReplToolOutput(
-                    "tool read_file result".to_string()
-                ),
-                content: codex_guardian_context::TranscriptContent::Text(oversized_result.clone()),
-                original_bytes: oversized_result.len(),
-                retained_source: None,
-            }
-        );
-        assert_eq!(entries.len(), 4);
-        assert_eq!(
-            render_guardian_transcript_entries(&entries, token_cap),
-            (
-                vec![
-                    "[1] user: check the repo".to_string(),
-                    "[2] tool read_file call: {\"path\":\"README.md\"}".to_string(),
-                    format!(
-                        "[3] tool read_file result: {}",
-                        guardian_truncate_text(&oversized_result, token_cap).0
-                    ),
-                    "[4] assistant: I need to push a fix".to_string(),
-                ],
-                None,
-            )
-        );
-    }
-}
-
 #[tokio::test]
 async fn guardian_prompt_rejects_oversized_environment_ids() -> anyhow::Result<()> {
     let (session, _) = crate::session::tests::make_session_and_context().await;
@@ -1404,49 +1069,6 @@ async fn build_guardian_prompt_items_keeps_required_node_repl_reviews_generic() 
     assert!(text.contains("\"tool_name\": \"js\""));
     assert!(text.contains("await browser.open('https://example.com')"));
     assert!(!text.contains("# Computer and Browser Use"));
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn build_guardian_prompt_items_keeps_other_requests_generic() -> anyhow::Result<()> {
-    let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
-    seed_guardian_parent_history(&session, &turn).await;
-    let context = GuardianReviewContext::from(&turn);
-
-    for request in [
-        guardian_mcp_request("node_repl", "js"),
-        guardian_mcp_request("node_repl", "inspect"),
-        guardian_mcp_request("another_server", "js"),
-        guardian_exec_command_request("shell-1"),
-    ] {
-        let collected = collect_guardian_prompt_items_with_parent_turn(
-            session.as_ref(),
-            GuardianTranscriptHistory::Retained(
-                session.conversation_history_snapshot().await.as_ref(),
-            ),
-            Some(&context),
-            ApprovalRequestReasons::default(),
-            request,
-            GuardianPromptMode::Full,
-            /*reviewed_node_repl_evidence_sequence*/ 0,
-        )
-        .await?;
-        let prompt = codex_guardian_reviewer::compose_guardian_prompt(
-            collected.sections,
-            &collected.profile,
-            collected.mode,
-            collected.history_version,
-            &collected.session_id,
-            collected.node_repl_evidence_sequence,
-        )?;
-
-        let text = guardian_prompt_text(&prompt.context.into_user_inputs()?);
-        assert!(text.contains("Assess the exact planned action below."));
-        assert!(text.contains("Planned action JSON:"));
-        assert!(!text.contains("Node REPL action JSON:"));
-        assert!(!text.contains("Distinguish preparation"));
-    }
 
     Ok(())
 }
@@ -1576,62 +1198,6 @@ async fn guardian_exec_command_uses_executor_cwd_convention(
     Ok(())
 }
 
-#[test]
-fn guardian_request_turn_id_prefers_network_access_owner_turn() {
-    let network_access = GuardianApprovalRequest::NetworkAccess {
-        id: "network-1".to_string(),
-        turn_id: "owner-turn".to_string(),
-        environment_id: "local".to_string(),
-        target: "https://example.com:443".to_string(),
-        host: "example.com".to_string(),
-        protocol: NetworkApprovalProtocol::Https,
-        port: 443,
-        trigger: None,
-    };
-    let apply_patch = GuardianApprovalRequest::ApplyPatch {
-        environment_id: "local".to_string(),
-        id: "patch-1".to_string(),
-        cwd: test_path_buf("/tmp").abs().into(),
-        files: vec![test_path_buf("/tmp/guardian.txt").abs().into()],
-        patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
-            .to_string(),
-    };
-
-    assert_eq!(
-        guardian_request_turn_id(&network_access, "fallback-turn"),
-        "owner-turn"
-    );
-    assert_eq!(
-        guardian_request_turn_id(&apply_patch, "fallback-turn"),
-        "fallback-turn"
-    );
-}
-
-#[test]
-fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
-    let network_access = GuardianApprovalRequest::NetworkAccess {
-        id: "network-1".to_string(),
-        turn_id: "owner-turn".to_string(),
-        environment_id: "local".to_string(),
-        target: "https://example.com:443".to_string(),
-        host: "example.com".to_string(),
-        protocol: NetworkApprovalProtocol::Https,
-        port: 443,
-        trigger: Some(GuardianNetworkAccessTrigger {
-            call_id: "call-1".to_string(),
-            tool_name: "shell".to_string(),
-            command: vec!["curl".to_string(), "https://example.com".to_string()],
-            cwd: PathUri::from_abs_path(&test_path_buf("/repo").abs()),
-            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: None,
-            tty: None,
-        }),
-    };
-
-    assert_eq!(guardian_request_target_item_id(&network_access), None);
-}
-
 #[derive(Clone, Copy)]
 enum ApprovalCancellation {
     BeforeRouting,
@@ -1721,139 +1287,6 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning(
         }
     );
     assert!(warnings.is_empty());
-}
-
-#[test]
-fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
-    let repeated = "signal ".repeat(8_000);
-    let mut items = [
-        ("user", "please figure out if the repo is public"),
-        (
-            "assistant",
-            "The public repo check is the main reason I want to escalate.",
-        ),
-    ]
-    .into_iter()
-    .map(|(role, text)| ResponseItem::Message {
-        status: None,
-        encrypted_content: None,
-        id: None,
-        role: role.to_string(),
-        content: vec![ContentItem::InputText {
-            text: text.to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    })
-    .collect::<Vec<_>>();
-    items.extend((0..12).map(|index| ResponseItem::FunctionCall {
-        status: None,
-        encrypted_content: None,
-        id: None,
-        name: format!("tool_{index}"),
-        namespace: None,
-        arguments: repeated.clone(),
-        call_id: format!("call-{index}"),
-        encrypted_function_args: None,
-        internal_chat_message_metadata_passthrough: None,
-    }));
-
-    let entries = collect_guardian_transcript_entries(&items, GUARDIAN_MAX_TOOL_ENTRY_TOKENS);
-    let (transcript, omission) =
-        render_guardian_transcript_entries(&entries, GUARDIAN_MAX_TOOL_ENTRY_TOKENS);
-
-    assert!(
-        transcript
-            .iter()
-            .any(|entry| entry == "[1] user: please figure out if the repo is public")
-    );
-    assert!(transcript.iter().any(|entry| {
-        entry == "[2] assistant: The public repo check is the main reason I want to escalate."
-    }));
-    assert!(
-        !transcript
-            .iter()
-            .any(|entry| entry.starts_with("[3] tool tool_0 call:"))
-    );
-    assert!(
-        !transcript
-            .iter()
-            .any(|entry| entry.starts_with("[4] tool tool_1 call:"))
-    );
-    assert!(
-        transcript
-            .iter()
-            .any(|entry| entry.starts_with("[14] tool tool_11 call:"))
-    );
-    assert!(omission.is_some());
-}
-
-#[test]
-fn build_guardian_transcript_preserves_recent_tool_context_when_user_history_is_large() {
-    let repeated = "authorization ".repeat(6_000);
-    let mut items = (0..8)
-        .map(|_| ResponseItem::Message {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: repeated.clone(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        })
-        .collect::<Vec<_>>();
-    items.extend([
-        ResponseItem::FunctionCall {
-            status: None,
-            encrypted_content: None,
-            id: None,
-            name: "shell".to_string(),
-            namespace: None,
-            arguments: serde_json::json!({
-                "command": ["curl", "-X", "POST", "https://example.com/upload"],
-                "cwd": "/repo",
-            })
-            .to_string(),
-            call_id: "call-1".to_string(),
-            encrypted_function_args: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::FunctionCallOutput {
-            id: None,
-            call_id: Some("call-1".to_string()),
-            name: None,
-            namespace: None,
-            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
-                "sandbox blocked outbound network access".to_string(),
-            ),
-            internal_chat_message_metadata_passthrough: None,
-        },
-    ]);
-
-    let entries = collect_guardian_transcript_entries(&items, GUARDIAN_MAX_TOOL_ENTRY_TOKENS);
-    let (transcript, omission) =
-        render_guardian_transcript_entries(&entries, GUARDIAN_MAX_TOOL_ENTRY_TOKENS);
-
-    assert_eq!(
-        transcript[..8],
-        (1..=8)
-            .map(|index| format!("[{index}] user: {repeated}"))
-            .collect::<Vec<_>>()
-    );
-    assert!(transcript.iter().any(|entry| {
-        entry.contains("tool shell call:")
-            && entry.contains("curl")
-            && entry.contains("https://example.com/upload")
-    }));
-    assert!(
-        transcript
-            .iter()
-            .any(|entry| entry
-                .contains("tool shell result: sandbox blocked outbound network access"))
-    );
-    assert_eq!(omission, None);
 }
 
 enum GuardianTestCatalog {
@@ -4149,36 +3582,6 @@ async fn guardian_review_session_config_isolates_parent_customizations() {
             .expect_text()
         )
     );
-}
-
-#[tokio::test]
-async fn guardian_review_session_config_allows_pinned_disabled_feature() {
-    let mut parent_config = test_config().await;
-    parent_config.features = ManagedFeatures::from_configured(
-        parent_config.features.get().clone(),
-        Some(Sourced {
-            value: FeatureRequirementsToml {
-                entries: BTreeMap::from([("multi_agent".to_string(), true)]),
-            },
-            source: RequirementSource::Unknown,
-        }),
-    )
-    .expect("managed features");
-
-    let guardian_config = build_guardian_review_session_config_for_test(
-        crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
-        /*live_network_config*/ None,
-        "active-model",
-        /*reasoning_effort*/ None,
-        ReasoningSummary::default(),
-        /*personality*/ None,
-        ResolvedModelMessages::bundled(),
-    )
-    .expect("guardian config should continue when a disabled feature is pinned on");
-
-    assert!(guardian_config.features.enabled(Feature::Collab));
-    assert!(guardian_config.mcp_servers.get().is_empty());
-    assert!(!guardian_config.include_apps_instructions);
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-//! Checks that elastic preparation keeps captured root and REPL evidence.
+//! Checks that source preparation preserves captured evidence and bounds supporting text.
 
 use super::*;
 use crate::GuardianRootMessage;
@@ -111,4 +111,58 @@ fn elastic_repl_rendering_keeps_stored_text_images_and_omissions() {
             mode == NodeReplReviewEvidenceMode::Multimodal
         );
     }
+}
+
+#[test]
+fn build_guardian_prompt_truncates_oversized_approval_reason() -> Result<(), SectionError> {
+    let approval_reason = format!("policy-start {} policy-end", "x".repeat(10_000));
+    let expected_reason = codex_utils_output_truncation::truncate_text(
+        &approval_reason,
+        codex_utils_output_truncation::TruncationPolicy::Tokens(/*tokens*/ 512),
+    );
+
+    let action = crate::PlannedAction {
+        kind: crate::PlannedActionKind::Command {
+            json: serde_json::json!({
+                "tool": "exec_command",
+                "environment_id": "local",
+                "command": ["git", "push"],
+                "cwd": "/repo/codex-rs/core",
+                "sandbox_permissions": "use_default",
+                "tty": false,
+            })
+            .to_string(),
+        },
+        reason: Some(approval_reason),
+        tool_descriptions: None,
+    };
+    let context = prepare_sync_context(
+        CollectedContext {
+            sections: vec![ContextSection::PlannedAction(action)],
+        },
+        &ContextProfile::synchronous(),
+        /*entry_number_offset*/ 0,
+        ContextPresentation::SyncFull {
+            session_id: "11111111-1111-4111-8111-111111111111",
+        },
+        ContextBudgeting::Fixed,
+    )?;
+
+    let items = context.into_user_inputs()?;
+    let reason_item = items
+        .iter()
+        .find_map(|item| match item {
+            codex_protocol::user_input::UserInput::Text { text, .. }
+                if text.contains("tokens truncated") =>
+            {
+                Some(text)
+            }
+            _ => None,
+        })
+        .expect("oversized approval reason should include a truncation marker");
+    assert!(reason_item.starts_with("policy-start"));
+    assert!(reason_item.ends_with("policy-end\n\n"));
+    assert_eq!(reason_item, &format!("{expected_reason}\n\n"));
+
+    Ok(())
 }

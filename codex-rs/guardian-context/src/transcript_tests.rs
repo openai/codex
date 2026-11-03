@@ -775,3 +775,137 @@ fn encrypted_messages_preserve_order_and_budget_for_both_reviewers() {
         }
     }
 }
+
+#[test]
+fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
+    let mut profile = crate::ContextProfile::synchronous();
+    let mut items = vec![
+        ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "check the repo".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCall {
+            status: None,
+            encrypted_content: None,
+            id: None,
+            name: "read_file".to_string(),
+            namespace: None,
+            arguments: "{\"path\":\"README.md\"}".to_string(),
+            call_id: "call-1".to_string(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: Some("call-1".to_string()),
+            name: None,
+            namespace: None,
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                "repo is public".to_string(),
+            ),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                annotations: None,
+                logprobs: None,
+                text: "I need to push a fix".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let entries =
+        super::collect_transcript_for_target(&items, &profile.transcript, ContextTarget::Sync);
+
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries[1],
+        ConversationTranscriptEntry {
+            kind: ConversationTranscriptEntryKind::ToolCall("tool read_file call".to_string()),
+            content: crate::TranscriptContent::Text("{\"path\":\"README.md\"}".to_string()),
+            original_bytes: "{\"path\":\"README.md\"}".len(),
+            retained_source: None,
+        }
+    );
+    assert_eq!(
+        entries[2],
+        ConversationTranscriptEntry {
+            kind: ConversationTranscriptEntryKind::ToolOutput("tool read_file result".to_string()),
+            content: crate::TranscriptContent::Text("repo is public".to_string()),
+            original_bytes: "repo is public".len(),
+            retained_source: None,
+        }
+    );
+    if let ResponseItem::FunctionCall { namespace, .. } = &mut items[1] {
+        *namespace = Some("mcp__node_repl__".to_string());
+    }
+    assert!(matches!(
+        super::collect_transcript_for_target(&items, &profile.transcript, ContextTarget::Sync)[2]
+            .kind,
+        ConversationTranscriptEntryKind::NodeReplToolOutput(_)
+    ));
+
+    let oversized_result = "é🙂".repeat(/*n*/ 10_000);
+    if let ResponseItem::FunctionCallOutput { output, .. } = &mut items[2] {
+        *output =
+            codex_protocol::models::FunctionCallOutputPayload::from_text(oversized_result.clone());
+    }
+    for token_cap in [profile.transcript.entry_limits.tool_tokens, 6_000] {
+        profile.transcript.entry_limits.node_repl_output_tokens = token_cap;
+        let entries =
+            super::collect_transcript_for_target(&items, &profile.transcript, ContextTarget::Sync);
+        assert_eq!(
+            entries[2],
+            ConversationTranscriptEntry {
+                kind: ConversationTranscriptEntryKind::NodeReplToolOutput(
+                    "tool read_file result".to_string()
+                ),
+                content: crate::TranscriptContent::Text(oversized_result.clone()),
+                original_bytes: oversized_result.len(),
+                retained_source: None,
+            }
+        );
+        assert_eq!(entries.len(), 4);
+        let prepared = profile.prepare_transcript(&entries, /*entry_number_offset*/ 0);
+        let rendered = prepared
+            .items
+            .into_iter()
+            .map(|item| match item.content {
+                crate::TranscriptContent::Text(text) => text,
+                crate::TranscriptContent::Record(record) => record.to_string(),
+                crate::TranscriptContent::ScheduledMessage(_)
+                | crate::TranscriptContent::NativeMessage(_) => {
+                    panic!("expected text transcript")
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (rendered, prepared.omission_note),
+            (
+                vec![
+                    "[1] user: check the repo".to_string(),
+                    "[2] tool read_file call: {\"path\":\"README.md\"}".to_string(),
+                    format!(
+                        "[3] tool read_file result: {}",
+                        truncate_text(&oversized_result, token_cap)
+                    ),
+                    "[4] assistant: I need to push a fix".to_string(),
+                ],
+                None,
+            )
+        );
+    }
+}

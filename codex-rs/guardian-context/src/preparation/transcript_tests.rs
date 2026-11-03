@@ -233,3 +233,138 @@ fn transcript_json_keeps_forged_roles_inside_the_original_entry() {
         }
     }
 }
+
+#[test]
+fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
+    let repeated = "signal ".repeat(8_000);
+    let mut entries = [
+        (
+            ConversationTranscriptEntryKind::User,
+            "please figure out if the repo is public",
+        ),
+        (
+            ConversationTranscriptEntryKind::ProtectedAssistant,
+            "The public repo check is the main reason I want to escalate.",
+        ),
+    ]
+    .into_iter()
+    .map(|(kind, text)| ConversationTranscriptEntry {
+        kind,
+        content: TranscriptContent::Text(text.to_owned()),
+        original_bytes: text.len(),
+        retained_source: None,
+    })
+    .collect::<Vec<_>>();
+    entries.extend((0..12).map(|index| ConversationTranscriptEntry {
+        kind: ConversationTranscriptEntryKind::ToolCall(format!("tool tool_{index} call")),
+        content: TranscriptContent::Text(repeated.clone()),
+        original_bytes: repeated.len(),
+        retained_source: None,
+    }));
+
+    let prepared =
+        ContextProfile::synchronous().prepare_transcript(&entries, /*entry_number_offset*/ 0);
+    let transcript = prepared
+        .items
+        .into_iter()
+        .map(|item| {
+            let TranscriptContent::Record(record) = item.content else {
+                panic!("expected transcript record");
+            };
+            record.to_string()
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry == "[1] user: please figure out if the repo is public")
+    );
+    assert!(transcript.iter().any(|entry| {
+        entry == "[2] assistant: The public repo check is the main reason I want to escalate."
+    }));
+    assert!(
+        !transcript
+            .iter()
+            .any(|entry| entry.starts_with("[3] tool tool_0 call:"))
+    );
+    assert!(
+        !transcript
+            .iter()
+            .any(|entry| entry.starts_with("[4] tool tool_1 call:"))
+    );
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry.starts_with("[14] tool tool_11 call:"))
+    );
+    assert!(prepared.omission_note.is_some());
+}
+
+#[test]
+fn build_guardian_transcript_preserves_recent_tool_context_when_user_history_is_large() {
+    let repeated = "authorization ".repeat(6_000);
+    let mut entries = (0..8)
+        .map(|_| ConversationTranscriptEntry {
+            kind: ConversationTranscriptEntryKind::User,
+            content: TranscriptContent::Text(repeated.clone()),
+            original_bytes: repeated.len(),
+            retained_source: None,
+        })
+        .collect::<Vec<_>>();
+    entries.extend(
+        [
+            (
+                ConversationTranscriptEntryKind::ToolCall("tool shell call".to_owned()),
+                serde_json::json!({
+                    "command": ["curl", "-X", "POST", "https://example.com/upload"],
+                    "cwd": "/repo",
+                })
+                .to_string(),
+            ),
+            (
+                ConversationTranscriptEntryKind::ToolOutput("tool shell result".to_owned()),
+                "sandbox blocked outbound network access".to_owned(),
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, text)| ConversationTranscriptEntry {
+            kind,
+            original_bytes: text.len(),
+            content: TranscriptContent::Text(text),
+            retained_source: None,
+        }),
+    );
+
+    let prepared =
+        ContextProfile::synchronous().prepare_transcript(&entries, /*entry_number_offset*/ 0);
+    let transcript = prepared
+        .items
+        .into_iter()
+        .map(|item| {
+            let TranscriptContent::Record(record) = item.content else {
+                panic!("expected transcript record");
+            };
+            record.to_string()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        transcript[..8],
+        (1..=8)
+            .map(|index| format!("[{index}] user: {repeated}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(transcript.iter().any(|entry| {
+        entry.contains("tool shell call:")
+            && entry.contains("curl")
+            && entry.contains("https://example.com/upload")
+    }));
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry
+                .contains("tool shell result: sandbox blocked outbound network access"))
+    );
+    assert_eq!(prepared.omission_note, None);
+}

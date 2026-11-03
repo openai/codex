@@ -1,11 +1,7 @@
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_features::Feature;
-#[cfg(test)]
-use codex_guardian_context::Budgeted;
 use codex_guardian_context::CollectedContext;
 use codex_guardian_context::ContextProfile;
-#[cfg(test)]
-use codex_guardian_context::ConversationTranscriptEntry;
 use codex_guardian_context::GuardianRootMessage;
 use codex_guardian_context::PlannedAction;
 use codex_guardian_context::SectionError;
@@ -203,39 +199,6 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
         session_id: session.thread_id.to_string(),
         node_repl_evidence_sequence,
     })
-}
-
-/// Exercises the sync profile through the host's existing transcript tests.
-#[cfg(test)]
-pub(crate) fn render_guardian_transcript_entries(
-    entries: &[ConversationTranscriptEntry],
-    node_repl_result_token_limit: usize,
-) -> (Vec<String>, Option<String>) {
-    let mut profile = ContextProfile::synchronous();
-    profile.transcript.entry_limits.node_repl_output_tokens = node_repl_result_token_limit;
-    let mut transcript = profile.prepare_transcript(entries, /*entry_number_offset*/ 0);
-    if entries.is_empty() {
-        transcript.items.push(Budgeted::required(
-            codex_guardian_context::TranscriptContent::Text(
-                "<no retained transcript entries>".to_owned(),
-            ),
-        ));
-    }
-    (
-        transcript
-            .items
-            .into_iter()
-            .map(|item| match item.content {
-                codex_guardian_context::TranscriptContent::Text(text) => text,
-                codex_guardian_context::TranscriptContent::Record(record) => record.to_string(),
-                codex_guardian_context::TranscriptContent::ScheduledMessage(_)
-                | codex_guardian_context::TranscriptContent::NativeMessage(_) => {
-                    panic!("expected text transcript")
-                }
-            })
-            .collect(),
-        transcript.omission_note,
-    )
 }
 
 /// Retains the human-readable conversation plus recent tool call / result

@@ -207,8 +207,6 @@ use codex_guardian_reviewer::guardian_output_schema;
 #[cfg(test)]
 use approval_request::guardian_assessment_action;
 #[cfg(test)]
-use approval_request::guardian_request_turn_id;
-#[cfg(test)]
 use codex_guardian_reviewer::GuardianReviewOutcome;
 #[cfg(test)]
 use prompt::GuardianPromptMode;
@@ -218,8 +216,6 @@ use prompt::GuardianTranscriptCursor;
 use prompt::build_guardian_prompt_items;
 #[cfg(test)]
 use prompt::collect_guardian_prompt_items_with_parent_turn;
-#[cfg(test)]
-use prompt::render_guardian_transcript_entries;
 #[cfg(test)]
 use review::run_guardian_review_session_with_retry as run_guardian_review_session_for_test;
 #[cfg(test)]
