@@ -1,8 +1,8 @@
 ---
-source: core/tests/suite/scenarios_deferred_mcp_cache.rs
+source: core/tests/suite/scenarios_strict_3p_cache.rs
 expression: snapshot
 ---
-Scenario: Code Mode Only: deferred MCP config changes between turns. Exec calls the live catalog. One window means the captured prefix stayed stable. The execution environment remains running.
+Scenario: Strict Code Mode Only: MCP config changes between turns, with omit-all and namespace skips. Exec calls the live catalog. One window means the captured prefix stayed stable. The execution environment remains running.
 
 ## Window 1
 Settings:
@@ -57,7 +57,7 @@ Settings:
     Wall time <DURATION> seconds
     Output:
      | []
--- request 3 (turn; turn 2: register deferred MCP with lookup) --
+-- request 3 (turn; turn 2: register MCP with lookup; omit-all, direct-only and excluded) --
 10:message/developer:
     <tools>
     Deferred tool namespaces:

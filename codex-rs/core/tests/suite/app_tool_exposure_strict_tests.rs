@@ -1,10 +1,11 @@
-//! Code Mode honors app exposure settings while preserving app access restrictions.
+//! App omissions cannot bypass strict deferral; app access restrictions still apply.
 use super::*;
 use pretty_assertions::assert_eq;
 use std::sync::Mutex;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_honors_app_omissions_and_preserves_app_access() -> anyhow::Result<()> {
+#[tracing_test::traced_test]
+async fn strict_ignores_app_omissions_but_preserves_app_access() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let mut tools = vec![];
     for name in ["lookup", "disabled", "app_only"] {
@@ -62,6 +63,10 @@ enabled = false
                 .features
                 .enable(Feature::CodeModeHost)
                 .expect("code mode host");
+            config
+                .features
+                .enable(Feature::CodeModeOnlyStrictThirdPartyTools)
+                .expect("strict third-party tools");
             config.analytics_enabled = Some(false);
         });
     let test = builder.build_with_auto_env(&server).await?;
@@ -73,7 +78,6 @@ enabled = false
             .tool_by_name("mcp__codex_apps__calendar", "lookup")
             .is_none()
     );
-    assert!(requests[0].body_contains_text("mcp__codex_apps__calendar__lookup("));
     let output =
         super::super::code_mode::custom_tool_output_last_non_empty_text(&requests[1], "lookup")
             .expect("exec reports actual discovery and dispatch");
@@ -83,8 +87,19 @@ enabled = false
             "names": ["mcp__codex_apps__calendar__lookup"],
             "result": "called lookup for  at  with "
         }),
-        "disabled and app-only tools never enter ALL_TOOLS"
+        "app omissions are ignored; disabled and app-only tools never enter ALL_TOOLS"
     );
+    // The spawned Core session does not inherit the test span.
+    let logs = String::from_utf8(
+        tracing_test::internal::global_buf()
+            .lock()
+            .expect("captured logs")
+            .clone(),
+    )?;
+    let thread_id = test.session_configured.thread_id.to_string();
+    assert!(logs.lines().any(|line| {
+        line.contains(&thread_id) && line.contains("Ignoring MCP/app omit_tools_from")
+    }));
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deferred_mcp_refresh_preserves_cache_while_exec_tracks_available_tools() -> Result<()> {
+async fn strict_3p_mcp_refresh_preserves_cache_while_exec_tracks_available_tools() -> Result<()> {
     let server = responses::start_mock_server().await;
     let first_mcp = responses::start_mock_server().await;
     let second_mcp = responses::start_mock_server().await;
@@ -54,11 +54,17 @@ async fn deferred_mcp_refresh_preserves_cache_while_exec_tracks_available_tools(
             super::configure_scenario_catalog(config);
             config.code_mode.disable_in_process_fallback = true;
             config.features.enable(Feature::CodeModeHost).unwrap();
+            config
+                .features
+                .enable(Feature::CodeModeOnlyStrictThirdPartyTools)
+                .unwrap();
+            config.code_mode.direct_only_tool_namespaces = vec!["mcp__environment".to_string()];
+            config.code_mode.excluded_tool_namespaces = vec!["mcp__environment".to_string()];
         })
         .with_model_info_override("gpt-6-astra", |model| {
             model.tool_mode = Some(ToolMode::CodeModeOnly);
             model.use_responses_lite = true;
-            model.supports_search_tool = true;
+            model.supports_search_tool = false;
         })
         .build_with_auto_env(&server)
         .await?;
@@ -95,7 +101,7 @@ text(JSON.stringify(results));"#;
                 "environment".to_string(),
                 serde_json::from_value(json!({
                     "url": format!("{url}/api/codex/ps/mcp"),
-                    "omit_tools_from": ["direct"],
+                    "omit_tools_from": ["direct", "deferred", "code_mode"],
                 }))?,
             );
         }
@@ -164,7 +170,7 @@ text(JSON.stringify(results));"#;
     let labels = [
         "turn 1: no MCP server registered",
         "turn 1: exec discovery and call results",
-        "turn 2: register deferred MCP with lookup",
+        "turn 2: register MCP with lookup; omit-all, direct-only and excluded",
         "turn 2: exec discovery and call results",
         "turn 3: same MCP name, new endpoint; replace lookup with resolve and search",
         "turn 3: exec discovery and call results",
@@ -173,7 +179,7 @@ text(JSON.stringify(results));"#;
     ];
     let sections = labels.into_iter().zip(&requests).collect::<Vec<_>>();
     let snapshot = context_snapshot::format_labeled_requests_snapshot(
-        "Code Mode Only: deferred MCP config changes between turns. Exec calls the live catalog. One window means the captured prefix stayed stable. The execution environment remains running.",
+        "Strict Code Mode Only: MCP config changes between turns, with omit-all and namespace skips. Exec calls the live catalog. One window means the captured prefix stayed stable. The execution environment remains running.",
         &sections,
         &ContextSnapshotOptions::default()
             .rewrite_known_segments()
@@ -185,7 +191,7 @@ text(JSON.stringify(results));"#;
         r"(?m)(^00:additional_tools/developer \(\d+; hash=|^ +- namespace/functions; hash=)[0-9a-f]{16}",
     )?
     .replace_all(&snapshot, "${1}<INITIAL_BUILD_HASH>");
-    insta::assert_snapshot!("deferred_mcp_catalog_cache", snapshot);
+    insta::assert_snapshot!("strict_3p_mcp_catalog_cache", snapshot);
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }

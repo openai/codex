@@ -177,6 +177,10 @@ impl CoreToolRuntime for DynamicToolHandler {
     fn finishes_on_cancellation(&self) -> bool {
         true
     }
+
+    fn is_third_party_tool(&self) -> bool {
+        true
+    }
 }
 
 #[expect(

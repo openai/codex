@@ -217,6 +217,15 @@ pub(crate) fn build_tool_router(
     )
 }
 
+/// Use the effective mode because the model can override the thread's configured mode.
+fn code_mode_only_strict_3p_tools(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
+    effective_tool_mode(turn_context, model_info) == ToolMode::CodeModeOnly
+        && turn_context
+            .config
+            .features
+            .enabled(Feature::CodeModeOnlyStrictThirdPartyTools)
+}
+
 fn apply_mcp_tool_exposure_policy(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
@@ -261,6 +270,17 @@ fn apply_mcp_tool_exposure_policy(
         let Some(omitted_exposures) = omitted_exposures_by_tool.get(&tool_name) else {
             continue;
         };
+        if code_mode_only_strict_3p_tools(turn_context, model_info) {
+            // Ignore MCP/app omit_tools_from; eligible tools must stay deferred in exec.
+            // Log conflicts without adding a warning to the model's prompt.
+            if omitted_exposures.intersects(ToolExposures::DEFERRED | ToolExposures::CODE_MODE) {
+                tracing::warn!(
+                    tool_name = %tool_name,
+                    "Ignoring MCP/app omit_tools_from because code_mode_only_strict_3p_tools is enabled"
+                );
+            }
+            continue;
+        }
         let tool_name = tool_name.with_default_namespace();
 
         let mut exposures = ToolExposures::ALL.difference(*omitted_exposures);
@@ -388,6 +408,7 @@ pub(crate) fn finalize_tool_router(
     let model_messages = ResolvedModelMessages::from_model(model_info);
     hosted_specs.retain(|spec| registry.tool_policy.allows(&ToolName::plain(spec.name())));
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
+    enforce_strict_3p_tools(turn_context, model_info, &mut registry);
     let tool_mode = effective_tool_mode(turn_context, model_info);
     let code_mode_enabled = matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly);
     if code_mode_enabled {
@@ -607,6 +628,31 @@ fn tool_exposure_with_namespace_override(
         ToolExposure::DirectModelOnly
     } else {
         exposure
+    }
+}
+
+/// Run after namespace overrides so eligible third-party tools always remain deferred.
+fn enforce_strict_3p_tools(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    registry: &mut ToolRegistry,
+) {
+    if !code_mode_only_strict_3p_tools(turn_context, model_info) {
+        return;
+    }
+
+    for tool in registry.entries_mut() {
+        // Remaining Hidden entries failed eligibility or budget checks; keep them hidden.
+        if !tool.runtime.is_third_party_tool() || tool.exposure == ToolExposure::Hidden {
+            continue;
+        }
+        if tool.exposure != ToolExposure::Deferred {
+            tracing::warn!(
+                tool_name = %tool.runtime.tool_name().with_default_namespace(),
+                "Deferring third-party tool because code_mode_only_strict_3p_tools is enabled"
+            );
+            tool.exposure = ToolExposure::Deferred;
+        }
     }
 }
 
@@ -956,7 +1002,11 @@ fn code_mode_tools<'a>(
         }
 
         let tool_name = tool.runtime.tool_name();
-        if is_excluded_from_code_mode(turn_context, &tool_name) {
+        // Deferred third-party tools still need an exec route to be discoverable.
+        if is_excluded_from_code_mode(turn_context, &tool_name)
+            && !(code_mode_only_strict_3p_tools(turn_context, model_info)
+                && tool.runtime.is_third_party_tool())
+        {
             return None;
         }
 
