@@ -1664,6 +1664,22 @@ async fn find_refreshes_live_details_before_searching_the_first_query() -> Resul
         ))
         .contains("needle")
     );
+    crate::app::test_support::enable_side_retention(&mut app)?;
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyCode::F(4).into()),
+    )
+    .await?;
+    assert!(app.transcript_view.is_activity_focused());
+    for key in [
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        KeyCode::Char('c').into(),
+    ] {
+        app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key))
+            .await?;
+    }
+    assert!(!app.transcript_view.is_activity_focused());
     for event in [
         TuiEvent::Key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
         TuiEvent::Paste("needle".into()),

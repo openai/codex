@@ -32,6 +32,8 @@ pub(in crate::keymap) fn register(
         (Global, "change_host", 'b'),
         (Global, "select_transcript", '['),
         (Chat, "open_presets", 'p'),
+        (Global, "focus_main_composer", 'c'),
+        (Global, "focus_sidebar_content", 's'),
         (Global, "hide_pane", '-'),
     ] {
         if remaining == 0 {

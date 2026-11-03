@@ -322,11 +322,15 @@ impl App {
         self.local_settings.workspace_enabled(&self.config) && tui.is_owned_screen()
     }
 
-    pub(super) fn side_pane_shortcuts_available(&self, tui: &tui::Tui) -> bool {
+    pub(super) fn main_composer_shortcut_available(&self, tui: &tui::Tui) -> bool {
         self.side_retention_enabled(tui)
-            && !self.reconnect.offline
             && self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
+            && (!self.reconnect.offline || self.active_side_parent_thread_id().is_none())
+    }
+
+    pub(super) fn side_pane_switch_available(&self) -> bool {
+        !self.reconnect.offline
             && self
                 .current_displayed_thread_id()
                 .and_then(|id| self.side_pair_key(id))
@@ -483,8 +487,7 @@ impl App {
         {
             side.pane_open = false;
             tui.frame_requester().schedule_frame();
-            self.surface_pending_inactive_thread_interactive_requests()
-                .await?;
+            self.focus_returned_parent_composer(parent).await?;
         }
         Ok(())
     }

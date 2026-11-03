@@ -118,6 +118,8 @@ macro_rules! define_keymap_actions {
 define_keymap_actions! {
     global "Global" {
         change_host [MultiBackend] => "Change where a new conversation runs.",
+        focus_main_composer [Workspace] => "Focus the main conversation composer.",
+        focus_sidebar_content [Workspace] => "Focus the side conversation, or hide it when already focused.",
         hide_pane [Workspace] => "Hide the focused sidebar pane.",
         open_agents => "Open the agent command center.",
         open_transcript => "Open the transcript overlay.",

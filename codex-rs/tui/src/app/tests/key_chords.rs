@@ -1173,12 +1173,15 @@ async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
     tui.set_owned_screen(/*owned*/ true)?;
     let parent = ThreadId::new();
     app.active_thread_id = Some(parent);
+    let child = ThreadId::new();
     app.side_threads
-        .insert(ThreadId::new(), super::SideThreadState::new(parent));
+        .insert(child, super::SideThreadState::new(parent));
     for (config, key) in [
         ("", 8),
         ("[chat]\ntoggle_voice = 'f8 v'", 8),
         ("[global]\nhide_pane = 'f12'", 12),
+        ("[global]\nfocus_main_composer = 'f12'", 12),
+        ("[global]\nfocus_sidebar_content = 'f12 s'", 12),
     ] {
         app.keymap =
             RuntimeKeymap::for_session(&toml::from_str(config)?, /*workspace*/ true).unwrap();
@@ -1219,5 +1222,25 @@ async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
         }
         assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
     }
+
+    // Offline, the same printable binding focuses the local composer but cannot switch threads.
+    let mut stopped = app_server.request_view();
+    app_server.shutdown().await?;
+    app.local_settings.tui.keymap = toml::from_str("[global]\nfocus_main_composer = '%'")?;
+    super::enable_side_retention(&mut app)?;
+    app.active_thread_id = Some(ThreadId::new());
+    app.reconnect.offline = true;
+    app.chat_widget.apply_external_edit("draft".into());
+    app.transcript_view.begin_search();
+    for key in [KeyCode::Char('%'), KeyCode::Char('!'), KeyCode::Right] {
+        press(&mut app, &mut tui, &mut stopped, key.into()).await?;
+    }
+    assert!(!app.transcript_view.has_active_interaction());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "draft!");
+    app.active_thread_id = Some(child);
+    for key in [KeyCode::Char('%'), KeyCode::Right] {
+        press(&mut app, &mut tui, &mut stopped, key.into()).await?;
+    }
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "draft!%");
     Ok(())
 }

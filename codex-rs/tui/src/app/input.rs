@@ -239,7 +239,11 @@ impl App {
 
     fn key_chord_contexts(&self, tui: &tui::Tui) -> crate::keymap::KeymapContextSet {
         let contexts = self.active_keymap_contexts();
-        if self.side_pane_shortcuts_available(tui) {
+        if !self.main_composer_shortcut_available(tui) {
+            return contexts;
+        }
+        let contexts = contexts.with_main_composer_focus();
+        if self.side_pane_switch_available() {
             contexts.with_side_pane()
         } else {
             contexts

@@ -270,6 +270,7 @@ mod server_version_notice;
 mod session_lifecycle;
 mod session_picker;
 mod side;
+mod side_focus;
 mod side_pane;
 mod startup;
 pub(crate) mod startup_bootstrap;
@@ -1011,24 +1012,12 @@ impl App {
             event
         };
 
-        self.cancel_primed_browsing_for_event(&event);
         if let TuiEvent::Key(key) = &event
-            && self.keymap.app.hide_pane.is_pressed(*key)
-            && self.side_pane_shortcuts_available(tui)
+            && self.handle_side_focus_key(tui, app_server, *key).await
         {
-            if key.kind == KeyEventKind::Press {
-                let activation = self
-                    .routed_key_activation
-                    .take()
-                    .unwrap_or_else(|| KeyBinding::from_event(*key));
-                if let Err(err) = self.hide_focused_side_pane(tui, app_server).await {
-                    self.chat_widget.add_error_message(err.to_string());
-                }
-                self.chat_widget
-                    .suppress_current_view_key_until_release(activation, Instant::now());
-            }
             return Ok(AppRunControl::Continue);
         }
+        self.cancel_primed_browsing_for_event(&event);
         let voice_toggle = |app: &Self, key: KeyEvent| {
             key.kind == KeyEventKind::Press
                 && app

@@ -137,6 +137,10 @@ pub struct TuiGlobalKeymap {
     pub leader: Option<KeybindingsSpec>,
     /// Change where a new conversation runs.
     pub change_host: Option<KeybindingsSpec>,
+    /// Focus the main conversation composer.
+    pub focus_main_composer: Option<KeybindingsSpec>,
+    /// Focus the side conversation, or hide it when already focused.
+    pub focus_sidebar_content: Option<KeybindingsSpec>,
     /// Hide the focused sidebar pane.
     pub hide_pane: Option<KeybindingsSpec>,
     /// Open the shared agent-session overview.

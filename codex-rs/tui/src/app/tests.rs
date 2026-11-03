@@ -3497,7 +3497,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             parent_thread_id,
             "background",
             "reply",
-            "still working\n\n",
+            &"still working\n\n".repeat(40),
         ),
     )
     .await?;
@@ -3543,7 +3543,8 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         KeyEventKind::Release,
     ]
     .map(|kind| KeyEvent::new_with_kind(KeyCode::Char('-'), KeyModifiers::NONE, kind));
-    assert!(app.side_pane_shortcuts_available(&tui));
+    let main = KeyEvent::from(KeyCode::Char('c'));
+    let side = KeyEvent::from(KeyCode::Char('s'));
     // Hide is consumed on the parent without closing the visible pane or typing its completion.
     keys!(leader, minus, repeat, release);
     assert!(!app.chat_widget.is_in_paste_burst());
@@ -3616,7 +3617,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
 
     // The pending permission change refuses a parent switch even though selection returns Ok.
     app.pending_server_profiles
-        .insert(side_thread_id, read_only);
+        .insert(side_thread_id, read_only.clone());
     keys!(leader, minus, repeat, release);
     assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), "child draft!");
@@ -3640,10 +3641,33 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             enable_side_retention(&mut app)?;
             KeyCode::F(12).into()
         };
+        // Park an interaction on the parent so both hide shortcuts must clear it on return.
+        keys!(prefix, main);
+        app.transcript_view.begin_search();
+        app.select_agent_thread(&mut tui, &mut app_server, side_thread_id)
+            .await?;
+        drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+        side_frame(&mut app, &mut tui, size)?;
         assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
-        keys!(prefix, minus);
+        if width == 100 {
+            app.pending_server_profiles
+                .insert(side_thread_id, read_only.clone());
+            keys!(prefix, main);
+            assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+            assert!(app.transcript_view.is_select_mode());
+            assert!(
+                app.side_companions[&parent_thread_id]
+                    .view
+                    .is_search_editing()
+            );
+            app.pending_server_profiles.remove(&side_thread_id);
+        }
+        keys!(prefix, if width == 100 { minus } else { side });
         assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
-        keys!(repeat, release);
+        assert!(!app.transcript_view.has_active_interaction());
+        if width == 100 {
+            keys!(repeat, release);
+        }
         assert!(!app.chat_widget.is_in_paste_burst());
         let hidden = side_frame(&mut app, &mut tui, size)?;
         assert!(
@@ -3689,6 +3713,45 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         frames.push(format!("{width} columns, reopened\n{reopened}"));
     }
     assert_app_snapshot!("hide_and_reopen_side_conversation", frames.join("\n\n"));
+
+    // The parent is browsing a saved prompt and the child has a selection.
+    let prefix = KeyCode::F(12).into();
+    keys!(toggle);
+    app.apply_backtrack_selection_internal(/*nth_user_message*/ 0);
+    let highlighted = side_frame(&mut app, &mut tui, size)?;
+    assert!(
+        highlighted.contains("Saved user message") && !highlighted.contains("Back to bottom"),
+        "{highlighted}"
+    );
+    keys!(toggle);
+    side_frame(&mut app, &mut tui, size)?;
+    assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
+
+    keys!(prefix, main);
+    assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
+    let restored = side_frame(&mut app, &mut tui, size)?;
+    assert!(
+        restored.contains("Saved user message")
+            && restored.contains("Back to bottom")
+            && restored.contains('│'),
+        "{restored}"
+    );
+    assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
+    app.pending_server_profiles
+        .insert(parent_thread_id, read_only);
+    keys!(prefix, side);
+    assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
+    assert!(app.transcript_view.is_select_mode());
+    app.pending_server_profiles.remove(&parent_thread_id);
+    keys!(prefix, side);
+    assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+    assert!(app.transcript_view.is_select_mode());
+    assert!(
+        !app.side_companions[&parent_thread_id]
+            .view
+            .has_active_interaction()
+    );
+    app.transcript_view.end_select_mode();
 
     read_side_history(&mut app, &mut tui, "child")?;
     // The upload finishes before the app event loop can park the now-inactive child.

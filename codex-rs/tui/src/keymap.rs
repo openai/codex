@@ -104,6 +104,8 @@ pub(crate) struct RuntimeKeymap {
 pub(crate) struct AppKeymap {
     /// Change where a new conversation runs.
     pub(crate) change_host: Vec<KeyBinding>,
+    pub(crate) focus_main_composer: Vec<KeyBinding>,
+    pub(crate) focus_sidebar_content: Vec<KeyBinding>,
     pub(crate) hide_pane: Vec<KeyBinding>,
     /// Open the agent command center.
     pub(crate) open_agents: Vec<KeyBinding>,
@@ -738,6 +740,16 @@ impl RuntimeKeymap {
                 keymap.global.change_host.as_ref(),
                 &defaults.app.change_host,
                 "tui.keymap.global.change_host",
+            )?,
+            focus_main_composer: resolve_bindings(
+                keymap.global.focus_main_composer.as_ref(),
+                &[],
+                "tui.keymap.global.focus_main_composer",
+            )?,
+            focus_sidebar_content: resolve_bindings(
+                keymap.global.focus_sidebar_content.as_ref(),
+                &[],
+                "tui.keymap.global.focus_sidebar_content",
             )?,
             hide_pane: resolve_bindings(
                 keymap.global.hide_pane.as_ref(),
@@ -1719,6 +1731,8 @@ impl RuntimeKeymap {
         Self {
             app: AppKeymap {
                 change_host: Vec::new(),
+                focus_main_composer: Vec::new(),
+                focus_sidebar_content: Vec::new(),
                 hide_pane: Vec::new(),
                 open_agents: default_bindings![],
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
@@ -2071,6 +2085,11 @@ impl RuntimeKeymap {
         for (action, bindings) in [
             ("global.change_host", &self.app.change_host),
             ("global.open_agents", &self.app.open_agents),
+            ("global.focus_main_composer", &self.app.focus_main_composer),
+            (
+                "global.focus_sidebar_content",
+                &self.app.focus_sidebar_content,
+            ),
             ("global.hide_pane", &self.app.hide_pane),
             ("chat.open_presets", &self.chat.open_presets),
             ("chat.toggle_voice", &self.chat.toggle_voice),
@@ -2101,6 +2120,14 @@ impl RuntimeKeymap {
 
         let main_bindings = [
             ("change_host", self.app.change_host.as_slice()),
+            (
+                "focus_main_composer",
+                self.app.focus_main_composer.as_slice(),
+            ),
+            (
+                "focus_sidebar_content",
+                self.app.focus_sidebar_content.as_slice(),
+            ),
             ("hide_pane", self.app.hide_pane.as_slice()),
             ("open_agents", self.app.open_agents.as_slice()),
             ("open_transcript", self.app.open_transcript.as_slice()),
@@ -2270,6 +2297,14 @@ impl RuntimeKeymap {
         validate_no_shadow_with_allowed_overlaps(
             "main",
             [
+                (
+                    "focus_main_composer",
+                    self.app.focus_main_composer.as_slice(),
+                ),
+                (
+                    "focus_sidebar_content",
+                    self.app.focus_sidebar_content.as_slice(),
+                ),
                 ("hide_pane", self.app.hide_pane.as_slice()),
                 ("open_agents", self.app.open_agents.as_slice()),
                 ("open_transcript", self.app.open_transcript.as_slice()),
@@ -2396,6 +2431,14 @@ impl RuntimeKeymap {
         validate_unique(
             "transcript",
             [
+                (
+                    "global.focus_main_composer",
+                    self.app.focus_main_composer.as_slice(),
+                ),
+                (
+                    "global.focus_sidebar_content",
+                    self.app.focus_sidebar_content.as_slice(),
+                ),
                 ("global.hide_pane", self.app.hide_pane.as_slice()),
                 (
                     "global.select_transcript",
@@ -2429,6 +2472,14 @@ impl RuntimeKeymap {
         validate_unique(
             "activity",
             context_bindings(KeymapContext::List).chain([
+                (
+                    "global.focus_main_composer",
+                    self.app.focus_main_composer.as_slice(),
+                ),
+                (
+                    "global.focus_sidebar_content",
+                    self.app.focus_sidebar_content.as_slice(),
+                ),
                 ("global.hide_pane", self.app.hide_pane.as_slice()),
                 ("global.focus_activity", self.app.focus_activity.as_slice()),
                 (
@@ -3891,21 +3942,26 @@ mod tests {
 
     #[test]
     fn toggle_side_conversation_can_be_remapped_and_rejects_conflicts() {
-        for (section, action) in [("pager", "page_up"), ("list", "move_down")] {
+        for (pane, section, action) in [
+            ("hide_pane", "pager", "page_up"),
+            ("hide_pane", "list", "move_down"),
+            ("focus_main_composer", "pager", "page_up"),
+            ("focus_sidebar_content", "list", "move_down"),
+        ] {
             let config: TuiKeymap = toml::from_str(&format!(
-                "[global]\nhide_pane = 'f8'\n[{section}]\n{action} = 'f8'"
+                "[global]\n{pane} = 'f8'\n[{section}]\n{action} = 'f8'"
             ))
             .unwrap();
             let error = RuntimeKeymap::for_session(&config, /*workspace*/ true).unwrap_err();
             assert!(
-                error.contains("global.hide_pane") && error.contains(action),
+                error.contains(&format!("global.{pane}")) && error.contains(action),
                 "{error}"
             );
         }
         #[cfg(unix)]
-        {
-            let mut config = TuiKeymap::default();
-            config.global.hide_pane = Some(one("ctrl-z"));
+        for action in ["hide_pane", "focus_main_composer", "focus_sidebar_content"] {
+            let config: TuiKeymap =
+                toml::from_str(&format!("[global]\n{action} = 'ctrl-z'")).unwrap();
             assert!(
                 RuntimeKeymap::for_session(&config, /*workspace*/ true)
                     .unwrap_err()
@@ -4105,12 +4161,15 @@ mod tests {
         let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
         assert!(runtime.composer.toggle_shortcuts.is_empty());
         keymap.global.hide_pane = Some(KeybindingsSpec::Many(vec![]));
+        keymap.global.focus_sidebar_content = Some(KeybindingsSpec::Many(vec![]));
         let runtime = RuntimeKeymap::for_session(&keymap, /*workspace*/ true).unwrap();
-        assert!(
-            runtime
-                .primary_hint(KeymapContext::Global, "hide_pane")
-                .is_none()
-        );
+        for action in ["hide_pane", "focus_sidebar_content"] {
+            assert!(
+                runtime
+                    .primary_hint(KeymapContext::Global, action)
+                    .is_none()
+            );
+        }
     }
 
     #[test]
