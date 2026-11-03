@@ -110,7 +110,7 @@ async fn guardian_denial_reconsideration(
             ev_assistant_message("first-assessment", &first_assessment.to_string()),
             // Cross the pre-turn compaction threshold. Reconsideration must preserve
             // the original evidence instead of issuing a compaction request.
-            ev_completed_with_tokens("first-review", 100_001),
+            ev_completed_with_tokens("first-review", /*total_tokens*/ 100_001),
         ]),
     ]
     .into_iter()

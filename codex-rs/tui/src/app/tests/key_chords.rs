@@ -1170,7 +1170,7 @@ async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
     let mut app_server = start_config_write_test_app_server(&app).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     super::enable_side_retention(&mut app)?;
-    tui.set_owned_screen(true)?;
+    tui.set_owned_screen(/*owned*/ true)?;
     let parent = ThreadId::new();
     app.active_thread_id = Some(parent);
     app.side_threads
