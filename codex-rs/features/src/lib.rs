@@ -439,6 +439,8 @@ pub enum Feature {
     GuardianTrustOrchestratorConnectors,
     /// Give Guardian access to the root conversation's message history tools.
     GuardianConversationHistoryTools,
+    /// Reconsider a synchronous Guardian denial once before publishing it.
+    GuardianDenialReconsideration,
     /// Enable Guardian V2 automatic approval reviews.
     GuardianV2,
     /// Run Decisions alongside Guardian V2 for measurement without changing approvals.
@@ -2140,6 +2142,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianConversationHistoryTools,
         key: "guardian_conversation_history_tools",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianDenialReconsideration,
+        key: "guardian_denial_reconsideration",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

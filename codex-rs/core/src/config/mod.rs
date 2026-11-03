@@ -737,6 +737,9 @@ pub struct Config {
     /// Blank config values are treated as unset, like other Guardian policy overrides.
     pub guardian_conversation_history_prompt: Option<String>,
 
+    /// Optional bounded developer message for the gated denial reconsideration pass.
+    pub guardian_denial_reconsideration_prompt: Option<String>,
+
     /// Optional per-response history-tool budget. Guardian defaults to 4,000 tokens and
     /// preserves stricter parent tool limits.
     pub guardian_conversation_history_max_output_tokens: Option<NonZeroUsize>,
@@ -4302,6 +4305,20 @@ impl Config {
             .auto_review
             .as_ref()
             .and_then(|auto_review| auto_review.conversation_history_max_output_tokens);
+        let guardian_denial_reconsideration_prompt = cfg.auto_review.as_ref().and_then(|auto_review| {
+            normalize_guardian_policy_config(
+                auto_review.experimental_denial_reconsideration_prompt.as_deref(),
+            )
+        });
+        if guardian_denial_reconsideration_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.len() > crate::context::GuardianDenialReconsideration::MAX_BYTES)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "auto_review.experimental_denial_reconsideration_prompt exceeds 1,000 UTF-8 bytes",
+            ));
+        }
         let personality = personality.or(cfg.personality);
 
         let experimental_compact_prompt_path = cfg.experimental_compact_prompt_file.as_ref();
@@ -4668,6 +4685,7 @@ impl Config {
             guardian_policy_template,
             guardian_transcript_mode,
             guardian_conversation_history_prompt,
+            guardian_denial_reconsideration_prompt,
             guardian_conversation_history_max_output_tokens,
             guardian_review_timeout: cfg
                 .auto_review

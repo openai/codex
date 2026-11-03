@@ -175,6 +175,9 @@ mod guardian_direct_review;
 #[path = "scenarios_guardian_extra_policy.rs"]
 mod guardian_extra_policy;
 
+#[path = "scenarios_guardian_reconsideration.rs"]
+mod guardian_reconsideration;
+
 #[path = "scenarios_guardian_orchestrator_connector.rs"]
 mod guardian_orchestrator_connector;
 
