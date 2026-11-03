@@ -45,7 +45,7 @@ Scenario: The config flag starts an in-memory MCP board shared by a parent and c
 08:tool_search_call
 09:tool_search_output
 -- request 3 (request) --
-10:function_call/mcp__codex_message_board.post:{"new_channel_name":"design","text":"Worker's durable decision."}
+10:function_call/mcp__codex_message_board.post:{"agents_to_notify":["/root"],"new_channel_name":"design","text":"Worker's durable decision."}
 11:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"author":"/root/worker","channel_name":"design","created_at":"<TIMESTAMP>","message_id":"<UUID 1>","thread_id":"<UUID 1>"}
@@ -95,8 +95,9 @@ Scenario: The config flag starts an in-memory MCP board shared by a parent and c
 11:tool_search_output
 12:agent_message
 13:agent_message
+14:agent_message
 -- request 6 (request) --
-14:function_call/mcp__codex_message_board.search_posts:{"channel_name":"design"}
-15:function_call_output:Wall time: <DURATION> seconds
+15:function_call/mcp__codex_message_board.search_posts:{"channel_name":"design"}
+16:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"has_more":false,"n_returned":1,"next_cursor":null,"results":[{"author":"/root/worker","channel_name":"...ecision.","thread_id":"<UUID 1>","truncated":false}]} [hash=0322071c1fb9baa5]

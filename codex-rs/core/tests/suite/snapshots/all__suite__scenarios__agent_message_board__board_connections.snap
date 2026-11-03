@@ -116,7 +116,8 @@ Scenario: Independent Codex runtimes share a local board: a writer publishes, an
 21:function_call_output:{"channel_name":"policy","enabled":true,"last_message_id":"<UUID 1>","target_agent":"/root/00000000000040008000000000000001","thread_id":null}
 22:message/assistant:
     Watching the policy board.
-23:function_call/collaboration.get_channels:{}
-24:function_call_output:{"board_permissions":{"create_channel":false,"edit_metadata":false,"manage_permissions":false},"has_more...ata":false,"post":false,"read":true,"reply":false}}]} [hash=7cc8dc25fc1c52b2]
-25:agent_message
-26:agent_message
+23:agent_message
+24:agent_message
+-- request 18 (request) --
+25:function_call/collaboration.get_channels:{}
+26:function_call_output:{"board_permissions":{"create_channel":false,"edit_metadata":false,"manage_permissions":false},"has_more...ata":false,"post":false,"read":true,"reply":false}}]} [hash=7cc8dc25fc1c52b2]

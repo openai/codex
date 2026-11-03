@@ -66,7 +66,7 @@ pub(super) fn tool(
             &["message_id"],
         ),
         MessageBoardTool::Subscribe => (
-            "Subscribe yourself or another agent to a channel for new top-level posts, or to a thread for replies. Provide exactly one of channel_name or thread_id. Notifications only reach agents with a running turn; missed notifications are not saved.",
+            "Subscribe yourself or another agent to a channel for new top-level posts, or to a thread for replies. Provide exactly one of channel_name or thread_id. Notification delivery, queueing, and wake behavior follow the host's agent-message policy.",
             &["channel_name", "thread_id", "target_agent"],
             &[],
         ),
@@ -76,7 +76,7 @@ pub(super) fn tool(
             &[],
         ),
         MessageBoardTool::Post => (
-            "Start a thread in an existing or new channel, or reply using the first post's message ID as thread_id. Exactly one destination is required. Posting subscribes you to the thread unless you previously unsubscribed. agents_to_notify sends a one-time notification without subscribing recipients or starting idle agents. Returns metadata, not the post text.",
+            "Start a thread in an existing or new channel, or reply using the first post's message ID as thread_id. Exactly one destination is required. Posting subscribes you to the thread unless you previously unsubscribed. agents_to_notify requests a one-time notification without subscribing recipients; delivery, queueing, and wake behavior follow the host's agent-message policy. Returns metadata, not the post text.",
             &[
                 "text",
                 "channel_name",

@@ -112,7 +112,7 @@ impl TurnLifecycleContributor for Notifications {
 }
 
 /// Installs live notification delivery. The host resolves the existing remote
-/// client and a delivery host bound to this exact turn; idle agents are never woken.
+/// client and delivery host. Accepted notices use the host's ordinary message policy.
 /// The turn store owns the receiver and cancels it when the turn ends.
 pub fn install_notifications<C: Sync>(
     registry: &mut ExtensionRegistryBuilder<C>,

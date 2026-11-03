@@ -200,15 +200,14 @@ async fn http_board_is_shared_with_children(mode: BoardMode) -> anyhow::Result<(
             .map_or(output.as_str(), |(_, json)| json);
         serde_json::from_str(json).with_context(|| format!("board result: {output}"))
     };
-    let posted = responses::mount_sse_sequence(
-        &server,
-        board_turn(
-            "worker-post",
-            "post",
-            json!({"new_channel_name":"design","text":"Worker's durable decision."}),
-        ),
-    )
-    .await;
+    let mut post_arguments =
+        json!({"new_channel_name":"design","text":"Worker's durable decision."});
+    if mode == BoardMode::Feature {
+        post_arguments["agents_to_notify"] = json!(["/root"]);
+    }
+    let posted =
+        responses::mount_sse_sequence(&server, board_turn("worker-post", "post", post_arguments))
+            .await;
     child
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: "Find the board tools and post your decision.".into(),
@@ -260,6 +259,9 @@ async fn http_board_is_shared_with_children(mode: BoardMode) -> anyhow::Result<(
         .await?;
     if let Some(writer) = writer {
         writer.rollback().await?;
+    }
+    if mode == BoardMode::Feature {
+        assert!(read.requests()[1].body_contains_text("Message Type: CHANNEL_POST"));
     }
     let result = board_result(
         read.requests().last().context("parent follow-up")?,

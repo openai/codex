@@ -171,15 +171,15 @@ impl LocalAgentRuntime {
     /// Pins and touches the registered runtime without waiting for unrelated eviction.
     pub(crate) async fn pin_v2_residency(
         &self,
-        state: &ThreadManagerState,
-        thread: &Arc<CodexThread>,
+        thread: &CodexThread,
     ) -> CodexResult<Option<tokio::sync::OwnedRwLockReadGuard<()>>> {
         if !is_resident_candidate(thread) {
             return Ok(None);
         }
         let guard = Arc::clone(&thread.residency_gate).read_owned().await;
         let thread_id = thread.session.thread_id;
-        if !Arc::ptr_eq(thread, &state.get_thread(thread_id).await?) {
+        let registered = self.upgrade()?.get_thread(thread_id).await?;
+        if !std::ptr::eq(thread, registered.as_ref()) {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
         self.residency.touch(thread_id);

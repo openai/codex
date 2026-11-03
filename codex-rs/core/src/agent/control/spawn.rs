@@ -264,7 +264,7 @@ impl LocalAgentControl {
         if owner_thread_id.is_none()
             && let Ok(thread) = state.get_thread(thread_id).await
         {
-            return self.runtime.pin_v2_residency(&state, &thread).await;
+            return self.runtime.pin_v2_residency(&thread).await;
         }
         if self
             .runtime
@@ -328,7 +328,7 @@ impl LocalAgentControl {
             }
             if let Ok(thread) = state.get_thread(thread_id).await {
                 self.validate_loaded_v2_child(&thread, parent_thread_id)?;
-                return self.runtime.pin_v2_residency(&state, &thread).await;
+                return self.runtime.pin_v2_residency(&thread).await;
             }
         }
         let parent = if let Some(parent) = parent {
@@ -589,9 +589,7 @@ impl LocalAgentControl {
                 // Finish registration even if the sender is cancelled while acquiring its pin.
                 tokio::spawn(async move {
                     let _membership = membership;
-                    let residency_pin = runtime
-                        .pin_v2_residency(&state, &reloaded_thread.thread)
-                        .await?;
+                    let residency_pin = runtime.pin_v2_residency(&reloaded_thread.thread).await?;
                     runtime.registry.clear_evicted_environments(thread_id);
                     residency_slot.commit(reloaded_thread.thread_id);
                     // Register before listeners can forward events from the resumed thread.
@@ -616,7 +614,7 @@ impl LocalAgentControl {
                     }
                     self.runtime.registry.clear_evicted_environments(thread_id);
                     drop(residency_slot);
-                    return self.runtime.pin_v2_residency(&state, &thread).await;
+                    return self.runtime.pin_v2_residency(&thread).await;
                 }
                 Err(err)
             }

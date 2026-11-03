@@ -2,7 +2,7 @@
 //!
 //! The extension owns backend construction, storage and tool registration. This adapter
 //! selects configuration and supplies host capabilities. It never starts or restores
-//! recipients and never queues a notification for an idle agent.
+//! recipients during lookup. Notifications use ordinary agent-message scheduling.
 
 use crate::CodexThread;
 use crate::ThreadManager;
@@ -28,6 +28,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::Op;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -44,7 +45,7 @@ pub fn install_agent_message_board(
         Some((
             board,
             Arc::new(LocalBoardHost {
-                expected_turn_id: Some(input.turn_id.into()),
+                remote_notifications: true,
                 ..host.as_ref().clone()
             }),
         ))
@@ -91,7 +92,7 @@ pub fn install_agent_message_board(
                     manager: manager.clone(),
                     tree,
                     caller,
-                    expected_turn_id: None,
+                    remote_notifications: false,
                     connection,
                 },
             ))
@@ -104,7 +105,7 @@ struct LocalBoardHost {
     manager: Weak<ThreadManager>,
     tree: SessionId,
     caller: ThreadId,
-    expected_turn_id: Option<String>,
+    remote_notifications: bool,
     connection: Option<Arc<LocalBoardConnection>>,
 }
 
@@ -237,7 +238,7 @@ impl MessageBoardHost for LocalBoardHost {
             );
             // Remote metadata is untrusted. Skip an oversized notice without closing
             // the receiver; the post remains available through the board tools.
-            if self.expected_turn_id.is_some()
+            if self.remote_notifications
                 && communication.content.len()
                     + communication.author.as_str().len()
                     + communication.recipient.as_str().len()
@@ -247,22 +248,13 @@ impl MessageBoardHost for LocalBoardHost {
                     "remote board notice exceeds the context budget".into(),
                 ));
             }
-            Ok(
-                if recipient
-                    .session
-                    .input_queue
-                    .deliver_mailbox_communication_to_current_turn(
-                        &recipient.session.active_turn,
-                        communication,
-                        self.expected_turn_id.as_deref(),
-                    )
-                    .await
-                {
-                    NotificationDelivery::Accepted
-                } else {
-                    NotificationDelivery::SkippedInactive
-                },
-            )
+            recipient
+                .submit(Op::InterAgentCommunication {
+                    communication,
+                    start_options: Default::default(),
+                })
+                .await?;
+            Ok(NotificationDelivery::Accepted)
         })
     }
 }

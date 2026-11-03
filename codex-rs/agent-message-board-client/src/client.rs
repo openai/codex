@@ -363,8 +363,8 @@ impl AgentMessageBoard for RemoteAgentMessageBoard {
     );
 }
 
-/// One active turn's live receiver. The host must also check the turn atomically
-/// when injecting a returned notification, since the turn can end after `next`.
+/// One active turn's live receiver. Frames are checked against this receiver's
+/// identity before accepted notices enter the host's ordinary message delivery.
 pub struct BoardNotifications {
     caller: ThreadId,
     turn_id: String,

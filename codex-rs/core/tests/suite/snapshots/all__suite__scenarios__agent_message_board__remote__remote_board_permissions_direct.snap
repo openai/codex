@@ -6,7 +6,7 @@ Scenario: Permission discovery preserves legacy output, exposes reply-only acces
 
 ## Window 1
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=e49a28343a9fe4ed):
+00:additional_tools/developer (3; hash=788c4a5014dcfe4f):
         - namespace/functions; hash=c8b8fa91706a7620
           - function/exec_command
           - function/write_stdin
@@ -17,7 +17,7 @@ Scenario: Permission discovery preserves legacy output, exposes reply-only acces
         - namespace/clock: Tools for reading and waiting on time.; hash=a80435c7a3a3943f
           - function/curr_time
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=ba5664aaab81db64
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=5c5c29d91fa33d4a
           - function/create_channel
           - function/followup_task
           - function/get_channels

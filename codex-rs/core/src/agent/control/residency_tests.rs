@@ -7,11 +7,15 @@ use crate::config::test_config;
 use crate::thread_manager::ThreadManagerState;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -58,6 +62,29 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
     first_slot.commit(first.thread_id);
     mark_thread_completed(first.thread.as_ref()).await;
 
+    // Public message submission must honor the same eviction gate as MAv2 sends.
+    let eviction_gate = Arc::clone(&first.thread.residency_gate).write_owned().await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker_1").unwrap(),
+        Vec::new(),
+        "queued notice".into(),
+        /*trigger_turn*/ false,
+    );
+    let delivery = first.thread.submit(Op::InterAgentCommunication {
+        communication: communication.clone(),
+        start_options: Default::default(),
+    });
+    tokio::pin!(delivery);
+    assert!(futures::poll!(delivery.as_mut()).is_pending());
+    drop(eviction_gate);
+    delivery.await.expect("submit after eviction gate releases");
+    first
+        .thread
+        .update_thread_settings(ThreadSettingsOverrides::default())
+        .await
+        .expect("dispatch queued notice before eviction");
+
     let second_slot = control
         .reserve_v2_residency_slot(
             &state,
@@ -74,6 +101,14 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         },
         Ok(_) => panic!("expected evicted thread to be missing"),
     }
+    let retained = first
+        .thread
+        .session
+        .services
+        .local_agent_runtime
+        .mailboxes
+        .take(first.thread_id);
+    assert_eq!(retained, vec![communication.into()]);
     let second = spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
 
