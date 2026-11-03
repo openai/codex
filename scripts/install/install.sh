@@ -743,7 +743,7 @@ release_install_lock() {
   if [ "$lock_kind" = "mkdir" ]; then
     rm -rf "$LOCK_DIR" 2>/dev/null || true
   elif [ "$lock_kind" = "flock" ] || [ "$lock_kind" = "lockf" ]; then
-    exec 9>&- 2>/dev/null || true
+    exec 9>&-
   fi
   lock_kind=""
 }
