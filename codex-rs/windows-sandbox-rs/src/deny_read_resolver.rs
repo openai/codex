@@ -6,20 +6,10 @@ use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::permissions::ResolvedFileSystemPermissions;
 use codex_protocol::permissions::windows_deny_read_glob_scan;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::collections::HashMap;
+use ignore::overrides::OverrideBuilder;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-
-#[path = "deny_read_walker.rs"]
-mod walker;
-
-use walker::DirectoryScanMode;
-use walker::collect_existing_glob_directory_matches;
-
-/// External scanner used by deny-glob expansion and its dependency inventory.
-pub const GLOB_SCAN_PROGRAM: &str = "rg";
 
 #[derive(Debug, Eq, PartialEq)]
 struct GlobScanPlan {
@@ -33,8 +23,9 @@ struct GlobScanPlan {
 /// Windows ACLs do not understand Codex filesystem glob patterns directly. Exact
 /// unreadable roots can be passed through as-is, including paths that do not
 /// exist yet. Glob entries are snapshot-expanded to the files/directories that
-/// already exist under their literal scan root; future exact paths are handled
-/// later by materializing them before the deny ACE is applied.
+/// already exist under their literal scan root. Directory links below that root
+/// are not traversed; explicitly linked scan roots are followed. Future exact
+/// paths are materialized later before the deny ACE is applied.
 pub fn resolve_windows_deny_read_paths(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &AbsolutePathBuf,
@@ -44,7 +35,6 @@ pub fn resolve_windows_deny_read_paths(
         &file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd),
         file_system_sandbox_policy.glob_scan_max_depth,
         cwd,
-        |_| {},
     )
 }
 
@@ -58,26 +48,6 @@ pub fn expand_windows_deny_read_paths(
         &permissions.unreadable_globs,
         permissions.glob_scan_max_depth,
         cwd,
-        |_| {},
-    )
-}
-
-/// Resolve deny paths with the launcher's scanner in an explicit command environment.
-/// The supplied environment replaces inheritance, including when it is empty.
-pub fn resolve_windows_deny_read_paths_in_environment(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
-    env: &HashMap<String, String>,
-    command_cwd: &Path,
-) -> Result<Vec<AbsolutePathBuf>, String> {
-    expand_deny_read_paths(
-        &file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd),
-        &file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd),
-        file_system_sandbox_policy.glob_scan_max_depth,
-        cwd,
-        |command| {
-            command.env_clear().envs(env).current_dir(command_cwd);
-        },
     )
 }
 
@@ -86,7 +56,6 @@ fn expand_deny_read_paths(
     unreadable_globs: &[String],
     glob_scan_max_depth: Option<usize>,
     cwd: &AbsolutePathBuf,
-    configure: impl Fn(&mut Command),
 ) -> Result<Vec<AbsolutePathBuf>, String> {
     let mut paths = Vec::new();
     let mut seen = HashSet::new();
@@ -123,103 +92,56 @@ fn expand_deny_read_paths(
             continue;
         }
 
-        let directory_scan_mode = if let Some(file_paths) = ripgrep_files(&scan_plan, &configure)? {
-            for path in file_paths {
-                if matcher.is_local_path_read_denied(&path) {
-                    push_absolute_path(&mut paths, &mut seen, path)?;
-                }
-            }
-            DirectoryScanMode::DirectoriesOnly
-        } else {
-            // Rebuild the complete accessible snapshot with the policy matcher
-            // when ripgrep is missing or reports an incomplete traversal. Never
-            // apply ACLs from a failed scan's partial stdout.
-            DirectoryScanMode::IncludeAllFiles
-        };
+        // Snapshot matching entries without following directory links below the scan root.
+        let mut filter = OverrideBuilder::new(&scan_plan.root);
+        filter.allow_unclosed_class(/*yes*/ true);
+        filter
+            .case_insensitive(/*yes*/ true)
+            .map_err(|err| err.to_string())?;
+        for glob in &scan_plan.globs {
+            filter.add(glob).map_err(|err| err.to_string())?;
+        }
+        let filter = filter.build().map_err(|err| err.to_string())?;
 
-        collect_existing_glob_directory_matches(
-            &scan_plan.root,
-            &matcher,
-            &mut paths,
-            &mut seen,
-            scan_plan.max_depth,
-            directory_scan_mode,
-        )?;
+        for entry in ignore::WalkBuilder::new(&scan_plan.root)
+            .standard_filters(/*yes*/ false)
+            .follow_links(/*yes*/ false)
+            .max_depth(scan_plan.max_depth)
+            .overrides(filter)
+            .build()
+        {
+            let entry = entry.and_then(|entry| {
+                if entry.path_is_symlink() && matcher.is_local_path_read_denied(entry.path()) {
+                    std::fs::metadata(entry.path()).map_err(ignore::Error::Io)?;
+                }
+                Ok(entry)
+            });
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err)
+                    if err.io_error().is_some_and(|err| {
+                        matches!(
+                            err.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                        )
+                    }) =>
+                {
+                    continue;
+                }
+                Err(err) => {
+                    return Err(format!(
+                        "failed to enumerate unreadable glob paths under {}: {err}",
+                        scan_plan.root.display()
+                    ));
+                }
+            };
+            if matcher.is_local_path_read_denied(entry.path()) {
+                push_absolute_path(&mut paths, &mut seen, entry.into_path())?;
+            }
+        }
     }
 
     Ok(paths)
-}
-
-fn ripgrep_files(
-    scan_plan: &GlobScanPlan,
-    configure: &impl Fn(&mut Command),
-) -> Result<Option<Vec<PathBuf>>, String> {
-    let mut command = codex_utils_process::background_command(GLOB_SCAN_PROGRAM);
-    configure(&mut command);
-    command
-        .arg("--files")
-        .arg("--hidden")
-        .arg("--no-ignore")
-        .arg("--glob-case-insensitive")
-        .arg("--null");
-    if let Some(max_depth) = scan_plan.max_depth {
-        command.arg("--max-depth").arg(max_depth.to_string());
-    }
-    for glob in &scan_plan.globs {
-        command.arg("--glob").arg(glob);
-    }
-    command.arg("--").arg(&scan_plan.root);
-
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(format!(
-                "failed to run bundled ripgrep for unreadable glob scan under {}: {err}",
-                scan_plan.root.display()
-            ));
-        }
-    };
-    if !output.status.success() {
-        if output.status.code() == Some(1) && output.stderr.is_empty() {
-            return Ok(Some(Vec::new()));
-        }
-        if output.status.code() == Some(2) {
-            // Ripgrep uses exit 2 for traversal errors, including protected
-            // Windows directories. Its output may be incomplete. The caller
-            // must enumerate again using the matcher-backed walker; policy
-            // syntax has already been validated by
-            // ReadDenyMatcher::try_new_for_local_paths.
-            return Ok(None);
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "ripgrep unreadable glob scan failed under {}: {stderr}",
-            scan_plan.root.display()
-        ));
-    }
-
-    output
-        .stdout
-        .split(|byte| *byte == b'\0')
-        .filter(|path| !path.is_empty())
-        .map(|path| {
-            let path = std::str::from_utf8(path).map_err(|err| {
-                format!(
-                    "ripgrep returned a non-UTF-8 path under {}: {err}",
-                    scan_plan.root.display()
-                )
-            })?;
-            let path = PathBuf::from(path);
-            Ok(if path.is_absolute() {
-                path
-            } else {
-                scan_plan.root.join(path)
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
 }
 
 fn push_absolute_path(
@@ -271,45 +193,16 @@ fn glob_scan_plan(pattern: &str, configured_max_depth: Option<usize>) -> GlobSca
     GlobScanPlan {
         root: PathBuf::from(scan.root),
         max_depth: scan.max_depth,
-        globs: vec![ripgrep_glob(scan.pattern_suffix)],
+        globs: vec![file_filter_glob(scan.pattern_suffix)],
     }
 }
 
-fn ripgrep_glob(pattern: &str) -> String {
+fn file_filter_glob(pattern: &str) -> String {
     let pattern = pattern.replace('\\', "/");
-    let mut escaped = String::with_capacity(pattern.len());
-    let mut chars = pattern.chars();
-
-    while let Some(ch) = chars.next() {
-        if ch != '[' {
-            escaped.push(ch);
-            continue;
-        }
-
-        let mut class = String::new();
-        let mut closed = false;
-        for class_ch in chars.by_ref() {
-            if class_ch == ']' {
-                closed = true;
-                break;
-            }
-            class.push(class_ch);
-        }
-
-        if closed {
-            escaped.push('[');
-            escaped.push_str(&class);
-            escaped.push(']');
-        } else {
-            escaped.push_str(r"\[");
-            escaped.push_str(&class);
-        }
-    }
-
-    if escaped.starts_with("**/") {
-        escaped
+    if pattern.starts_with("**/") {
+        pattern
     } else {
-        format!("**/{escaped}")
+        format!("**/{pattern}")
     }
 }
 
@@ -320,10 +213,10 @@ mod access_tests;
 #[cfg(test)]
 mod tests {
     use super::GlobScanPlan;
+    use super::file_filter_glob;
     use super::glob_scan_plan;
     use super::glob_scan_plans;
     use super::resolve_windows_deny_read_paths;
-    use super::ripgrep_glob;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -568,18 +461,6 @@ mod tests {
             tmp.path().display()
         ))]);
 
-        if let Some(paths) = super::ripgrep_files(
-            &GlobScanPlan {
-                root: tmp.path().to_path_buf(),
-                max_depth: None,
-                globs: vec!["**/*.env".to_string()],
-            },
-            &|_| {},
-        )
-        .expect("case-insensitive ripgrep scan")
-        {
-            assert!(paths.contains(&uppercase_env));
-        }
         let actual: HashSet<PathBuf> = resolve_windows_deny_read_paths(&policy, &cwd)
             .expect("resolve")
             .into_iter()
@@ -684,10 +565,27 @@ mod tests {
     }
 
     #[test]
-    fn ripgrep_globs_normalize_windows_separators_and_unclosed_classes() {
-        assert_eq!(ripgrep_glob(r"**\*.env"), "**/*.env");
-        assert_eq!(ripgrep_glob("nested/*.env"), "**/nested/*.env");
-        assert_eq!(ripgrep_glob("[*.env"), r"**/\[*.env");
+    fn file_filter_globs_normalize_windows_separators_and_unclosed_classes() {
+        assert_eq!(file_filter_glob(r"**\*.env"), "**/*.env");
+        assert_eq!(file_filter_glob("nested/*.env"), "**/nested/*.env");
+        assert_eq!(file_filter_glob("[*.env"), "**/[*.env");
+
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = AbsolutePathBuf::from_absolute_path(tmp.path()).expect("cwd");
+        for (name, pattern) in [
+            ("[]secret.env", "**/[]*.env"),
+            ("[[secret.env", "**/[[*.env"),
+        ] {
+            let secret = cwd.join(name);
+            std::fs::write(&secret, "secret").expect("write literal bracket name");
+            let policy = FileSystemSandboxPolicy::restricted(vec![unreadable_glob_entry(
+                pattern.to_owned(),
+            )]);
+            assert_eq!(
+                resolve_windows_deny_read_paths(&policy, &cwd).expect("valid literal bracket glob"),
+                vec![secret],
+            );
+        }
     }
 
     #[test]

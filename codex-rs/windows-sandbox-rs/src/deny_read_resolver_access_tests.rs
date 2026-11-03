@@ -1,11 +1,8 @@
 use super::resolve_windows_deny_read_paths;
-use super::walker::DirectoryScanMode;
-use super::walker::collect_existing_glob_directory_matches;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::ReadDenyMatcher;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
@@ -98,7 +95,7 @@ fn protected_directory_does_not_discard_accessible_deny_matches() {
     #[cfg(windows)]
     {
         // CI enables backup privileges, which let directory enumeration bypass
-        // this fixture's ACL. Restrict a separate process, including its rg child,
+        // this fixture's ACL. Restrict a separate process,
         // rather than changing the shared test process's privileges. The parent
         // owns ACL setup and cleanup, which the restricted child cannot perform.
         let codex_home = TempDir::new().expect("restricted codex home");
@@ -179,7 +176,7 @@ fn assert_accessible_deny_matches(root: &Path) {
 }
 
 #[test]
-fn native_walk_preserves_canonical_matches_through_directory_links_and_cycles() {
+fn glob_scans_skip_child_directory_links_but_follow_linked_roots() {
     let temp = TempDir::new().expect("tempdir");
     let cwd = AbsolutePathBuf::from_absolute_path(temp.path()).expect("cwd");
     let walk = temp.path().join("walk");
@@ -190,7 +187,9 @@ fn native_walk_preserves_canonical_matches_through_directory_links_and_cycles() 
     std::fs::write(target.join("public.txt"), "public").expect("public");
     let alias = walk.join("alias");
     let cycle = target.join("cycle");
-    for (link, destination) in [(&alias, &target), (&cycle, &walk)] {
+    let dangling = walk.join("broken.env");
+    let missing = temp.path().join("missing");
+    for (link, destination) in [(&alias, &target), (&cycle, &walk), (&dangling, &missing)] {
         #[cfg(unix)]
         std::os::unix::fs::symlink(destination, link).expect("directory symlink");
         #[cfg(windows)]
@@ -205,45 +204,26 @@ fn native_walk_preserves_canonical_matches_through_directory_links_and_cycles() 
                 .success()
         );
     }
-    let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-        path: FileSystemPath::GlobPattern {
-            pattern: target
-                .canonicalize()
-                .expect("canonical target")
-                .join("**")
-                .join("*.env")
-                .display()
-                .to_string(),
-        },
-        access: FileSystemAccessMode::Deny,
-        missing_path_behavior: None,
-    }]);
-    let matcher = ReadDenyMatcher::try_new_for_local_paths(&policy, cwd.as_path())
-        .expect("valid matcher")
-        .expect("deny restriction");
-    assert!(
-        matcher.is_local_path_read_denied_with_canonical_path(
-            &alias.join("secret.env"),
-            &target
-                .canonicalize()
-                .expect("canonical target")
-                .join("secret.env"),
-        )
-    );
-    let mut paths = Vec::new();
-    collect_existing_glob_directory_matches(
-        &walk,
-        &matcher,
-        &mut paths,
-        &mut HashSet::new(),
-        /*max_depth*/ None,
-        DirectoryScanMode::IncludeAllFiles,
-    )
-    .expect("walk through directory alias and cycle");
-    assert_eq!(
-        paths,
-        vec![
-            AbsolutePathBuf::from_absolute_path(alias.join("secret.env")).expect("lexical target")
-        ]
-    );
+    for (root, expected) in [
+        (&walk, Vec::new()),
+        (
+            &alias,
+            vec![
+                AbsolutePathBuf::from_absolute_path(alias.join("secret.env"))
+                    .expect("linked secret"),
+            ],
+        ),
+    ] {
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: root.join("**").join("*.env").display().to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
+        }]);
+        assert_eq!(
+            resolve_windows_deny_read_paths(&policy, &cwd).expect("resolve directory links"),
+            expected,
+        );
+    }
 }

@@ -107,9 +107,6 @@ pub fn is_available() -> bool {
     }
 }
 
-#[cfg(windows)]
-pub use codex_windows_sandbox::GLOB_SCAN_PROGRAM;
-
 /// Resolve configured symbols and snapshot deny globs for policy inspection.
 /// Reuses MXC's resolution without adding native grants or protections.
 #[cfg(windows)]
@@ -126,13 +123,8 @@ pub fn prepare_file_system_policy(
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>();
     let mut policy = policy::materialize_temporary_paths(policy, &env_entries)?;
-    let denied = codex_windows_sandbox::resolve_windows_deny_read_paths_in_environment(
-        &policy,
-        policy_cwd,
-        env,
-        command_cwd,
-    )
-    .map_err(anyhow::Error::msg)?;
+    let denied = codex_windows_sandbox::resolve_windows_deny_read_paths(&policy, policy_cwd)
+        .map_err(anyhow::Error::msg)?;
     policy = policy.with_expanded_deny_globs(denied);
     if policy.has_full_disk_write_access() {
         return Ok(policy);
