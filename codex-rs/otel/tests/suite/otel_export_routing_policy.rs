@@ -1062,6 +1062,7 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
                 .with_filter(filter_fn(OtelProvider::trace_export_filter)),
         );
 
+    let (metrics, metric_exporter) = build_metrics_with_defaults(&[]).unwrap();
     tracing::subscriber::with_default(subscriber, || {
         tracing::callsite::rebuild_interest_cache();
         let manager = SessionTelemetry::new(
@@ -1076,7 +1077,9 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
             "tty".to_string(),
             SessionSource::Cli,
         )
-        .with_auth_env(auth_env_metadata());
+        .with_auth_env(auth_env_metadata())
+        .with_product_sku(Some("codex"))
+        .with_metrics_without_metadata_tags(metrics);
         let root_span = tracing::info_span!("root");
         let _root_guard = root_span.enter();
         let agent_identity_telemetry = AgentIdentityTelemetry {
@@ -1093,14 +1096,37 @@ fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
             Some("managed"),
             Some("reload"),
             "/responses",
-            /*connection_reused*/ false,
+            /*reauth*/ true,
             Some("req-ws-401"),
             Some("ray-ws-401"),
             Some("missing_authorization_header"),
             Some("token_expired"),
             Some(&agent_identity_telemetry),
         );
+        manager.shutdown_metrics().unwrap();
     });
+
+    let exported = latest_metrics(&metric_exporter);
+    let expected_labels = BTreeMap::from([
+        ("product_sku".to_string(), "codex".to_string()),
+        ("reauth".to_string(), "true".to_string()),
+        ("success".to_string(), "false".to_string()),
+    ]);
+    let counter = find_metric(&exported, codex_otel::WEBSOCKET_CONNECT_COUNT_METRIC).unwrap();
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = counter.data() else {
+        panic!("expected connect counter");
+    };
+    let point = sum.data_points().next().expect("failed handshake");
+    assert_eq!(point.value(), 1);
+    assert_eq!(attributes_to_map(point.attributes()), expected_labels);
+
+    let duration = find_metric(&exported, codex_otel::WEBSOCKET_CONNECT_DURATION_METRIC).unwrap();
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = duration.data() else {
+        panic!("expected connect duration histogram");
+    };
+    let point = histogram.data_points().next().expect("failed handshake");
+    assert_eq!((point.count(), point.sum()), (1, 17.0));
+    assert_eq!(attributes_to_map(point.attributes()), expected_labels);
 
     logger_provider.force_flush().expect("flush logs");
     tracer_provider.force_flush().expect("flush traces");

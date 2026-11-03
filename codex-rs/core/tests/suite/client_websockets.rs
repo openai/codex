@@ -69,6 +69,7 @@ use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
@@ -1138,12 +1139,30 @@ async fn responses_websocket_reconnects_after_account_switch() {
             ],
             "new_turn_on_switch={new_turn_on_switch}",
         );
-        assert_continuation_metrics(
-            &harness.session_telemetry,
+        let snapshot = harness
+            .session_telemetry
+            .snapshot_metrics()
+            .expect("metrics snapshot");
+        assert_counter(
+            &snapshot,
+            codex_otel::WEBSOCKET_CONNECT_COUNT_METRIC,
+            ["reauth", "success"],
+            &[(["false", "true"], 1), (["true", "true"], 1)],
+        );
+        assert_counter(
+            &snapshot,
+            codex_otel::WEBSOCKET_CONTINUATION_COUNT_METRIC,
+            CONTINUATION_TAGS,
             &[
-                (["full", "other", "generation"], 1),
-                (["full", "no_previous_request", "generation"], 1),
-                (["incremental", "incremental", "generation"], 3),
+                (["full", "other", "generation", "none", "none"], 1),
+                (
+                    ["full", "no_previous_request", "generation", "none", "none"],
+                    1,
+                ),
+                (
+                    ["incremental", "incremental", "generation", "none", "none"],
+                    3,
+                ),
             ],
         );
         server.shutdown().await;
@@ -2936,6 +2955,7 @@ async fn responses_websocket_restored_history_metric(fork: bool) -> anyhow::Resu
 
     let manager = &initial.thread_manager;
     let mut options = codex_core::StartThreadOptions::new(initial.config.clone());
+    options.config.apps_mcp_product_sku = Some("codex".to_string());
     options.thread_extension_init.insert(metrics);
     let restored = if fork {
         manager
@@ -2948,11 +2968,23 @@ async fn responses_websocket_restored_history_metric(fork: bool) -> anyhow::Resu
     };
     initial.codex = restored.thread;
     initial.submit_text_turn("continue").await?;
-    assert_continuation_metrics(
-        &initial.codex.session_telemetry(),
+    let snapshot = initial.codex.session_telemetry().snapshot_metrics()?;
+    assert_counter(
+        &snapshot,
+        codex_otel::WEBSOCKET_CONNECT_COUNT_METRIC,
+        ["product_sku", "reauth", "success"],
+        &[(["codex", "false", "true"], 1)],
+    );
+    assert_counter(
+        &snapshot,
+        codex_otel::WEBSOCKET_CONTINUATION_COUNT_METRIC,
+        CONTINUATION_TAGS,
         &[
-            (["full", "restored_history", "warmup"], 1),
-            (["incremental", "incremental", "generation"], 1),
+            (["full", "restored_history", "warmup", "none", "none"], 1),
+            (
+                ["incremental", "incremental", "generation", "none", "none"],
+                1,
+            ),
         ],
     );
     assert!(server.connections()[1].iter().any(|request| {
@@ -2973,19 +3005,40 @@ fn assert_continuation_metrics(telemetry: &SessionTelemetry, expected: &[([&str;
     assert_continuation_metrics_with_item_types(telemetry, &expected);
 }
 
+const CONTINUATION_TAGS: [&str; 5] = [
+    "mode",
+    "reason",
+    "phase",
+    "previous_item_type",
+    "current_item_type",
+];
+
 fn assert_continuation_metrics_with_item_types(
     telemetry: &SessionTelemetry,
     expected: &[([&str; 5], u64)],
 ) {
+    assert_counter(
+        &telemetry.snapshot_metrics().expect("metrics snapshot"),
+        codex_otel::WEBSOCKET_CONTINUATION_COUNT_METRIC,
+        CONTINUATION_TAGS,
+        expected,
+    );
+}
+
+fn assert_counter<const N: usize>(
+    snapshot: &ResourceMetrics,
+    name: &str,
+    tag_names: [&str; N],
+    expected: &[([&str; N], u64)],
+) {
     use opentelemetry_sdk::metrics::data::AggregatedMetrics;
     use opentelemetry_sdk::metrics::data::MetricData;
 
-    let snapshot = telemetry.snapshot_metrics().expect("metrics snapshot");
     let metric = snapshot
         .scope_metrics()
         .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .find(|metric| metric.name() == codex_otel::WEBSOCKET_CONTINUATION_COUNT_METRIC)
-        .expect("continuation counter");
+        .find(|metric| metric.name() == name)
+        .unwrap_or_else(|| panic!("missing counter {name}"));
     let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
         panic!("expected counter");
     };
@@ -2996,14 +3049,7 @@ fn assert_continuation_metrics_with_item_types(
     let mut actual: Vec<_> = sum
         .data_points()
         .map(|point| {
-            let tags = [
-                "mode",
-                "reason",
-                "phase",
-                "previous_item_type",
-                "current_item_type",
-            ]
-            .map(|key| {
+            let tags = tag_names.map(|key| {
                 point
                     .attributes()
                     .find(|attr| attr.key.as_str() == key)

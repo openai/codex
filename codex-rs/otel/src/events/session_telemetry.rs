@@ -27,6 +27,8 @@ use crate::metrics::TOOL_CALL_COUNT_METRIC;
 use crate::metrics::TOOL_CALL_DURATION_METRIC;
 use crate::metrics::TURN_COST_MICROUSD_METRIC;
 use crate::metrics::TURN_TTFT_DURATION_METRIC;
+use crate::metrics::WEBSOCKET_CONNECT_COUNT_METRIC;
+use crate::metrics::WEBSOCKET_CONNECT_DURATION_METRIC;
 use crate::metrics::WEBSOCKET_EVENT_COUNT_METRIC;
 use crate::metrics::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::WEBSOCKET_REQUEST_COUNT_METRIC;
@@ -834,7 +836,7 @@ impl SessionTelemetry {
         recovery_mode: Option<&str>,
         recovery_phase: Option<&str>,
         endpoint: &str,
-        connection_reused: bool,
+        reauth: bool,
         request_id: Option<&str>,
         cf_ray: Option<&str>,
         auth_error: Option<&str>,
@@ -846,6 +848,15 @@ impl SessionTelemetry {
                 .map(|code| (200..=299).contains(&code))
                 .unwrap_or(true);
         let success_str = if success { "true" } else { "false" };
+        let mut tags = vec![
+            ("success", success_str),
+            ("reauth", if reauth { "true" } else { "false" }),
+        ];
+        if let Some(product_sku) = self.metadata.product_sku {
+            tags.push(("product_sku", product_sku));
+        }
+        self.counter(WEBSOCKET_CONNECT_COUNT_METRIC, /*inc*/ 1, &tags);
+        self.record_duration(WEBSOCKET_CONNECT_DURATION_METRIC, duration, &tags);
         log_and_trace_event!(
             self,
             common: {
@@ -866,7 +877,8 @@ impl SessionTelemetry {
                 auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
                 auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
                 auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
-                auth.connection_reused = connection_reused,
+                auth.connection_reused = false,
+                auth.reauth = reauth,
                 auth.request_id = request_id,
                 auth.cf_ray = cf_ray,
                 auth.error = auth_error,
