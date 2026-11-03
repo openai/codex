@@ -17,7 +17,35 @@ pub struct ModelAccessPrograms {
     pub cyber: Vec<CyberAccessProgram>,
 }
 
+/// Saved preference to resolve against the selected model's advertised programs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SavedDaybreakChoice {
+    Unset,
+    On,
+    Off,
+}
+
+impl From<Option<bool>> for SavedDaybreakChoice {
+    fn from(enabled: Option<bool>) -> Self {
+        match enabled {
+            Some(true) => Self::On,
+            Some(false) => Self::Off,
+            None => Self::Unset,
+        }
+    }
+}
+
 impl ModelAccessPrograms {
+    /// Select only an advertised program for explicit saved intent. Unset and
+    /// unsupported choices remain omitted, including On without Daybreak support.
+    pub fn select_saved(&self, choice: SavedDaybreakChoice) -> Option<CyberAccessProgram> {
+        match choice {
+            SavedDaybreakChoice::On => self.daybreak(),
+            SavedDaybreakChoice::Off => self.standard(),
+            SavedDaybreakChoice::Unset => None,
+        }
+    }
+
     /// Select the preferred Daybreak treatment advertised for this model.
     pub fn daybreak(&self) -> Option<CyberAccessProgram> {
         [
