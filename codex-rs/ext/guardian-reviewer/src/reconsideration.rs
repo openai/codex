@@ -1,6 +1,6 @@
 //! Reconsiders a completed denial once, within the original review's deadline.
-//! Only a valid second assessment can replace the denial. Cancellation and timeout
-//! retain their normal outcomes; other failures keep the denial and discard the session.
+//! Only a valid second assessment can replace the denial. Cancellation still aborts;
+//! timeouts and other failures keep the denial and discard the session.
 
 use crate::GuardianReviewSessionOutcome;
 use crate::ReviewDeadline;
@@ -88,12 +88,7 @@ pub async fn reconsider_denial(
         started.elapsed(),
         &tags,
     );
-    if assessment.is_none()
-        && !matches!(
-            second.outcome,
-            GuardianReviewSessionOutcome::TimedOut | GuardianReviewSessionOutcome::Aborted
-        )
-    {
+    if assessment.is_none() && !matches!(second.outcome, GuardianReviewSessionOutcome::Aborted) {
         // Do not feed a failed confirmation into the ordinary error retry loop,
         // which could otherwise reconsider the same denial repeatedly.
         second.outcome = first.outcome;
