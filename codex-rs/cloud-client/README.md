@@ -26,8 +26,10 @@ start time, completion time, and duration when the server provides them.
 Other notifications and server requests remain opaque protobuf payloads, preserving
 unknown fields. These are not ProtoJSON or app-server JSON-RPC. Native status
 code, message and binary details are available explicitly; credentials, event
-and error diagnostics are redacted. History, approval replies and reconnect
-are subsequent slices.
+and error diagnostics are redacted. Item lifecycle updates report supported
+message, command, and file-change summaries. Agent message summaries retain
+structured questions even when their text is empty. Unsupported item kinds stay opaque.
+History, approval replies and reconnect are subsequent slices.
 The minimal envelopes in `wire.rs` and `ResumeRequest` mirror ThreadService field
 numbers; no monorepo checkout or protobuf compiler is required to build this crate.
 

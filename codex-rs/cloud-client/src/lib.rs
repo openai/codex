@@ -4,11 +4,21 @@
 //! a timeout or disconnect can leave Resume admitted. Attach delivers live events only;
 //! dropping its stream detaches without interrupting the thread or answering approvals.
 
+mod item_wire;
+mod items;
 mod transcript;
 mod transcript_wire;
+mod turns_wire;
 mod types;
 mod wire;
 
+pub use items::AgentQuestion;
+pub use items::CommandAction;
+pub use items::CommandExecutionSource;
+pub use items::CommandSummary;
+pub use items::ItemLifecycle;
+pub use items::ItemStatus;
+pub use items::ItemSummary;
 pub use transcript::FileUpdate;
 pub use transcript::ItemDelta;
 pub use transcript::PatchKind;

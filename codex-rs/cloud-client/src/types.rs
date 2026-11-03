@@ -103,4 +103,6 @@ pub enum Error {
     Rpc(RpcStatus),
     #[error("invalid gRPC event envelope")]
     InvalidResponse,
+    #[error("cloud response contains an unsupported {0}")]
+    UnsupportedResponse(&'static str),
 }

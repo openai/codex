@@ -160,6 +160,10 @@ async fn attach_preserves_opaque_notifications_and_continues() {
     let foreign_turn = b"\x0a\x01x\x12\x05\x22\x01u\x40\x01";
     let opaque = [
         message(/*tag*/ 100, b"unknown notification"),
+        notification(
+            /*tag*/ 27,
+            b"\x0a\x02\x4a\x00\x10\x03\x1a\x01t\x22\x01u",
+        ), // Unsupported MCP item.
         notification(/*tag*/ 21, foreign_turn),
         notification(/*tag*/ 23, foreign_turn),
         notification(/*tag*/ 32, &DELTA[..9]), // missing turn ID
@@ -288,3 +292,6 @@ fn notification_selection_handles_many_fragments_and_obsolete_malformed_messages
     payload.extend(message(/*tag*/ 89, b"\xff"));
     assert!(TranscriptEvent::decode("t", &payload).unwrap().is_none());
 }
+
+#[path = "item_tests.rs"]
+mod items;
