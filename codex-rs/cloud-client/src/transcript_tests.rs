@@ -298,3 +298,6 @@ mod items;
 
 #[path = "history_tests.rs"]
 mod history;
+
+#[path = "turns_tests.rs"]
+mod turns_tests;

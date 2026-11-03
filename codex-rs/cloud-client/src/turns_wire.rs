@@ -1,6 +1,19 @@
-//! Native user-input envelopes shared by item decoding and later turn submission.
+//! Native plain-text submission and interruption envelopes; omitted settings inherit thread config.
 use prost::Message;
 
+#[derive(Clone, Message)]
+pub(super) struct AddRequest {
+    #[prost(string, tag = "4")]
+    pub client_user_message_id: String,
+    #[prost(message, optional, tag = "11")]
+    pub input: Option<Input>,
+    #[prost(string, tag = "23")]
+    pub thread_id: String,
+    #[prost(int32, optional, tag = "26")]
+    pub access: Option<i32>,
+    #[prost(int32, optional, tag = "30")]
+    pub mode: Option<i32>,
+}
 #[derive(Clone, Message)]
 pub(super) struct Input {
     #[prost(message, repeated, tag = "1")]
@@ -32,4 +45,31 @@ pub(super) enum Value {
 pub(super) struct Text {
     #[prost(string, optional, tag = "1")]
     pub text: Option<String>,
+}
+#[derive(Clone, Message)]
+pub(super) struct AddResponse {
+    #[prost(message, optional, tag = "1")]
+    pub turn: Option<crate::transcript_wire::Turn>,
+    #[prost(int32, optional, tag = "2")]
+    pub outcome: Option<i32>,
+    #[prost(string, optional, tag = "3")]
+    pub client_user_message_id: Option<String>,
+    #[prost(message, optional, tag = "5")]
+    pub queued_submission: Option<QueuedSubmission>,
+}
+#[derive(Clone, Message)]
+pub(super) struct QueuedSubmission {
+    #[prost(string, optional, tag = "1")]
+    pub id: Option<String>,
+    #[prost(string, optional, tag = "3")]
+    pub client_user_message_id: Option<String>,
+}
+#[derive(Clone, Message)]
+pub(super) struct InterruptRequest {
+    #[prost(string, tag = "1")]
+    pub thread_id: String,
+    #[prost(string, tag = "2")]
+    pub turn_id: String,
+    #[prost(int32, optional, tag = "3")]
+    pub access: Option<i32>,
 }

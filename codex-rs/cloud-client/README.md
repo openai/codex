@@ -59,3 +59,29 @@ they must not create duplicate transcript rows. Disconnects, untyped recovery
 notifications and uncertain overlap require authoritative history reload. This
 crate exposes the read primitives; a coordinated resync/display state machine is
 still required before claiming lossless resume or live/history reconciliation.
+
+`add_user_message` submits plain text using the thread's existing configuration.
+Choose `StartIfIdle`, `Steer`, or `Queue` explicitly; admission distinguishes
+started, steered, duplicate and queued results. Persist a unique client message ID
+with each logical input and keep it unchanged when reconciling an uncertain
+submission. Success means admission, not completion. `interrupt_turn` addresses
+one thread/turn and does not stop the thread or delete queued input. Duplicate
+admission exposes only the original turn ID when supplied. Its wire turn status
+is synthesized by the backend and does not describe current lifecycle state;
+reload history or observe Attach instead of treating the receipt as an active turn.
+
+`MutationError::InvalidRequest` means local validation rejected the request before
+sending. `OutcomeUnknown` retains the source error: even a server error can follow
+admission, so status codes alone do not prove rejection. Malformed success replies
+and mismatched response IDs are also uncertain. No automatic retry is performed;
+dropping a pending call does not undo remote work. Reconcile with server state
+before deciding whether another attempt is safe. Full input/configuration overrides
+and automated outcome reconciliation are not implemented by this text-only slice.
+
+The attach example accepts two optional additional arguments to explicitly send
+one message after attaching: a persisted client message ID and the text. It uses
+`StartIfIdle`, drains events during admission, and prints only redacted event kinds:
+
+```sh
+cargo run -p codex-cloud-client --example attach -- "$CODEX_CLOUD_GRPC_ENDPOINT" "$CODEX_CLOUD_THREAD_ID" "$CODEX_CLOUD_MESSAGE_ID" 'Explain this project'
+```
