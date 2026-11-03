@@ -9,6 +9,11 @@ config_setting(
 )
 
 config_setting(
+    name = "is_macos",
+    constraint_values = ["@platforms//os:macos"],
+)
+
+config_setting(
     name = "is_windows",
     constraint_values = ["@platforms//os:windows"],
 )
@@ -129,6 +134,12 @@ libcxx_library(
         "@//third_party/v8:use_rusty_v8_custom_libcxx_native_windows": [],
         ":is_windows": ["-Wno-macro-redefined"],
         "//conditions:default": ["-fPIC"],
+    }) + select({
+        ":is_macos": [
+            "-Wno-pragma-clang-attribute",
+            "-Wno-thread-safety-analysis",
+        ],
+        "//conditions:default": [],
     }),
     defines = [
         "CR_LIBCXX_REVISION=b16984ce99c702355a5b2b4c52574e82cec41fb9",
