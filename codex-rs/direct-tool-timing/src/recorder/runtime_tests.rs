@@ -91,6 +91,7 @@ async fn lock_handoff_publishes_review_history_before_admitting_waiter(admission
         PathDurations {
             sampling: Duration::from_secs(1),
             auto_review: Duration::from_secs(3),
+            auto_review_overhead: None,
             tools: completed.ended_at.duration_since(start) - Duration::from_secs(4),
             ..PathDurations::default()
         }

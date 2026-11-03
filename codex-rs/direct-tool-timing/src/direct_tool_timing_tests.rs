@@ -40,6 +40,7 @@ fn parallel_winner_retains_its_review_and_shared_initial_path() {
         PathDurations {
             sampling: Duration::from_secs(1),
             auto_review: Duration::from_secs(3),
+            auto_review_overhead: None,
             tools: completed.ended_at.duration_since(start) - Duration::from_secs(4),
             ..PathDurations::default()
         }
@@ -181,6 +182,7 @@ fn human_wait_takes_precedence_over_reviews_and_overlapping_waits() {
         PathDurations {
             tools: Duration::from_secs(2),
             auto_review: Duration::from_secs(2),
+            auto_review_overhead: None,
             user_wait: Duration::from_secs(3),
             ..PathDurations::default()
         }

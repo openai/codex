@@ -380,6 +380,7 @@ fn capture_preserves_phases_and_freezes_missing_dependencies() {
         PathDurations {
             sampling: Duration::from_millis(10),
             unknown: Duration::from_millis(30),
+            auto_review_overhead: None,
             overhead: Duration::from_millis(20),
             ..PathDurations::default()
         }

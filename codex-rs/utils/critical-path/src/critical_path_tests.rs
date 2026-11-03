@@ -93,6 +93,7 @@ fn nested_serial_dependencies_preserve_exclusive_categories() {
             sampling: Duration::from_millis(100),
             compaction: Duration::from_millis(100),
             auto_review: Duration::from_millis(200),
+            auto_review_overhead: None,
             tools: Duration::from_millis(200),
             ..PathDurations::default()
         }
@@ -132,6 +133,7 @@ fn path_retention_exhaustion_marks_unknown_instead_of_claiming_zero() {
         critical_path.durations(turn_start, turn_end),
         PathDurations {
             unknown: turn_end.duration_since(turn_start),
+            auto_review_overhead: None,
             ..Default::default()
         }
     );
@@ -179,6 +181,7 @@ fn reviewed_branch_wins_even_when_some_review_overlapped_parent_inference() {
         PathDurations {
             sampling: Duration::from_millis(100),
             auto_review: Duration::from_millis(200),
+            auto_review_overhead: None,
             tools: Duration::from_millis(100),
             ..Default::default()
         }
@@ -206,6 +209,7 @@ fn durations_clip_work_to_the_window_and_attribute_gaps_to_overhead() {
         PathDurations {
             sampling: Duration::from_millis(20),
             auto_review: Duration::from_millis(40),
+            auto_review_overhead: None,
             overhead: Duration::from_millis(40),
             ..PathDurations::default()
         }
@@ -215,6 +219,7 @@ fn durations_clip_work_to_the_window_and_attribute_gaps_to_overhead() {
         PathDurations {
             sampling: Duration::from_millis(10),
             auto_review: Duration::from_millis(30),
+            auto_review_overhead: None,
             overhead: Duration::from_millis(20),
             ..PathDurations::default()
         }
@@ -362,9 +367,249 @@ fn human_wait_is_retained_only_on_the_selected_parallel_path() {
         PathDurations {
             sampling: Duration::from_millis(100),
             auto_review: Duration::from_millis(100),
+            auto_review_overhead: None,
             user_wait: Duration::from_millis(300),
             tools: Duration::from_millis(100),
             ..PathDurations::default()
         }
     );
+}
+
+fn observed_review(intervals: &[(Instant, Instant)]) -> ReviewExecution {
+    let review = ReviewExecution::default();
+    review.observe();
+    for &(start, end) in intervals {
+        review.started(start);
+        review.completed(start, end);
+    }
+    review.seal();
+    review
+}
+
+#[test]
+fn review_overhead_is_the_execution_complement_and_clips_to_the_requested_window() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let review = observed_review(&[(at(1000), at(4633))]);
+    let path = CriticalPath::default().auto_review(start, at(5000), vec![review]);
+    assert_eq!(
+        path.durations(start, at(5000)),
+        PathDurations {
+            auto_review: Duration::from_millis(5000),
+            auto_review_overhead: Some(Duration::from_millis(1367)),
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        path.durations(at(500), at(4800)),
+        PathDurations {
+            auto_review: Duration::from_millis(4300),
+            auto_review_overhead: Some(Duration::from_millis(667)),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn overlapping_reviews_and_retries_subtract_a_clipped_union_once() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let first = observed_review(&[(at(0), at(30)), (at(25), at(50))]);
+    let second = observed_review(&[(at(40), at(60)), (at(80), at(120))]);
+    let path = CriticalPath::default().auto_review(at(10), at(100), vec![first, second]);
+    assert_eq!(
+        path.durations(at(10), at(100)),
+        PathDurations {
+            auto_review: Duration::from_millis(90),
+            auto_review_overhead: Some(Duration::from_millis(20)),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn human_wait_overlap_is_excluded_from_both_review_components() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let review = observed_review(&[(at(20), at(80))]);
+    let path = CriticalPath::default()
+        .auto_review(start, at(40), vec![review.clone()])
+        .work(at(40), at(70), WorkKind::UserWait)
+        .auto_review(at(70), at(100), vec![review]);
+    assert_eq!(
+        path.durations(start, at(100)),
+        PathDurations {
+            auto_review: Duration::from_millis(70),
+            auto_review_overhead: Some(Duration::from_millis(40)),
+            user_wait: Duration::from_millis(30),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn cached_review_has_only_overhead_and_losing_review_has_no_contribution() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let reviewed = CriticalPath::default().auto_review(start, at(10), vec![observed_review(&[])]);
+    assert_eq!(
+        reviewed.durations(start, at(10)),
+        PathDurations {
+            auto_review: Duration::from_millis(10),
+            auto_review_overhead: Some(Duration::from_millis(10)),
+            ..Default::default()
+        }
+    );
+    let winner = CriticalPath::default().work(start, at(20), WorkKind::Tools);
+    assert_eq!(
+        reviewed.latest(winner).durations(start, at(20)),
+        PathDurations {
+            tools: Duration::from_millis(20),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn incomplete_or_unobserved_reviews_leave_the_subcomponent_unknown() {
+    let start = Instant::now();
+    let end = start + Duration::from_millis(10);
+    let unobserved = ReviewExecution::default();
+    let canceled = ReviewExecution::default();
+    canceled.observe();
+    canceled.started(start);
+    let missing = ReviewExecution::default();
+    missing.observe();
+    missing.mark_unknown();
+    for review in [unobserved, canceled, missing] {
+        review.seal();
+        let path = CriticalPath::default().auto_review(start, end, vec![review.clone()]);
+        let expected = PathDurations {
+            auto_review: Duration::from_millis(10),
+            auto_review_overhead: None,
+            ..Default::default()
+        };
+        assert_eq!(path.durations(start, end), expected);
+        review.observe();
+        review.completed(start, end);
+        assert_eq!(path.durations(start, end), expected);
+    }
+}
+
+#[test]
+fn one_completed_retry_does_not_hide_another_canceled_attempt() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let review = ReviewExecution::default();
+    review.observe();
+    review.started(at(1));
+    review.started(at(2));
+    review.completed(at(2), at(5));
+    review.seal();
+    assert_eq!(
+        CriticalPath::default()
+            .auto_review(start, at(10), vec![review])
+            .durations(start, at(10)),
+        PathDurations {
+            auto_review: Duration::from_millis(10),
+            auto_review_overhead: None,
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn indistinguishable_concurrent_attempts_remain_unknown_after_one_completes() {
+    let start = Instant::now();
+    let end = start + Duration::from_millis(10);
+    let review = ReviewExecution::default();
+    review.observe();
+    review.started(start);
+    review.started(start);
+    review.completed(start, end);
+    review.seal();
+    assert_eq!(
+        CriticalPath::default()
+            .auto_review(start, end, vec![review])
+            .durations(start, end),
+        PathDurations {
+            auto_review: Duration::from_millis(10),
+            auto_review_overhead: None,
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn sealing_before_submission_starts_freezes_unknown_attribution() {
+    let start = Instant::now();
+    let end = start + Duration::from_millis(10);
+    let review = ReviewExecution::default();
+    review.observe();
+    let attempt = review.start_attempt();
+    review.seal();
+    let path = CriticalPath::default().auto_review(start, end, vec![review.clone()]);
+    let expected = PathDurations {
+        auto_review: Duration::from_millis(10),
+        auto_review_overhead: None,
+        ..Default::default()
+    };
+    assert_eq!(path.durations(start, end), expected);
+    review.started(start);
+    review.completed(start, end);
+    attempt.finish(/*known*/ true);
+    assert_eq!(path.durations(start, end), expected);
+}
+
+#[test]
+fn completed_attempts_resolve_only_when_all_submissions_have_known_outcomes() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    for known in [true, false] {
+        let review = ReviewExecution::default();
+        review.observe();
+        let first = review.start_attempt();
+        let second = review.start_attempt();
+        review.started(at(2));
+        review.completed(at(2), at(7));
+        first.finish(/*known*/ true);
+        let path = CriticalPath::default().auto_review(start, at(10), vec![review.clone()]);
+        assert_eq!(path.durations(start, at(10)).auto_review_overhead, None);
+        second.finish(known);
+        review.seal();
+        assert_eq!(
+            path.durations(start, at(10)),
+            PathDurations {
+                auto_review: Duration::from_millis(10),
+                auto_review_overhead: known.then_some(Duration::from_millis(5)),
+                ..Default::default()
+            }
+        );
+    }
+}
+
+#[test]
+fn incomplete_attempt_does_not_label_unobserved_execution_as_overhead() {
+    for completed in [false, true] {
+        let execution = ReviewExecution::default();
+        execution.observe();
+        let attempt = execution.start_attempt();
+        let start = Instant::now();
+        let end = start + Duration::from_millis(100);
+        if completed {
+            execution.started(start);
+            execution.completed(start, end);
+            attempt.finish(/*known*/ true);
+        } else {
+            drop(attempt);
+        }
+        execution.seal();
+        let totals = CriticalPath::default()
+            .auto_review(start, end, vec![execution])
+            .durations(start, end);
+        assert_eq!(
+            totals.auto_review_overhead,
+            completed.then_some(Duration::ZERO)
+        );
+    }
 }
