@@ -65,7 +65,7 @@ impl Session {
             for environment in environments.turn_environments() {
                 // Remote starts cannot cancel an in-flight capture. Leave them, deferred
                 // environments, and managed networking on the normal lazy capture path.
-                if environment.environment.is_remote()
+                if environment.environment().is_remote()
                     || !environment.shell_snapshot_v2_supported
                     || !environment.config().allow_login_shell
                     || environment.config().network_policy.is_some()
@@ -154,7 +154,7 @@ impl Session {
                 };
 
                 let result = environment
-                    .environment
+                    .environment()
                     .get_exec_backend()
                     .prewarm_shell_snapshot(params)
                     .await;

@@ -1366,7 +1366,7 @@ pub(crate) async fn remote_network_proxy_launch(
     turn: &TurnContext,
 ) -> Result<(RemoteNetworkProxyLaunchConfig, RemoteCredentialMasking), ToolError> {
     let network_proxy = environment
-        .environment
+        .environment()
         .info()
         .await
         .map_err(|err| {

@@ -145,7 +145,7 @@ impl ToolOrchestrator {
         #[cfg(target_os = "macos")]
         let sandbox_manager = sandbox_manager.with_allowed_symlinked_codex_home(
             environment
-                .environment
+                .environment()
                 .local_runtime_paths()
                 .and_then(|paths| paths.allowed_symlinked_codex_home.clone()),
         );
@@ -269,9 +269,9 @@ impl ToolOrchestrator {
             (None, false)
         };
         if (escalated_profile.is_some() || writable_root_metadata)
-            && environment.environment.is_remote()
+            && environment.environment().is_remote()
         {
-            let info = environment.environment.info().await.map_err(|err| {
+            let info = environment.environment().info().await.map_err(|err| {
                 ToolError::Rejected(format!(
                     "could not verify exec-server support for escalation with denied reads: {err}"
                 ))

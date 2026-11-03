@@ -78,7 +78,7 @@ pub(super) fn for_environment(
         None => context.environments().primary(),
     };
     let native_cwd = environment
-        .filter(|environment| !environment.environment.is_remote())
+        .filter(|environment| !environment.environment().is_remote())
         .and_then(|environment| environment.cwd().to_abs_path().ok());
     let permission_profile = environment
         .map(TurnEnvironment::permission_profile_with_workspace_roots)

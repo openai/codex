@@ -208,7 +208,7 @@ impl HookEnvironmentExecutor for EnvironmentCommandExecutor {
                     ToolError::Rejected(message) => anyhow::anyhow!("{message}"),
                     ToolError::Codex(error) => anyhow::Error::new(error),
                 })?;
-            let backend = environment.environment.get_exec_backend();
+            let backend = environment.environment().get_exec_backend();
             let process = tokio::time::timeout_at(deadline, backend.start(params))
                 .await
                 .context("environment command hook timed out during launch")??

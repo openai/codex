@@ -947,7 +947,7 @@ async fn turn_diff_display_roots(step_context: &StepContext) -> Vec<(String, Pat
         // A turn cwd is expected to be a directory. If it is a file, the failed `<cwd>/.git` probe
         // is ignored and ancestor search continues from its parent.
         let root = find_nearest_ancestor_with_markers(
-            turn_environment.environment.get_filesystem().as_ref(),
+            turn_environment.environment().get_filesystem().as_ref(),
             cwd,
             vec![".git".to_string()],
             FindUpErrorPolicy::Ignore,

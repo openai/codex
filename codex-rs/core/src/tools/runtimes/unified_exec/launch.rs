@@ -22,10 +22,10 @@ pub(super) async fn with_launch_failure_events(
     let Err(ToolError::Rejected(message)) = &result else {
         return result;
     };
-    let plugin_attribution = if req.turn_environment.environment.is_remote() {
+    let plugin_attribution = if req.turn_environment.environment().is_remote() {
         let file_system = req
             .turn_environment
-            .environment
+            .environment()
             .get_filesystem_without_reconnect();
         ctx.step_context
             .turn

@@ -176,7 +176,7 @@ impl ExecCommandHandler {
         .await;
         let prepared = parsed.prepare(self.lifetime)?;
         let max_output_tokens = prepared.max_output_tokens;
-        let fs = prepared.turn_environment.environment.get_filesystem();
+        let fs = prepared.turn_environment.environment().get_filesystem();
         let intercepted_patch = intercept_apply_patch(
             &prepared.resolved.command,
             &prepared.cwd,
@@ -223,7 +223,7 @@ impl ExecCommandHandler {
         let process_id = manager.allocate_process_id().await;
         let hook_command = prepared.hook_command.clone();
         let tool_cwd =
-            (!prepared.turn_environment.environment.is_remote()).then(|| prepared.cwd.clone());
+            (!prepared.turn_environment.environment().is_remote()).then(|| prepared.cwd.clone());
         let request = ExecCommandRequest {
             prepared,
             process_id,
@@ -361,7 +361,7 @@ impl CoreToolRuntime for ExecCommandHandler {
         let cwd = args.resolve_cwd(environment)?;
         // Hook scripts execute on the host. Remote command paths cannot replace
         // the host cwd in hook input, even when both machines use the same OS.
-        Ok((!environment.environment.is_remote()).then_some(cwd))
+        Ok((!environment.environment().is_remote()).then_some(cwd))
     }
 
     fn with_updated_hook_input(

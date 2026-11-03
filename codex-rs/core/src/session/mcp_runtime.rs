@@ -154,7 +154,7 @@ impl Session {
             let mut catalog = None;
             let mut registered = HashSet::new();
             for selected in environments.turn_environments() {
-                let environment = &selected.environment;
+                let environment = selected.environment();
                 if !environment.is_remote() {
                     continue;
                 }

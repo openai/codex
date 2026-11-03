@@ -8,6 +8,7 @@ use crate::agent::child_config::build_agent_spawn_config;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::config::PermissionProfileSnapshot;
+use crate::environment_selection::EnvironmentAttachment;
 use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::function_tool::FunctionCallError;
@@ -2337,9 +2338,13 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     else {
         panic!("parent environment should be ready");
     };
-    environment.environment = environment_manager
-        .default_environment()
-        .expect("sandbox-capable test environment should exist");
+    let (attachment, _guard, _) = EnvironmentAttachment::new(
+        &environment.selection.environment_id,
+        environment_manager
+            .default_environment()
+            .expect("sandbox-capable test environment should exist"),
+    );
+    environment.attachment = attachment;
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(expected_permission_profile.clone());
     environment.config_origin = EnvironmentConfigOrigin::Owner;

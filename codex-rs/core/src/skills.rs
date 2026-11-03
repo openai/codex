@@ -56,7 +56,7 @@ pub(crate) fn skills_load_input_for_environments(
             .cwd()
             .to_abs_path()
             .ok()
-            .map(|cwd| (cwd, environment.environment.get_filesystem()))
+            .map(|cwd| (cwd, environment.environment().get_filesystem()))
     });
     let (cwd, fs) = match workspace {
         Some((cwd, fs)) => (cwd, Some(fs)),

@@ -146,7 +146,7 @@ pub(crate) async fn review_tool_call(
                     ExecCommandLifetime::OneShot
                 };
                 let prepared = parsed.prepare(lifetime).map_err(tool_error)?;
-                let fs = prepared.turn_environment.environment.get_filesystem();
+                let fs = prepared.turn_environment.environment().get_filesystem();
                 if let Some(patch) = prepare_intercepted_patch(
                     &prepared.resolved.command,
                     &prepared.cwd,

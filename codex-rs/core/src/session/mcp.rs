@@ -558,17 +558,17 @@ impl Session {
             .get_or_init(ExecutorCapabilityDiscoveryV2Cache::default);
         let remote_environment_count = environments
             .turn_environments()
-            .filter(|selected| selected.environment.is_remote())
+            .filter(|selected| selected.environment().is_remote())
             .count();
         cache.ensure_capacity(remote_environment_count);
         let mut snapshots = Vec::new();
         let mut skipped_incompatible_executor = false;
         for selected in environments.turn_environments() {
-            if !selected.environment.is_remote() {
+            if !selected.environment().is_remote() {
                 continue;
             }
             let environment_id = &selected.selection.environment_id;
-            let info = match selected.environment.info().await {
+            let info = match selected.environment().info().await {
                 Ok(info) => info,
                 Err(_) => {
                     tracing::warn!(
@@ -587,7 +587,7 @@ impl Session {
                 sandbox: Some(selected.sandbox_context(/*additional_permissions*/ None)),
             };
             let result = cache
-                .discover(environment_id, &selected.environment, request)
+                .discover(environment_id, selected.environment(), request)
                 .await;
             snapshots.push(ExecutorCapabilityDiscoveryV2Snapshot {
                 environment_id: environment_id.clone(),
@@ -632,7 +632,7 @@ impl Session {
             environments.turn_environments().map(|environment| {
                 environment
                     .config_origin
-                    .selected_capability_roots(&environment.environment, environment.config())
+                    .selected_capability_roots(environment.environment(), environment.config())
             }),
         );
         for (index, root) in combined_roots.into_iter().enumerate() {

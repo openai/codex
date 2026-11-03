@@ -68,8 +68,8 @@ async fn plugin_attribution_for_guardian_request(
                     .find(|environment| {
                         environment.selection.environment_id.as_str() == environment_id
                     })?;
-            if turn_environment.environment.is_remote() {
-                let file_system = turn_environment.environment.get_filesystem();
+            if turn_environment.environment().is_remote() {
+                let file_system = turn_environment.environment().get_filesystem();
                 turn.plugin_attribution_for_executor_command(command, cwd, file_system.as_ref())
                     .await
             } else {

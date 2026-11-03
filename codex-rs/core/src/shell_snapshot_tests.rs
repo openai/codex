@@ -449,6 +449,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
                 updated.clone(),
                 /*non_blocking_snapshots*/ false,
             );
+            child.activate_configured(async_channel::unbounded().0);
             let child = child.snapshot().await;
             assert!(!Arc::ptr_eq(
                 &updated.primary().expect("parent turn").shell_snapshot_cache,

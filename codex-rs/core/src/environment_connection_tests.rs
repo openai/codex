@@ -3,8 +3,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use assert_matches::assert_matches;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentConnectionState;
+use codex_protocol::protocol::EnvironmentConnectionEvent;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -17,9 +20,11 @@ use tokio::sync::oneshot;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-use super::ThreadEnvironments;
+use super::ConnectionEventStreams;
+use super::EnvironmentAttachment;
 use super::tests::read_websocket_json;
 
 // Keep paused time from advancing during socket I/O; only the test advances it.
@@ -77,13 +82,9 @@ async fn lifecycle_waits_for_recovery(retries: usize, recovery: Recovery) {
         Environment::create_for_tests(Some(format!("ws://{}", listener.local_addr().unwrap())))
             .unwrap(),
     );
-    let (events, received) = async_channel::unbounded();
-    let _forwarding = ThreadEnvironments::spawn_connection_event_listener(
-        &environment,
-        "remote".to_owned(),
-        events,
-    )
-    .unwrap();
+    let (attachment, _detach_on_drop, events) =
+        EnvironmentAttachment::new("remote", Arc::clone(&environment));
+    let received = events.expect("remote connection events");
     let mut raw = environment.subscribe_connection_state().unwrap();
     let (disconnect, disconnected) = oneshot::channel();
     let (resume, resumed) = oneshot::channel();
@@ -175,6 +176,48 @@ async fn lifecycle_waits_for_recovery(retries: usize, recovery: Recovery) {
         }
     }
     assert!(received.try_recv().is_err());
+    drop(attachment);
+    assert!(
+        received.recv().await.is_err(),
+        "dropping the attachment should stop its listener"
+    );
     finish.send(()).unwrap();
     server.await.unwrap();
+}
+
+/// Reselecting an executor must discard events still queued for its previous attachment.
+#[tokio::test(flavor = "current_thread")]
+async fn reselection_discards_buffered_connection_events() {
+    let (tx_event, received) = async_channel::unbounded();
+    let streams = ConnectionEventStreams::new(tx_event);
+    let remote = EnvironmentConnectionEvent {
+        environment_id: "remote".to_owned(),
+    };
+    let connected = Event {
+        id: String::new(),
+        msg: EventMsg::EnvironmentConnected(remote.clone()),
+    };
+
+    // Queue both attachments' events before yielding to the forwarder.
+    let detached = CancellationToken::new();
+    let (old_tx, old_events) = async_channel::unbounded();
+    streams.add(Some(old_events), &detached);
+    old_tx.try_send(connected.clone()).unwrap();
+    old_tx
+        .try_send(Event {
+            id: String::new(),
+            msg: EventMsg::EnvironmentDisconnected(remote.clone()),
+        })
+        .unwrap();
+    detached.cancel();
+    drop(old_tx);
+
+    let (new_tx, new_events) = async_channel::unbounded();
+    streams.add(Some(new_events), &CancellationToken::new());
+    new_tx.try_send(connected).unwrap();
+    drop(new_tx);
+    streams.streams.close();
+
+    let messages = received.map(|event| event.msg).collect::<Vec<_>>().await;
+    assert_matches!(messages.as_slice(), [EventMsg::EnvironmentConnected(event)] if event == &remote);
 }

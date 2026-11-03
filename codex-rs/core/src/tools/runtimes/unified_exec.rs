@@ -187,7 +187,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
     }
 
     fn uses_executor_managed_process_sandbox(&self, req: &UnifiedExecRequest<'_>) -> bool {
-        req.prepared.turn_environment.environment.is_remote() || req.shell_snapshot.is_some()
+        req.prepared.turn_environment.environment().is_remote() || req.shell_snapshot.is_some()
     }
 
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest<'_>) -> Option<&'b PathUri> {
@@ -263,7 +263,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
             req.network.as_ref(),
             launch_sandbox_permissions,
         ));
-        let environment_is_remote = prepared.turn_environment.environment.is_remote();
+        let environment_is_remote = prepared.turn_environment.environment().is_remote();
         let credential_broker_available = !environment_is_remote
             && req.network.is_some()
             && ctx
@@ -446,7 +446,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
             ctx,
             &prepared.resolved.command,
             &prepared.cwd,
-            prepared.turn_environment.environment.as_ref(),
+            prepared.turn_environment.environment().as_ref(),
         )
         .await;
         if let Some(sidecar) = metrics_sidecar.as_ref() {
@@ -473,7 +473,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
         if ctx.session.enabled(Feature::LoginShellPackagePath)
             && prepared.resolved.shell.is_posix_login()
             && !explicit_env_overrides.contains_key("PATH")
-            && let Ok(info) = prepared.turn_environment.environment.info().await
+            && let Ok(info) = prepared.turn_environment.environment().info().await
             && let Some(command_with_path_prepends) =
                 prepared.resolved.shell.derive_exec_args_with_path_prepends(
                     &prepared.hook_command,
@@ -642,7 +642,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
                 req.shell_snapshot.clone(),
                 windows_sandbox_proxy_settings_mode,
                 prepared.tty,
-                prepared.turn_environment.environment.as_ref(),
+                prepared.turn_environment.environment().as_ref(),
             )
             .await;
         let mut process = with_launch_failure_events(process, prepared, ctx).await?;

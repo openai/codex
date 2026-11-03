@@ -238,7 +238,7 @@ impl Session {
         if turn_context.config.include_permissions_instructions {
             let environment = step_context.environments.primary();
             let sandbox = environment
-                .filter(|environment| environment.environment.is_remote())
+                .filter(|environment| environment.environment().is_remote())
                 .map(|environment| {
                     environment.sandbox_context(/*additional_permissions*/ None)
                 });

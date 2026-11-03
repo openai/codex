@@ -71,7 +71,7 @@ pub(crate) async fn load_project_instructions(
             break;
         }
 
-        let filesystem = turn_environment.environment.get_filesystem();
+        let filesystem = turn_environment.environment().get_filesystem();
         let sandbox = (!turn_environment
             .permission_profile()
             .file_system_sandbox_policy()

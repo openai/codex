@@ -4,6 +4,7 @@ use super::token_budget::resolve_token_budget;
 use super::*;
 use crate::config::TokenBudgetConfig;
 use crate::cyber_access_program;
+use crate::environment_selection::EnvironmentAttachment;
 use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::AllowPrefixRules;
@@ -69,7 +70,7 @@ pub(crate) struct ShellSnapshotCacheKey {
 pub(crate) struct TurnEnvironment {
     pub(crate) selection: TurnEnvironmentSelection,
     pub(crate) config_origin: EnvironmentConfigOrigin,
-    pub(crate) environment: Arc<Environment>,
+    pub(crate) attachment: Arc<EnvironmentAttachment>,
     /// Cached from the selected executor; `None` means it did not report one.
     pub(crate) user_home_dir: Option<PathUri>,
     /// Cached from the selected executor; `None` means it did not report them.
@@ -84,17 +85,31 @@ pub(crate) struct TurnEnvironment {
 }
 
 impl TurnEnvironment {
+    #[cfg(test)]
     pub(crate) fn new(
         selection: TurnEnvironmentSelection,
         config_origin: EnvironmentConfigOrigin,
         environment: Arc<Environment>,
         shell: Option<shell::Shell>,
     ) -> Self {
+        let (attachment, guard, _) =
+            EnvironmentAttachment::new(&selection.environment_id, environment);
+        // Standalone test snapshots have no thread selection to signal detach.
+        guard.disarm();
+        Self::from_attachment(selection, config_origin, attachment, shell)
+    }
+
+    pub(crate) fn from_attachment(
+        selection: TurnEnvironmentSelection,
+        config_origin: EnvironmentConfigOrigin,
+        attachment: Arc<EnvironmentAttachment>,
+        shell: Option<shell::Shell>,
+    ) -> Self {
         debug_assert!(matches!(selection.config, EnvironmentConfigState::Ready(_)));
         Self {
             selection,
             config_origin,
-            environment,
+            attachment,
             user_home_dir: None,
             temporary_directories: None,
             shell,
@@ -104,6 +119,10 @@ impl TurnEnvironment {
             shell_snapshot_cache: Arc::default(),
             shell_snapshot_v2_supported: false,
         }
+    }
+
+    pub(crate) fn environment(&self) -> &Arc<Environment> {
+        &self.attachment.environment
     }
 
     pub(crate) fn config(&self) -> &EnvironmentConfig {
@@ -182,7 +201,7 @@ impl TurnEnvironment {
                     .as_ref()
                     .clone()
                     .build(
-                        Arc::clone(&self.environment),
+                        Arc::clone(self.environment()),
                         PathUri::from_abs_path(cwd),
                         Some(shell.clone()),
                         use_login_shell,
@@ -226,7 +245,7 @@ impl TurnEnvironment {
         additional_permissions: Option<AdditionalPermissionProfile>,
     ) -> impl EnvironmentAccess + '_ {
         FileSystemEnvironmentAccessor::new(
-            self.environment.filesystem_ref(),
+            self.environment().filesystem_ref(),
             self.sandbox_context(additional_permissions),
         )
     }
@@ -264,7 +283,7 @@ impl TurnEnvironment {
         &self,
     ) -> codex_file_system::WindowsSandboxSelection {
         let config = self.config();
-        if self.environment.is_remote() {
+        if self.environment().is_remote() {
             executor_windows_sandbox_selection(
                 config.windows_sandbox_type,
                 config.windows_sandbox_level,
@@ -299,7 +318,7 @@ impl std::fmt::Debug for TurnEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TurnEnvironment")
             .field("environment_id", &self.selection.environment_id)
-            .field("environment", &self.environment)
+            .field("environment", self.environment())
             .field("cwd", &self.selection.cwd)
             .field("workspace_roots", &self.config().workspace_roots)
             .field("user_home_dir", &self.user_home_dir)

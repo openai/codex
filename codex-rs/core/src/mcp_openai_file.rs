@@ -178,7 +178,7 @@ async fn build_uploaded_argument_value(
         requires_sandbox.then(|| turn_environment.sandbox_context(additional_permissions));
     if sandbox.is_some() {
         let environment_info = turn_environment
-            .environment
+            .environment()
             .info()
             .await
             .map_err(|error| contextualize_error(error.to_string()))?;
@@ -188,7 +188,7 @@ async fn build_uploaded_argument_value(
             ));
         }
     }
-    let fs = turn_environment.environment.get_filesystem();
+    let fs = turn_environment.environment().get_filesystem();
     let metadata = fs
         .get_metadata(&path_uri, GetMetadataOptions::default(), sandbox.as_ref())
         .await

@@ -1535,9 +1535,11 @@ impl Session {
                 config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_configured_selections(environment_selections);
-            turn_environments.update_selections(environment_selections);
-            session_configuration.environments = turn_environments.selections();
-            let resolved_environments = turn_environments.snapshot().await;
+            let configured_environments = turn_environments.configured_snapshot_now();
+            session_configuration.environments = configured_environments.all_selections();
+            let resolved_environments = turn_environments
+                .resolve_snapshot(configured_environments)
+                .await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(instructions));
             // Keep discovery's future out of the large embedded startup/resume frame.
             let plugin_skill_warmup = Box::pin(warm_plugins_and_skills_for_session_init(
@@ -1976,7 +1978,7 @@ impl Session {
             let thread_config = sess
                 .effective_thread_config_snapshot(
                     &session_configuration,
-                    turn_environments.selections(),
+                    session_configuration.environments.clone(),
                 )
                 .await;
             let events = std::iter::once(Event {
@@ -2009,7 +2011,7 @@ impl Session {
             for event in events {
                 sess.send_event_raw(event).await;
             }
-            turn_environments.start_connection_event_forwarding(tx_event.clone());
+            turn_environments.activate_configured(tx_event.clone());
 
             let startup_auth_changed = mcp_auth_changes.has_changed().unwrap_or(false);
             if startup_auth_changed {

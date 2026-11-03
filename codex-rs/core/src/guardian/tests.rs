@@ -8,6 +8,7 @@ use crate::config::NetworkProxySpec;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::test_config;
 use crate::context::ContextualUserFragment;
+use crate::environment_selection::EnvironmentAttachment;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::guardian::review::guardian_review_session_config;
@@ -679,10 +680,14 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
         ));
     let mut windows = secondary.clone();
     let windows_cwd = PathUri::parse("file:///C:/guardian-secondary")?;
-    windows.environment = Arc::new(codex_exec_server::Environment::create_for_tests(Some(
-        "ws://127.0.0.1:1".into(),
-    ))?);
     windows.selection.environment_id = "windows".into();
+    let (attachment, _guard, _) = EnvironmentAttachment::new(
+        &windows.selection.environment_id,
+        Arc::new(codex_exec_server::Environment::create_for_tests(Some(
+            "ws://127.0.0.1:1".into(),
+        ))?),
+    );
+    windows.attachment = attachment;
     windows.selection.cwd = windows_cwd.clone();
     windows.config_mut().workspace_roots = vec![windows_cwd.clone()];
     windows.config_mut().permission_profile =
