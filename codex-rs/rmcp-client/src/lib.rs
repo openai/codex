@@ -106,6 +106,7 @@ pub use rmcp_client::RmcpClient;
 pub use rmcp_client::SendElicitation;
 pub use rmcp_client::StreamableHttpBearerToken;
 pub use rmcp_client::ToolWithConnectorId;
+pub use service_error::is_retryable_transport_error;
 pub use service_error::mcp_error;
 pub use service_error::request_error_code;
 pub use service_error::request_timeout_error;

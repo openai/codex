@@ -59,7 +59,10 @@ impl ManagedClient {
         }
     }
 
-    async fn with_lease_request<T>(&self, operation: impl Future<Output = Result<T>>) -> Result<T> {
+    pub(crate) async fn with_lease_request<T>(
+        &self,
+        operation: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
         // Keep one copy of the request future as it passes through both lease scopes.
         let operation = std::pin::pin!(operation);
         self.with_active_shared_lease(async {

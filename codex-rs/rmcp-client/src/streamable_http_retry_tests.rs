@@ -55,6 +55,8 @@ fn streamable_http_retry_classifies_transport_and_auth_errors() {
             ),
         )),
         StreamableHttpError::UnexpectedServerResponse("HTTP 502: upstream failure".into()),
+        StreamableHttpError::UnexpectedServerResponse("HTTP 503: service unavailable".into()),
+        StreamableHttpError::UnexpectedServerResponse("HTTP 403: forbidden".into()),
         StreamableHttpError::UnexpectedServerResponse("HTTP 400: bad request".into()),
         StreamableHttpError::Client(StreamableHttpClientAdapterError::Auth(
             codex_api::AuthError::Transient("credential refresh unavailable".to_string()),
@@ -68,9 +70,18 @@ fn streamable_http_retry_classifies_transport_and_auth_errors() {
     ];
 
     assert_eq!(
-        errors.map(|error| RmcpClient::is_retryable_streamable_http_error(&error)),
+        errors.map(|error| {
+            let transport = DynamicTransportError::from_parts(
+                "streamable_http",
+                TypeId::of::<()>(),
+                Box::new(error),
+            );
+            let error =
+                ClientOperationError::from(rmcp::service::ServiceError::TransportSend(transport));
+            crate::is_retryable_transport_error(&anyhow::Error::new(error).context("listing tools"))
+        }),
         [
-            false, true, true, true, false, true, false, true, false, false
+            false, true, true, true, false, true, true, false, false, true, false, false
         ],
     );
 }

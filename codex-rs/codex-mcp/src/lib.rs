@@ -1,6 +1,9 @@
 pub use binding::McpBinding;
 pub use binding::McpPermissionSource;
 pub use binding::PreparedMcpCall;
+pub use binding::SEARCH_CONNECTOR;
+pub use binding::SearchDiscovery;
+pub use binding::is_model_search_tool;
 pub use client_capabilities::client_mcp_extensions;
 pub use client_tool_catalog::CodexAppsToolSnapshot;
 pub use codex_rmcp_client::McpProtocolMode;
