@@ -29,7 +29,18 @@ pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<Str
         }
 
         let mut file = options.open(&path)?;
-        file.lock()?;
+        file.lock_shared()?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        if Uuid::parse_str(contents.trim()).is_err() {
+            // Another process can initialize the ID while we switch locks. Read it again
+            // under the exclusive lock before deciding whether to create a new one.
+            file.unlock()?;
+            file.lock()?;
+            file.seek(SeekFrom::Start(0))?;
+            contents.clear();
+            file.read_to_string(&mut contents)?;
+        }
 
         #[cfg(unix)]
         {
@@ -42,8 +53,6 @@ pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<Str
             }
         }
 
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
         let trimmed = contents.trim();
         if !trimmed.is_empty()
             && let Ok(existing) = Uuid::parse_str(trimmed)
@@ -113,15 +122,41 @@ mod tests {
         )
         .expect("write installation id");
 
-        let resolved = resolve_installation_id(&codex_home_abs)
-            .await
-            .expect("resolve installation id");
+        #[cfg(unix)]
+        let reader = {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(codex_home.path().join(INSTALLATION_ID_FILENAME))
+                .expect("open existing ID");
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .expect("set existing permissions");
+            file.lock_shared().expect("share existing ID");
+            file
+        };
+        let resolved = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            resolve_installation_id(&codex_home_abs),
+        )
+        .await
+        .expect("valid ID readers must not serialize")
+        .expect("resolve installation id");
 
         assert_eq!(
             resolved,
             Uuid::parse_str(existing.as_str())
                 .expect("parse existing installation id")
                 .to_string()
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            reader
+                .metadata()
+                .expect("read installation id metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644
         );
     }
 
