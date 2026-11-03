@@ -222,6 +222,7 @@ fn exec_completion(turn_id: &str, call_id: &str, output: &str) -> RolloutItem {
 
 fn item_completed(turn_id: &str, item_id: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id: ThreadId::new(),
         turn_id: turn_id.to_string(),
         item: TurnItem::Reasoning(ReasoningItem {

@@ -313,6 +313,7 @@ mod tests {
         let mut expected = metadata.clone();
         for text in ["  ", "delegated task", "later output"] {
             let item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id: metadata.id,
                 turn_id: "turn-1".to_string(),
                 item: TurnItem::FunctionCallOutput(codex_protocol::items::FunctionCallOutputItem {
@@ -345,6 +346,7 @@ mod tests {
     fn completed_user_message_items_set_title_and_first_user_message() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id: ThreadId::default(),
             turn_id: "turn-1".to_string(),
             item: TurnItem::UserMessage(UserMessageItem::new(&[UserInput::Text {
@@ -395,6 +397,7 @@ mod tests {
         for event in [
             EventMsg::UserMessage(user.as_legacy_user_message_event()),
             EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: "turn-1".to_string(),
                 item: TurnItem::UserMessage(user),

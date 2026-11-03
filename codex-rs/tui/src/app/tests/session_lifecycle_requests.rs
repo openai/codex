@@ -2517,6 +2517,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
     }))
     .chain(items.into_iter().map(|item| {
         EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: "cross-page-review-turn".to_string(),
             item,
@@ -2681,6 +2682,7 @@ async fn transcript_alt_beginning_loads_every_older_history_page() -> Result<()>
     }))
     .chain((0..305).map(|index| {
         EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: "multi-page-turn".to_string(),
             item: TurnItem::AgentMessage(AgentMessageItem {
@@ -3097,6 +3099,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     }))
     .chain((0..120).map(|index| {
         EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: "scrollback-pagination-turn".to_string(),
             item: TurnItem::AgentMessage(AgentMessageItem {
@@ -5345,6 +5348,7 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
                         collaboration_mode_kind: Default::default(),
                     }),
                     EventMsg::ItemCompleted(ItemCompletedEvent {
+                        content_token_count: None,
                         thread_id,
                         turn_id: format!("saved-turn-{index}"),
                         item: TurnItem::UserMessage(UserMessageItem::new(&[CoreUserInput::Text {
@@ -5355,6 +5359,7 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
                         completed_at_ms: 0,
                     }),
                     EventMsg::ItemCompleted(ItemCompletedEvent {
+                        content_token_count: None,
                         thread_id,
                         turn_id: format!("saved-turn-{index}"),
                         item: TurnItem::AgentMessage(AgentMessageItem {

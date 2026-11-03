@@ -60,6 +60,7 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
     // ItemCompleted is the existing source for thread/items/list. Keep the legacy
     // equivalent too; the store selects the appropriate format for this thread.
     let completed = EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id: session.thread_id,
         turn_id: turn.sub_id.clone(),
         item: TurnItem::UserMessage(UserMessageItem::new(&content)),

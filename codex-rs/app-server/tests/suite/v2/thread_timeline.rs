@@ -108,6 +108,7 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> 
                     collaboration_mode_kind: Default::default(),
                 })),
                 RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                    content_token_count: None,
                     thread_id,
                     turn_id: "turn-1".to_string(),
                     item: TurnItem::UserMessage(UserMessageItem {

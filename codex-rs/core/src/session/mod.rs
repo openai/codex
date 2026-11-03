@@ -2909,6 +2909,20 @@ impl Session {
         turn_context: &TurnContext,
         item: TurnItem,
     ) {
+        self.emit_turn_item_completed_with_token_count(
+            turn_context,
+            item,
+            /*content_token_count*/ None,
+        )
+        .await;
+    }
+
+    pub(crate) async fn emit_turn_item_completed_with_token_count(
+        &self,
+        turn_context: &TurnContext,
+        item: TurnItem,
+        content_token_count: Option<u64>,
+    ) {
         record_turn_ttfm_metric(turn_context, &item).await;
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             contributor
@@ -2940,6 +2954,7 @@ impl Session {
                 thread_id: self.thread_id,
                 turn_id: turn_context.sub_id.clone(),
                 item,
+                content_token_count,
                 started_at_ms: Some(started_at_ms),
                 completed_at_ms,
             }),

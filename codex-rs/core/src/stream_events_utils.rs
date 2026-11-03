@@ -258,6 +258,7 @@ pub(crate) enum TurnItemContributorPolicy<'a> {
 pub(crate) struct FinalizedTurnItem {
     pub(crate) turn_item: TurnItem,
     pub(crate) facts: FinalizedTurnItemFacts,
+    pub(crate) content_token_count: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -303,6 +304,16 @@ pub(crate) async fn finalize_non_tool_response_item(
             _ => (None, None, false),
         };
     Some(FinalizedTurnItem {
+        content_token_count: match item {
+            ResponseItem::Message {
+                role,
+                internal_chat_message_metadata_passthrough,
+                ..
+            } if role == "assistant" => internal_chat_message_metadata_passthrough
+                .as_ref()
+                .and_then(|metadata| metadata.content_token_count),
+            _ => None,
+        },
         turn_item,
         facts: FinalizedTurnItemFacts {
             memory_citation,
@@ -395,7 +406,11 @@ pub(crate) async fn handle_output_item_done(
                 }
 
                 ctx.sess
-                    .emit_turn_item_completed(&ctx.step_context.turn, finalized_turn_item.turn_item)
+                    .emit_turn_item_completed_with_token_count(
+                        &ctx.step_context.turn,
+                        finalized_turn_item.turn_item,
+                        finalized_turn_item.content_token_count,
+                    )
                     .await;
             }
             record_completed_response_item_with_finalized_facts(

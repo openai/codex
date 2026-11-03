@@ -2761,6 +2761,7 @@ fn paginated_completed_item(
     item: CoreTurnItem,
 ) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id,
         turn_id: turn_id.to_string(),
         item,

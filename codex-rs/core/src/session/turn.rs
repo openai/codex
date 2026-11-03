@@ -2565,6 +2565,7 @@ async fn emit_agent_message_in_plan_mode(
     sess: &Session,
     turn_context: &TurnContext,
     agent_message: codex_protocol::items::AgentMessageItem,
+    content_token_count: Option<u64>,
     state: &mut PlanModeStreamState,
 ) {
     let agent_message_id = agent_message.id.clone();
@@ -2600,8 +2601,12 @@ async fn emit_agent_message_in_plan_mode(
             .insert(agent_message_id.clone());
     }
 
-    sess.emit_turn_item_completed(turn_context, TurnItem::AgentMessage(agent_message))
-        .await;
+    sess.emit_turn_item_completed_with_token_count(
+        turn_context,
+        TurnItem::AgentMessage(agent_message),
+        content_token_count,
+    )
+    .await;
     state.started_agent_message_items.remove(&agent_message_id);
 }
 
@@ -2610,12 +2615,20 @@ async fn emit_turn_item_in_plan_mode(
     sess: &Session,
     turn_context: &TurnContext,
     turn_item: TurnItem,
+    content_token_count: Option<u64>,
     previously_active_item: Option<&TurnItem>,
     state: &mut PlanModeStreamState,
 ) {
     match turn_item {
         TurnItem::AgentMessage(agent_message) => {
-            emit_agent_message_in_plan_mode(sess, turn_context, agent_message, state).await;
+            emit_agent_message_in_plan_mode(
+                sess,
+                turn_context,
+                agent_message,
+                content_token_count,
+                state,
+            )
+            .await;
         }
         _ => {
             if previously_active_item.is_none() {
@@ -2656,6 +2669,7 @@ async fn handle_assistant_item_done_in_plan_mode(
                 sess,
                 turn_context,
                 finalized_turn_item.turn_item,
+                finalized_turn_item.content_token_count,
                 previously_active_item,
                 state,
             )

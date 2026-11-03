@@ -1924,6 +1924,7 @@ async fn thread_fork_freezes_active_paginated_turn_as_interrupted(
     };
     let completed_user_item = |id: &str, completed_at_ms| {
         RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id: source_id,
             turn_id: "active-turn".to_string(),
             item: CoreTurnItem::UserMessage(UserMessageItem {

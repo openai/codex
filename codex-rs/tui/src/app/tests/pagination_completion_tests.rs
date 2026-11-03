@@ -87,6 +87,7 @@ pub(super) async fn completed_history_app(
         ];
         events.extend(items.into_iter().map(|item| {
             EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: turn_id.clone(),
                 item,

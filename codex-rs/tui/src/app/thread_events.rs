@@ -1010,6 +1010,7 @@ mod tests {
         let mut expected = serde_json::json!({
             "method": "item/completed", "params": {
                 "threadId": "thread", "turnId": "turn", "completedAtMs": 20,
+                "contentTokenCount": null,
                 "item": {
                     "type": "agentMessage", "id": "question", "text": "already in the snapshot",
                     "startedAtMs": 10, "completedAtMs": 20,

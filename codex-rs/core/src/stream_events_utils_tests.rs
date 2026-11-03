@@ -466,20 +466,32 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
     assert!(result.item.executed_tool_call_metadata().is_none());
 }
 
+#[test_case::test_case(false; "default_mode")]
+#[test_case::test_case(true; "plan_mode")]
 #[tokio::test]
-async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
+async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text(plan_mode: bool) {
     let (mut session, turn_context) = make_session_and_context().await;
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
     session.services.extensions = Arc::new(builder.build());
     let turn_store = ExtensionData::new(turn_context.sub_id.clone());
-    let item = assistant_output_text("<oai-mem-citation>hidden only</oai-mem-citation>");
+    let mut item = assistant_output_text("<oai-mem-citation>hidden only</oai-mem-citation>");
+    let ResponseItem::Message {
+        internal_chat_message_metadata_passthrough,
+        ..
+    } = &mut item
+    else {
+        panic!("expected assistant message");
+    };
+    internal_chat_message_metadata_passthrough
+        .get_or_insert_default()
+        .content_token_count = Some(23);
 
     let finalized = finalize_non_tool_response_item(
         &session,
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
-        /*plan_mode*/ false,
+        plan_mode,
     )
     .await
     .expect("assistant message should parse");
@@ -489,6 +501,7 @@ async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
         Some("contributed assistant text")
     );
     assert!(finalized.facts.defers_mailbox_delivery_to_next_turn);
+    assert_eq!(finalized.content_token_count, Some(23));
 }
 
 #[test_case::test_case(MessagePhase::Commentary; "commentary")]

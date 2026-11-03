@@ -936,6 +936,7 @@ mod tests {
         codex_rollout::append_rollout_item_to_path(
             &rollout_path,
             &RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: "turn-1".to_string(),
                 item: TurnItem::UserMessage(UserMessageItem::new(&[UserInput::Text {

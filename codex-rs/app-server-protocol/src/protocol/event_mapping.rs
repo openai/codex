@@ -419,13 +419,15 @@ pub fn item_event_to_server_notification(
             ))
         }
         EventMsg::ItemCompleted(item_completed_event) => {
-            ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            let mut notification = ItemCompletedNotification::new(
                 thread_id,
                 turn_id,
                 ThreadItemPayload::from(item_completed_event.item),
                 item_completed_event.started_at_ms,
                 item_completed_event.completed_at_ms,
-            ))
+            );
+            notification.content_token_count = item_completed_event.content_token_count;
+            ServerNotification::ItemCompleted(notification)
         }
         EventMsg::PatchApplyUpdated(event) => {
             ServerNotification::FileChangePatchUpdated(FileChangePatchUpdatedNotification {
@@ -486,6 +488,56 @@ mod tests {
     use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
     use codex_protocol::protocol::ExecOutputStream;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn assistant_completion_count_is_optional_envelope_metadata() {
+        let item = codex_protocol::items::TurnItem::AgentMessage(
+            codex_protocol::items::AgentMessageItem {
+                id: "answer".into(),
+                content: vec![codex_protocol::items::AgentMessageContent::Text {
+                    text: "Answer".into(),
+                }],
+                phase: None,
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            },
+        );
+        let payload = ThreadItemPayload::from(item.clone());
+        for count in [None, Some(0), Some(23)] {
+            let event = codex_protocol::protocol::ItemCompletedEvent {
+                thread_id: ThreadId::new(),
+                turn_id: "turn".into(),
+                item: item.clone(),
+                content_token_count: count,
+                started_at_ms: Some(1),
+                completed_at_ms: 2,
+            };
+            let mut expected = ItemCompletedNotification::new(
+                "thread".into(),
+                "turn".into(),
+                payload.clone(),
+                /*started_at_ms*/ Some(1),
+                /*completed_at_ms*/ 2,
+            );
+            expected.content_token_count = count;
+            assert_item_completed_server_notification(
+                item_event_to_server_notification(EventMsg::ItemCompleted(event), "thread", "turn"),
+                expected.clone(),
+            );
+            let mut wire = serde_json::to_value(&expected).unwrap();
+            assert_eq!(
+                wire.get("contentTokenCount"),
+                Some(&serde_json::json!(count))
+            );
+            wire.as_object_mut().unwrap().remove("contentTokenCount");
+            expected.content_token_count = None;
+            assert_eq!(
+                serde_json::from_value::<ItemCompletedNotification>(wire).unwrap(),
+                expected,
+            );
+        }
+    }
 
     fn assert_item_started_server_notification(
         notification: ServerNotification,

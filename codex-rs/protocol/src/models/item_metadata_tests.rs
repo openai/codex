@@ -57,6 +57,41 @@ fn malformed_content_kinds_do_not_prevent_loading_response_item() -> Result<()> 
     Ok(())
 }
 
+#[test]
+fn malformed_content_token_counts_do_not_prevent_loading_response_item() -> Result<()> {
+    for value in [json!(-1), json!(true), json!(1.5), json!("4"), json!(null)] {
+        let item: ResponseItem = serde_json::from_value(response_item_json(json!({
+            "content_token_count": value,
+        })))?;
+        assert_eq!(
+            item,
+            response_item(InternalChatMessageMetadataPassthrough::default())
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn content_token_counts_are_not_replayed_into_requests() -> Result<()> {
+    let item: ResponseItem = serde_json::from_value(response_item_json(json!({
+        "turn_id": "turn-1", "content_token_count": 23,
+    })))?;
+    let ResponseItem::Message {
+        internal_chat_message_metadata_passthrough: Some(ref metadata),
+        ..
+    } = item
+    else {
+        panic!("expected message metadata");
+    };
+    assert_eq!(metadata.content_token_count, Some(23));
+    let encoded = serde_json::to_value(item)?;
+    assert_eq!(
+        encoded["internal_chat_message_metadata_passthrough"],
+        json!({"turn_id": "turn-1"})
+    );
+    Ok(())
+}
+
 fn response_item(metadata: InternalChatMessageMetadataPassthrough) -> ResponseItem {
     ResponseItem::Message {
         status: None,

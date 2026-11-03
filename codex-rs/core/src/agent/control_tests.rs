@@ -2435,6 +2435,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
                 internal_chat_message_metadata_passthrough: None,
             }),
             RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id: parent_thread_id,
                 turn_id: "parent-turn".to_string(),
                 item: TurnItem::UserMessage(UserMessageItem {

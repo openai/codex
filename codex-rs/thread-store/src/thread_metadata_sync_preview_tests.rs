@@ -27,6 +27,7 @@ fn delegated_output_emits_only_first_preview_in_live_patch() {
     );
     for (index, text) in ["first task", "later task"].into_iter().enumerate() {
         let item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: "turn".to_string(),
             item: TurnItem::FunctionCallOutput(FunctionCallOutputItem {

@@ -1009,6 +1009,13 @@ pub struct InternalChatMessageMetadataPassthrough {
     #[schemars(skip)]
     #[ts(skip)]
     pub create_time: Option<serde_json::Number>,
+    /// Native content-token count for this sampled message, including its sampled footer.
+    /// Read from the producer only; do not replay telemetry into subsequent model requests.
+    #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub content_token_count: Option<u64>,
     /// Harness-owned classifications aligned with the item's content entries.
     #[serde_as(deserialize_as = "serde_with::DefaultOnError")]
     #[serde(default, skip_serializing_if = "Option::is_none")]

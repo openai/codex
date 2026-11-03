@@ -28,6 +28,7 @@ fn image_item(image: GeneratedImageRef) -> ImageGenerationItem {
 #[test]
 fn paginated_image_generation_preserves_file_reference() {
     let event = EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
         item: TurnItem::Extension(ExtensionItem::ImageGeneration(image_item(
@@ -89,6 +90,7 @@ fn legacy_image_generation_preserves_file_reference() {
 #[test]
 fn inline_image_generation_result_is_preserved() {
     let event = EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id: ThreadId::new(),
         turn_id: "turn-1".to_string(),
         item: TurnItem::Extension(ExtensionItem::ImageGeneration(image_item(

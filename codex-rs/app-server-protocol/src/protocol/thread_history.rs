@@ -2135,6 +2135,7 @@ mod tests {
             };
             builder.handle_event_for_history_mode(&EventMsg::ItemStarted(started), mode);
             let completed = ItemCompletedEvent {
+                content_token_count: None,
                 thread_id: ThreadId::default(),
                 turn_id: turn_id.clone(),
                 item,
@@ -2336,6 +2337,7 @@ mod tests {
         });
         let events = vec![
             EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: "turn-1".into(),
                 item: entered,
@@ -2343,6 +2345,7 @@ mod tests {
                 completed_at_ms: 0,
             }),
             EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: "turn-1".into(),
                 item: exited,
@@ -2594,6 +2597,7 @@ mod tests {
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: turn_id.to_string(),
                 item: sleep_item,
@@ -2679,6 +2683,7 @@ mod tests {
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: turn_id.to_string(),
                 item: CoreTurnItem::Extension(CoreExtensionItem::ImageGeneration(
@@ -2797,6 +2802,7 @@ mod tests {
                 interaction_input: None,
             }),
             EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id,
                 turn_id: turn_id.to_string(),
                 item: command_item,
@@ -4073,6 +4079,7 @@ mod tests {
         use codex_protocol::protocol::HasLegacyEvent;
 
         let completion = ItemCompletedEvent {
+            content_token_count: None,
             thread_id: ThreadId::new(),
             turn_id: "turn-a".into(),
             started_at_ms: None,
@@ -4388,6 +4395,7 @@ mod tests {
             ("c", "latest"),
         ] {
             builder.handle_live_paginated_event(&EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id: ThreadId::default(),
                 turn_id: turn_id.clone(),
                 item: CoreTurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
@@ -5530,6 +5538,7 @@ mod tests {
         }));
         let changes =
             builder.handle_event_with_changes(&EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id: ThreadId::new(),
                 turn_id: "turn-a".into(),
                 item: hook_prompt,
@@ -5551,6 +5560,7 @@ mod tests {
             .join("worker")
             .expect("worker path");
         let spawn = ItemCompletedEvent {
+            content_token_count: None,
             thread_id: ThreadId::new(),
             turn_id: "turn-a".into(),
             item: CoreTurnItem::SubAgentActivity(CoreSubAgentActivityItem {
@@ -5601,6 +5611,7 @@ mod tests {
                     time_to_first_token_ms: None,
                 })),
                 RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                    content_token_count: None,
                     thread_id: ThreadId::new(),
                     turn_id: "turn-a".into(),
                     item: CoreTurnItem::SubAgentActivity(CoreSubAgentActivityItem {

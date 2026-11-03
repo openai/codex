@@ -2329,6 +2329,7 @@ mod tests {
             .await
             .expect("create paginated thread");
         let paginated_item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: "turn-1".to_string(),
             item: TurnItem::UserMessage(UserMessageItem {

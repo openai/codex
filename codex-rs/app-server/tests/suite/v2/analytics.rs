@@ -11,6 +11,7 @@ use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
@@ -25,6 +26,7 @@ use codex_app_server_protocol::TurnSettingsUpdateResponse;
 use codex_app_server_protocol::TurnSettingsUpdateStatus;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::OtelExporterKind;
@@ -35,12 +37,18 @@ use codex_core_plugins::store::PluginStore;
 use codex_features::Feature;
 use codex_models_manager::bundled_models_response;
 use codex_plugin::PluginId;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
 use core_test_support::skip_if_wine_exec;
+use core_test_support::startup::STARTUP_TIMEOUT;
+use core_test_support::startup::expect_startup;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -58,6 +66,123 @@ use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const SERVICE_VERSION: &str = "0.0.0-test";
+
+// Completion metadata follows its source message without entering later model requests.
+#[test_case::test_case(ModeKind::Default; "normal")]
+#[test_case::test_case(ModeKind::Plan; "plan")]
+#[tokio::test]
+async fn native_counts_follow_completed_messages_without_request_replay(
+    mode: ModeKind,
+) -> Result<()> {
+    #[cfg(windows)]
+    const READ_TIMEOUT: Duration = Duration::from_secs(25);
+    #[cfg(not(windows))]
+    const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+    let server = responses::start_mock_server().await;
+    let mut events = vec![responses::ev_response_created("response-1")];
+    for (id, text, phase, count) in [
+        ("partial", "Partial.", "partial_answer", 0),
+        ("final", "Done.", "final_answer", 23),
+    ] {
+        let mut added = responses::ev_message_item_added(id, "");
+        added["item"]["phase"] = json!(phase);
+        let mut done = responses::ev_assistant_message(id, text);
+        done["item"]["phase"] = json!(phase);
+        done["item"]["internal_chat_message_metadata_passthrough"] =
+            json!({"content_token_count": count});
+        events.extend([added, responses::ev_output_text_delta(text), done]);
+    }
+    events.push(responses::ev_completed("response-1"));
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
+    let mut app = expect_startup(
+        TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .build_initialized_with_timeout(STARTUP_TIMEOUT),
+    )
+    .await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(events),
+            responses::sse(vec![
+                responses::ev_response_created("response-2"),
+                responses::ev_assistant_message("next", "Next."),
+                responses::ev_completed("response-2"),
+            ]),
+        ],
+    )
+    .await;
+    let thread = app
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".into()),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    timeout(READ_TIMEOUT, async {
+        for prompt in ["First turn", "Next turn"] {
+            let completed = app
+                .start_turn_and_wait_for_completion(TurnStartParams {
+                    thread_id: thread.id.clone(),
+                    input: vec![UserInput::Text {
+                        text: prompt.into(),
+                        text_elements: Vec::new(),
+                    }],
+                    collaboration_mode: Some(CollaborationMode {
+                        mode,
+                        settings: Settings {
+                            model: "mock-model".into(),
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    }),
+                    ..Default::default()
+                })
+                .await?;
+            assert_eq!(completed.turn.status, TurnStatus::Completed);
+        }
+        let mut counts = Vec::new();
+        while counts.len() < 2 {
+            let completed: ItemCompletedNotification =
+                app.read_notification("item/completed").await?;
+            if let ThreadItemPayload::AgentMessage { id, phase, .. } = completed.item.payload {
+                counts.push((id, phase, completed.content_token_count));
+            }
+        }
+        assert_eq!(
+            counts,
+            vec![
+                ("partial".into(), Some(MessagePhase::PartialAnswer), Some(0)),
+                ("final".into(), Some(MessagePhase::FinalAnswer), Some(23)),
+            ]
+        );
+        app.shutdown_gracefully().await?;
+        anyhow::Ok(())
+    })
+    .await??;
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let assistant_input: Vec<_> = requests[1]
+        .inputs_of_type("message")
+        .into_iter()
+        .filter(|item| item["role"] == "assistant")
+        .map(|item| {
+            (
+                item["content"][0]["text"].clone(),
+                item["internal_chat_message_metadata_passthrough"]
+                    .get("content_token_count")
+                    .cloned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        assistant_input,
+        vec![(json!("Partial."), None), (json!("Done."), None)]
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn usage_limit_window_reaches_turn_analytics() -> Result<()> {

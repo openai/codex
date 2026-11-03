@@ -178,6 +178,7 @@ fn projects_optional_completed_item_lifecycle_timestamps() {
     {
         let changes = project(RolloutItem::EventMsg(EventMsg::ItemCompleted(
             ItemCompletedEvent {
+                content_token_count: None,
                 thread_id: ThreadId::default(),
                 turn_id: "turn-1".to_string(),
                 item: item.clone(),
@@ -283,6 +284,7 @@ fn project(item: RolloutItem) -> ThreadHistoryChangeSet {
 
 fn item_completed(thread_id: ThreadId, turn_id: &str, item: TurnItem) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id,
         turn_id: turn_id.to_string(),
         item,

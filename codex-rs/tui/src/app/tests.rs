@@ -9293,6 +9293,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place_scenario
                 collaboration_mode_kind: ModeKind::default(),
             })),
             RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                content_token_count: None,
                 thread_id: ThreadId::from_string(&source_thread_id)?,
                 turn_id: turn_id.to_string(),
                 item: TurnItem::UserMessage(UserMessageItem {
