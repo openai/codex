@@ -14,6 +14,7 @@ mod install_lock;
 mod launch;
 pub use launch::restart_with_features;
 pub use launch::start_with_features;
+pub use launch::start_with_features_classified;
 mod managed_install;
 mod prepare_install;
 mod release_pruning;
@@ -46,6 +47,8 @@ use managed_install::managed_codex_version;
 use serde::Serialize;
 use settings::DaemonSettings;
 use settings::MAX_SHUTDOWN_GRACE_SECONDS;
+use telemetry::StartError;
+use telemetry::StartFailure;
 use tokio::time::sleep;
 
 const START_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -420,7 +423,10 @@ impl Daemon {
         let _operation_lock = self.acquire_operation_lock().await?;
         let selected = self.current_installation()?;
         match command {
-            LifecycleCommand::Start => selected.start(&BTreeMap::new()).await,
+            LifecycleCommand::Start => selected
+                .start(&BTreeMap::new())
+                .await
+                .map_err(|err| err.error),
             LifecycleCommand::Restart { feature_overrides } => {
                 selected.restart(&feature_overrides).await
             }
@@ -435,7 +441,10 @@ impl Daemon {
         }
     }
 
-    async fn start(&self, feature_overrides: &BTreeMap<String, bool>) -> Result<LifecycleOutput> {
+    async fn start(
+        &self,
+        feature_overrides: &BTreeMap<String, bool>,
+    ) -> Result<LifecycleOutput, StartError> {
         let mut managed = self.clone();
         let mut settings = self.load_settings().await?;
         let (status, backend, pid, info) = if let Ok(info) = client::probe(&self.socket_path).await
@@ -460,9 +469,15 @@ impl Daemon {
                     "warning: failed to clear stale daemon recovery before start: {err}"
                 ));
             }
-            prepare_install::prepare(self, &settings).await?;
-            managed.managed_codex_bin = self.current_managed_codex_bin()?;
-            managed.ensure_managed_codex_bin()?;
+            prepare_install::prepare(self, &settings)
+                .await
+                .map_err(StartError::install)?;
+            managed.managed_codex_bin = self
+                .current_managed_codex_bin()
+                .map_err(StartError::install)?;
+            managed
+                .ensure_managed_codex_bin()
+                .map_err(StartError::install)?;
             // Only a fresh launch may replace these settings. Keep them for restarts
             // and updates, without changing the user's config or a running daemon.
             if settings.feature_overrides != *feature_overrides {
@@ -705,19 +720,24 @@ impl Daemon {
         let exited = backend::wait_for_process_exit(&self.pid_file);
         tokio::pin!(exited);
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
-        let err = loop {
+        let (err, exited_before_ready) = loop {
             match client::probe(&self.socket_path).await {
                 Ok(info) => return Ok(info),
                 Err(err) if tokio::time::Instant::now() < deadline => {
                     tokio::select! {
-                        () = &mut exited => break err,
+                        () = &mut exited => break (err, true),
                         () = sleep(START_POLL_INTERVAL) => {}
                     }
                 }
-                Err(err) => break err,
+                Err(err) => break (err, false),
             }
         };
-        Err(err).context(self.app_server_not_ready_context().await)
+        let context = self.app_server_not_ready_context().await;
+        Err(err).context(if exited_before_ready {
+            StartFailure::EarlyChildExit(context)
+        } else {
+            StartFailure::ReadinessTimeout(context)
+        })
     }
 
     async fn app_server_not_ready_context(&self) -> String {
@@ -754,7 +774,10 @@ impl Daemon {
             let _ = selected
                 .set_remote_control_locked(RemoteControlMode::Enabled)
                 .await?;
-            let output = selected.start(&BTreeMap::new()).await?;
+            let output = selected
+                .start(&BTreeMap::new())
+                .await
+                .map_err(|err| err.error)?;
             return Ok(RemoteControlStartOutput::Start(output));
         }
 
@@ -1569,6 +1592,10 @@ mod tests {
                 daemon.managed_codex_bin.display(),
                 stderr_log.display()
             )
+        );
+        assert_eq!(
+            super::StartError::from(error).failure_reason(),
+            "early_child_exit"
         );
     }
 }

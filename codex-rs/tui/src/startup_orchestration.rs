@@ -614,9 +614,10 @@ pub(super) async fn run_main_inner(
                 // responsive while it checks the running server or prepares an installation.
                 // Preserve saved daemon settings until any mismatch is confirmed in recovery.
                 let result =
-                    codex_app_server_daemon::start_with_features(&Default::default()).await;
+                    codex_app_server_daemon::start_with_features_classified(&Default::default())
+                        .await;
                 daemon_telemetry::record_start(&config, &result).await;
-                match result {
+                match result.map_err(|err| err.error) {
                     Ok(output) => Ok(Some(output)),
                     #[cfg(windows)]
                     Err(err) if err.is::<codex_app_server_daemon::DetachedLaunchRestricted>() => {

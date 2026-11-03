@@ -273,6 +273,10 @@ async fn start_retries_stale_empty_pid_file_under_its_own_lock() {
         err.to_string()
             .starts_with("failed to spawn detached app-server process using ")
     );
+    assert_eq!(
+        crate::telemetry::StartError::from(err).failure_reason(),
+        "spawn"
+    );
 }
 
 #[cfg(unix)]

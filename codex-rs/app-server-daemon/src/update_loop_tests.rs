@@ -839,6 +839,12 @@ async fn readiness_waits_for_a_slow_managed_daemon() {
     backend.start().await.unwrap();
 
     tokio::time::pause();
+    // The process is alive but has no listening socket throughout the first deadline.
+    let error = daemon.wait_until_ready().await.unwrap_err();
+    assert_eq!(
+        crate::telemetry::StartError::from(error).failure_reason(),
+        "readiness_timeout"
+    );
     let (ready, listener) = tokio::join!(daemon.wait_until_ready(), async {
         // Model a cold start that takes longer than the old Linux readiness deadline.
         tokio::time::sleep(Duration::from_secs(15)).await;

@@ -25,7 +25,10 @@ impl<F: FnOnce(&'static str) -> LaunchTags> Drop for Launch<F> {
 
 pub(super) async fn record_start(
     config: &Config,
-    result: &anyhow::Result<codex_app_server_daemon::LifecycleOutput>,
+    result: &Result<
+        codex_app_server_daemon::LifecycleOutput,
+        codex_app_server_daemon::telemetry::StartError,
+    >,
 ) {
     use codex_app_server_daemon::LifecycleStatus;
     let outcome = match result {
@@ -59,6 +62,9 @@ pub(super) async fn record_start(
             ("initiation_source", "tui_auto_start"),
             ("outcome", outcome),
         ]);
+        if let Err(error) = result {
+            tags.push(("failure_reason", error.failure_reason()));
+        }
         let _ = metrics.counter("codex.daemon.start", /*inc*/ 1, &tags);
     }
     let _ = otel

@@ -3,6 +3,63 @@
 
 use std::path::Path;
 
+/// Failure of a foreground auto-start, with the original diagnostic kept separate from the metric.
+#[derive(Debug)]
+pub struct StartError {
+    pub error: anyhow::Error,
+    during_install: bool,
+}
+
+impl StartError {
+    pub fn failure_reason(&self) -> &'static str {
+        #[cfg(windows)]
+        if self.error.is::<crate::DetachedLaunchRestricted>() {
+            return "spawn";
+        }
+        match self.error.downcast_ref::<StartFailure>() {
+            Some(StartFailure::Spawn(_)) => "spawn",
+            Some(StartFailure::EarlyChildExit(_)) => "early_child_exit",
+            Some(StartFailure::ReadinessTimeout(_)) => "readiness_timeout",
+            None if self.during_install => "install",
+            None => "other",
+        }
+    }
+
+    pub(crate) fn install(error: anyhow::Error) -> Self {
+        Self {
+            error,
+            during_install: true,
+        }
+    }
+}
+
+impl From<anyhow::Error> for StartError {
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            error,
+            during_install: false,
+        }
+    }
+}
+
+/// Typed anyhow context preserves both the original diagnostic and downcasts through it.
+#[derive(Debug)]
+pub(crate) enum StartFailure {
+    Spawn(String),
+    EarlyChildExit(String),
+    ReadinessTimeout(String),
+}
+
+impl std::fmt::Display for StartFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(message)
+            | Self::EarlyChildExit(message)
+            | Self::ReadinessTimeout(message) => f.write_str(message),
+        }
+    }
+}
+
 /// Suppress child reporting when the foreground TUI handoff owns the observation.
 pub const HANDOFF_ENV: &str = "CODEX_DAEMON_TELEMETRY_HANDOFF";
 
