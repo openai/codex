@@ -252,7 +252,11 @@ async fn safety_recourse_handles_a_policy_block() -> Result<()> {
             }
         }
         let loading = render_bottom_popup(&app.chat_widget, /*width*/ 80);
-        let loading = loading.split(" (").next().unwrap_or_default();
+        let loading = loading
+            .split(" (")
+            .next()
+            .unwrap_or_default()
+            .replace('◦', "•");
         while let Ok(event) = events.try_recv() {
             if let AppEvent::InsertHistoryCell(cell) = event {
                 assert!(!cell.as_any().is::<history_cell::SafetyAccessBlockCell>());
