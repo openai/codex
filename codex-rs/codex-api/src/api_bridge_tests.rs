@@ -184,6 +184,12 @@ fn map_http_error_classifies_provider_codes() {
             true,
         ),
         (400, "model_not_found", ModelNotFound, false),
+        (
+            400,
+            "budget_reached",
+            CodexErrorInfo::SessionBudgetExceeded,
+            false,
+        ),
         (403, "model_not_found", ModelNotFound, false),
         (404, "model_not_found", ModelNotFound, false),
         (

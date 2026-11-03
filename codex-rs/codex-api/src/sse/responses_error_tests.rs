@@ -109,48 +109,53 @@ async fn policy_capacity_classification_preserves_overload_retry_behavior() {
     }
 }
 
-/// Flex failures remain terminal even with retry headers and a later completed event.
+/// Terminal provider failures ignore retry headers and stop before a later completed event.
 #[tokio::test(start_paused = true)]
-async fn flex_failure_with_retry_header_ends_stream_immediately() {
-    let error = json!({
-        "code": "flex_unavailable",
-        "plan_type": 42,
-        "headers": {"retry-after": "300"}
-    });
-    for failure in [
-        json!({"type": "error", "error": error}),
-        json!({"type": "response.failed", "response": {"error": error}}),
+async fn terminal_failure_with_retry_header_ends_stream_immediately() {
+    for (code, expected) in [
+        ("flex_unavailable", CodexErrorInfo::FlexUnavailable),
+        ("budget_reached", CodexErrorInfo::SessionBudgetExceeded),
     ] {
-        let completed = json!({"type": "response.completed", "response": {"id": "later"}});
-        let bytes = stream::iter([Ok(Bytes::from(format!(
-            "data: {failure}\n\ndata: {completed}\n\n"
-        )))])
-        .chain(stream::pending());
-        let mut stream = spawn_response_stream(
-            StreamResponse {
-                status: StatusCode::OK,
-                headers: HeaderMap::new(),
-                bytes: Box::pin(bytes),
-            },
-            Duration::from_secs(60),
-            /*telemetry*/ None,
-            /*turn_state*/ None,
-        );
-        let error = loop {
-            match stream.next().await {
-                Some(Ok(ResponseEvent::RateLimits(_))) => {}
-                Some(Err(error)) => break map_api_error(error),
-                event => panic!("expected a Flex error, got {event:?}"),
-            }
-        };
-        assert_eq!(
-            (
-                error.to_codex_protocol_error(),
-                error.retry_delay(/*retry_count*/ 1)
-            ),
-            (CodexErrorInfo::FlexUnavailable, None)
-        );
-        assert!(stream.next().await.is_none());
+        let error = json!({
+            "code": code,
+            "plan_type": 42,
+            "headers": {"retry-after": "300"}
+        });
+        for failure in [
+            json!({"type": "error", "error": error}),
+            json!({"type": "response.failed", "response": {"error": error}}),
+        ] {
+            let completed = json!({"type": "response.completed", "response": {"id": "later"}});
+            let bytes = stream::iter([Ok(Bytes::from(format!(
+                "data: {failure}\n\ndata: {completed}\n\n"
+            )))])
+            .chain(stream::pending());
+            let mut stream = spawn_response_stream(
+                StreamResponse {
+                    status: StatusCode::OK,
+                    headers: HeaderMap::new(),
+                    bytes: Box::pin(bytes),
+                },
+                Duration::from_secs(60),
+                /*telemetry*/ None,
+                /*turn_state*/ None,
+            );
+            let error = loop {
+                match stream.next().await {
+                    Some(Ok(ResponseEvent::RateLimits(_))) => {}
+                    Some(Err(error)) => break map_api_error(error),
+                    event => panic!("expected a terminal error for {code}, got {event:?}"),
+                }
+            };
+            assert_eq!(
+                (
+                    error.to_codex_protocol_error(),
+                    error.retry_delay(/*retry_count*/ 1)
+                ),
+                (expected.clone(), None)
+            );
+            assert!(stream.next().await.is_none());
+        }
     }
 }
 
