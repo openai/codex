@@ -85,8 +85,7 @@ impl Client {
         turn_ids: &[String],
         provider_headers: &HeaderMap,
     ) -> Result<Vec<ApiKeyTurnCost>, RequestError> {
-        let mut headers = provider_headers.clone();
-        headers.extend(self.headers()?);
+        let headers = self.headers_with(provider_headers.clone()).await?;
         let request = self
             .request(Method::POST, url)
             .headers(headers)

@@ -2436,18 +2436,23 @@ name = "codex-backend-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "codex-api",
  "codex-backend-openapi-models",
+ "codex-features",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
  "codex-protocol",
+ "codex-runtime-agent-instance",
  "http 1.4.0",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "url",
+ "uuid",
  "wiremock",
 ]
 
@@ -4773,6 +4778,7 @@ name = "codex-runtime-agent-instance"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "codex-agent-identity",
  "codex-api",
  "codex-features",
@@ -4780,6 +4786,7 @@ dependencies = [
  "codex-login",
  "codex-utils-redacted-string",
  "ed25519-dalek",
+ "futures",
  "http 1.4.0",
  "pretty_assertions",
  "rand 0.9.3",

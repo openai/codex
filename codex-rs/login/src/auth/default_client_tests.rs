@@ -355,3 +355,61 @@ fn test_macos() {
     .unwrap();
     assert!(re.is_match(&user_agent));
 }
+
+#[tokio::test]
+async fn signed_reject_routes_preserve_invalid_ca_errors() {
+    const CHILD: &str = "CODEX_TEST_SIGNED_ROUTE_INVALID_CA";
+    if std::env::var_os(CHILD).is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = dir.path().join("invalid.pem");
+        std::fs::write(&ca, "invalid certificate").unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("signed_reject_routes_preserve_invalid_ca_errors")
+            .arg("--nocapture")
+            .env(CHILD, "1")
+            .env("CODEX_CA_CERTIFICATE", ca)
+            .env_remove("SSL_CERT_FILE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+
+    let url = "https://127.0.0.1:9/";
+    let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+        .with_sensitive_header_protection();
+    let sync_client = create_client_for_route(
+        &factory,
+        url,
+        ClientRouteClass::Api,
+        ClientRedirectPolicy::Reject,
+    )
+    .unwrap();
+    let async_client = create_client_for_route_async(
+        factory,
+        url.into(),
+        ClientRouteClass::Api,
+        ClientRedirectPolicy::Reject,
+    )
+    .await
+    .unwrap();
+    for client in [sync_client, async_client] {
+        let error = client.get(url).send().await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                codex_http_client::HttpError::Route(
+                    codex_http_client::RouteAwareClientPoolError::Build(
+                        codex_http_client::BuildRouteAwareHttpClientError::CustomCa(_)
+                    )
+                )
+            ),
+            "{error}"
+        );
+    }
+}

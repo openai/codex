@@ -20,13 +20,18 @@ http = { workspace = true }
 url = { workspace = true }
 codex-backend-openapi-models = { path = "../codex-backend-openapi-models" }
 codex-api = { workspace = true }
+codex-features = { workspace = true }
 codex-http-client = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-protocol = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
+uuid = { workspace = true }
 pretty_assertions = "1"
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 wiremock = { workspace = true }

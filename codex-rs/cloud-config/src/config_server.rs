@@ -191,13 +191,15 @@ impl BundleSource for ConfigServerSource {
             });
         }
         *identity = credentials.authorization_id;
-        fetch_bundle(
-            &self
-                .client
-                .clone()
-                .with_bearer_token(credentials.access_token),
-        )
-        .await
+        let client = self
+            .client
+            .clone()
+            .with_bearer_token(credentials.access_token)
+            .map_err(|_| BundleRequestError::Fatal {
+                error: auth_failure(),
+                metric_reason: Some("auth"),
+            })?;
+        fetch_bundle(&client).await
     }
 
     async fn recover_auth(

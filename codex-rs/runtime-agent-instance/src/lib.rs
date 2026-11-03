@@ -28,3 +28,6 @@ pub use registration::RegistrationErrorCode;
 pub use registration::RuntimeRegistrationClient;
 pub use runtime::RuntimeAgentInstance;
 pub use runtime::RuntimeRegistration;
+
+/// Harness-owned lazy runtime, shared before any request requires registration.
+pub type RuntimeAuthSlot = std::sync::Arc<std::sync::OnceLock<std::sync::Arc<RuntimeAuthManager>>>;

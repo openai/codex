@@ -571,3 +571,140 @@ async fn registration_failure_reports_retryability() {
         );
     }
 }
+
+#[tokio::test]
+async fn captured_request_auth_allows_refresh_but_rejects_source_replacement() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(registered)
+        .mount(&server)
+        .await;
+    let initial = oauth(Some("login-a"), "old");
+    let refreshed = oauth(Some("login-a"), "new");
+    let (manager, source, _) = setup(&server, initial.clone(), refreshed.clone()).await;
+    let runtime = manager.auth().await.unwrap().runtime().id().to_string();
+    *source.current.write().unwrap() = refreshed.clone();
+    let selected = manager
+        .auth_for(&initial, &PlatformResourceSelection::default())
+        .await
+        .unwrap();
+    let source_generation = selected.change_state().source_generation;
+    let request_auth = selected.into_auth_provider(RuntimeAuthMode::DualHeader);
+    let headers = request_auth
+        .apply_auth_headers(HeaderMap::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        headers[AUTHORIZATION],
+        format!("Bearer {}", refreshed.get_token().unwrap())
+    );
+    let proof = headers["x-openai-agent-assertion"].to_str().unwrap();
+    let payload: Value = serde_json::from_slice(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(proof.split('.').nth(2).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(payload["runtime_agent_instance"], runtime);
+    *source.current.write().unwrap() = oauth(Some("another-login"), "replacement");
+    assert!(matches!(
+        manager
+            .auth_for_source(source_generation, &PlatformResourceSelection::default())
+            .await,
+        Err(RuntimeAuthError::Changed)
+    ));
+    assert!(
+        manager
+            .auth_for(&initial, &PlatformResourceSelection::default())
+            .await
+            .is_err()
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn file_upload_runtime_auth_signs_control_requests_but_not_blob_uploads() {
+    use wiremock::matchers::path;
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        let server = MockServer::start().await;
+        let blob = MockServer::start().await;
+        Mock::given(path("/agent/register"))
+            .respond_with(registered)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "file_id": "file-a", "upload_url": blob.uri(),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/files/file-a/uploaded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "retry"})))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/files/file-a/uploaded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "success", "download_url": blob.uri(), "file_name": "hello.txt", "file_size_bytes": 5,
+            }))).expect(1).mount(&server).await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&blob)
+            .await;
+        let initial = CodexAuth::from_api_key("key-a");
+        let (manager, _, _) = setup(&server, initial.clone(), initial).await;
+        let provider = manager.auth().await.unwrap().into_auth_provider(mode);
+        let pool =
+            codex_http_client::RouteAwareClientPool::new_without_redirects_or_request_logging(
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                codex_http_client::ClientRouteClass::Api,
+            );
+        let uploaded = codex_api::upload_openai_file(
+            &server.uri(),
+            provider.as_ref(),
+            &pool,
+            "hello.txt".into(),
+            /*file_size_bytes*/ 5,
+            || async {
+                Ok(futures::stream::iter([Ok::<_, std::io::Error>(
+                    bytes::Bytes::from_static(b"hello"),
+                )]))
+            },
+            /*hosted_upload*/ None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(uploaded.uri, "sediment://file-a");
+        let requests = server.received_requests().await.unwrap();
+        let mut proofs = std::collections::HashSet::new();
+        for request in requests
+            .iter()
+            .filter(|r| r.url.path().starts_with("/files"))
+        {
+            let authorization = request.headers[AUTHORIZATION].to_str().unwrap();
+            let proof = match mode {
+                RuntimeAuthMode::DualHeader => {
+                    assert_eq!(authorization, "Bearer key-a");
+                    request.headers["x-openai-agent-assertion"]
+                        .to_str()
+                        .unwrap()
+                }
+                RuntimeAuthMode::AssertionOnly => {
+                    assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+                    authorization.strip_prefix("AgentAssertion ").unwrap()
+                }
+            };
+            assert!(proofs.insert(proof));
+        }
+        assert_eq!(proofs.len(), 3);
+        let blobs = blob.received_requests().await.unwrap();
+        assert_eq!(blobs.len(), 1);
+        assert!(!blobs[0].headers.contains_key(AUTHORIZATION));
+        assert!(!blobs[0].headers.contains_key("x-openai-agent-assertion"));
+        assert_eq!(blobs[0].body, b"hello");
+    }
+}

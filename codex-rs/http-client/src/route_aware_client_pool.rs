@@ -56,6 +56,7 @@ pub struct RouteAwareClientPool {
     pub(crate) client_builder: HttpClientBuilder,
     default_headers: HeaderMap,
     custom_ca_fallback: CustomCaFallback,
+    direct_proxy: bool,
     clients: Arc<Mutex<HashMap<OutboundProxyRoute, TransportClient>>>,
     client_build: Arc<tokio::sync::Mutex<()>>,
     rustls_clients: Option<RustlsClientCache>,
@@ -289,6 +290,7 @@ impl RouteAwareClientPool {
             client_builder,
             default_headers,
             custom_ca_fallback: CustomCaFallback::Disabled,
+            direct_proxy: false,
             clients: Arc::new(Mutex::new(HashMap::new())),
             client_build: Arc::default(),
             rustls_clients: None,
@@ -354,6 +356,12 @@ impl RouteAwareClientPool {
     /// custom-CA construction failure. System-proxy routes still propagate construction errors.
     pub fn with_legacy_custom_ca_fallback(mut self) -> Self {
         self.custom_ca_fallback = CustomCaFallback::LegacyTransportDefault;
+        self
+    }
+
+    /// Uses direct routing without changing destination policy or TLS configuration.
+    pub fn with_direct_proxy(mut self) -> Self {
+        self.direct_proxy = true;
         self
     }
 
@@ -478,13 +486,14 @@ impl RouteAwareClientPool {
         F: FnOnce(String) -> Fut,
         Fut: Future<Output = io::Result<OutboundProxyRoute>>,
     {
-        let route = if self.custom_ca_fallback == CustomCaFallback::LegacyDirect {
-            OutboundProxyRoute::Direct
-        } else {
-            resolve_route(request_url.to_string())
-                .await
-                .map_err(RouteAwareClientPoolError::Resolve)?
-        };
+        let route =
+            if self.direct_proxy || self.custom_ca_fallback == CustomCaFallback::LegacyDirect {
+                OutboundProxyRoute::Direct
+            } else {
+                resolve_route(request_url.to_string())
+                    .await
+                    .map_err(RouteAwareClientPoolError::Resolve)?
+            };
         if let Some(rustls_clients) = self.rustls_clients.as_ref()
             && let Ok(url) = reqwest::Url::parse(request_url)
             && rustls_clients.requires_rustls(&url, &route)

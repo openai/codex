@@ -1,6 +1,7 @@
 //! Keep model requests and catalog refreshes bound to the same registered actor.
 
 use codex_api::AuthError;
+use codex_features::RuntimeAuthMode;
 use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
 use codex_http_client::OPENAI_ORGANIZATION_HEADER;
 use codex_http_client::OPENAI_PROJECT_HEADER;
@@ -13,6 +14,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_runtime_agent_instance::ActorInfo;
 use codex_runtime_agent_instance::PlatformResourceSelection;
 use codex_runtime_agent_instance::RuntimeAuth;
+use codex_runtime_agent_instance::RuntimeAuthError;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 use http::HeaderMap;
 use std::sync::Arc;
@@ -22,6 +24,39 @@ pub(crate) async fn select_runtime_auth(
     manager: &RuntimeAuthManager,
     headers: &HeaderMap,
 ) -> Result<RuntimeAuth, AuthError> {
+    manager
+        .auth_with_selection(&resource_selection(headers)?)
+        .await
+        .map_err(AuthError::from)
+}
+
+/// Select fresh request auth without allowing a reusable client's source to change.
+pub async fn select_runtime_auth_for_source(
+    manager: &Arc<RuntimeAuthManager>,
+    source_generation: u64,
+    headers: &HeaderMap,
+) -> Result<RuntimeAuth, AuthError> {
+    let manager = Arc::clone(manager);
+    let selection = resource_selection(headers)?;
+    finish_runtime_selection(
+        async move { manager.auth_for_source(source_generation, &selection).await },
+    )
+    .await
+}
+
+// Once token rotation begins, let it finish persisting even if the request is cancelled.
+pub(crate) async fn finish_runtime_selection(
+    selection: impl Future<Output = Result<RuntimeAuth, RuntimeAuthError>> + Send + 'static,
+) -> Result<RuntimeAuth, AuthError> {
+    tokio::spawn(selection)
+        .await
+        .map_err(|error| AuthError::Build(format!("runtime auth task failed: {error}")))?
+        .map_err(AuthError::from)
+}
+
+pub(crate) fn resource_selection(
+    headers: &HeaderMap,
+) -> Result<PlatformResourceSelection, AuthError> {
     let selector = |name| {
         headers
             .get(name)
@@ -33,14 +68,10 @@ pub(crate) async fn select_runtime_auth(
             })
             .transpose()
     };
-    let selection = PlatformResourceSelection {
+    Ok(PlatformResourceSelection {
         organization_id: selector(OPENAI_ORGANIZATION_HEADER)?,
         project_id: selector(OPENAI_PROJECT_HEADER)?,
-    };
-    manager
-        .auth_with_selection(&selection)
-        .await
-        .map_err(AuthError::from)
+    })
 }
 
 /// A runtime may not replace an independently selected provider credential.
@@ -72,6 +103,17 @@ pub fn validate_runtime_destination(destination: Option<&str>) -> CodexResult<()
         ));
     }
     Ok(())
+}
+
+/// Select runtime auth for supported OpenAI URLs; reject unsupported OpenAI URLs.
+pub fn runtime_auth_for_url<'a>(
+    runtime: Option<&'a (Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
+    url: &str,
+) -> CodexResult<Option<&'a (Arc<RuntimeAuthManager>, RuntimeAuthMode)>> {
+    if runtime.is_some() {
+        validate_runtime_destination(Some(url))?;
+    }
+    Ok(runtime.filter(|_| classify_openai_api_url(url) == OpenAiDestination::Supported))
 }
 
 /// Account and organization selectors must agree with the registered actor.

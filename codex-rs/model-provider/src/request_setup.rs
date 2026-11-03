@@ -33,31 +33,42 @@ pub(crate) async fn resolve_request_auth(
     destination: Option<String>,
 ) -> codex_protocol::error::Result<ResolvedProviderAuth> {
     tokio::spawn(async move {
-        if let Some((runtime, mode)) = runtime {
-            crate::validate_runtime_destination(destination.as_deref())?;
-            crate::validate_runtime_provider(&info, manager.as_ref(), &runtime)?;
-            let headers = info.build_header_map()?;
-            let selected = crate::runtime_auth::select_runtime_auth(&runtime, &headers)
-                .await
-                .map_err(|error| codex_api::map_api_error(error.into()))?;
-            let resolved = ResolvedProviderAuth::for_runtime(selected, mode);
-            resolved.validate_headers(&headers)?;
-            tracing::debug!(runtime_auth_mode = ?mode, "selected runtime authentication");
-            return Ok(resolved);
-        }
+        crate::auth::observe_auth_selection(
+            runtime.as_ref().map(|(_, mode)| *mode),
+            "model",
+            async move {
+                if let Some((runtime, mode)) = runtime {
+                    crate::validate_runtime_destination(destination.as_deref())?;
+                    crate::validate_runtime_provider(&info, manager.as_ref(), &runtime)?;
+                    let headers = info.build_header_map()?;
+                    let selected = crate::runtime_auth::select_runtime_auth(&runtime, &headers)
+                        .await
+                        .map_err(|error| codex_api::map_api_error(error.into()))?;
+                    let resolved = ResolvedProviderAuth::for_runtime(selected, mode);
+                    resolved.validate_headers(&headers)?;
+                    tracing::debug!(runtime_auth_mode = ?mode, "selected runtime authentication");
+                    return Ok(resolved);
+                }
 
-        let credential = match &manager {
-            Some(manager) => manager.auth().await,
-            None => None,
-        };
-        let mut resolved = match scope {
-            Some(scope) if crate::provider_uses_first_party_auth_path(&info) => {
-                resolve_provider_auth_for_scope(manager, credential.as_ref(), &info, scope).await?
-            }
-            _ => ResolvedProviderAuth::new(resolve_provider_auth(credential.as_ref(), &info)?),
-        };
-        resolved.credential = credential;
-        Ok(resolved)
+                let credential = match &manager {
+                    Some(manager) => manager.auth().await,
+                    None => None,
+                };
+                let mut resolved = match scope {
+                    Some(scope) if crate::provider_uses_first_party_auth_path(&info) => {
+                        resolve_provider_auth_for_scope(manager, credential.as_ref(), &info, scope)
+                            .await?
+                    }
+                    _ => ResolvedProviderAuth::new(resolve_provider_auth(
+                        credential.as_ref(),
+                        &info,
+                    )?),
+                };
+                resolved.credential = credential;
+                Ok(resolved)
+            },
+        )
+        .await
     })
     .await?
 }
@@ -85,9 +96,10 @@ impl ResolvedProviderRequest {
         } else {
             self.redirect_policy
         };
+        let request_url = self.api_provider.url_for_path(endpoint);
         let client = create_client_for_route(
             &self.http_client_factory,
-            &self.api_provider.url_for_path(endpoint),
+            &request_url,
             ClientRouteClass::Api,
             redirect_policy,
         )

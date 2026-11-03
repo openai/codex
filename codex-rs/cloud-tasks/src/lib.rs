@@ -111,7 +111,7 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     }
 
     let auth_provider = codex_model_provider::auth_provider_from_auth(&auth);
-    http = http.with_auth_provider(auth_provider);
+    http = http.with_auth_provider(auth_provider)?;
     if let Some(acc) = auth.get_account_id() {
         append_error_log(format!("auth: set ChatGPT-Account-Id header: {acc}"));
     }

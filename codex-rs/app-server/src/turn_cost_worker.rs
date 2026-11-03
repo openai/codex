@@ -454,7 +454,8 @@ impl WorkerRuntime {
                     .map_err(|error| RequestError::Other(error.into()))?;
                 let endpoint = provider.url_for_path("analytics/codex/turn-costs");
                 let client = BackendClient::new(provider.base_url.clone(), http_client_factory)
-                    .with_auth_provider(auth);
+                    .with_auth_provider(auth)
+                    .map_err(RequestError::Other)?;
                 client
                     .query_api_key_turn_costs_at(&endpoint, turn_ids, &provider.headers)
                     .await
