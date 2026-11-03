@@ -77,9 +77,13 @@ impl ThreadManagerState {
                 .collect();
             let runtime = &thread.session.services.local_agent_runtime;
             let _ = runtime.mailboxes.enqueue(thread_id, /*id*/ None, mail);
+            // Reuse the same effective configuration snapshot as a fork. This includes live
+            // permissions and network restrictions that a profile name cannot reconstruct.
+            let (config, ..) = thread.session.fork_config().await;
             // Preserve configured bindings across eviction without retaining turn-only attachments.
             // Raw bindings keep the original pending owner configuration alive.
             let environments = EvictedEnvironments {
+                config: Arc::new(config),
                 selections: thread.environment_selections().await,
                 bindings: thread
                     .session

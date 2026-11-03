@@ -275,6 +275,13 @@ impl LocalAgentControl {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
         let evicted_environments = self.runtime.registry.evicted_environments(thread_id);
+        if owner_thread_id.is_none()
+            && let Some(evicted) = &evicted_environments
+        {
+            // Preserve the worker's permissions while keeping the current wake configuration.
+            config.permissions = evicted.config.permissions.clone();
+            config.approvals_reviewer = evicted.config.approvals_reviewer;
+        }
         let mut environment_selections = evicted_environments
             .as_ref()
             .map(|environments| environments.selections.clone());

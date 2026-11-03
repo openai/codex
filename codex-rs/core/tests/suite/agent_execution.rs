@@ -759,6 +759,9 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
 #[path = "agent_eviction_tests.rs"]
 mod eviction_tests;
 
+#[path = "agent_permission_reload_tests.rs"]
+mod permission_reload_tests;
+
 /// Tree shutdown waits for all admitted members, even after registry removal, without crossing
 /// into another root's tree.
 #[tokio::test]
