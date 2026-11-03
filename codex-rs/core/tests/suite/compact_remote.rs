@@ -19,9 +19,14 @@ use codex_model_provider_info::GCP_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::image_close_tag_text;
+use codex_protocol::models::image_open_tag_text;
+use codex_protocol::models::input_text;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -853,6 +858,135 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
             let _ = append_mock.single_request();
         }
     }
+    Ok(())
+}
+
+#[test_case(false; "audio_only")]
+#[test_case(true; "mixed_media_boundary")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_budgets_persisted_file_audio_atomically(
+    older_image: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config
+                    .features
+                    .set_enabled(Feature::CompactionImageBudget, /*enabled*/ false)
+                    .expect("disable image budgeting for this test");
+            })
+            .with_model_info_override("gpt-5.5", |model| {
+                model.input_modalities.push(InputModality::Audio);
+            }),
+    )
+    .await?;
+    // Seven maximum-cost audio items exceed the 64k retained-message budget. The
+    // newest five fit whole at 12,000 tokens each.
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+    let initial_history = (1..=7)
+        .map(|number| {
+            let mut content = Vec::new();
+            if older_image && number == 3 {
+                // The file fits, then the older text exhausts the remaining budget.
+                content.extend([
+                    input_text(image_open_tag_text()),
+                    ContentItem::InputImage {
+                        image: ImageReference::Inline {
+                            image_url: image_url.to_string(),
+                        },
+                        detail: None,
+                    },
+                    input_text(image_close_tag_text()),
+                    input_text("older context ".repeat(4000)),
+                ]);
+            }
+            content.extend([
+                input_text(format!("recording {number}")),
+                ContentItem::InputAudio {
+                    audio: AudioReference::File {
+                        file_id: format!("file_audio_{number}"),
+                    },
+                },
+            ]);
+            RolloutItem::ResponseItem(
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content,
+                    status: None,
+                    phase: None,
+                    encrypted_content: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }
+                .into(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let codex = harness
+        .test()
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            initial_history: InitialHistory::Forked(initial_history),
+            ..StartThreadOptions::new(harness.test().config.clone())
+        })
+        .await?
+        .thread;
+    let responses = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "AUDIO_BUDGET_SUMMARY"
+                    },
+                }),
+                responses::ev_completed("compact-audio"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("after-audio", "done"),
+                responses::ev_completed("after-audio"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue after audio compaction".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    if older_image {
+        assert_eq!(requests[0].message_input_image_urls("user").len(), 1);
+        assert!(requests[1].message_input_image_urls("user").is_empty());
+    }
+    assert_eq!(
+        requests[0].message_input_audio_file_ids("user"),
+        (1..=7)
+            .map(|number| format!("file_audio_{number}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        requests[1].message_input_audio_file_ids("user"),
+        (3..=7)
+            .map(|number| format!("file_audio_{number}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        requests[1].inputs_of_type("compaction")[0]["encrypted_content"],
+        "AUDIO_BUDGET_SUMMARY"
+    );
     Ok(())
 }
 

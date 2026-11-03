@@ -317,6 +317,22 @@ impl ResponsesRequest {
             .collect()
     }
 
+    /// Returns all `input_audio` `file_id` spans from `message` inputs for the provided role.
+    pub fn message_input_audio_file_ids(&self, role: &str) -> Vec<String> {
+        self.inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .flatten()
+            .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_audio"))
+            .filter_map(|span| {
+                span.get("file_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+
     pub fn input(&self) -> Vec<Value> {
         self.body_json()["input"]
             .as_array()

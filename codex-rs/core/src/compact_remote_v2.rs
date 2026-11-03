@@ -47,6 +47,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -75,8 +76,8 @@ use attempt::run_remote_compact_v2_attempt;
 mod installation;
 use installation::run_compaction;
 
-#[path = "compact_remote_v2_images.rs"]
-mod images;
+#[path = "compact_remote_v2_media.rs"]
+mod media;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RetainedImageBudget {
@@ -640,18 +641,26 @@ fn truncate_retained_messages(
         }
 
         let client_developer = is_client_authored_developer_message(&group.source);
-        let charge_images = image_budget == RetainedImageBudget::Enabled && !client_developer;
-        let notice_tokens = group
-            .attached_notice
-            .as_ref()
-            .map_or(0, |notice| message_text_token_count(&notice.item).max(1));
+        let image_budget = if client_developer {
+            RetainedImageBudget::Disabled
+        } else {
+            image_budget
+        };
+        let has_budgeted_image = image_budget == RetainedImageBudget::Enabled
+            && retained_input_image_count(&group.source.item) > 0;
+        let has_file_audio = matches!(&group.source.item, ResponseItem::Message { content, .. }
+        if content.iter().any(|part| matches!(part, ContentItem::InputAudio {
+            audio: AudioReference::File { .. }
+        })));
+        // Charged media is truncated newest-first as a message boundary. Each
+        // modality still defines its own grouping and token cost in `media`.
+        let requires_media_boundary_truncation = has_budgeted_image || has_file_audio;
+        let notice_tokens = group.attached_notice.as_ref().map_or(0, |notice| {
+            retained_message_token_count(&notice.item, RetainedImageBudget::Disabled).max(1)
+        });
         // Client-authored developer messages already charge non-text content via
         // the serialized estimate. Preserve their text-only boundary correction.
-        let content_tokens = if charge_images {
-            message_content_token_count(&group.source.item)
-        } else {
-            message_text_token_count(&group.source.item)
-        };
+        let content_tokens = retained_message_token_count(&group.source.item, image_budget);
         let source_tokens = if client_developer {
             usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX)
         } else {
@@ -674,14 +683,13 @@ fn truncate_retained_messages(
             } else {
                 available_tokens
             };
-            let image_count = retained_input_image_count(&group.source.item);
-            if charge_images && image_count > 0 {
-                // An oversized image can leave no boundary content. Do not backfill
+            if requires_media_boundary_truncation {
+                // Oversized media can leave no boundary content. Do not backfill
                 // the remaining budget with older messages in that case.
                 remaining = 0;
             }
-            let truncated_item = if charge_images && image_count > 0 {
-                images::truncate_message_to_token_budget(group.source, content_budget)
+            let truncated_item = if requires_media_boundary_truncation {
+                media::truncate_message_to_token_budget(group.source, content_budget, image_budget)
             } else {
                 truncate_message_text_to_token_budget(group.source, content_budget)
             };
@@ -695,9 +703,16 @@ fn truncate_retained_messages(
                     let adjusted_budget = content_budget
                         .saturating_sub(item_tokens - available_tokens)
                         .saturating_sub(1);
-                    let Some(adjusted) =
+                    let adjusted = if requires_media_boundary_truncation {
+                        media::truncate_message_to_token_budget(
+                            truncated_item,
+                            adjusted_budget,
+                            image_budget,
+                        )
+                    } else {
                         truncate_message_text_to_token_budget(truncated_item, adjusted_budget)
-                    else {
+                    };
+                    let Some(adjusted) = adjusted else {
                         continue;
                     };
                     if usize::try_from(estimate_item_token_count(&adjusted.item))
@@ -714,7 +729,7 @@ fn truncate_retained_messages(
             }
             truncated_reversed.push(truncated_item);
             remaining = 0;
-        } else if charge_images && retained_input_image_count(&group.source.item) > 0 {
+        } else if requires_media_boundary_truncation {
             remaining = 0;
         }
     }
@@ -722,28 +737,15 @@ fn truncate_retained_messages(
     truncated_reversed
 }
 
-fn message_content_token_count(item: &ResponseItem) -> usize {
-    let ResponseItem::Message { content, .. } = item else {
-        return usize::try_from(estimate_item_token_count(item)).unwrap_or(usize::MAX);
-    };
-
-    content.iter().map(images::content_item_token_count).sum()
-}
-
-fn message_text_token_count(item: &ResponseItem) -> usize {
+fn retained_message_token_count(item: &ResponseItem, image_budget: RetainedImageBudget) -> usize {
     let ResponseItem::Message { content, .. } = item else {
         return usize::try_from(estimate_item_token_count(item)).unwrap_or(usize::MAX);
     };
 
     content
         .iter()
-        .map(|item| match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
-                approx_token_count(text)
-            }
-            ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => 0,
-        })
-        .sum()
+        .map(|part| media::content_item_token_count(part, image_budget))
+        .fold(0, usize::saturating_add)
 }
 
 fn truncate_message_text_to_token_budget(
@@ -1470,5 +1472,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "compact_remote_v2_image_budget_tests.rs"]
-mod image_budget_tests;
+#[path = "compact_remote_v2_media_budget_tests.rs"]
+mod media_budget_tests;

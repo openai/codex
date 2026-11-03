@@ -36,6 +36,7 @@ libcap_version="2.75"
 libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
 libcap_tarball_name="libcap-${libcap_version}.tar.xz"
 libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+libcap_debian_url="https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_${libcap_version}.orig.tar.xz"
 
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
 if command -v "${arch}-linux-musl-gcc" >/dev/null; then
@@ -63,7 +64,9 @@ if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
   mkdir -p "${libcap_src_root}" "${libcap_prefix}/lib" "${libcap_prefix}/include/sys" "${libcap_prefix}/include/linux" "${libcap_pkgconfig_dir}"
   libcap_tarball="${libcap_root}/${libcap_tarball_name}"
 
-  curl -fsSL "${libcap_download_url}" -o "${libcap_tarball}"
+  if ! curl -fsSL --connect-timeout 10 --max-time 60 "${libcap_download_url}" -o "${libcap_tarball}"; then
+    curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 "${libcap_debian_url}" -o "${libcap_tarball}"
+  fi
   echo "${libcap_sha256}  ${libcap_tarball}" | sha256sum -c -
 
   tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"

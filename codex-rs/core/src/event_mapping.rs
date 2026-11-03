@@ -11,14 +11,8 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::models::is_audio_close_tag_text;
-use codex_protocol::models::is_audio_open_tag_text;
-use codex_protocol::models::is_image_close_tag_text;
-use codex_protocol::models::is_image_open_tag_text;
-use codex_protocol::models::is_local_audio_close_tag_text;
-use codex_protocol::models::is_local_audio_open_tag_text;
-use codex_protocol::models::is_local_image_close_tag_text;
-use codex_protocol::models::is_local_image_open_tag_text;
+use codex_protocol::models::is_closing_media_label;
+use codex_protocol::models::is_opening_media_label;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
@@ -103,19 +97,13 @@ pub(crate) fn user_input_parts(
         .enumerate()
         .filter(|(idx, content_item)| match content_item {
             ContentItem::InputText { text } => {
-                let is_image_label = ((is_local_image_open_tag_text(text)
-                    || is_image_open_tag_text(text))
-                    && matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. })))
-                    || (*idx > 0
-                        && (is_local_image_close_tag_text(text) || is_image_close_tag_text(text))
-                        && matches!(message.get(idx - 1), Some(ContentItem::InputImage { .. })));
-                let is_audio_label = ((is_local_audio_open_tag_text(text)
-                    || is_audio_open_tag_text(text))
-                    && matches!(message.get(idx + 1), Some(ContentItem::InputAudio { .. })))
-                    || (*idx > 0
-                        && (is_local_audio_close_tag_text(text) || is_audio_close_tag_text(text))
-                        && matches!(message.get(idx - 1), Some(ContentItem::InputAudio { .. })));
-                !is_image_label && !is_audio_label
+                let opens_media = message
+                    .get(idx + 1)
+                    .is_some_and(|part| is_opening_media_label(text, part));
+                let closes_media = idx
+                    .checked_sub(1)
+                    .is_some_and(|i| is_closing_media_label(text, &message[i]));
+                !opens_media && !closes_media
             }
             ContentItem::InputImage { .. }
             | ContentItem::InputAudio { .. }

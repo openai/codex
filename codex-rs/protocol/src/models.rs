@@ -1906,6 +1906,28 @@ pub fn is_audio_close_tag_text(text: &str) -> bool {
     text == AUDIO_CLOSE_TAG
 }
 
+/// Whether this text opens a harness label for the adjacent media part.
+pub fn is_opening_media_label(text: &str, media: &ContentItem) -> bool {
+    match media {
+        ContentItem::InputImage { .. } => {
+            is_local_image_open_tag_text(text) || is_image_open_tag_text(text)
+        }
+        ContentItem::InputAudio { .. } => {
+            is_local_audio_open_tag_text(text) || is_audio_open_tag_text(text)
+        }
+        ContentItem::InputText { .. } | ContentItem::OutputText { .. } => false,
+    }
+}
+
+/// Whether this text closes a harness label for the adjacent media part.
+pub fn is_closing_media_label(text: &str, media: &ContentItem) -> bool {
+    match media {
+        ContentItem::InputImage { .. } => is_image_close_tag_text(text),
+        ContentItem::InputAudio { .. } => is_audio_close_tag_text(text),
+        ContentItem::InputText { .. } | ContentItem::OutputText { .. } => false,
+    }
+}
+
 fn invalid_image_error_placeholder(
     path: &std::path::Path,
     error: impl std::fmt::Display,

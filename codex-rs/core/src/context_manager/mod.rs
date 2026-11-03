@@ -4,6 +4,7 @@ mod normalize;
 pub(crate) mod updates;
 
 pub(crate) use history::ContextManager;
+pub(crate) use history::FILE_AUDIO_TOKENS_ESTIMATE;
 pub(crate) use history::HistoryReplacement;
 pub(crate) use history::estimate_image_reference_bytes;
 pub(crate) use history::estimate_item_token_count;
