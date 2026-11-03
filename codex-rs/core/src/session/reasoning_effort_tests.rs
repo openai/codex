@@ -8,10 +8,98 @@ use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use test_case::test_case;
+
+#[test_case(ReasoningEffort::High, ReasoningEffort::Low; "disallowed_high")]
+#[test_case(ReasoningEffort::Ultra, ReasoningEffort::Low; "valid_ultra")]
+#[test_case(ReasoningEffort::Persistent, ReasoningEffort::Low; "valid_persistent")]
+#[tokio::test]
+async fn fresh_step_metadata_retires_only_incompatible_pins(
+    previous: ReasoningEffort,
+    selected: ReasoningEffort,
+) {
+    let (session, turn, _events) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            config
+                .features
+                .enable(Feature::ReasoningEffortOverride)
+                .unwrap();
+        },
+    )
+    .await;
+    let mut model = (*turn.initial_settings.model_info).clone();
+    model.origin = ModelOrigin::Provider;
+    model.supports_reasoning_effort_updates = true;
+    model.supported_reasoning_levels = [previous.clone(), selected.clone(), ReasoningEffort::Max]
+        .into_iter()
+        .map(|effort| ReasoningEffortPreset {
+            description: effort.to_string(),
+            effort,
+        })
+        .collect();
+    let original = model.resolve_reasoning_effort(previous.clone());
+    let mut choice = turn.initial_settings.selected().clone();
+    choice.collaboration_mode.settings.reasoning_effort = Some(previous.clone());
+    let old_step = ResolvedStepSettings::new(
+        Arc::new(choice.clone()),
+        Arc::new(model.clone()),
+        &Default::default(),
+    );
+    assert_eq!(
+        session
+            .reasoning_effort_for_request(&old_step, RequestEffortUsage::Sampling)
+            .await,
+        Some(original.clone())
+    );
+    if previous == ReasoningEffort::High {
+        model.supported_reasoning_levels = vec![ReasoningEffortPreset {
+            description: selected.to_string(),
+            effort: selected.clone(),
+        }];
+    }
+    choice.collaboration_mode.settings.reasoning_effort = Some(selected.clone());
+    let expected = if previous == ReasoningEffort::High {
+        model.resolve_reasoning_effort(selected)
+    } else {
+        original.clone()
+    };
+    let fresh_step =
+        ResolvedStepSettings::new(Arc::new(choice), Arc::new(model), &Default::default());
+    assert_eq!(
+        session
+            .reasoning_effort_for_request(&fresh_step, RequestEffortUsage::Compaction)
+            .await,
+        Some(expected.clone())
+    );
+    assert_eq!(
+        session
+            .state
+            .lock()
+            .await
+            .reasoning_effort_pin
+            .get(&old_step.model_info.slug),
+        Some(original.clone())
+    );
+    assert_eq!(
+        session
+            .reasoning_effort_for_request(&old_step, RequestEffortUsage::Sampling)
+            .await,
+        Some(original)
+    );
+    assert_eq!(
+        session
+            .reasoning_effort_for_request(&fresh_step, RequestEffortUsage::Sampling)
+            .await,
+        Some(expected)
+    );
+}
 
 #[test_case(InitialHistory::Forked(Vec::new()); "fork")]
 #[test_case(InitialHistory::Resumed(ResumedHistory {

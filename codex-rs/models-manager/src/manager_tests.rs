@@ -1200,6 +1200,7 @@ async fn authoritative_catalog_access_rejection_invalidates_cache_until_refresh_
                     .await,
                 ModelsResponse::default()
             );
+            assert!(manager.refreshed_model_catalog().is_none());
         }
         let restarted =
             OpenAiModelsManager::new_with_cache(cache, endpoint, /*auth_manager*/ None)
@@ -1267,6 +1268,8 @@ async fn authoritative_catalog_refresh_failure_preserves_snapshot_and_freshness(
         let initial = manager
             .raw_model_catalog(RefreshStrategy::Online, DEFAULT_HTTP_CLIENT_FACTORY)
             .await;
+        let updates = manager.model_catalog_updates().unwrap();
+        let refreshed = manager.refreshed_model_catalog();
         let initial_info = manager
             .get_model_info("provider-model", &ModelsManagerConfig::default())
             .await;
@@ -1285,6 +1288,11 @@ async fn authoritative_catalog_refresh_failure_preserves_snapshot_and_freshness(
         );
         assert_eq!(manager.remote_models.read().await.entry, stored[0]);
         assert_eq!(cache.stored_entries(), stored);
+        assert!(
+            !updates.has_changed().unwrap(),
+            "failed fetch must not publish a refreshed catalog"
+        );
+        assert_eq!(manager.refreshed_model_catalog(), refreshed);
 
         let restarted = OpenAiModelsManager::new_with_cache(
             cache.clone(),

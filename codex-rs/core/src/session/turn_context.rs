@@ -1210,6 +1210,21 @@ impl Session {
         options: NewTurnContextOptions,
         should_start: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> CodexResult<Option<(Arc<TurnContext>, ThreadSettingsSnapshot)>> {
+        let refresh_client = {
+            let state = self.state.lock().await;
+            let configuration = &state.session_configuration;
+            (!crate::guardian::is_basic_session_source(&configuration.session_source)).then(|| {
+                self.build_effective_session_config(configuration)
+                    .http_client_factory()
+            })
+        };
+        // An auth refresh may change allowed settings; finish it before capturing this turn.
+        if let Some(http_client_factory) = refresh_client {
+            self.services
+                .models_manager
+                .refresh_after_auth_change(http_client_factory)
+                .await;
+        }
         let service_tier_for_turn = updates.service_tier_for_turn.clone();
         let commit = match self.update_settings_if(updates, should_start).await {
             Ok(Some(commit)) => commit,
@@ -1232,15 +1247,6 @@ impl Session {
         // Apply the override only to the turn's copy, after persisting thread settings.
         if let Some(service_tier) = service_tier_for_turn {
             Arc::make_mut(&mut configuration.step_settings).service_tier = Some(service_tier);
-        }
-        if !crate::guardian::is_basic_session_source(&configuration.session_source) {
-            self.services
-                .models_manager
-                .refresh_after_auth_change(
-                    self.build_effective_session_config(&configuration)
-                        .http_client_factory(),
-                )
-                .await;
         }
         let turn_environments = self.activate_turn_environments(&configuration).await;
         let turn_context = self

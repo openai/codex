@@ -264,6 +264,7 @@ mod mcp;
 mod mcp_prewarm;
 mod mcp_refresh;
 mod mcp_runtime;
+mod model_catalog_settings;
 pub(crate) mod multi_agents;
 mod plugin_selection;
 mod realtime_history;
@@ -2087,14 +2088,18 @@ impl Session {
             credential_masking_warning,
         ) = {
             let mut state = self.state.lock().await;
-            let updated = match self.apply_session_settings(&state.session_configuration, &updates)
-            {
-                Ok(updated) => updated,
-                Err(err) => {
-                    warn!("rejected session settings update: {err}");
-                    return Err(err);
-                }
-            };
+            let mut updated =
+                match self.apply_session_settings(&state.session_configuration, &updates) {
+                    Ok(updated) => updated,
+                    Err(err) => {
+                        warn!("rejected session settings update: {err}");
+                        return Err(err);
+                    }
+                };
+
+            if let Some(catalog) = self.services.models_manager.refreshed_model_catalog() {
+                model_catalog_settings::normalize(&mut updated.step_settings, &catalog);
+            }
 
             if !should_commit(&state.session_configuration, &updated) {
                 return Ok(None);

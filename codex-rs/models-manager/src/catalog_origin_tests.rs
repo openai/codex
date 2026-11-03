@@ -18,13 +18,22 @@ async fn catalog_origins_survive_reload_and_auth_change() {
             TestAuthAwareModelsEndpoint::new(Some(auth.clone()), vec![vec![model.clone()]]);
         let manager =
             OpenAiModelsManager::new(home.path().into(), endpoint.clone(), Some(auth.clone()));
+        let mut updates = manager.model_catalog_updates().unwrap();
         manager.set_api_key_model_discovery_enabled(/*enabled*/ true);
         let bundled = manager
             .model_catalog_with_origins(RefreshStrategy::Offline, DEFAULT_HTTP_CLIENT_FACTORY)
             .await;
+        assert!(manager.refreshed_model_catalog().is_none());
+        assert!(!updates.has_changed().unwrap());
         let catalog = manager
             .model_catalog_with_origins(RefreshStrategy::Online, DEFAULT_HTTP_CLIENT_FACTORY)
             .await;
+        assert_eq!(
+            manager.refreshed_model_catalog().as_deref(),
+            Some([model.clone()].as_slice())
+        );
+        assert!(updates.has_changed().unwrap());
+        updates.borrow_and_update();
         assert!(catalog.contains(&CatalogModel {
             model: model.into(),
             origin: ModelOrigin::Provider
@@ -45,6 +54,10 @@ async fn catalog_origins_survive_reload_and_auth_change() {
             catalog
         );
         assert_eq!(endpoint.fetch_count(), 1);
+        assert!(
+            restarted.refreshed_model_catalog().is_none(),
+            "disk cache is not a fresh provider response"
+        );
         assert_eq!(
             restarted
                 .get_model_info(
@@ -68,6 +81,10 @@ async fn catalog_origins_survive_reload_and_auth_change() {
         auth.set_external_auth(Arc::new(TestExternalApiKeyAuth))
             .await
             .unwrap();
+        assert!(
+            manager.refreshed_model_catalog().is_none(),
+            "a previous identity cannot normalize settings"
+        );
         assert_eq!(
             manager
                 .model_catalog_with_origins(RefreshStrategy::Offline, DEFAULT_HTTP_CLIENT_FACTORY)
@@ -126,4 +143,41 @@ async fn static_catalog_records_its_supplied_origin() {
             }]
         );
     }
+}
+
+#[tokio::test]
+async fn refreshing_retained_originators_keeps_catalog_notifications_isolated() {
+    let root_model = remote_model("root-model", "Root", /*priority*/ 0);
+    let work_model = remote_model("work-model", "Work", /*priority*/ 0);
+    let root_endpoint = TestModelsEndpoint::new(vec![vec![root_model.clone()]]);
+    let work_endpoint = TestModelsEndpoint::new(vec![vec![work_model.clone()]]);
+    let root =
+        OpenAiModelsManager::new_without_cache(root_endpoint.clone(), /*auth_manager*/ None);
+    let work = Arc::new(OpenAiModelsManager::new_without_cache(
+        work_endpoint.clone(),
+        /*auth_manager*/ None,
+    ));
+    root.list_models(RefreshStrategy::Online, DEFAULT_HTTP_CLIENT_FACTORY)
+        .await;
+    let root_updates = root.model_catalog_updates().unwrap();
+    let work_updates = work.model_catalog_updates().unwrap();
+    root.originator_managers
+        .lock()
+        .unwrap()
+        .insert(ModelCatalogOriginator::WorkDesktop, work.clone());
+    root.refresh_originator_catalogs(DEFAULT_HTTP_CLIENT_FACTORY)
+        .await;
+    assert_eq!(
+        root.refreshed_model_catalog().as_deref(),
+        Some([root_model].as_slice())
+    );
+    assert_eq!(
+        work.refreshed_model_catalog().as_deref(),
+        Some([work_model].as_slice())
+    );
+    assert!(!root_updates.has_changed().unwrap());
+    assert!(work_updates.has_changed().unwrap());
+    assert_eq!(root_endpoint.fetch_count(), 1);
+    assert_eq!(work_endpoint.fetch_count(), 1);
+    assert_eq!(root.originator_managers.lock().unwrap().len(), 1);
 }

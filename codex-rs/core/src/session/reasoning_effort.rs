@@ -5,6 +5,7 @@
 //! Successful compaction retires the overrides and allows a fresh request baseline.
 //! Fixed-effort workers always use their selected request-level effort.
 //! Unsupported models use selected request effort without rewriting saved updates.
+//! A provider catalog can retire a request pin that is invalid for a new step.
 
 use super::session::Session;
 use super::step_context::StepContext;
@@ -14,6 +15,7 @@ use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ConfigurationReasoning;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::openai_models::ReasoningEffort;
 
 /// Sampling can establish a pin; compaction must not change live state before it succeeds.
@@ -107,18 +109,26 @@ impl Session {
             }
             return selected_effort;
         }
-        if usage == RequestEffortUsage::Compaction
-            && let Some(pinned) = self
-                .state
-                .lock()
-                .await
-                .reasoning_effort_pin
-                .get(&settings.model_info.slug)
-        {
-            return Some(pinned);
-        }
         let effort = self.effort_for_configuration_update(settings);
         let mut state = self.state.lock().await;
+        if let Some(pinned) = state.reasoning_effort_pin.get(&settings.model_info.slug) {
+            let model = &settings.model_info;
+            let disallowed = model.origin == ModelOrigin::Provider
+                && !model.supported_reasoning_levels.is_empty()
+                && !model
+                    .supported_reasoning_levels
+                    .iter()
+                    .any(|preset| model.resolve_reasoning_effort(preset.effort.clone()) == pinned);
+            if disallowed {
+                // Check the step's captured metadata, so a refresh cannot change a running
+                // step. Failed compaction must not mutate the live request baseline.
+                if usage == RequestEffortUsage::Sampling {
+                    state.reasoning_effort_pin = ReasoningEffortPin::Unset;
+                }
+            } else if usage == RequestEffortUsage::Compaction {
+                return Some(pinned);
+            }
+        }
         let Some(effort) = effort else {
             if usage == RequestEffortUsage::Sampling {
                 state.reasoning_effort_pin = ReasoningEffortPin::Unset;

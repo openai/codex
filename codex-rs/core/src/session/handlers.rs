@@ -463,6 +463,11 @@ pub(super) async fn submission_loop(
 ) {
     // Session shutdown and tree shutdown both use the existing teardown handler.
     let mut shutdown_received = false;
+    let mut catalog_updates = sess.services.models_manager.model_catalog_updates();
+    if let Some(updates) = &mut catalog_updates {
+        // A resumed chat must also consume a catalog fetched before it was opened.
+        updates.mark_changed();
+    }
     let mut mailbox = sess.input_queue.mailbox_updates();
     if let Some(updates) = &mut mailbox {
         updates.mark_changed();
@@ -473,6 +478,19 @@ pub(super) async fn submission_loop(
             _ = sess.services.local_agent_runtime.shutdown.cancelled() => {
                 shutdown_received = shutdown(&sess, super::new_submission_id()).await;
                 break;
+            }
+            update = async {
+                match &mut catalog_updates {
+                    Some(updates) => updates.changed().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if update.is_err() {
+                    catalog_updates = None;
+                } else {
+                    super::model_catalog_settings::apply(&sess).await;
+                }
+                continue;
             }
             sub = rx_sub.recv() => match sub {
                 Ok(sub) => sub,

@@ -33,6 +33,7 @@ struct TestModelsEndpoint {
     fetch_count: AtomicUsize,
     fetched: Notify,
     release_second_fetch: Notify,
+    originator_endpoint: Option<Arc<TestModelsEndpoint>>,
 }
 
 impl TestModelsEndpoint {
@@ -41,6 +42,7 @@ impl TestModelsEndpoint {
             fetch_count: AtomicUsize::new(0),
             fetched: Notify::new(),
             release_second_fetch: Notify::new(),
+            originator_endpoint: None,
         })
     }
 
@@ -56,6 +58,15 @@ impl TestModelsEndpoint {
 }
 
 impl ModelsEndpointClient for TestModelsEndpoint {
+    fn for_originator(
+        &self,
+        _originator: codex_models_manager::ModelCatalogOriginator,
+    ) -> Option<Arc<dyn ModelsEndpointClient>> {
+        self.originator_endpoint
+            .clone()
+            .map(|endpoint| endpoint as Arc<dyn ModelsEndpointClient>)
+    }
+
     fn identity(&self) -> Option<String> {
         Some("test-provider".to_string())
     }
@@ -94,7 +105,10 @@ impl ModelsEndpointClient for TestModelsEndpoint {
 #[tokio::test]
 async fn refreshes_immediately_periodically_and_stops_when_dropped() {
     let codex_home = tempdir().expect("temp dir");
-    let endpoint = TestModelsEndpoint::new();
+    let mut endpoint = TestModelsEndpoint::new();
+    let work_endpoint = TestModelsEndpoint::new();
+    work_endpoint.release_second_fetch.notify_one();
+    Arc::get_mut(&mut endpoint).unwrap().originator_endpoint = Some(work_endpoint.clone());
     let requirements_path = codex_home.path().join("requirements.toml");
     std::fs::write(&requirements_path, "model_provider = 'ollama'").unwrap();
     let config_manager = crate::config_manager::ConfigManager::new_for_tests(
@@ -123,6 +137,8 @@ async fn refreshes_immediately_periodically_and_stops_when_dropped() {
         endpoint.clone(),
         /*auth_manager*/ None,
     ));
+    let work_manager = models_manager.for_originator("codex_work_desktop").unwrap();
+    let mut work_updates = work_manager.model_catalog_updates().unwrap();
     let auth_manager = codex_login::AuthManager::shared_from_config(
         config.as_ref(),
         /*enable_codex_api_key_env*/ false,
@@ -141,9 +157,12 @@ async fn refreshes_immediately_periodically_and_stops_when_dropped() {
     endpoint.wait_for_fetch_count(/*expected*/ 2).await;
     drop(worker);
     endpoint.release_second_fetch.notify_one();
+    work_endpoint.wait_for_fetch_count(/*expected*/ 2).await;
+    work_updates.changed().await.unwrap();
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 2);
+    assert_eq!(work_endpoint.fetch_count.load(Ordering::SeqCst), 2);
 
     // Reloading after login preserves an embedded caller's typed --oss override.
     catalog.invalidate().await;
