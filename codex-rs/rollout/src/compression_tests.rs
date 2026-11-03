@@ -755,13 +755,36 @@ async fn worker_preserves_alternate_group_through_materialization() -> anyhow::R
     let original_group = fs::metadata(&path)?.gid();
     let groups = Command::new("id").arg("-G").output()?;
     assert!(groups.status.success());
-    let Some(group) = std::str::from_utf8(&groups.stdout)?
+    let groups = std::str::from_utf8(&groups.stdout)?
         .split_whitespace()
         .map(str::parse::<u32>)
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .find(|group| *group != original_group)
-    else {
+        .collect::<Result<Vec<_>, _>>()?;
+    #[cfg(target_os = "linux")]
+    let groups = {
+        // Unmapped supplementary groups appear as the overflow GID in Bazel's
+        // user namespace, but chown cannot use them.
+        let gid_map = fs::read_to_string("/proc/self/gid_map")?;
+        let mapped_groups = gid_map
+            .lines()
+            .map(|line| {
+                let fields = line
+                    .split_whitespace()
+                    .map(str::parse::<u64>)
+                    .collect::<Result<Vec<_>, _>>()?;
+                anyhow::ensure!(fields.len() == 3, "invalid GID mapping: {line}");
+                Ok(fields[0]..fields[0] + fields[2])
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        groups
+            .into_iter()
+            .filter(|group| {
+                mapped_groups
+                    .iter()
+                    .any(|range| range.contains(&u64::from(*group)))
+            })
+            .collect::<Vec<_>>()
+    };
+    let Some(group) = groups.into_iter().find(|group| *group != original_group) else {
         eprintln!("skipping ownership regression: no alternate supplementary group");
         return Ok(());
     };

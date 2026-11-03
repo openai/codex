@@ -76,6 +76,11 @@ fn install_startup_libraries(runtime: &Path) -> Result<()> {
     fs::create_dir_all(&destination)?;
     for entry in fs::read_dir(source.join(libraries))? {
         let entry = entry?;
+        // Windows keeps plugins beside startup DLLs. Omit one required plugin
+        // so this startup-only fixture cannot initialize the audio runtime.
+        if cfg!(windows) && entry.file_name() == "gstcoreelements.dll" {
+            continue;
+        }
         if entry.path().is_file() {
             fs::copy(entry.path(), destination.join(entry.file_name()))?;
         }
@@ -121,7 +126,7 @@ async fn installed_client_rejects_mixed_builds_and_missing_helper() -> Result<()
         .close()
         .await?;
     assert!(VoiceHost::connect(&package, "wrong-build").await.is_err());
-    // Startup libraries permit handshakes; the missing runtime receipt prevents readiness.
+    // Startup libraries permit handshakes; missing native plugins prevent readiness.
     let host = VoiceHost::connect(&package, &build_commit().await?).await?;
     assert!(host.initialize_runtime().await.is_err());
     // The same executable elsewhere in the package must not become a fallback.
