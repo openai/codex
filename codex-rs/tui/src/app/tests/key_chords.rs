@@ -78,7 +78,7 @@ async fn empty_thread_backend_chord_preserves_draft_until_first_submission() -> 
         .apply_external_edit("first draft".to_string());
     app.chat_widget
         .set_new_backend_control(Some("Cloud".to_string()));
-    let screen = render_bottom_popup(&app.chat_widget, 80);
+    let screen = render_bottom_popup(&app.chat_widget, /*width*/ 80);
     insta::assert_snapshot!(screen.lines().find(|line| line.trim_start().starts_with("Cloud")).unwrap().trim(), @"Cloud  ⌃x b to cycle");
 
     // Cursor movement remains available while the backend selector is visible.
@@ -110,7 +110,7 @@ async fn empty_thread_backend_chord_preserves_draft_until_first_submission() -> 
 
     app.chat_widget.handle_key_event(KeyCode::Enter.into());
     assert!(
-        !render_bottom_popup(&app.chat_widget, 80)
+        !render_bottom_popup(&app.chat_widget, /*width*/ 80)
             .lines()
             .any(|line| line.trim_start().starts_with("Cloud"))
     );

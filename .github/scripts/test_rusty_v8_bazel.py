@@ -72,28 +72,12 @@ class RustyV8BazelTest(unittest.TestCase):
             with patch.object(rusty_v8_bazel, "MODULE_BAZEL", module_bazel):
                 self.assertEqual("146.4.0", rusty_v8_bazel.command_version(None))
 
-    def test_bazel_commands_use_shared_buildbuddy_remote_config_library(self) -> None:
+    def test_bazel_commands_use_shared_ci_options(self) -> None:
         with patch.dict(environ, {}, clear=True):
             self.assertEqual(
                 [
                     "bazel",
                     "build",
-                    "//third_party/v8:release",
-                ],
-                rusty_v8_bazel.bazel_command(
-                    "build",
-                    "--config=ci-v8",
-                    "//third_party/v8:release",
-                ),
-            )
-        with patch.dict(environ, {"BUILDBUDDY_API_KEY": "token"}, clear=True):
-            self.assertEqual(
-                [
-                    "bazel",
-                    "build",
-                    "--config=buildbuddy-generic-rbe",
-                    "--remote_header=x-buildbuddy-api-key=token",
-                    "--config=ci-v8",
                     "//third_party/v8:release",
                 ],
                 rusty_v8_bazel.bazel_command(

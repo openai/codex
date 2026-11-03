@@ -7,9 +7,6 @@ inputs:
   windows-tools:
     description: Directory containing the public Windows voice bootstrap
     default: .github/scripts
-  buildbuddy-api-key:
-    description: Optional BuildBuddy credential for trusted CI builds
-    default: ""
 runs:
   using: composite
   steps:
@@ -23,14 +20,13 @@ runs:
         cache-scope: cargo-voice-native
     - name: Set up Windows voice build tools
       if: runner.os == 'Windows'
-      uses: ./third_party/voice/cargo-ci/windows-setup
+      uses: ./.github/actions/setup-bazel-windows
       with:
         target: ${{ inputs.target }}
         windows-tools: ${{ inputs.windows-tools }}
     - name: Build and stage native dependencies
       shell: bash
       env:
-        BUILDBUDDY_API_KEY: ${{ inputs.buildbuddy-api-key }}
         TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail

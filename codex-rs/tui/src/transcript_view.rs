@@ -365,11 +365,11 @@ impl TranscriptView {
             lines.extend_from_slice(auxiliary);
             (!lines.is_empty()).then_some(lines)
         };
-        self.sync_search_live_tail(width, None, lines);
+        self.sync_search_live_tail(width, /*key*/ None, lines);
         if self.detailed {
-            self.sync_live_tail(width, None, lines);
+            self.sync_live_tail(width, /*key*/ None, lines);
         } else {
-            self.sync_live_activity_tail(width, None, expanded && disclose, |width| {
+            self.sync_live_activity_tail(width, /*key*/ None, expanded && disclose, |width| {
                 let activity = active.map_or_else(Vec::new, |cell| {
                     if disclose && expanded {
                         cell.expanded_hyperlink_lines(width)

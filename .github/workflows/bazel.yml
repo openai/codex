@@ -17,9 +17,7 @@ jobs:
   test:
     # PRs use the sharded Windows cross-compiled test jobs below. Post-merge
     # pushes to main also run the native Windows test job for broader Windows
-    # signal without putting PR latency back on the critical path. When
-    # Code-mode unit tests run on every Bazel target. When authenticated RBE
-    # is available, the Windows-cross shards exercise the source-built V8 path.
+    # signal without putting PR latency back on the critical path.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -72,8 +70,6 @@ jobs:
 
       - name: Check MODULE.bazel.lock is up to date
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
 
@@ -86,8 +82,6 @@ jobs:
           echo "CODEX_COMPAT_RELEASES=$releases" >> "$GITHUB_ENV"
 
       - name: bazel test //...
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           bazel_targets=(
@@ -139,9 +133,7 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   test-windows-shard:
-    # Split the Windows Bazel test leg across separate Windows hosts. Jobs with
-    # BuildBuddy credentials use Linux RBE for build actions; test execution
-    # remains on a Windows runner.
+    # Build and test Windows shards on separate Windows runners.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -164,7 +156,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Test BuildBuddy Bazel wrapper
+      - name: Test Bazel command wrapper
         if: matrix.shard == 1
         shell: pwsh
         run: python .github/scripts/test_run_bazel_with_buildbuddy.py
@@ -184,11 +176,16 @@ jobs:
           # the PR-blocking critical path after the useful test work is done.
           cache-scope: bazel-test
 
+      - name: Prepare native Windows audio dependencies
+        if: runner.os == 'Windows'
+        uses: ./third_party/voice/cargo-ci/windows-setup
+        with:
+          target: x86_64-pc-windows-msvc
+
       - name: bazel test shard
         env:
           BAZEL_TEST_SHARD: ${{ matrix.shard }}
           BAZEL_TEST_SHARD_COUNT: 4
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -283,9 +280,13 @@ jobs:
           target: x86_64-pc-windows-msvc
           cache-scope: bazel-${{ github.job }}
 
+      - name: Prepare native Windows audio dependencies
+        if: runner.os == 'Windows'
+        uses: ./third_party/voice/cargo-ci/windows-setup
+        with:
+          target: x86_64-pc-windows-msvc
+
       - name: bazel test //...
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           bazel_targets=(
@@ -376,6 +377,12 @@ jobs:
           target: ${{ matrix.target }}
           cache-scope: bazel-${{ github.job }}
 
+      - name: Prepare native Windows audio dependencies
+        if: runner.os == 'Windows'
+        uses: ./third_party/voice/cargo-ci/windows-setup
+        with:
+          target: x86_64-pc-windows-msvc
+
       - name: Resolve app-server/exec-server compatibility releases
         if: runner.os == 'Linux'
         env:
@@ -385,8 +392,6 @@ jobs:
           echo "CODEX_COMPAT_RELEASES=$releases" >> "$GITHUB_ENV"
 
       - name: bazel build --config=clippy lint targets
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           bazel_clippy_args=(
@@ -397,19 +402,9 @@ jobs:
           bazel_wrapper_args=()
           bazel_target_list_args=()
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            # Keep this aligned with the fast Windows Bazel test job: use
-            # Linux RBE for clippy build actions while targeting Windows
-            # gnullvm. Fork/community PRs without the BuildBuddy secret fall
-            # back inside `run-bazel-ci.sh` to the previous local Windows MSVC
-            # host-platform shape.
             bazel_wrapper_args+=(--windows-cross-compile)
             bazel_target_list_args+=(--windows-cross-compile)
-            if [[ -z "${BUILDBUDDY_API_KEY:-}" ]]; then
-              # The fork fallback can see incompatible explicit Windows-cross
-              # internal test binaries in the generated target list. Preserve
-              # the old local-fallback behavior there.
-              bazel_clippy_args+=(--skip_incompatible_explicit_targets)
-            fi
+            bazel_clippy_args+=(--skip_incompatible_explicit_targets)
           fi
 
           bazel_target_lines="$(./scripts/list-bazel-clippy-targets.sh "${bazel_target_list_args[@]}")"
@@ -483,6 +478,12 @@ jobs:
           target: ${{ matrix.target }}
           cache-scope: bazel-${{ github.job }}
 
+      - name: Prepare native Windows audio dependencies
+        if: runner.os == 'Windows'
+        uses: ./third_party/voice/cargo-ci/windows-setup
+        with:
+          target: x86_64-pc-windows-msvc
+
       - name: Resolve app-server/exec-server compatibility releases
         if: runner.os == 'Linux'
         env:
@@ -492,8 +493,6 @@ jobs:
           echo "CODEX_COMPAT_RELEASES=$releases" >> "$GITHUB_ENV"
 
       - name: bazel build verify-release-build targets
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           # This job exists to compile Rust code behind
@@ -504,11 +503,7 @@ jobs:
           # Rust debug assertions explicitly.
           bazel_wrapper_args=()
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            # This is build-only signal, so use the same Linux-RBE
-            # cross-compile path as the fast Windows test and clippy jobs.
-            # Fork/community PRs without the BuildBuddy secret fall back
-            # inside `run-bazel-ci.sh` to the previous local Windows MSVC
-            # host-platform shape.
+            # Use the same native host toolchain as the Windows test shards.
             bazel_wrapper_args+=(--windows-cross-compile)
           fi
 
@@ -537,8 +532,6 @@ jobs:
 
       - name: Verify Bazel builds bwrap
         if: runner.os == 'Linux'
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           ./.github/scripts/run-bazel-ci.sh \

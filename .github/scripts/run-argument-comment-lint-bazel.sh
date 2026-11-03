@@ -9,7 +9,7 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   # lint aspect can run across the compatible crate graph instead of failing the
   # whole build after analysis.
   bazel_lint_args+=("--skip_incompatible_explicit_targets")
-  if [[ -z "${BUILDBUDDY_API_KEY:-}" && -n "${VOICE_WINDOWS_BAZEL_REPOSITORY:-}" ]]; then
+  if [[ -n "${VOICE_WINDOWS_BAZEL_REPOSITORY:-}" ]]; then
     : "${VOICE_WINDOWS_BAZEL_REPOSITORY:?Windows voice tools are required}"
     : "${VOICE_WINDOWS_SYSTEM_ROOT:?Windows SystemRoot is required}"
     : "${VOICE_WINDOWS_HOST_ARCH:?Windows host architecture is required}"

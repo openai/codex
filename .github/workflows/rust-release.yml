@@ -277,8 +277,6 @@ jobs:
       - name: Build Bazel release binaries and symbols
         if: ${{ matrix.build-system == 'bazel' }}
         uses: ./.github/actions/build-bazel-release
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         with:
           target: ${{ matrix.target }}
           bundle: ${{ matrix.bundle }}
@@ -327,7 +325,6 @@ jobs:
         env:
           APP_TARGET: ${{ matrix.target }}
           # Use local Bazel while BuildBuddy credentials are unavailable.
-          BUILDBUDDY_API_KEY: ""
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -607,7 +604,6 @@ jobs:
           TARGET: ${{ matrix.target }}
           PREFIX: ${{ matrix.prefix }}
           # Use local Bazel while BuildBuddy credentials are unavailable.
-          BUILDBUDDY_API_KEY: ""
         run: |
           set -euo pipefail
           # Release tags bump Cargo.toml without rewriting the workspace lockfile.

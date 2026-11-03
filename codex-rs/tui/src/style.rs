@@ -183,8 +183,10 @@ pub(crate) fn quiet_workspace_style() -> Style {
     let Some(bg) = default_bg() else {
         return base.fg(Color::Reset).bg(Color::Reset).dim();
     };
-    let fill = best_color(blend(user_message_bg_rgb(bg), bg, 0.40));
-    let foreground = default_fg().map_or(Color::Reset, |fg| best_color(blend(fg, bg, 0.66)));
+    let fill = best_color(blend(user_message_bg_rgb(bg), bg, /*alpha*/ 0.40));
+    let foreground = default_fg().map_or(Color::Reset, |fg| {
+        best_color(blend(fg, bg, /*alpha*/ 0.66))
+    });
     base.bg(fill).fg(readable_color_on(foreground, Some(fill)))
 }
 

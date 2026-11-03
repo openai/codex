@@ -1184,7 +1184,7 @@ async fn startup_draft_handoff_preserves_literal_and_shell_bang() {
     ] {
         let (mut source, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
         source.bottom_pane.insert_str(&format!("x{text}"));
-        source.bottom_pane.set_composer_cursor(0);
+        source.bottom_pane.set_composer_cursor(/*cursor*/ 0);
         source.handle_key_event(KeyEvent::from(KeyCode::Delete));
         let draft = source.composer_draft_snapshot();
         assert_eq!(draft.text, text);

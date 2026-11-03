@@ -4789,7 +4789,7 @@ fn fresh_session_keeps_its_name_and_draft_when_cycling_backends() -> Result<()> 
                     backends.session_at_mut(backends.displayed),
                     AppEvent::ChooseNewSessionCheckout { name: None },
                 ).await?;
-                assert!(render_bottom_popup(&app.chat_widget, 80).contains("Use current Git worktree"));
+                assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Use current Git worktree"));
                 app.chat_widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
                 assert_eq!(app.current_displayed_thread_id(), Some(thread_id));
                 assert_eq!(recorded_params(&requests, "thread/start").len(), 1);

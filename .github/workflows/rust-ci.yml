@@ -212,7 +212,6 @@ jobs:
         uses: ./.github/actions/run-argument-comment-lint
         with:
           target: ${{ runner.os }}
-          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Check for a clean worktree
         if: always() && !cancelled() && steps.argument_comment_lint_gate.outputs.run == 'true'

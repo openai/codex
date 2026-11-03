@@ -124,8 +124,6 @@ jobs:
       - name: Build Bazel release binaries and symbols
         if: ${{ matrix.build-system == 'bazel' }}
         uses: ./.github/actions/build-bazel-release
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         with:
           target: ${{ matrix.target }}
           bundle: ${{ matrix.bundle }}
@@ -253,7 +251,6 @@ jobs:
           ARCH: ${{ matrix.arch }}
           VOICE_ARCH: ${{ matrix.arch }}
           # Use local Bazel while BuildBuddy credentials are unavailable.
-          BUILDBUDDY_API_KEY: ""
         run: |
           (cd codex-rs && cargo update --workspace)
           python .github/scripts/watch_voice_bazel.py "$(cygpath -w "$BASH")" ./.github/scripts/run-bazel-ci.sh \

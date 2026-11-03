@@ -79,8 +79,6 @@ jobs:
 
       - name: Build codex and the code-mode host with Bazel
         id: build_bazel
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail

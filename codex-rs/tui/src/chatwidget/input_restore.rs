@@ -577,7 +577,7 @@ impl ChatWidget {
     }
 
     pub(super) fn restore_composer_state(&mut self, composer: ThreadComposerState) {
-        self.restore_composer_state_with_shell_mode(composer, None);
+        self.restore_composer_state_with_shell_mode(composer, /*shell_mode*/ None);
     }
 
     fn restore_composer_state_with_shell_mode(
