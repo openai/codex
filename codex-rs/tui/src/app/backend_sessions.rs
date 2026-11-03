@@ -130,6 +130,10 @@ impl BackendSessions {
     }
 
     pub(super) fn set_preference_key(&mut self, owner: BackendId, key: &str) {
+        #[expect(
+            clippy::expect_used,
+            reason = "preference keys are assigned only after the backend is registered"
+        )]
         let slot = self.slot(owner).expect("registered app-server");
         assert!(
             !key.is_empty()

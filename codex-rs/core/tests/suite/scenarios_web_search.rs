@@ -142,7 +142,7 @@ async fn mount_model_search(
             }}}}
         })))
         .respond_with(move |request: &wiremock::Request| {
-            let body: serde_json::Value = request.body_json().unwrap();
+            let body: serde_json::Value = request.body_json().expect("tools/list request JSON");
             let mut response = json!({"jsonrpc":"2.0","id":body["id"]});
             if available.load(Ordering::SeqCst) {
                 response["result"] = json!({"tools":catalog});
@@ -170,13 +170,19 @@ fn model_search_builder(apps: &AppsTestServer, tool_mode: ToolMode) -> TestCodex
         .with_config(move |config| {
             configure_scenario_catalog(config);
             if tool_mode == ToolMode::CodeMode {
-                config.features.enable(Feature::CodeMode).unwrap();
+                config
+                    .features
+                    .enable(Feature::CodeMode)
+                    .expect("enable code mode");
             }
             config
                 .features
                 .enable(Feature::StandaloneWebSearch)
-                .unwrap();
-            config.web_search_mode.set(WebSearchMode::Live).unwrap();
+                .expect("enable standalone web search");
+            config
+                .web_search_mode
+                .set(WebSearchMode::Live)
+                .expect("set live web search mode");
         })
         .with_model_info_override("native-paper", |model| {
             model.web_search_provider = Some(WebSearchProvider::Standalone);
@@ -464,7 +470,7 @@ async fn responses_native_fallback(used: bool) -> Result<()> {
             config
                 .features
                 .disable(Feature::StandaloneWebSearch)
-                .unwrap();
+                .expect("disable standalone web search");
         })
         .with_model_info_override("hosted-paper", |model| model.use_responses_lite = false)
         .build_with_auto_env(&server)
@@ -504,7 +510,7 @@ async fn responses_native_fallback(used: bool) -> Result<()> {
         .map(|request| {
             request.body_json()["tools"]
                 .as_array()
-                .unwrap()
+                .expect("request tools array")
                 .iter()
                 .any(|tool| tool["type"] == "web_search")
         })
@@ -527,7 +533,7 @@ async fn background_search_and_native_fallback(native_first: bool) -> Result<()>
     Mock::given(method("POST"))
         .and(body_partial_json(json!({"method":"tools/call","params":{"name":"search_service.web_run","_meta":{"_codex_apps":{"invocation_context":literature_search_pin()}}}})))
         .respond_with(|request: &wiremock::Request| {
-            let body: Value = request.body_json().unwrap();
+            let body: Value = request.body_json().expect("tools/call request JSON");
             ResponseTemplate::new(200).set_body_json(json!({
                 "jsonrpc":"2.0", "id":body["id"], "result":{"content":[{"type":"text","text":"[turn0academia0] FlashAttention-2"}]}
             }))
@@ -564,7 +570,7 @@ text((await tools.mcp__codex_apps__search_service_web_run({{literature_search_qu
     let cell_id = running
         .lines()
         .next()
-        .unwrap()
+        .expect("yielded exec output line")
         .strip_prefix("Script running with cell ID ")
         .expect("yielded exec cell");
     available.store(false, Ordering::SeqCst);
@@ -612,7 +618,7 @@ text((await tools.mcp__codex_apps__search_service_web_run({{literature_search_qu
         requests[0].tool_by_name("web", "run").is_some(),
         "outage initially allows native"
     );
-    let last = requests.last().unwrap();
+    let last = requests.last().expect("final response request");
     let result = last.function_call_output("wait-search").to_string();
     if native_first {
         assert!(

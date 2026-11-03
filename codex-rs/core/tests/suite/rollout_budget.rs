@@ -689,7 +689,10 @@ async fn host_accounting_reports_raw_usage_and_preserves_error_semantics(
     let test = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
-            config.features.enable(Feature::InstantInterrupt).unwrap();
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable instant interrupt");
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
             config.rollout_budget = None;
