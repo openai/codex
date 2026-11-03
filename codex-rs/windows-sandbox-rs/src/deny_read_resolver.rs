@@ -3,6 +3,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::ReadDenyMatcher;
+use codex_protocol::permissions::ResolvedFileSystemPermissions;
 use codex_protocol::permissions::windows_deny_read_glob_scan;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -38,7 +39,27 @@ pub fn resolve_windows_deny_read_paths(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &AbsolutePathBuf,
 ) -> Result<Vec<AbsolutePathBuf>, String> {
-    resolve_deny_read_paths(file_system_sandbox_policy, cwd, |_| {})
+    expand_deny_read_paths(
+        &file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd),
+        &file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd),
+        file_system_sandbox_policy.glob_scan_max_depth,
+        cwd,
+        |_| {},
+    )
+}
+
+/// Expand the denies from an already resolved filesystem policy into Windows ACL targets.
+pub fn expand_windows_deny_read_paths(
+    permissions: &ResolvedFileSystemPermissions,
+    cwd: &AbsolutePathBuf,
+) -> Result<Vec<AbsolutePathBuf>, String> {
+    expand_deny_read_paths(
+        &permissions.unreadable_roots,
+        &permissions.unreadable_globs,
+        permissions.glob_scan_max_depth,
+        cwd,
+        |_| {},
+    )
 }
 
 /// Resolve deny paths with the launcher's scanner in an explicit command environment.
@@ -49,24 +70,31 @@ pub fn resolve_windows_deny_read_paths_in_environment(
     env: &HashMap<String, String>,
     command_cwd: &Path,
 ) -> Result<Vec<AbsolutePathBuf>, String> {
-    resolve_deny_read_paths(file_system_sandbox_policy, cwd, |command| {
-        command.env_clear().envs(env).current_dir(command_cwd);
-    })
+    expand_deny_read_paths(
+        &file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd),
+        &file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd),
+        file_system_sandbox_policy.glob_scan_max_depth,
+        cwd,
+        |command| {
+            command.env_clear().envs(env).current_dir(command_cwd);
+        },
+    )
 }
 
-fn resolve_deny_read_paths(
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+fn expand_deny_read_paths(
+    unreadable_roots: &[AbsolutePathBuf],
+    unreadable_globs: &[String],
+    glob_scan_max_depth: Option<usize>,
     cwd: &AbsolutePathBuf,
     configure: impl Fn(&mut Command),
 ) -> Result<Vec<AbsolutePathBuf>, String> {
     let mut paths = Vec::new();
     let mut seen = HashSet::new();
 
-    for path in file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd.as_path()) {
-        push_absolute_path(&mut paths, &mut seen, path.into_path_buf())?;
+    for path in unreadable_roots {
+        push_absolute_path(&mut paths, &mut seen, path.as_path())?;
     }
 
-    let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd.as_path());
     if unreadable_globs.is_empty() {
         return Ok(paths);
     }
@@ -88,10 +116,7 @@ fn resolve_deny_read_paths(
         return Ok(paths);
     };
 
-    let scan_plans = glob_scan_plans(
-        &unreadable_globs,
-        file_system_sandbox_policy.glob_scan_max_depth,
-    )?;
+    let scan_plans = glob_scan_plans(unreadable_globs, glob_scan_max_depth)?;
 
     for scan_plan in scan_plans {
         if !scan_plan.root.exists() {
@@ -200,9 +225,9 @@ fn ripgrep_files(
 fn push_absolute_path(
     paths: &mut Vec<AbsolutePathBuf>,
     seen: &mut HashSet<PathBuf>,
-    path: PathBuf,
+    path: impl AsRef<Path>,
 ) -> Result<(), String> {
-    let absolute_path = AbsolutePathBuf::from_absolute_path(dunce::simplified(&path))
+    let absolute_path = AbsolutePathBuf::from_absolute_path(dunce::simplified(path.as_ref()))
         .map_err(|err| err.to_string())?;
     if seen.insert(absolute_path.to_path_buf()) {
         paths.push(absolute_path);

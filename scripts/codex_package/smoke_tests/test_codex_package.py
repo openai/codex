@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -155,28 +156,68 @@ def test_packaged_executor_initializes_and_enforces_sandbox(
             assert reported_environment["executorVersion"] == metadata["version"]
             process.stdin.write('{"method":"initialized","params":{}}\n')
 
-            # Restricted writes always launch the filesystem helper, even when allowed.
-            for request_id, path in [(2, workspace / "allowed.txt"), (3, blocked)]:
+            def file_request(
+                request_id: int,
+                method: str,
+                path: Path,
+                *,
+                timeout: int = 45,
+                **params: str,
+            ) -> dict:
                 process.stdin.write(
                     json.dumps(
                         {
                             "id": request_id,
-                            "method": "fs/writeFile",
+                            "method": method,
                             "params": {
                                 "path": path.as_uri(),
-                                "dataBase64": "b2s=",
                                 "sandbox": sandbox,
+                                **params,
                             },
                         }
                     )
                     + "\n"
                 )
                 process.stdin.flush()
+                return json.loads(
+                    reader.submit(process.stdout.readline).result(timeout=timeout)
+                )
+
+            if windows:
+                # Resolving the inner helper creates today's log. The first ACL scan must see it.
+                log_dir = home / ".sandbox"
+                log_dir.mkdir(exist_ok=True)
+                sibling = log_dir / "allowed.txt"
+                sibling.write_bytes(b"ok")
+                day = datetime.now(UTC).date()
+                log = log_dir / f"sandbox.{day}.log"
+                assert not log.exists()
+                sandbox["permissions"]["file_system"]["entries"].append(
+                    {
+                        "path": {
+                            "type": "glob_pattern",
+                            "pattern": (log_dir / "*.log").as_posix(),
+                        },
+                        "access": "deny",
+                    }
+                )
                 # The first Windows helper can provision sandbox accounts before replying.
-                response = json.loads(
-                    reader.submit(process.stdout.readline).result(
-                        timeout=180 if windows and request_id == 2 else 45
-                    )
+                denied = file_request(5, "fs/readFile", log, timeout=180)
+                if not log.exists() and day != datetime.now(UTC).date():
+                    # The helper crossed UTC midnight before creating its log.
+                    log = next(log_dir.glob("sandbox.*.log"))
+                    denied = file_request(7, "fs/readFile", log)
+                assert "Access is denied" in denied.get("error", {}).get("message", "")
+                assert log.is_file()
+                assert file_request(6, "fs/readFile", sibling) == {
+                    "id": 6,
+                    "result": {"dataBase64": "b2s="},
+                }
+
+            # Restricted writes always launch the filesystem helper, even when allowed.
+            for request_id, path in [(2, workspace / "allowed.txt"), (3, blocked)]:
+                response = file_request(
+                    request_id, "fs/writeFile", path, dataBase64="b2s="
                 )
                 if request_id == 2:
                     assert response == {"id": 2, "result": {}}, response

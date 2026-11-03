@@ -8,12 +8,14 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_protocol::permissions::FileSystemPolicyProjection;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use codex_windows_sandbox::expand_windows_deny_read_paths;
 use codex_windows_sandbox::resolve_windows_deny_read_paths;
 use mxc_sdk::mxc_common::cmdline::CommandLineContext;
 use mxc_sdk::mxc_common::cmdline::CommandLineError;
@@ -153,10 +155,26 @@ pub(super) fn build_request(
     #[cfg(not(windows))]
     let read_volumes = volumes.clone();
     let fs = materialize_volume_roots(policy.clone(), &volumes, &read_volumes)?;
-    let roots = if full_disk_write {
-        Vec::new()
+    let absolute_cwd = AbsolutePathBuf::from_absolute_path(cwd)
+        .map_err(|error| PolicyError::PolicyResolution(error.to_string()))?;
+    let (roots, readable_roots, denied_paths) = if fs == policy {
+        let resolved =
+            fs.resolve_for_enforcement(cwd, FileSystemPolicyProjection::PreserveMutableRoots)?;
+        let denies = expand_windows_deny_read_paths(&resolved, &absolute_cwd);
+        (resolved.writable_roots, resolved.readable_roots, denies)
     } else {
-        fs.get_writable_roots_with_cwd_preserving_mutable_paths(cwd)
+        // A symbolic root deny sets the default on every volume. Expanding it into ACL
+        // targets would mask narrower grants and probe disconnected drives.
+        let roots = if full_disk_write {
+            Vec::new()
+        } else {
+            fs.get_writable_roots_with_cwd_preserving_mutable_paths(cwd)
+        };
+        (
+            roots,
+            fs.get_readable_roots_with_cwd(cwd),
+            resolve_windows_deny_read_paths(&policy, &absolute_cwd),
+        )
     };
     let mut write = collect_paths(roots.iter().map(|root| root.root.to_path_buf()))?;
     if full_disk_write {
@@ -171,17 +189,13 @@ pub(super) fn build_request(
         }
     }
     let mut read = collect_paths(
-        fs.get_readable_roots_with_cwd(cwd)
+        readable_roots
             .into_iter()
             .filter(|path| !fs.can_write_local_path_with_cwd(path.as_path(), cwd))
             .map(|path| path.to_path_buf()),
     )?;
-    let absolute_cwd = AbsolutePathBuf::from_absolute_path(cwd)
-        .map_err(|error| PolicyError::PolicyResolution(error.to_string()))?;
-    // A symbolic root deny is the default, not a recursive native mask that
-    // should erase narrower grants. Only materialize grants and carveouts.
     let deny = collect_paths(
-        resolve_windows_deny_read_paths(&policy, &absolute_cwd)
+        denied_paths
             .map_err(PolicyError::PolicyResolution)?
             .into_iter()
             .map(AbsolutePathBuf::into_path_buf),

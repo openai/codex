@@ -73,7 +73,7 @@ impl GlobWalker<'_> {
             None => self.matcher.is_local_path_read_denied(path),
         };
         if denied {
-            push_absolute_path(self.paths, self.seen_paths, path.to_path_buf())?;
+            push_absolute_path(self.paths, self.seen_paths, path)?;
         }
         if !file_type.is_dir()
             || self.max_depth.is_some_and(|limit| depth >= limit)
