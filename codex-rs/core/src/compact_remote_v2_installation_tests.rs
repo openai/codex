@@ -77,6 +77,7 @@ async fn prepared_prefix_rejection_respects_caller_intent(
         model_info: Arc::clone(&step.settings.model_info),
         cutoff_world_state: Arc::new(WorldState::default()),
         attempt: RemoteCompactV2Attempt {
+            rejected_audio_file_ids: Default::default(),
             input_goal_ids: Default::default(),
             trace_input_history: None,
             prompt_input: vec![original.clone()],

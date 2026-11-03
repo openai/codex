@@ -1909,6 +1909,7 @@ impl Session {
     ) -> Option<PreviousTurnSettings> {
         let rollout_reconstruction::RolloutReconstruction {
             mut history,
+            rejected_audio_file_ids,
             retained_context,
             guardian_history,
             last_started_turn_id,
@@ -1977,6 +1978,9 @@ impl Session {
                 reference_context_item,
                 HistoryReplacement::Reset,
             );
+            state
+                .history
+                .restore_rejected_audio_file_ids(rejected_audio_file_ids);
             state.history.restore_review_context(
                 Some(&retained_context),
                 guardian_history.as_ref(),
@@ -2582,7 +2586,7 @@ impl Session {
     }
 
     /// Persist the event to rollout and send it to clients.
-    pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+    pub(crate) async fn send_event(&self, turn_context: &TurnContext, mut msg: EventMsg) {
         if let Some((item_id, started_at_ms)) = msg.command_approval_start() {
             // The client can see the command before execution. Keep its first start
             // for the canonical lifecycle events that will be saved in history.
@@ -2591,19 +2595,32 @@ impl Session {
                 .record_item_started(item_id.to_owned(), started_at_ms)
                 .await;
         }
-        let legacy_source = msg.clone();
-        if let EventMsg::Error(error) = &legacy_source
+        if let EventMsg::TurnComplete(completed) = &msg
+            && completed.error.is_some()
+        {
+            self.state
+                .lock()
+                .await
+                .history
+                .record_rejected_file_audio(completed);
+        }
+        if let EventMsg::Error(error) = &mut msg
             && error
                 .codex_error_info
                 .as_ref()
                 .is_some_and(CodexErrorInfo::affects_turn_status)
         {
-            turn_context
-                .terminal_error
-                .lock()
-                .await
-                .replace(error.clone());
+            let mut terminal_error = turn_context.terminal_error.lock().await;
+            if let Some(previous) = terminal_error.as_ref() {
+                for file_id in &previous.rejected_audio_file_ids {
+                    if !error.rejected_audio_file_ids.contains(file_id) {
+                        error.rejected_audio_file_ids.push(file_id.clone());
+                    }
+                }
+            }
+            terminal_error.replace(error.clone());
         }
+        let legacy_source = msg.clone();
         self.services
             .rollout_thread_trace
             .record_codex_turn_event(&turn_context.sub_id, &legacy_source);
@@ -4608,6 +4625,7 @@ impl Session {
         mut items: Vec<ResponseItemEnvelope>,
         reference_context_item: TurnContextItem,
         mut world_state_baseline: WorldStateSnapshot,
+        rejected_audio_file_ids: std::collections::BTreeSet<String>,
         installation: impl Into<CompactedHistoryInstallation<'a>>,
     ) -> bool {
         let installation = installation.into();
@@ -4737,6 +4755,9 @@ impl Session {
                 );
             }
             let replacement_history = items.clone();
+            state
+                .history
+                .extend_rejected_audio_file_ids(rejected_audio_file_ids);
             state.replace_annotated_history(
                 items,
                 Some(reference_context_item.clone()),
@@ -4764,6 +4785,7 @@ impl Session {
                 compaction_response_id: metadata.compaction_response_id,
                 latest_token_usage_record: state.latest_token_usage_record.clone(),
                 resume_metadata: Some(CompactionResumeMetadata {
+                    rejected_audio_file_ids: state.history.rejected_audio_file_ids(),
                     dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
                         thread_id: self.thread_id(),
                         tools: state.persisted_dynamic_tools.to_vec(),
@@ -5289,6 +5311,7 @@ impl Session {
             context_items,
             turn_context_item,
             world_state_snapshot,
+            /*rejected_audio_file_ids*/ Default::default(),
             CompactedHistoryMetadata {
                 input_goal_ids,
                 message: String::new(),

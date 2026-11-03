@@ -4,7 +4,10 @@ use super::*;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_login::CodexAuth;
+use codex_protocol::models::AudioReference;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -21,7 +24,7 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider.supports_websockets = false;
     let server_uri = server.uri();
-    let (sess, turn, _events) =
+    let (sess, mut turn, _events) =
         crate::session::tests::make_session_and_context_with_auth_and_config_and_rx(
             CodexAuth::create_dummy_chatgpt_auth_for_testing(),
             Vec::new(),
@@ -29,6 +32,7 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
                 config.model = Some("gpt-5.2".to_string());
                 config.model_context_window = Some(100_000);
                 config.model_auto_compact_token_limit = Some(90_000);
+                config.async_compaction_threshold_percent = 50;
                 config.model_provider = provider;
                 config.chatgpt_base_url = server_uri;
                 config.features.enable(Feature::AsyncCompaction).unwrap();
@@ -36,14 +40,27 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
             },
         )
         .await;
-    let request = responses::mount_sse_once(
+    crate::session::tests::update_turn_settings_for_test(
+        Arc::get_mut(&mut turn).expect("unshared turn context"),
+        |settings| {
+            Arc::make_mut(&mut settings.model_info)
+                .input_modalities
+                .push(InputModality::Audio);
+        },
+    );
+    let request = responses::mount_response_sequence(
         &server,
-        responses::sse(vec![
-            serde_json::json!({"type":"response.output_item.done", "item": {
-                "type":"compaction", "encrypted_content":"prepared-summary"
-            }}),
-            responses::ev_completed("prepared"),
-        ]),
+        vec![
+            wiremock::ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": {"message": "Invalid input: Unknown `file_id` in input content."}
+            })),
+            responses::sse_response(responses::sse(vec![
+                serde_json::json!({"type":"response.output_item.done", "item": {
+                    "type":"compaction", "encrypted_content":"prepared-summary"
+                }}),
+                responses::ev_completed("prepared"),
+            ])),
+        ],
     )
     .await;
     let turn_cancellation = CancellationToken::new();
@@ -51,18 +68,44 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
         .capture_step_context(Arc::clone(&turn), &turn_cancellation)
         .await
         .expect("capture step");
-    let original: ResponseItem = serde_json::from_value(serde_json::json!({
-        "type": "message", "role": "user",
-        "content": [{"type": "input_text", "text": "original turn"}]
-    }))
-    .expect("user message");
+    let rejected_file_id = "file_rejected_background_compaction";
+    let original = ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "original turn".to_string(),
+            },
+            ContentItem::InputAudio {
+                audio: AudioReference::File {
+                    file_id: rejected_file_id.to_string(),
+                },
+            },
+            ContentItem::InputAudio {
+                audio: AudioReference::File {
+                    file_id: "file_expired_since_last_turn".to_string(),
+                },
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
     sess.replace_history(vec![original], /*reference_context_item*/ None)
         .await;
+    sess.state
+        .lock()
+        .await
+        .history
+        .restore_rejected_audio_file_ids(std::collections::BTreeSet::from([
+            rejected_file_id.to_string()
+        ]));
     sess.update_token_usage_info(
         &turn,
         Some(&TokenUsage {
-            input_tokens: 70_000,
-            total_tokens: 70_000,
+            input_tokens: 60_000,
+            total_tokens: 60_000,
             ..Default::default()
         }),
         /*includes_reasoning*/ false,
@@ -70,6 +113,7 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
     .await
     .expect("record usage");
     let status = super::super::context_window::context_window_token_status(&sess, &turn).await;
+    assert!(!status.token_limit_reached);
     let world_state = Arc::new(WorldState::default());
     let cancelled = CancellationToken::new();
     cancelled.cancel();
@@ -118,6 +162,7 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
     .await;
     // Wait for client publication before exercising either ready-result consumer.
     wait_for_background_compaction_for_test(&sess).await;
+    assert_eq!(request.requests().len(), 2, "background retry completed");
     let next_step = sess
         .capture_step_context(Arc::clone(&turn), &CancellationToken::new())
         .await
@@ -163,6 +208,13 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
         })
         .collect::<Vec<_>>();
     assert_eq!(summaries, ["prepared-summary"]);
-    assert_eq!(request.requests().len(), 1);
+    let requests = request.requests();
+    assert_eq!(requests.len(), 2);
+    for (index, request) in requests.into_iter().enumerate() {
+        let body = request.body_json().to_string();
+        assert!(body.contains("original turn"));
+        assert!(!body.contains(rejected_file_id));
+        assert_eq!(body.contains("file_expired_since_last_turn"), index == 0);
+    }
     shutdown(&sess).await;
 }

@@ -734,6 +734,7 @@ async fn admission_revalidates_constraints_before_committing(kind: TurnStartKind
             misalignment: None,
             message: expected_message,
             codex_error_info: Some(CodexErrorInfo::BadRequest),
+            rejected_audio_file_ids: Vec::new(),
         }]
     );
     assert_eq!(session.thread_settings_snapshot().await, desired_settings);

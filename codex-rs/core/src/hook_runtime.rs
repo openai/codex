@@ -699,6 +699,7 @@ pub(crate) async fn run_legacy_after_agent_hook(
         misalignment: None,
         message,
         codex_error_info: Some(CodexErrorInfo::Other),
+        rejected_audio_file_ids: Vec::new(),
     });
     sess.send_event(turn_context, event).await;
     true

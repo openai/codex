@@ -427,6 +427,7 @@ async fn run_compact_task_inner_impl(
         new_history,
         replacement_step_context.to_turn_context_item(),
         world_state_baseline,
+        /*rejected_audio_file_ids*/ Default::default(),
         CompactedHistoryMetadata {
             input_goal_ids,
             message: summary_text,

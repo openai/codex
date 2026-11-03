@@ -288,7 +288,8 @@ async fn run_remote_compaction_request_v2(
     step_context: &StepContext,
     prompt: &Prompt,
     responses_metadata: &CodexResponsesMetadata,
-    transport: CompactionRequestTransport<'_>,
+    transport: &mut CompactionRequestTransport<'_>,
+    submitted_audio: Option<&crate::context_manager::rejected_audio::SubmittedFileAudio>,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let turn_context = &step_context.turn;
     let client_session = match transport {
@@ -300,13 +301,13 @@ async fn run_remote_compaction_request_v2(
                 .await;
             let trace = InferenceTraceContext::disabled();
             // Replay the routing token without letting this request change foreground routing.
-            let turn_state = Arc::new(turn_state.map(OnceLock::from).unwrap_or_default());
+            let turn_state = Arc::new(turn_state.clone().map(OnceLock::from).unwrap_or_default());
             let http_executor = ResponsesHttpExecutor::new(&sess.services.model_client);
             let stream = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(CodexErr::TurnAborted),
                 stream = http_executor.stream_responses_http(
-                    &turn_state, auth_owner_generation, /*event_sender*/ None, prompt, &settings.model_info, &step_context.session_telemetry, effort,
+                    &turn_state, *auth_owner_generation, /*event_sender*/ None, prompt, &settings.model_info, &step_context.session_telemetry, effort,
                     settings.reasoning_summary, settings.service_tier.clone(), responses_metadata,
                     &trace,
                 ) => stream?,
@@ -356,6 +357,11 @@ async fn run_remote_compaction_request_v2(
         };
         match result {
             Ok(compaction_output) => return Ok(compaction_output),
+            Err(err)
+                if submitted_audio.is_some_and(|audio| audio.matches_rejection(err.details())) =>
+            {
+                return Err(err);
+            }
             Err(err) => {
                 handle_response_stream_error(
                     &mut retry_state,
@@ -493,6 +499,10 @@ fn build_v2_compacted_history(
         .zip(prompt_input_metadata)
         .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
         .collect::<Vec<_>>();
+    let no_file_error_sources =
+        crate::context_manager::rejected_audio::checkpoint_input_has_no_file_error_sources(
+            &prompt_input,
+        );
     let retained = v2_history_item_groups(prompt_input)
         .filter(|group| is_retained_for_remote_compaction_v2(&group.source, features))
         .flat_map(HistoryItemGroup::into_items)
@@ -503,7 +513,14 @@ fn build_v2_compacted_history(
         .iter()
         .map(|envelope| retained_input_image_count(&envelope.item))
         .sum::<usize>();
-    retained.push(ResponseItemEnvelope::new(compaction_output));
+    let mut checkpoint = ResponseItemEnvelope::new(compaction_output);
+    if no_file_error_sources {
+        checkpoint
+            .metadata
+            .get_or_insert_default()
+            .compaction_without_file_error_sources = true;
+    }
+    retained.push(checkpoint);
     (retained, retained_image_count)
 }
 
@@ -980,7 +997,13 @@ mod tests {
                     metadata: Some(CodexHarnessMetadata::default()),
                 },
                 ResponseItemEnvelope::new(generated_notice.clone()),
-                ResponseItemEnvelope::new(output.clone()),
+                ResponseItemEnvelope {
+                    item: output.clone(),
+                    metadata: Some(CodexHarnessMetadata {
+                        compaction_without_file_error_sources: true,
+                        ..Default::default()
+                    }),
+                },
             ];
             if enabled {
                 expected.insert(

@@ -30,6 +30,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ExecutedToolCall;
@@ -1999,9 +2000,14 @@ async fn responses_websocket_uses_incremental_create_on_prefix() {
 
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
-    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let audio = ResponseItem::from(ResponseInputItem::from(vec![UserInput::Audio {
+        audio: AudioReference::File {
+            file_id: "file_audio".to_string(),
+        },
+    }]));
+    let prompt_one = prompt_with_input(vec![audio.clone()]);
     let prompt_two = prompt_with_input(vec![
-        message_item("hello"),
+        audio,
         assistant_message_item("1", "assistant output"),
         message_item("second"),
     ]);
@@ -2018,6 +2024,10 @@ async fn responses_websocket_uses_incremental_create_on_prefix() {
     assert_eq!(first["model"].as_str(), Some(MODEL));
     assert_eq!(first["stream"], serde_json::Value::Bool(true));
     assert_eq!(first["input"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        first["input"][0]["content"],
+        serde_json::json!([{"type": "input_audio", "file_id": "file_audio"}]),
+    );
     assert_eq!(second["type"].as_str(), Some("response.create"));
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(

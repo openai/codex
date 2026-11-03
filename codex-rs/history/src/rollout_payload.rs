@@ -49,7 +49,7 @@ pub(super) enum RolloutItemWire<'a> {
         payload: InterAgentCommunicationMetadataPayload,
     },
     Compacted {
-        payload: Cow<'a, CompactedItem>,
+        payload: Cow<'a, Box<CompactedItem>>,
     },
     TurnContext {
         payload: Cow<'a, TurnContextItem>,
@@ -239,9 +239,7 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
                     trigger_turn: payload.trigger_turn,
                 }
             }
-            RolloutItemWire::Compacted { payload } => {
-                Self::Compacted(Box::new(payload.into_owned()))
-            }
+            RolloutItemWire::Compacted { payload } => Self::Compacted(payload.into_owned()),
             RolloutItemWire::TurnContext { payload } => Self::TurnContext(payload.into_owned()),
             RolloutItemWire::TokenUsageRecord { payload } => {
                 Self::TokenUsageRecord(payload.into_owned())

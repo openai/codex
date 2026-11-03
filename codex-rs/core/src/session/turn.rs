@@ -16,6 +16,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
+use crate::context_manager::rejected_audio;
 use crate::cyber_access_program;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
@@ -105,6 +106,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
@@ -183,18 +185,21 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
-    if input.iter().any(turn_input_has_uploaded_audio_file) {
+    let model_info = turn_context.capture_current_model_info();
+    if !model_info.input_modalities.contains(&InputModality::Audio)
+        && input.iter().any(turn_input_has_uploaded_audio_file)
+    {
         let result = run_hooks_and_record_inputs(
             &sess,
             &turn_context,
-            &turn_context.capture_current_model_info(),
+            &model_info,
             &input,
             PersistContext::TurnStart,
         )
         .await;
         return match result {
             Err(err) => Err(err),
-            Ok(_) => Err(uploaded_audio_disabled_error()),
+            Ok(_) => Err(unsupported_uploaded_audio_error()),
         };
     }
     let auto_compaction_enabled = sess
@@ -912,6 +917,7 @@ pub(crate) async fn run_turn(
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
                     codex_error_info: Some(error),
+                    rejected_audio_file_ids: Vec::new(),
                 });
                 sess.send_event(&turn_context, event).await;
                 break;
@@ -928,7 +934,23 @@ pub(crate) async fn run_turn(
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone(), e.details())
                     .await;
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
-                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                let mut error_event = e.to_error_event(/*message_prefix*/ None);
+                if let Some(rejected) = turn_context
+                    .extension_data
+                    .remove::<rejected_audio::RejectedAudioFileIds>()
+                {
+                    error_event
+                        .rejected_audio_file_ids
+                        .extend(Arc::unwrap_or_clone(rejected).0);
+                }
+                if matches!(e.details(), CodexErrorDetails::InvalidAudioInput { .. })
+                    || !error_event.rejected_audio_file_ids.is_empty()
+                {
+                    error_event.message.push_str(
+                        " Please remove or replace the affected audio attachment and try again.",
+                    );
+                }
+                let event = EventMsg::Error(error_event);
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
@@ -972,7 +994,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
 ) -> CodexResult<bool> {
     let mut blocked_input = false;
     let mut accepted_user_input = false;
-    for input_item in recordable_inputs(sess, input) {
+    for input_item in recordable_inputs(sess, model_info, input) {
         let input_item = input_item?;
         let hook_outcome = inspect_pending_input(sess, turn_context, &input_item).await;
         if hook_outcome.should_stop {
@@ -1008,9 +1030,11 @@ pub(crate) async fn run_hooks_and_record_inputs(
 /// Yields usable input in order, then reports unsupported audio after valid siblings can be recorded.
 pub(crate) fn recordable_inputs<'a>(
     sess: &Session,
+    model_info: &ModelInfo,
     input: &'a [TurnInput],
 ) -> impl Iterator<Item = CodexResult<Cow<'a, TurnInput>>> {
-    let rejected_audio = input.iter().any(turn_input_has_uploaded_audio_file);
+    let rejected_audio = !model_info.input_modalities.contains(&InputModality::Audio)
+        && input.iter().any(turn_input_has_uploaded_audio_file);
     // Only finalized evidence may enter reusable Guardian history.
     let items: &[TurnInput] = if sess
         .services
@@ -1024,9 +1048,10 @@ pub(crate) fn recordable_inputs<'a>(
     };
     items
         .iter()
-        .filter_map(|item| {
+        .filter_map(move |item| {
             let mut item = Cow::Borrowed(item);
-            if turn_input_has_uploaded_audio_file(&item)
+            if rejected_audio
+                && turn_input_has_uploaded_audio_file(&item)
                 && let TurnInput::UserInput { content, .. } = item.to_mut()
             {
                 content.retain(|part| !is_uploaded_audio_file(part));
@@ -1036,16 +1061,16 @@ pub(crate) fn recordable_inputs<'a>(
             }
             Some(Ok(item))
         })
-        .chain(rejected_audio.then(|| Err(uploaded_audio_disabled_error())))
+        .chain(rejected_audio.then(|| Err(unsupported_uploaded_audio_error())))
 }
 
 fn turn_input_has_uploaded_audio_file(input: &TurnInput) -> bool {
     matches!(input, TurnInput::UserInput { content, .. } if content.iter().any(is_uploaded_audio_file))
 }
 
-fn uploaded_audio_disabled_error() -> CodexErr {
+fn unsupported_uploaded_audio_error() -> CodexErr {
     CodexErr::UnsupportedOperation(
-        "Uploaded audio file inputs are not enabled in this build.".to_string(),
+        "The selected model does not support uploaded audio. Choose an audio-capable model or remove the attachment.".to_string(),
     )
 }
 
@@ -1058,7 +1083,7 @@ fn is_uploaded_audio_file(input: &UserInput) -> bool {
     )
 }
 
-fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
+pub(crate) fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
     input
         .iter()
         .filter_map(|item| match item {
@@ -1877,6 +1902,30 @@ async fn run_sampling_request(
             &sess.services.thread_extension_data,
             &mut prompt.tools,
         );
+        let (submitted_audio, pending_audio) = {
+            let model = &step_context.settings.model_info.slug;
+            let provider = &turn_context.config.model_provider_id;
+            let history = sess.clone_history().await;
+            let accepted = history
+                .retained_context()
+                .accepted_file_audio(model, provider);
+            let pending = rejected_audio::pending_audio_confirmation(
+                accepted,
+                &turn_context.sub_id,
+                model,
+                provider,
+                &prompt.input,
+            );
+            let clear_checkpoints = history.annotated_items().iter().filter_map(|envelope| {
+                rejected_audio::clear_checkpoint(&envelope.item, envelope.metadata.as_ref())
+            });
+            let submitted = rejected_audio::SubmittedFileAudio::from_request(
+                &prompt.input,
+                accepted,
+                clear_checkpoints,
+            );
+            (submitted, pending)
+        };
         let mut draining_for_mailbox = false;
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
@@ -1887,6 +1936,7 @@ async fn run_sampling_request(
             &responses_metadata,
             Arc::clone(&turn_diff_tracker),
             prompt,
+            pending_audio,
             input_item_count,
             cancellation_token.child_token(),
             &mut draining_for_mailbox,
@@ -1915,6 +1965,19 @@ async fn run_sampling_request(
             },
         };
 
+        // A steer can preempt retry handling. Finish this terminal failure with the
+        // identity from the submitted request before draining any new recordings.
+        if let Some(audio) = submitted_audio {
+            let ids = audio
+                .rejected_file_ids(err.details(), sess.services.image_store.as_ref())
+                .await;
+            if !ids.is_empty() {
+                turn_context
+                    .extension_data
+                    .insert(rejected_audio::RejectedAudioFileIds(ids));
+                return Err(err);
+            }
+        }
         let retry = handle_response_stream_error(
             &mut retry_state,
             max_retries,
@@ -2757,6 +2820,7 @@ async fn try_run_sampling_request(
     responses_metadata: &CodexResponsesMetadata,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: Prompt,
+    mut pending_audio: Option<codex_history::AcceptedFileAudio>,
     input_item_count: usize,
     cancellation_token: CancellationToken,
     draining_for_mailbox: &mut bool,
@@ -3351,6 +3415,14 @@ async fn try_run_sampling_request(
                 usage_metadata,
                 end_turn,
             } => {
+                if let Some(accepted) = pending_audio.take() {
+                    sess.record_retained_context(
+                        codex_history::RetainedContextEvent::AcceptedFileAudio {
+                            evidence: Arc::new(accepted),
+                        },
+                    )
+                    .await;
+                }
                 response_completed = true;
                 request_token_usage = token_usage.clone();
                 sess.services

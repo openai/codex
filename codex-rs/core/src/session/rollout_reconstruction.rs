@@ -6,6 +6,7 @@ use codex_history::TurnAttribution;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_utils_output_truncation::TruncationPolicy;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
@@ -13,6 +14,7 @@ use uuid::Uuid;
 #[derive(Debug, PartialEq)]
 pub(crate) struct RolloutReconstruction {
     pub(super) history: Vec<ResponseItemEnvelope>,
+    pub(super) rejected_audio_file_ids: BTreeSet<String>,
     pub(crate) retained_context: codex_history::RetainedContext,
     pub(super) guardian_history: Option<codex_history::GuardianHistoryCheckpoint>,
     pub(super) last_started_turn_id: Option<String>,
@@ -211,6 +213,27 @@ impl ContextManager {
         mut history: Self,
         truncation_policy: TruncationPolicy,
     ) -> RolloutReconstruction {
+        // Rejection facts are durable across compaction boundaries. File IDs are immutable,
+        // so retaining a fact after rollback is conservative and cannot suppress a different
+        // future upload.
+        let mut rejected_audio_file_ids = BTreeSet::new();
+        for item in rollout_items {
+            match item {
+                RolloutItem::Compacted(compacted) => {
+                    if let Some(metadata) = &compacted.resume_metadata {
+                        rejected_audio_file_ids
+                            .extend(metadata.rejected_audio_file_ids.iter().cloned());
+                    }
+                }
+                RolloutItem::EventMsg(EventMsg::TurnComplete(completed)) => {
+                    if let Some(error) = &completed.error {
+                        rejected_audio_file_ids
+                            .extend(error.rejected_audio_file_ids.iter().cloned());
+                    }
+                }
+                _ => {}
+            }
+        }
         // Select the compaction and suffix that can affect reconstruction.
         let has_legacy_compaction_without_window_number =
             rollout_items.iter().any(|item| {
@@ -616,6 +639,7 @@ impl ContextManager {
             guardian_history: history.guardian_history_checkpoint(),
             last_started_turn_id,
             history: history.into_annotated_items(),
+            rejected_audio_file_ids,
             previous_turn_settings,
             reference_context_item,
             turn_attribution,

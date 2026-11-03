@@ -759,10 +759,11 @@ impl Session {
                 std::mem::take(&mut ts.token_usage_by_model),
             )
         };
+        let model_info = turn_context.capture_current_model_info();
         let record_result = run_hooks_and_record_inputs(
             self,
             &turn_context,
-            &turn_context.capture_current_model_info(),
+            &model_info,
             &pending_input,
             PersistContext::Standard,
         )

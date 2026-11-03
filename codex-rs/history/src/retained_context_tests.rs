@@ -4,6 +4,35 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 
+#[test]
+fn accepted_audio_checkpoint_discards_oversized_and_rolled_back_evidence() {
+    let mut retained = RetainedContext::default();
+    let proof = |id: String| RetainedContextEvent::AcceptedFileAudio {
+        evidence: Arc::new(AcceptedFileAudio {
+            turn_id: "accepted".into(),
+            model: "model".into(),
+            provider: "provider".into(),
+            file_ids: BTreeSet::from([id]),
+        }),
+    };
+    assert!(retained.record(&proof("file_a".into())));
+    assert!(!retained.record(&proof("x".repeat(MAX_RECORD_BYTES))));
+    let bytes = serde_json::to_vec(&retained).expect("encode checkpoint");
+    let mut restored: RetainedContext = serde_json::from_slice(&bytes).expect("decode checkpoint");
+    let get_ids = |state: &RetainedContext| {
+        state
+            .accepted_file_audio("model", "provider")
+            .map(|proof| proof.file_ids.clone())
+    };
+    assert_eq!(get_ids(&restored), Some(BTreeSet::from(["file_a".into()])));
+    restored.rollback(
+        &["accepted"],
+        /*first_removed_message_id*/ None,
+        RetainedInputSource::Local(None),
+    );
+    assert_eq!(get_ids(&restored), None);
+}
+
 fn publish_answer() -> RetainedContextEvent {
     RetainedContextEvent::VerifiedAnswer {
         answer: VerifiedAnswer {

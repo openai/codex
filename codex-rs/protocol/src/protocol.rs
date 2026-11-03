@@ -2331,6 +2331,11 @@ pub struct ErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+    /// Host-only file identities proven rejected against the submitted request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub rejected_audio_file_ids: Vec<String>,
     /// Sensitive explanation and steering are delivered live but never enter rollout storage.
     #[serde(skip)]
     #[schemars(skip)]
@@ -6172,6 +6177,7 @@ mod tests {
             misalignment: None,
             message: "rollback failed".into(),
             codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+            rejected_audio_file_ids: Vec::new(),
         };
         assert!(!event.affects_turn_status());
     }
@@ -6184,6 +6190,7 @@ mod tests {
             codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
                 turn_kind: NonSteerableTurnKind::Review,
             }),
+            rejected_audio_file_ids: Vec::new(),
         };
         assert!(!event.affects_turn_status());
     }
@@ -6194,6 +6201,7 @@ mod tests {
             misalignment: None,
             message: "generic".into(),
             codex_error_info: Some(CodexErrorInfo::Other),
+            rejected_audio_file_ids: Vec::new(),
         };
         assert!(event.affects_turn_status());
     }
@@ -6203,6 +6211,7 @@ mod tests {
         let event = ErrorEvent {
             message: "This request violated the misalignment policy.".to_string(),
             codex_error_info: Some(CodexErrorInfo::MisalignmentPolicyViolation),
+            rejected_audio_file_ids: Vec::new(),
             misalignment: Some(MisalignmentErrorDetails {
                 error_type: Some("unauthorized_data_transfer".to_string()),
                 detailed_explanation: Some("Sensitive customer explanation".to_string()),
@@ -6229,6 +6238,22 @@ mod tests {
         assert!(!debug.contains("Sensitive customer explanation"));
         assert!(!debug.contains("Sensitive customer steering"));
         assert!(!debug.contains("sensitive-review-target"));
+    }
+
+    #[test]
+    fn rejected_audio_identity_round_trips_for_host_recovery() {
+        let event = ErrorEvent {
+            message: "invalid recording".to_string(),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+            rejected_audio_file_ids: vec!["file_audio".to_string()],
+            misalignment: None,
+        };
+
+        let serialized = serde_json::to_value(&event).expect("serialize error event");
+        assert_eq!(serialized["rejected_audio_file_ids"], json!(["file_audio"]));
+        let restored: ErrorEvent =
+            serde_json::from_value(serialized).expect("deserialize error event");
+        assert_eq!(restored.rejected_audio_file_ids, vec!["file_audio"]);
     }
 
     #[test]

@@ -11,7 +11,9 @@ pub use source::RetainedSource;
 pub use source::RetainedSourceId;
 pub use source::RetainedSourceRole;
 
+use std::collections::BTreeSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -141,10 +143,29 @@ impl std::fmt::Debug for VerifiedAnswer {
     }
 }
 
+/// File IDs in a completed Responses request, scoped to its model and provider.
+/// This proves decoding only. The same ID may subsequently expire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AcceptedFileAudio {
+    pub turn_id: String,
+    pub model: String,
+    pub provider: String,
+    pub file_ids: BTreeSet<String>,
+}
+
+impl AcceptedFileAudio {
+    fn fits_record_budget(&self) -> bool {
+        serde_json::to_vec(self).is_ok_and(|bytes| bytes.len() <= MAX_RECORD_BYTES)
+    }
+}
+
 /// Sparse, model-invisible updates. Only the host may produce these records.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RetainedContextEvent {
+    AcceptedFileAudio {
+        evidence: Arc<AcceptedFileAudio>,
+    },
     VerifiedAnswer {
         #[serde(flatten)]
         answer: VerifiedAnswer,
@@ -164,6 +185,8 @@ pub enum RetainedContextEvent {
 /// Facts live until their instruction boundary is rolled back; compaction does not expire them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RetainedContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_file_audio: Option<Arc<AcceptedFileAudio>>,
     verified_answers: VecDeque<Ordered<VerifiedAnswer>>,
     /// Lost evidence cannot be treated as a complete authorization history.
     #[serde(rename = "incomplete")]
@@ -233,11 +256,19 @@ impl RetainedContextEvent {
                 }
             }
             Self::DeliveredAssistantMessage { message, .. } => message.bound(),
+            // An oversized audio record is omitted in record(); IDs must never be truncated.
+            Self::AcceptedFileAudio { .. } => {}
         }
     }
 }
 
 impl RetainedContext {
+    pub fn accepted_file_audio(&self, model: &str, provider: &str) -> Option<&AcceptedFileAudio> {
+        self.accepted_file_audio
+            .as_deref()
+            .filter(|evidence| evidence.model == model && evidence.provider == provider)
+    }
+
     /// Context for the latest delivery still present in this task's retained history.
     pub fn sender_user_messages(&self) -> Option<&SenderUserMessages> {
         self.sender_deliveries.back().map(|entry| &entry.value)
@@ -443,6 +474,15 @@ impl RetainedContext {
         let mut event = event.clone();
         event.bound();
         match event {
+            RetainedContextEvent::AcceptedFileAudio { evidence } => {
+                if !evidence.fits_record_budget()
+                    || self.accepted_file_audio.as_ref() == Some(&evidence)
+                {
+                    return false;
+                }
+                self.accepted_file_audio = Some(evidence);
+                true
+            }
             RetainedContextEvent::VerifiedAnswer {
                 answer,
                 acceptance_order,
@@ -498,6 +538,8 @@ impl RetainedContext {
             user_messages_incomplete: true,
             ..Self::default()
         });
+        self.accepted_file_audio
+            .take_if(|evidence| !evidence.fits_record_budget());
         for entry in &mut self.verified_answers {
             let mut event = RetainedContextEvent::VerifiedAnswer {
                 answer: entry.value.clone(),
@@ -567,6 +609,8 @@ impl RetainedContext {
         first_removed_message_id: Option<&str>,
         source: RetainedInputSource,
     ) {
+        self.accepted_file_audio
+            .take_if(|evidence| turn_ids.contains(&evidence.turn_id.as_str()));
         let boundary = source.acceptance_order().map(RetainedContextOrder::Local);
         if let Some(boundary) = boundary.or_else(|| {
             first_removed_message_id.and_then(|id| {

@@ -1143,6 +1143,20 @@ where
     response_mock
 }
 
+/// Choose a response from the decoded request, including compressed requests.
+pub async fn mount_response_handler(
+    server: &MockServer,
+    respond: impl Fn(ResponsesRequest) -> ResponseTemplate + Send + Sync + 'static,
+) -> ResponseMock {
+    let (mock, requests) = base_mock();
+    mock.respond_with(move |request: &wiremock::Request| {
+        respond(ResponsesRequest(request.clone()))
+    })
+    .mount(server)
+    .await;
+    requests
+}
+
 fn base_mock() -> (MockBuilder, ResponseMock) {
     let response_mock = ResponseMock::new();
     let mock = Mock::given(method("POST"))

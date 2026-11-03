@@ -849,6 +849,7 @@ impl Session {
                         misalignment: None,
                         message: format!("failed to submit turn input: {reason:?}"),
                         codex_error_info: Some(CodexErrorInfo::BadRequest),
+                        rejected_audio_file_ids: Vec::new(),
                     }),
                 })
                 .await;

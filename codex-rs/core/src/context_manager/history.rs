@@ -11,6 +11,8 @@
 //! sources recovered from legacy Guardian checkpoints before their raw history is dropped.
 //! Prompt projections replace unavailable file images without changing retained history.
 
+#[path = "history_rejected_audio.rs"]
+pub(crate) mod rejected_audio;
 #[path = "history_user_authorization.rs"]
 mod user_authorization;
 
@@ -62,6 +64,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
 use codex_utils_audio::estimate_audio_token_count;
@@ -73,6 +76,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use codex_utils_output_truncation::truncate_function_output_payload;
 use codex_utils_output_truncation::with_serialization_allowance;
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -106,6 +110,9 @@ pub(crate) struct ContextManager {
     review_history: Option<TranscriptHistory>,
     /// Host facts independent of the model window; snapshots share immutable state.
     retained_context: Arc<RetainedContext>,
+    /// File IDs rejected by Responses. Retained history stays append-only; only
+    /// request projections omit these references.
+    rejected_audio_file_ids: Arc<BTreeSet<String>>,
     /// Reviewer policy travels with the history snapshot, independently of capture.
     guardian_review_mode: GuardianContextMode,
     retain_inherited_user_messages: bool,
@@ -251,6 +258,7 @@ impl ContextManager {
             items: Arc::new(Vec::new()),
             review_history: None,
             retained_context: Arc::default(),
+            rejected_audio_file_ids: Arc::default(),
             guardian_review_mode: GuardianContextMode::ThreadOwned,
             retain_inherited_user_messages: false,
             history_version: 0,
@@ -307,6 +315,7 @@ impl ContextManager {
             return false;
         }
         match event {
+            RetainedContextEvent::AcceptedFileAudio { .. } => {}
             RetainedContextEvent::VerifiedAnswer { .. } => {
                 self.user_message_revision =
                     self.user_message_revision.saturating_add(/*rhs*/ 1);
@@ -656,7 +665,20 @@ impl ContextManager {
             image_store,
         )
         .await;
+        self.project_file_audio_for_prompt();
         Arc::unwrap_or_clone(self.items)
+    }
+
+    /// Applies the file-audio request projection to a normalized snapshot whose
+    /// remaining preparation is performed by another request path.
+    pub(crate) fn project_file_audio_for_prompt(&mut self) {
+        if self.rejected_audio_file_ids.is_empty() {
+            return;
+        }
+        rejected_audio::project_file_audio(
+            Arc::make_mut(&mut self.items),
+            &self.rejected_audio_file_ids,
+        );
     }
 
     /// Iterates over raw response items without exposing their history envelopes.
@@ -674,6 +696,37 @@ impl ContextManager {
     /// Returns annotated history items without cloning their response payloads.
     pub(crate) fn annotated_items(&self) -> &[ResponseItemEnvelope] {
         &self.items
+    }
+
+    /// Apply the durable failed-turn record without rewriting retained user history.
+    pub(crate) fn record_rejected_file_audio(&mut self, event: &TurnCompleteEvent) {
+        let Some(error) = &event.error else {
+            return;
+        };
+        self.extend_rejected_audio_file_ids(error.rejected_audio_file_ids.iter().cloned());
+    }
+
+    pub(crate) fn extend_rejected_audio_file_ids(&mut self, ids: impl IntoIterator<Item = String>) {
+        let mut ids = ids.into_iter().peekable();
+        if ids.peek().is_none() {
+            return;
+        }
+        let rejected = Arc::make_mut(&mut self.rejected_audio_file_ids);
+        let previous_len = rejected.len();
+        rejected.extend(ids);
+        if rejected.len() != previous_len {
+            self.history_version = self.history_version.saturating_add(1);
+            self.guardian_review_context_revision = next_guardian_review_context_revision();
+        }
+    }
+
+    pub(crate) fn rejected_audio_file_ids(&self) -> Arc<BTreeSet<String>> {
+        Arc::clone(&self.rejected_audio_file_ids)
+    }
+
+    /// Restores durable rejection facts from a checkpoint and subsequent failed turns.
+    pub(crate) fn restore_rejected_audio_file_ids(&mut self, rejected: BTreeSet<String>) {
+        self.rejected_audio_file_ids = Arc::new(rejected);
     }
 
     /// Returns annotated history items and consumes the snapshot.

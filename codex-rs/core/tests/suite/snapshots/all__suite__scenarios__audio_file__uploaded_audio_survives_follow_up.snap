@@ -1,0 +1,33 @@
+---
+source: core/tests/suite/scenarios_audio_file_tests.rs
+expression: "context_snapshot::format_request_history_snapshot(\"An uploaded audio file ID is forwarded to Responses and retained across follow-up and resume.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: An uploaded audio file ID is forwarded to Responses and retained across follow-up and resume.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user[2]:
+    [01] Listen to this recording.
+    [02] <input_audio:file_id>
+-- request 2 (turn) --
+04:message/assistant:
+    I heard the recording.
+05:message/user:
+    What did you hear?
+-- request 3 (turn) --
+06:message/assistant:
+    The recording contains speech.
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/user:
+    Listen to the same recording again.

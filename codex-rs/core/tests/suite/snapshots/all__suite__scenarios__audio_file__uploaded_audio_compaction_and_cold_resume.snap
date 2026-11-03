@@ -1,0 +1,44 @@
+---
+source: core/tests/suite/scenarios_audio_file_tests.rs
+expression: "context_snapshot::format_request_history_snapshot(\"The uploaded audio file ID survives remote compaction and a cold resume in canonical message content.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: The uploaded audio file ID survives remote compaction and a cold resume in canonical message content.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user[2]:
+    [01] Retain this recording through compaction.
+    [02] <input_audio:file_id>
+-- request 2 (compaction) --
+04:compaction_trigger
+
+## Window 2 (after request 2: input diverged at item 04)
+-- request 3 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user[2]:
+    [01] Retain this recording through compaction.
+    [02] <input_audio:file_id>
+04:compaction:encrypted=true; chars=36; hash=09ef79034851b5bf
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Use the retained recording after cold resume.

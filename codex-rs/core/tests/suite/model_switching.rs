@@ -910,8 +910,8 @@ async fn model_change_projects_media_without_changing_live_or_replayed_history(
                     detail: None,
                 },
                 UserInput::Audio {
-                    audio: AudioReference::Inline {
-                        audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
+                    audio: AudioReference::File {
+                        file_id: "file_model_switch_audio".to_string(),
                     },
                 },
                 UserInput::Text {
@@ -945,9 +945,16 @@ async fn model_change_projects_media_without_changing_live_or_replayed_history(
         !first_request.message_input_image_urls("user").is_empty(),
         "first request should include the uploaded image"
     );
+    let first_audio = first_request.body_json()["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|item| item["content"].as_array().into_iter().flatten())
+        .find(|part| part["type"] == "input_audio")
+        .cloned();
     assert_eq!(
-        first_request.message_input_audio_urls("user"),
-        vec!["data:audio/wav;base64,YXVkaW8=".to_string()]
+        first_audio,
+        Some(json!({"type": "input_audio", "file_id": "file_model_switch_audio"}))
     );
 
     let second_request = requests.last().expect("expected second request");
@@ -961,7 +968,12 @@ async fn model_change_projects_media_without_changing_live_or_replayed_history(
         "second request should strip unsupported image content"
     );
     assert!(
-        second_request.message_input_audio_urls("user").is_empty(),
+        second_request.body_json()["input"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|item| item["content"].as_array().into_iter().flatten())
+            .all(|part| part["type"] != "input_audio"),
         "second request should strip unsupported audio content"
     );
     let second_user_texts = second_request.message_input_texts("user");

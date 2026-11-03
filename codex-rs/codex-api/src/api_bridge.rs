@@ -86,9 +86,13 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
             })
         }
         ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
-        ApiError::InvalidAudioInput { message } => {
-            CodexErr::new(CodexErrorDetails::InvalidAudioInput { message })
-        }
+        ApiError::InvalidAudioInput {
+            message,
+            per_recording,
+        } => CodexErr::new(CodexErrorDetails::InvalidAudioInput {
+            message,
+            per_recording,
+        }),
         ApiError::ModelNotFound { message, status } => {
             CodexErr::new(CodexErrorDetails::ModelNotFound { message, status })
         }

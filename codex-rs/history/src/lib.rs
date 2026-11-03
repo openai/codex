@@ -108,6 +108,10 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub harness_authored_configuration: bool,
 
+    /// The exact input to this opaque checkpoint contained no audio or file-backed images.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compaction_without_file_error_sources: bool,
+
     /// Producer compatibility for an opaque compaction item, never the currently selected model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_model_hash: Option<String>,
@@ -280,6 +284,7 @@ mod sender_user_messages;
 pub use sender_user_messages::SenderUserMessages;
 
 pub use reconciled_retained_context::ReconciledRetainedContext;
+pub use retained_context::AcceptedFileAudio;
 pub use retained_context::RetainedContext;
 pub use retained_context::RetainedContextEntry;
 pub use retained_context::RetainedContextEvent;

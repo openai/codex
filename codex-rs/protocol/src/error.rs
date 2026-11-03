@@ -155,7 +155,11 @@ pub enum CodexErrorDetails {
     #[error("{0}")]
     InvalidRequest(String),
     #[error("{message}")]
-    InvalidAudioInput { message: String },
+    InvalidAudioInput {
+        message: String,
+        /// True when the provider rejected an individual clip, independent of request size.
+        per_recording: bool,
+    },
     #[error("{message}")]
     ModelNotFound {
         message: String,
@@ -558,6 +562,7 @@ impl CodexErr {
         ErrorEvent {
             message,
             codex_error_info: Some(self.to_codex_protocol_error()),
+            rejected_audio_file_ids: Vec::new(),
             misalignment: match &self.details {
                 CodexErrorDetails::MisalignmentPolicyViolation { misalignment, .. } => {
                     misalignment.clone()
@@ -640,7 +645,8 @@ impl UnexpectedResponseError {
         truncate_with_ellipsis(trimmed_body, UNEXPECTED_RESPONSE_BODY_MAX_BYTES)
     }
 
-    fn extract_error_message(&self) -> Option<String> {
+    /// Returns the provider message from a structured HTTP error body.
+    pub fn extract_error_message(&self) -> Option<String> {
         let json = serde_json::from_str::<serde_json::Value>(&self.body).ok()?;
         let message = json
             .get("error")

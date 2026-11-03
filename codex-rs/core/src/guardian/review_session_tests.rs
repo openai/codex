@@ -107,6 +107,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
             vec![checkpoint.into()],
             turn.to_turn_context_item(),
             crate::context::world_state::WorldStateSnapshot::default(),
+            /*rejected_audio_file_ids*/ Default::default(),
             crate::compact::CompactedHistoryMetadata {
                 input_goal_ids: Default::default(),
                 message: String::new(),
@@ -808,6 +809,7 @@ async fn wait_for_guardian_review_ignores_prior_turn_errors() {
                 misalignment: None,
                 message: "stale guardian error".to_string(),
                 codex_error_info: None,
+                rejected_audio_file_ids: Vec::new(),
             }),
         })
         .await
@@ -856,6 +858,7 @@ async fn wait_for_guardian_review_preserves_structured_session_error() {
                 misalignment: None,
                 message: "temporary failure".to_string(),
                 codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
+                rejected_audio_file_ids: Vec::new(),
             }),
         })
         .await

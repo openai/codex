@@ -105,7 +105,7 @@ impl Session {
             return Ok(());
         }
 
-        for item in recordable_inputs(self, &input) {
+        for item in recordable_inputs(self, &model_info, &input) {
             let item = item?;
             // The user must resubmit a prompt that still needs a submit hook.
             if matches!(item.as_ref(), TurnInput::UserInput { .. })

@@ -174,6 +174,7 @@ async fn build_and_install_compaction(
         (attempt, compaction_turn_context, None)
     };
     let RemoteCompactV2Attempt {
+        rejected_audio_file_ids,
         input_goal_ids,
         trace_input_history,
         prompt_input,
@@ -215,6 +216,7 @@ async fn build_and_install_compaction(
             compacted_history,
             replacement_step_context.to_turn_context_item(),
             world_state_baseline,
+            rejected_audio_file_ids,
             CompactedHistoryInstallation::Prefix {
                 prefix,
                 prefix_context,
@@ -253,6 +255,7 @@ async fn build_and_install_compaction(
             new_history,
             replacement_step_context.to_turn_context_item(),
             world_state_baseline,
+            rejected_audio_file_ids,
             installation,
         )
         .await
