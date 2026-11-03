@@ -143,8 +143,8 @@ mod context_management_tools;
 #[path = "scenarios_code_mode_settled_helpers_tests.rs"]
 mod code_mode_settled_helpers;
 
-#[path = "scenarios_strict_3p_cache.rs"]
-mod strict_3p_cache;
+#[path = "scenarios_deferred_mcp_cache.rs"]
+mod deferred_mcp_cache;
 
 #[path = "scenarios_agent_message_board.rs"]
 mod agent_message_board;

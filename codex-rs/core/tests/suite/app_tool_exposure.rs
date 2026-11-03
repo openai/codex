@@ -231,5 +231,5 @@ pub(super) async fn connector_exposure_requests(
     Ok(requests)
 }
 
-#[path = "app_tool_exposure_strict_tests.rs"]
-mod strict_third_party;
+#[path = "app_tool_exposure_code_mode_tests.rs"]
+mod code_mode;

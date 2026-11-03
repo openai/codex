@@ -164,8 +164,7 @@ pub enum Feature {
     CodeModeToolDescriptionFirst,
     /// Restrict model-visible tools to code mode entrypoints (`exec`, `wait`).
     CodeModeOnly,
-    /// Keep eligible MCP/app and dynamic tools deferred in exec, only in Code Mode Only.
-    /// Ignores deferLoading, omit_tools_from, and namespace skip settings.
+    /// Removed compatibility flag for strict third-party tool deferral in Code Mode Only.
     CodeModeOnlyStrictThirdPartyTools,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
@@ -1361,7 +1360,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeModeOnlyStrictThirdPartyTools,
         key: "code_mode_only_strict_3p_tools",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
