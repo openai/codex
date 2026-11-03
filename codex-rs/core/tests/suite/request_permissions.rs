@@ -1479,6 +1479,105 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
     Ok(())
 }
 
+#[test_case(PermissionGrantScope::Turn; "turn_grant")]
+#[test_case(PermissionGrantScope::Session; "session_grant")]
+#[tokio::test]
+async fn granular_write_grant_still_requires_dangerous_command_approval(
+    scope: PermissionGrantScope,
+) -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX deletion command");
+    let harness = TestCodexHarness::with_auto_env_builder(test_codex().with_config(|config| {
+        config.permissions.approval_policy =
+            Constrained::allow_any(AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: false,
+                skill_approval: false,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }));
+        config
+            .permissions
+            .set_permission_profile(CorePermissionProfile::read_only())
+            .unwrap();
+        config.approvals_reviewer = ApprovalsReviewer::User;
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .unwrap();
+    }))
+    .await?;
+    let test = harness.test();
+    harness
+        .write_file("recordings/recording.mp4", "recording")
+        .await?;
+    let recording = harness.path("recordings/recording.mp4");
+    let permissions = requested_directory_write_permissions(&harness.path("recordings"));
+    let command = format!("rm -f {recording:?}");
+    let _permissions_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            ev_response_created("resp-grant"),
+            request_permissions_tool_event("grant", "Delete the recording", &permissions)?,
+            ev_completed("resp-grant"),
+        ]),
+    )
+    .await;
+    let _command_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            ev_response_created("resp-delete"),
+            exec_command_event("delete", &command)?,
+            ev_completed("resp-delete"),
+        ]),
+    )
+    .await;
+    let result_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            ev_assistant_message("done", "done"),
+            ev_completed("resp-done"),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Delete the recording".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let granted_permissions = expect_request_permissions_event(test, "grant").await;
+    assert_eq!(granted_permissions, permissions);
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "grant".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: granted_permissions,
+                scope,
+                strict_auto_review: false,
+            },
+        })
+        .await?;
+    let approval = expect_exec_approval(test, &command).await;
+    assert!(
+        harness.path_exists("recordings/recording.mp4").await?,
+        "the write grant must not approve deletion"
+    );
+    assert_eq!(approval.proposed_execpolicy_amendment, None);
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion(test).await;
+    let result = parse_result(&result_mock.single_request().function_call_output("delete"));
+    assert_eq!(result.exit_code, Some(0), "{}", result.stdout);
+    assert!(!harness.path_exists("recordings/recording.mp4").await?);
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn request_permissions_grants_apply_to_later_exec_command_calls_without_inline_permission_feature()
 -> Result<()> {

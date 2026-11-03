@@ -1187,8 +1187,9 @@ pub enum AskForApproval {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 pub struct GranularApprovalConfig {
-    /// Whether to allow shell command approval requests, including inline
+    /// Whether to allow sandbox escalation approval requests, including inline
     /// `with_additional_permissions` and `require_escalated` requests.
+    /// Dangerous commands can still request approval within existing permissions.
     pub sandbox_approval: bool,
     /// Whether to allow prompts triggered by execpolicy `prompt` rules.
     pub rules: bool,

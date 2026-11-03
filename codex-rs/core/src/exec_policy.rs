@@ -429,20 +429,35 @@ impl ExecPolicyManager {
                 let prompt_is_rule = evaluation.matched_rules.iter().any(|rule_match| {
                     is_policy_match(rule_match) && rule_match.decision() == evaluation.decision
                 });
-                match prompt_is_rejected_by_policy(approval_policy, prompt_is_rule) {
+                let dangerous_command = dangerous_command_match_for_heuristics(
+                    &evaluation,
+                    Decision::Prompt,
+                    command_origin,
+                    command_platform,
+                );
+                // Reviewing a dangerous command does not grant additional permissions.
+                // Keep explicit rules, escalation requests, and unavailable Windows
+                // sandbox protection on their existing approval-policy paths.
+                let allow_dangerous_command_prompt = matches!(
+                    approval_policy,
+                    AskForApproval::Granular(config) if !config.sandbox_approval
+                ) && !prompt_is_rule
+                    && dangerous_command.is_some()
+                    && !sandbox_permissions.requests_sandbox_override()
+                    && !(command_platform == DangerousCommandPlatform::Windows
+                        && windows_sandbox_level == WindowsSandboxLevel::Disabled
+                        && profile_has_managed_filesystem_restrictions(&permission_profile));
+                let rejection = if allow_dangerous_command_prompt {
+                    None
+                } else {
+                    prompt_is_rejected_by_policy(approval_policy, prompt_is_rule)
+                };
+                match rejection {
                     Some(reason) if prompt_is_rule => ExecApprovalRequirement::Forbidden {
                         reason: reason.to_string(),
                     },
                     Some(reason) => ExecApprovalRequirement::Forbidden {
-                        reason: derive_rejected_prompt_reason(
-                            reason,
-                            dangerous_command_match_for_heuristics(
-                                &evaluation,
-                                Decision::Prompt,
-                                command_origin,
-                                command_platform,
-                            ),
-                        ),
+                        reason: derive_rejected_prompt_reason(reason, dangerous_command),
                     },
                     None if evaluation.decision == Decision::PromptUser => {
                         ExecApprovalRequirement::NeedsHumanApproval {
@@ -451,15 +466,21 @@ impl ExecPolicyManager {
                     }
                     None => ExecApprovalRequirement::NeedsApproval {
                         reason: derive_prompt_reason(command, &evaluation),
-                        proposed_execpolicy_amendment: requested_amendment.or_else(|| {
-                            if auto_amendment_allowed {
-                                try_derive_execpolicy_amendment_for_prompt_rules(
-                                    &evaluation.matched_rules,
-                                )
-                            } else {
-                                None
-                            }
-                        }),
+                        // A reusable allow rule can bypass the sandbox on later calls.
+                        // This approval only authorizes execution with current permissions.
+                        proposed_execpolicy_amendment: if allow_dangerous_command_prompt {
+                            None
+                        } else {
+                            requested_amendment.or_else(|| {
+                                if auto_amendment_allowed {
+                                    try_derive_execpolicy_amendment_for_prompt_rules(
+                                        &evaluation.matched_rules,
+                                    )
+                                } else {
+                                    None
+                                }
+                            })
+                        },
                     },
                 }
             }

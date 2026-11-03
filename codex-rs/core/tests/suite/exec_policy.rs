@@ -37,6 +37,7 @@ use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_target_windows;
 use core_test_support::skip_if_wine_exec;
+use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local_requests;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -243,7 +244,7 @@ prefix_rule(pattern=["git", "status"], decision="allow")
 }
 
 #[tokio::test]
-async fn granular_complex_forced_rm_denial_explains_why_the_command_was_rejected() -> Result<()> {
+async fn never_complex_forced_rm_denial_explains_why_the_command_was_rejected() -> Result<()> {
     skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
 
     let server = start_mock_server().await;
@@ -276,13 +277,7 @@ async fn granular_complex_forced_rm_denial_explains_why_the_command_was_rejected
     submit_user_turn(
         &test,
         "run the forced rm loop",
-        AskForApproval::Granular(GranularApprovalConfig {
-            sandbox_approval: false,
-            rules: true,
-            skill_approval: true,
-            request_permissions: true,
-            mcp_elicitations: true,
-        }),
+        AskForApproval::Never,
         PermissionProfile::read_only(),
         /*collaboration_mode*/ None,
     )
@@ -306,21 +301,50 @@ async fn granular_complex_forced_rm_denial_explains_why_the_command_was_rejected
     Ok(())
 }
 
+#[test_case::test_case(PermissionProfile::workspace_write(), ReviewDecision::Approved, false; "approved_with_write_access")]
+#[test_case::test_case(PermissionProfile::read_only(), ReviewDecision::Approved, true; "approval_preserves_read_only_sandbox")]
+#[test_case::test_case(PermissionProfile::workspace_write(), ReviewDecision::denied("rejected by user"), true; "user_can_deny")]
 #[tokio::test]
-async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<()> {
+async fn granular_dangerous_command_approval_preserves_permissions(
+    permission_profile: PermissionProfile,
+    decision: ReviewDecision,
+    sentinel_survives: bool,
+) -> Result<()> {
     skip_if_target_windows!(Ok(()), "uses a POSIX shell command fixture");
 
-    let server = start_mock_server().await;
-    let mut builder = test_codex();
-    let test = builder.build_with_auto_env(&server).await?;
+    let harness =
+        TestCodexHarness::with_auto_env_builder(test_codex().with_config(move |config| {
+            config.permissions.approval_policy =
+                Constrained::allow_any(AskForApproval::Granular(GranularApprovalConfig {
+                    sandbox_approval: false,
+                    rules: false,
+                    skill_approval: false,
+                    request_permissions: true,
+                    mcp_elicitations: true,
+                }));
+            config
+                .permissions
+                .set_permission_profile(permission_profile.clone())
+                .unwrap();
+            config.approvals_reviewer = ApprovalsReviewer::User;
+        }))
+        .await?;
+    let test = harness.test();
+    harness
+        .write_file(
+            "forced-rm-sentinel",
+            "must remain until approved with write access",
+        )
+        .await?;
+    let command = "for target in forced-rm-sentinel; do rm -rf \"$target\"; done";
     let call_id = "forced-rm-approval";
     let args = json!({
-        "cmd": COMPLEX_FORCED_RM_COMMAND,
+        "cmd": command,
         "yield_time_ms": 1_000,
     });
 
     mount_sse_once(
-        &server,
+        harness.server(),
         sse(vec![
             ev_response_created("resp-forced-rm-approval-1"),
             ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
@@ -328,8 +352,8 @@ async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<(
         ]),
     )
     .await;
-    mount_sse_once(
-        &server,
+    let results_mock = mount_sse_once(
+        harness.server(),
         sse(vec![
             ev_assistant_message("msg-forced-rm-approval-1", "done"),
             ev_completed("resp-forced-rm-approval-2"),
@@ -337,20 +361,12 @@ async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<(
     )
     .await;
 
-    submit_user_turn(
-        &test,
-        "run the forced rm loop",
-        AskForApproval::Granular(GranularApprovalConfig {
-            sandbox_approval: true,
-            rules: true,
-            skill_approval: true,
-            request_permissions: true,
-            mcp_elicitations: true,
-        }),
-        PermissionProfile::read_only(),
-        /*collaboration_mode*/ None,
-    )
-    .await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "run the forced rm loop".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
 
     let approval_event = wait_for_event(&test.codex, |event| {
         matches!(
@@ -362,16 +378,17 @@ async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<(
     let EventMsg::ExecApprovalRequest(approval) = approval_event else {
         panic!("expected forced rm to request approval before turn completion");
     };
-    assert_eq!(
-        approval.command.last().map(String::as_str),
-        Some(COMPLEX_FORCED_RM_COMMAND)
-    );
+    assert_eq!(approval.command.last().map(String::as_str), Some(command));
 
+    assert!(
+        harness.path_exists("forced-rm-sentinel").await?,
+        "the command must wait for approval"
+    );
     test.codex
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::denied("rejected by user"),
+            decision,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -379,6 +396,11 @@ async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<(
     })
     .await;
 
+    assert_eq!(
+        harness.path_exists("forced-rm-sentinel").await?,
+        sentinel_survives
+    );
+    assert_no_matched_rules_invariant(&results_mock.single_request().function_call_output(call_id));
     Ok(())
 }
 

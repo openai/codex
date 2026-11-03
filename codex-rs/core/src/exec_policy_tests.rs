@@ -1418,6 +1418,75 @@ async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_gra
     .await;
 }
 
+#[test_case::test_case(DangerousCommandPlatform::Posix, WindowsSandboxLevel::RestrictedToken; "posix")]
+#[test_case::test_case(DangerousCommandPlatform::Windows, WindowsSandboxLevel::RestrictedToken; "windows")]
+#[test_case::test_case(DangerousCommandPlatform::Windows, WindowsSandboxLevel::Disabled; "windows_without_sandbox")]
+#[tokio::test]
+async fn granular_dangerous_command_approval_does_not_authorize_escalation(
+    platform: DangerousCommandPlatform,
+    windows_sandbox_level: WindowsSandboxLevel,
+) {
+    let command = match platform {
+        DangerousCommandPlatform::Posix => vec!["rm", "-f", "recording.mp4"],
+        DangerousCommandPlatform::Windows => vec![
+            "powershell.exe",
+            "-Command",
+            "Remove-Item -Force recording.mp4",
+        ],
+    }
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    for sandbox_permissions in [
+        SandboxPermissions::UseDefault,
+        SandboxPermissions::WithAdditionalPermissions,
+        SandboxPermissions::RequireEscalated,
+    ] {
+        let requirement = ExecPolicyManager::default()
+            .create_exec_approval_requirement_for_command_platform(
+                ExecApprovalRequest {
+                    command: &command,
+                    approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                        sandbox_approval: false,
+                        rules: false,
+                        skill_approval: false,
+                        request_permissions: true,
+                        mcp_elicitations: true,
+                    }),
+                    permission_profile: PermissionProfile::workspace_write(),
+                    environment_policy: None,
+                    windows_sandbox_level,
+                    sandbox_permissions,
+                    prefix_rule: None,
+                    allow_prefix_rules: AllowPrefixRules::Honor,
+                },
+                platform,
+            )
+            .await;
+        let expected = if sandbox_permissions == SandboxPermissions::UseDefault
+            && windows_sandbox_level == WindowsSandboxLevel::RestrictedToken
+        {
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        } else {
+            ExecApprovalRequirement::Forbidden {
+                reason: match platform {
+                    DangerousCommandPlatform::Posix => {
+                        "rm -f style commands are not permitted. Use a safer approach".to_string()
+                    }
+                    DangerousCommandPlatform::Windows => REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+                },
+            }
+        };
+        assert_eq!(
+            requirement, expected,
+            "{platform:?}: {sandbox_permissions:?}"
+        );
+    }
+}
+
 #[test]
 fn other_danger_preserves_rejected_prompt_reason() {
     assert_eq!(
@@ -1497,7 +1566,7 @@ async fn forced_rm_preserves_rule_rejection_when_granular_rules_are_disabled() {
         .create_exec_approval_requirement_for_command(ExecApprovalRequest {
             command: &command,
             approval_policy: AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
+                sandbox_approval: false,
                 rules: false,
                 skill_approval: true,
                 request_permissions: true,
@@ -1506,7 +1575,7 @@ async fn forced_rm_preserves_rule_rejection_when_granular_rules_are_disabled() {
             permission_profile: PermissionProfile::read_only(),
             environment_policy: None,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
             allow_prefix_rules: AllowPrefixRules::Honor,
         })
