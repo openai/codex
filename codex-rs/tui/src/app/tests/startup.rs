@@ -2057,117 +2057,106 @@ async fn provider_resume_retries_via_picker_preserve_fresh_errors_and_drafts() -
 }
 
 async fn check_provider_resume_retries(reopen_via: ProviderResumeRoute) -> Result<()> {
-    for provider_configured in [false, true] {
-        let mut app = Box::pin(make_test_app()).await;
-        let home = app.config.codex_home.clone();
-        let definition = "[model_providers.missing_provider]\nname = 'Saved provider'\nbase_url = 'http://127.0.0.1:12345/v1'\nwire_api = 'responses'\n";
-        let config = if provider_configured {
-            format!("[tui]\nresume_cwd = 'current'\n{definition}")
-        } else {
-            "[tui]\nresume_cwd = 'current'\n".to_string()
-        };
-        std::fs::write(home.join("config.toml"), config)?;
-        crate::legacy_core::config::set_project_trust_level(
+    let mut app = Box::pin(make_test_app()).await;
+    let home = app.config.codex_home.clone();
+    let definition = "[model_providers.missing_provider]\nname = 'Saved provider'\nbase_url = 'http://127.0.0.1:12345/v1'\nwire_api = 'responses'\n";
+    let config = "[tui]\nresume_cwd = 'current'\n";
+    std::fs::write(home.join("config.toml"), config)?;
+    crate::legacy_core::config::set_project_trust_level(
+        home.as_path(),
+        app.config.cwd.as_path(),
+        codex_protocol::config_types::TrustLevel::Trusted,
+    )
+    .map_err(std::io::Error::other)?;
+    let thread_id = ThreadId::from_string(
+        &app_test_support::create_fake_rollout(
             home.as_path(),
-            app.config.cwd.as_path(),
-            codex_protocol::config_types::TrustLevel::Trusted,
+            "2025-01-05T12-00-00",
+            "2025-01-05T12:00:00Z",
+            "Saved provider history",
+            Some("missing_provider"),
+            /*git_info*/ None,
         )
-        .map_err(std::io::Error::other)?;
-        let thread_id = ThreadId::from_string(
-            &app_test_support::create_fake_rollout(
-                home.as_path(),
-                "2025-01-05T12-00-00",
-                "2025-01-05T12:00:00Z",
-                "Saved provider history",
-                Some("missing_provider"),
-                /*git_info*/ None,
-            )
-            .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
-        )?;
-        let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-        let mut tui = crate::tui::test_support::make_test_tui()?;
-        let target = crate::resume_picker::SessionTarget {
-            backend_id: server.backend_id(),
-            path: None,
-            thread_id,
-            cwd: None,
-            history_mode: None,
-        };
-        Box::pin(app.resume_target_session(&mut tui, &mut server, target.clone())).await?;
-        assert!(app.chat_widget.has_provider_error());
-        assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
-        let turns = app.thread_event_channels[&thread_id]
-            .store
-            .lock()
-            .await
-            .snapshot()
-            .turns;
-        assert!(serde_json::to_string(&turns)?.contains("Saved provider history"));
-        assert!(!app.ignore_same_thread_resume(&target));
-        app.chat_widget
-            .apply_external_edit("Preserved draft".into());
-        for current_provider in ["other_provider", "missing_provider"] {
-            if !matches!(reopen_via, ProviderResumeRoute::SameThread) {
-                let other_id = ThreadId::from_string(
-                    &app_test_support::create_fake_rollout(
-                        home.as_path(),
-                        "2025-01-05T13-00-00",
-                        "2025-01-05T13:00:00Z",
-                        "Other chat",
-                        Some("openai"),
-                        /*git_info*/ None,
-                    )
-                    .expect("other chat"),
-                )?;
-                Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, other_id))
-                    .await?;
-                assert_eq!(app.chat_widget.thread_id(), Some(other_id));
-                assert!(
-                    app.agents_overview.input_states[&thread_id]
-                        .provider_error
-                        .is_some()
-                );
-            }
-            std::fs::write(
-                home.join("config.toml"),
-                format!(
-                    "model_provider = '{current_provider}'\n[tui]\nresume_cwd = 'current'\n{definition}\n{}",
-                    definition.replace("missing_provider", "other_provider")
-                ),
+        .map_err(|err| color_eyre::eyre::eyre!(err.to_string()))?,
+    )?;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let target = crate::resume_picker::SessionTarget {
+        backend_id: server.backend_id(),
+        path: None,
+        thread_id,
+        cwd: None,
+        history_mode: None,
+    };
+    Box::pin(app.resume_target_session(&mut tui, &mut server, target.clone())).await?;
+    assert!(app.chat_widget.has_provider_error());
+    assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+    let turns = app.thread_event_channels[&thread_id]
+        .store
+        .lock()
+        .await
+        .snapshot()
+        .turns;
+    assert!(serde_json::to_string(&turns)?.contains("Saved provider history"));
+    assert!(!app.ignore_same_thread_resume(&target));
+    app.chat_widget
+        .apply_external_edit("Preserved draft".into());
+    for provider_configured in [false, true] {
+        if !matches!(reopen_via, ProviderResumeRoute::SameThread) {
+            let other_id = ThreadId::from_string(
+                &app_test_support::create_fake_rollout(
+                    home.as_path(),
+                    "2025-01-05T13-00-00",
+                    "2025-01-05T13:00:00Z",
+                    "Other chat",
+                    Some("openai"),
+                    /*git_info*/ None,
+                )
+                .expect("other chat"),
             )?;
-            match reopen_via {
-                ProviderResumeRoute::Overview => {
-                    Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, thread_id))
-                        .await?;
-                }
-                ProviderResumeRoute::Picker => {
-                    Box::pin(app.apply_resume_picker_selection(
-                        &mut tui,
-                        &mut server,
-                        SessionSelection::Resume(target.clone()),
-                    ))
-                    .await?;
-                }
-                ProviderResumeRoute::SameThread => {
-                    Box::pin(app.resume_target_session(&mut tui, &mut server, target.clone()))
-                        .await?;
-                }
-            }
-            let input = app.chat_widget.capture_thread_input_state().unwrap();
-            let expected_error = (current_provider != "missing_provider").then(|| {
-                codex_app_server_protocol::ModelProviderError::ModelProviderMismatch {
-                    model_provider: "missing_provider".into(),
-                    current_model_provider: current_provider.into(),
-                }
-            });
-            assert_eq!(input.provider_error, expected_error);
-            assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
-            assert_eq!(
-                app.chat_widget.composer_text_with_pending(),
-                "Preserved draft"
+            Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, other_id)).await?;
+            assert_eq!(app.chat_widget.thread_id(), Some(other_id));
+            assert!(
+                app.agents_overview.input_states[&thread_id]
+                    .provider_error
+                    .is_some()
             );
         }
-        server.shutdown().await?;
+        let saved_definition = if provider_configured { definition } else { "" };
+        std::fs::write(
+            home.join("config.toml"),
+            format!("model_provider = 'ollama'\n{config}{saved_definition}"),
+        )?;
+        match reopen_via {
+            ProviderResumeRoute::Overview => {
+                Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, thread_id))
+                    .await?;
+            }
+            ProviderResumeRoute::Picker => {
+                Box::pin(app.apply_resume_picker_selection(
+                    &mut tui,
+                    &mut server,
+                    SessionSelection::Resume(target.clone()),
+                ))
+                .await?;
+            }
+            ProviderResumeRoute::SameThread => {
+                Box::pin(app.resume_target_session(&mut tui, &mut server, target.clone())).await?;
+            }
+        }
+        let input = app.chat_widget.capture_thread_input_state().unwrap();
+        let expected_error = (!provider_configured).then(|| {
+            codex_app_server_protocol::ModelProviderError::ModelProviderNotConfigured {
+                model_provider: "missing_provider".into(),
+            }
+        });
+        assert_eq!(input.provider_error, expected_error);
+        assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "Preserved draft"
+        );
     }
+    server.shutdown().await?;
     Ok(())
 }

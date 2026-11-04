@@ -183,7 +183,7 @@ requires_openai_auth = false
 }
 
 #[tokio::test]
-async fn resume_discovers_other_providers_but_rejects_mismatched_resume() -> Result<()> {
+async fn resume_discovers_and_reopens_the_saved_gateway() -> Result<()> {
     let home = tempfile::tempdir()?;
     write_provider_config(home.path())?;
     let original = ConfigBuilder::default()
@@ -250,18 +250,15 @@ async fn resume_discovers_other_providers_but_rejects_mismatched_resume() -> Res
         .await?
         .is_none()
     );
-    let error = server
+    let resumed = server
         .resume_thread(
             &local_settings,
             config.clone(),
             parent,
             ResumeModelSettings::RestoreFromThread,
         )
-        .await
-        .expect_err("a different configured provider must block resume");
-    assert!(error.to_string().contains(
-        "This chat uses server-provider, but your current provider is client-provider. Switch to server-provider to continue."
-    ));
+        .await?;
+    assert_eq!(resumed.session.model_provider_id, "server-provider");
     assert_eq!(
         server
             .start_thread(&config)

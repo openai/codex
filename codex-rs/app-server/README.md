@@ -343,16 +343,13 @@ be loaded. This covers turn start/steer, review, compaction, manual queue start,
 updates. Realtime connections use separate routing configuration and are not checked here.
 Interrupt, realtime stop, and goal pause/clear remain available.
 
-Resume and input RPCs also reject a thread whose saved provider differs from the current
-configured provider, including profile and app-server launch overrides. The JSON-RPC error's
-`data` contains `ModelProviderError`: `modelProviderMismatch` has `modelProvider` and
-`currentModelProvider`, `modelProviderNotConfigured` identifies a missing provider, and
-`modelProviderPolicyConflict` identifies a mandatory-policy conflict. Clients can still use
-`thread/read` to display history and disable the composer with the error's explanation.
-Changing the resume request's provider does not bypass validation of the saved provider;
-switch the configured provider back to continue the chat. Input is also rejected when the
-current provider configuration cannot be loaded. Older clients retain their normal error
-fallback for unrecognized structured error variants.
+Resume and input use the thread's saved provider even when a different provider is the default.
+A cold resume resolves the saved provider from configuration. A loaded thread uses its retained
+provider configuration and checks current managed policy before accepting input. The JSON-RPC
+error's `data` contains `modelProviderNotConfigured` for a missing provider or
+`modelProviderPolicyConflict` for a mandatory-policy conflict. Clients can use `thread/read`
+to display history when input is blocked. A resume request that explicitly selects a
+different provider cannot change the thread's saved provider.
 
 ## Managed network requirements
 
