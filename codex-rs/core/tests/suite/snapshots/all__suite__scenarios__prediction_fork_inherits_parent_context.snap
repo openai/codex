@@ -16,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=7b4c6a992fd91f91):
-        - namespace/functions; hash=101d32aa59ea258b
+00:additional_tools/developer (2; hash=ba36cb129fbde5df):
+        - namespace/functions; hash=106dd1b983efd2f7
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -93,8 +93,8 @@ Settings:
 ## Window 2 (after request 3: input repeated)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=7b4c6a992fd91f91):
-        - namespace/functions; hash=101d32aa59ea258b
+00:additional_tools/developer (2; hash=ba36cb129fbde5df):
+        - namespace/functions; hash=106dd1b983efd2f7
           - function/exec_command
           - function/write_stdin
           - function/request_user_input

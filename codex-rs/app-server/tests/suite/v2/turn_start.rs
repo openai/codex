@@ -3022,13 +3022,13 @@ async fn turn_start_reports_personality_overrides_v2(
 }
 
 #[tokio::test]
-async fn turn_start_defaults_local_image_detail_to_high() -> Result<()> {
+async fn turn_start_defaults_local_image_detail_to_original() -> Result<()> {
     let input_images = run_local_image_turn(/*detail*/ None).await?;
 
     assert_eq!(input_images.len(), 1);
     assert_eq!(
         input_images[0].get("detail").and_then(Value::as_str),
-        Some("high")
+        Some("original")
     );
 
     Ok(())

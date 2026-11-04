@@ -15,7 +15,7 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (11; hash=b18d58517f1e1d66):
+  tools (11; hash=f0e5643a27e61b18):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
@@ -23,7 +23,7 @@ Settings:
     - function/read_mcp_resource: Read a specific resource from an MCP server given the server name and resource URI.; args=[server, uri]; hash=24246896b39008ae
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
-    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
     - namespace/mcp__cached_rmcp: Tools in the mcp__cached_rmcp namespace.; hash=fa6836ec918ed91a
       - function/calendar_list_events
     - namespace/mcp__codex_apps__calendar: Plan events and manage your calendar.; hash=78fbd295e219be87
@@ -141,7 +141,7 @@ Settings:
 
 ## Window 2 (after request 1)
 Settings: relative to window 1
-  tools (11; hash=ab44f83a0745a3ed):
+  tools (11; hash=4235ff36fba52467):
     ~ web_search; hash=e214d4db1bc49e89
 -- request 2 (turn) --
 00:message/developer:

@@ -15,8 +15,8 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (4; hash=1261f9f79ad97cee):
-    - custom/exec: Exec guidance.  Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided Ja...; hash=db96605f80dbbdd7
+  tools (4; hash=1873c769e1ecc1e6):
+    - custom/exec: Exec guidance.  Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided Ja...; hash=4b18b0a399fb90e1
     - function/wait: Waits on a yielded `exec` cell and returns new output or completion. - Use `wait` only after `exe...; args=[cell_id, max_tokens, terminate, yield_time_ms]; hash=6692d8f6c55be489
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - web_search; hash=e214d4db1bc49e89
@@ -44,13 +44,13 @@ Settings:
 07:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
-     | {"descriptions":["Functions context.\\n\\nImage guidance.\\n\\nView a local image file from the filesystem w...>>; };\\n```"],"echo":"ECHOING: ping","agent":"/root"} [hash=4bd42f2e71ce15d7]
+     | {"descriptions":["Functions context.\\n\\nImage guidance.\\n\\nView a local image file from the filesystem w...>>; };\\n```"],"echo":"ECHOING: ping","agent":"/root"} [hash=e3b76c8d361418c6]
 
 ## Window 2 (after request 2)
 Settings: relative to window 1
   model: "prefixes-cleared"
-  tools (4; hash=d878b195101dccae):
-    ~ custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=881b443f5068d3fb
+  tools (4; hash=7831e6ce06adc804):
+    ~ custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=b2642100ba673aff
 -- request 3 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
@@ -74,7 +74,7 @@ Settings: relative to window 1
 07:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
-     | {"descriptions":["Functions context.\\n\\nImage guidance.\\n\\nView a local image file from the filesystem w...>>; };\\n```"],"echo":"ECHOING: ping","agent":"/root"} [hash=4bd42f2e71ce15d7]
+     | {"descriptions":["Functions context.\\n\\nImage guidance.\\n\\nView a local image file from the filesystem w...>>; };\\n```"],"echo":"ECHOING: ping","agent":"/root"} [hash=e3b76c8d361418c6]
 08:message/assistant:
     Done.
 09:message/developer:
@@ -92,4 +92,4 @@ Settings: relative to window 1
 12:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
-     | {"descriptions":["View a local image file from the filesystem when visual inspection is needed. Use this...>>; };\\n```"],"echo":"ECHOING: ping","agent":"/root"} [hash=6f5fd573af132df1]
+     | {"descriptions":["View a local image file from the filesystem when visual inspection is needed. Use this...>>; };\\n```"],"echo":"ECHOING: ping","agent":"/root"} [hash=dafcf2a1f1aff990]

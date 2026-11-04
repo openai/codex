@@ -6807,9 +6807,7 @@ image({{
         "emit images with legacy detail arguments and MCP metadata",
         &code,
         "gpt-5.5",
-        |config| {
-            let _ = config.features.enable(Feature::UnifiedImageBudget);
-        },
+        |_| {},
     )
     .await?;
 
@@ -6859,7 +6857,6 @@ async fn code_mode_unified_image_budget_preserves_legacy_contract_for_unsupporte
         .with_config(|config| {
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
-            let _ = config.features.enable(Feature::UnifiedImageBudget);
         });
     let (_test, second_mock) = run_code_mode_turn_with_builder(
         &server,
@@ -6946,8 +6943,8 @@ async fn code_mode_can_use_view_image_result_with_image_helper(
         .with_model("gpt-5.5")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
-            if unified_image_budget {
-                let _ = config.features.enable(Feature::UnifiedImageBudget);
+            if !unified_image_budget {
+                let _ = config.features.disable(Feature::UnifiedImageBudget);
             }
         });
     let test = builder.build(&server).await?;
@@ -7454,7 +7451,7 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
     let check_detail = enhanced_transcripts && transcript_images && reviewer_constraint.is_none();
     let mut large_image = Cursor::new(Vec::new());
     if check_detail {
-        DynamicImage::new_rgba8(/*w*/ 2049, /*h*/ 32)
+        DynamicImage::new_rgba8(/*w*/ 6001, /*h*/ 32)
             .write_to(&mut large_image, ImageFormat::Png)?;
     }
     let mut builder = test_codex()
@@ -7679,11 +7676,11 @@ await tools.exec_command({ cmd: "printf second", sandbox_permissions: "require_e
             .position(|item| item.get("image_url").and_then(Value::as_str) == Some(PRIVATE_IMAGE))
             .expect("private reviewer image should be present");
         if check_detail {
-            assert_eq!(reviewer_user_content[image_index]["detail"], "high");
+            assert_eq!(reviewer_user_content[image_index]["detail"], "original");
             let payload = reviewer_image_urls[1].split_once(',').unwrap().1;
             let dimensions =
                 image::load_from_memory(&BASE64_STANDARD.decode(payload)?)?.dimensions();
-            assert_eq!(dimensions, (2048, 32));
+            assert_eq!(dimensions, (6000, 32));
         }
         for (index, marker) in [(image_index - 1, "before"), (image_index + 1, "after")] {
             let text = reviewer_user_content[index]["text"].as_str().unwrap();

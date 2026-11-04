@@ -15,14 +15,14 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (9; hash=7ebf49dda2901fbc):
-    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=3b60611486072e76
+  tools (9; hash=c36c84db667eb4c8):
+    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=9226aa5c0caf3b05
     - function/wait: Waits on a yielded `exec` cell and returns new output or completion. - Use `wait` only after `exe...; args=[cell_id, max_tokens, terminate, yield_time_ms]; hash=6692d8f6c55be489
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.  exec tool dec...; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=759843fc2a7d41a0
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.  exec tool decla...; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=e6405481b30a43c1
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=11c5b5ed4fb972e8
-    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=1b87dd8874f6fa10
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=0e7abbd0a5b17fb9
     - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
     - web_search; hash=e214d4db1bc49e89
 -- request 1 (turn) --
@@ -45,7 +45,7 @@ Settings:
 ## Window 2 (after request 2)
 Settings: relative to window 1
   model: "updated-tools-model"
-  tools (9; hash=6531bfd30ee7d343):
+  tools (9; hash=adb28e07b75745e2):
     ~ custom/exec: Updated execution instructions.  Some deferred nested tools may be omitted from this description....; hash=7af6961848c10849
 -- request 3 (turn) --
 00:message/developer:

@@ -585,7 +585,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     );
     assert_eq!(
         arr[1],
-        json!({"type": "input_image", "image_url": openai_png, "detail": "high"})
+        json!({"type": "input_image", "image_url": openai_png, "detail": "original"})
     );
 
     Ok(())

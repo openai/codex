@@ -16,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn; Initial policy A) --
-00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
-        - namespace/functions; hash=fada4a476a3754dd
+00:additional_tools/developer (3; hash=e019c949fc483f83):
+        - namespace/functions; hash=03340277aa23936f
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -123,8 +123,8 @@ Settings:
 ## Window 2 (after request 4: input diverged at item 02)
 Settings: unavailable (items only)
 -- request 5 (items; Stored replacement before next turn) --
-00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
-        - namespace/functions; hash=fada4a476a3754dd
+00:additional_tools/developer (3; hash=e019c949fc483f83):
+        - namespace/functions; hash=03340277aa23936f
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -218,8 +218,8 @@ Settings: unavailable (items only)
 ## Window 3 (after request 5)
 Settings: same as window 1
 -- request 6 (turn; Unchanged policy C after compaction) --
-00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
-        - namespace/functions; hash=fada4a476a3754dd
+00:additional_tools/developer (3; hash=e019c949fc483f83):
+        - namespace/functions; hash=03340277aa23936f
           - custom/exec
           - function/wait
           - function/request_user_input

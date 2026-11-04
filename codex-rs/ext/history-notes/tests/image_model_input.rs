@@ -160,8 +160,8 @@ async fn history_images_reach_the_next_model_request() -> Result<(), Box<dyn std
         json!([
                 {"type": "encrypted_content", "encrypted_content": "opaque-history-text"},
                 {"type": "input_image", "image_url": format!("data:image/png;base64,{PNG}"), "detail": "original"},
-                {"type": "input_image", "image_url": format!("data:image/png;base64,{PNG}"), "detail": "high"},
-                {"type": "input_image", "image_url": format!("data:image/png;base64,{PNG}"), "detail": "auto"}
+                {"type": "input_image", "image_url": format!("data:image/png;base64,{PNG}"), "detail": "original"},
+                {"type": "input_image", "image_url": format!("data:image/png;base64,{PNG}"), "detail": "original"}
         ])
     );
     insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(

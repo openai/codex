@@ -3435,7 +3435,7 @@ async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
     let server_name = "rmcp";
     let namespace = format!("mcp__{server_name}");
 
-    let original_dimensions = (3000, 2000);
+    let original_dimensions = (6400, 320);
     let image = ImageBuffer::from_pixel(
         original_dimensions.0,
         original_dimensions.1,
@@ -3509,14 +3509,14 @@ async fn stdio_image_responses_resize_large_image() -> anyhow::Result<()> {
     let resized_url = output[1]["image_url"]
         .as_str()
         .expect("MCP image output should contain a data URL");
-    assert_eq!(output[1]["detail"], "high");
+    assert_eq!(output[1]["detail"], "original");
     let (_, resized_base64) = resized_url
         .split_once(',')
         .expect("resized image should contain a data URL prefix");
     let resized_bytes = BASE64_STANDARD.decode(resized_base64)?;
     let resized = image::load_from_memory(&resized_bytes)?;
     let resized_dimensions = resized.dimensions();
-    assert_eq!(resized_dimensions, (1920, 1280));
+    assert_eq!(resized_dimensions, (6000, 300));
 
     server.verify().await;
     Ok(())

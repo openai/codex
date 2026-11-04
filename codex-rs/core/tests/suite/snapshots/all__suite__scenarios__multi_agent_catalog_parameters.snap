@@ -16,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=2b84850bc279e5ed):
-        - namespace/functions; hash=fada4a476a3754dd
+00:additional_tools/developer (3; hash=83697a0118230669):
+        - namespace/functions; hash=03340277aa23936f
           - custom/exec
           - function/wait
           - function/request_user_input

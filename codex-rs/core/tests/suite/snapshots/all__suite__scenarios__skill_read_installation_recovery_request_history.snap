@@ -6,8 +6,8 @@ Scenario: Astra reads Cloud instructions, discovers an omitted deployment instal
 
 ## Window 1
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=e075a43448be3246):
-        - namespace/functions; hash=bbcd688349ca7e12
+00:additional_tools/developer (3; hash=c989fc4f95fb6f22):
+        - namespace/functions; hash=80f0e6670cf933cc
           - custom/exec
           - function/wait
           - function/request_user_input

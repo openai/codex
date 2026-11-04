@@ -15,7 +15,7 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (11; hash=e4ad6947d6c88cac):
+  tools (11; hash=a079637661e48f3a):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
@@ -23,7 +23,7 @@ Settings:
     - function/read_mcp_resource: Read a specific resource from an MCP server given the server name and resource URI.; args=[server, uri]; hash=24246896b39008ae
     - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
-    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
     - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=2327142bda177c50
       - function/close_agent
       - function/resume_agent
@@ -50,7 +50,7 @@ Settings:
 ## Window 2 (after request 2: input diverged at item 03)
 Settings: relative to window 1
   prompt_cache_key: "<PROMPT_CACHE_KEY 2>"
-  tools (11; hash=b0f271ad4e160a41):
+  tools (11; hash=ab95a443abed962b):
     ~ namespace/mcp__shared: Use these tools to exercise the rmcp test server.; hash=a9e155b340098fac
       - function/echo_tool
 -- request 3 (turn; joiner) --

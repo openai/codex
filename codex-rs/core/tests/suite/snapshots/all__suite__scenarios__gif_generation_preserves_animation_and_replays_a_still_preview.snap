@@ -16,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=650d9374d11dab9f):
-        - namespace/functions; hash=101d32aa59ea258b
+00:additional_tools/developer (3; hash=cec010d63fda60d5):
+        - namespace/functions; hash=106dd1b983efd2f7
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -25,11 +25,15 @@ Settings:
           - function/view_image
         - namespace/image_gen: Tools in the image_gen namespace.; hash=7f9a214246396279
           - function/imagegen
-        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+        - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 03:message/user:
     <ENVIRONMENT_CONTEXT>
 04:message/user:
