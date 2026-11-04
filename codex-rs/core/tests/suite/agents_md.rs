@@ -1168,6 +1168,14 @@ async fn thread_provider_composes_and_clears_only_its_instructions() -> Result<(
     )
     .await;
     let fixture = ThreadInstructionsFixture::new(&server).await?;
+    let warning = core_test_support::wait_for_event_match(&fixture.thread, |event| match event {
+        EventMsg::Warning(warning) if warning.message.contains("project_doc_max_bytes") => {
+            Some(warning.message.clone())
+        }
+        _ => None,
+    })
+    .await;
+    insta::assert_snapshot!(warning, @"Combined user instructions use 86 bytes, above the 20-byte `project_doc_max_bytes` setting. The total includes global and thread instructions. The limit applies only to project files.");
     let sources = vec![
         PathUri::from_abs_path(&fixture.test.config.codex_home.join(GLOBAL_AGENTS_FILENAME)),
         fixture.test.workspace_path_uri(GLOBAL_AGENTS_FILENAME)?,

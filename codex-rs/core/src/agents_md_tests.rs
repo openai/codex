@@ -341,13 +341,13 @@ async fn get_user_instructions(config: &TestConfig) -> Option<String> {
 async fn load_agents_md(config: &TestConfig) -> Option<LoadedAgentsMd> {
     let environments = resolved_local_environments([("local", config.config.cwd.clone())]);
 
-    load_project_instructions(
-        &config.config,
-        config.user_instructions.clone(),
-        &environments,
-    )
-    .await
-    .expect("project instructions should load")
+    load_project_instructions(config, &environments, &mut Vec::new())
+        .await
+        .expect("project instructions should load")
+        .with_instructions(
+            config.user_instructions.clone(),
+            /*thread_instructions*/ None,
+        )
 }
 
 async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<PathUri>> {
@@ -675,12 +675,15 @@ async fn doc_larger_than_limit_is_truncated() {
     let huge = "A".repeat(LIMIT * 2); // 2 KiB
     fs::write(tmp.path().join("AGENTS.md"), &huge).unwrap();
 
-    let res = get_user_instructions(&make_config(&tmp, LIMIT, /*instructions*/ None).await)
+    let config = make_config(&tmp, LIMIT, /*instructions*/ None).await;
+    let environments = resolved_local_environments([("local", config.cwd.clone())]);
+    let mut warnings = Vec::new();
+    let loaded = load_project_instructions(&config, &environments, &mut warnings)
         .await
-        .expect("doc expected");
-
-    assert_eq!(res.len(), LIMIT, "doc should be truncated to LIMIT bytes");
-    assert_eq!(res, huge[..LIMIT]);
+        .expect("project instructions should load");
+    assert_eq!(loaded.text(), huge[..LIMIT]);
+    let path = config.cwd.join("AGENTS.md");
+    insta::assert_snapshot!(warnings.join("\n").replace(path.to_string_lossy().as_ref(), "AGENTS.md"), @"Loaded only 1024 of 2048 bytes from `AGENTS.md` in environment `local` under the 1024-byte project instruction budget. Trim your project instructions to fit the budget. If you need to keep them all, increase `project_doc_max_bytes`.");
 }
 
 #[tokio::test]
@@ -742,6 +745,7 @@ async fn read_agents_md_loads_cwd_instructions_when_parent_markers_are_unreadabl
         &PathUri::from_abs_path(&cwd),
         config.project_doc_max_bytes,
         /*sandbox*/ None,
+        &mut Vec::new(),
     )
     .await
     .expect("unreadable parent markers should not hide cwd instructions")
@@ -769,6 +773,7 @@ async fn read_agents_md_propagates_read_errors() {
         &PathUri::from_abs_path(&cwd),
         config.project_doc_max_bytes,
         /*sandbox*/ None,
+        &mut Vec::new(),
     )
     .await
     .expect_err("read error");
@@ -795,6 +800,7 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
         &PathUri::from_abs_path(&cwd),
         config.project_doc_max_bytes,
         /*sandbox*/ None,
+        &mut Vec::new(),
     )
     .await
     .expect("removed file is recoverable");
@@ -1147,12 +1153,14 @@ async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order(
         ("primary", config.cwd.clone()),
         ("secondary", secondary.abs()),
     ]);
-    let user_instructions = config.user_instructions.clone();
-
-    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
+    let loaded = load_project_instructions(&config, &environments, &mut Vec::new())
         .await
         .expect("project instructions should load")
-        .expect("instructions expected");
+        .with_instructions(
+            config.user_instructions.clone(),
+            /*thread_instructions*/ None,
+        )
+        .expect("global instructions");
     let inner = format!(
         r#"global instructions
 
@@ -1211,12 +1219,14 @@ async fn secondary_only_project_doc_uses_single_contributor_layout() {
         ("primary", config.cwd.clone()),
         ("secondary", secondary.abs()),
     ]);
-    let user_instructions = config.user_instructions.clone();
-
-    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
+    let loaded = load_project_instructions(&config, &environments, &mut Vec::new())
         .await
         .expect("project instructions should load")
-        .expect("instructions expected");
+        .with_instructions(
+            config.user_instructions.clone(),
+            /*thread_instructions*/ None,
+        )
+        .expect("global instructions");
     let inner = format!("global instructions{AGENTS_MD_SEPARATOR}secondary doc");
 
     assert_eq!(loaded.legacy_text(), inner);
@@ -1241,12 +1251,14 @@ async fn primary_only_project_doc_preserves_legacy_layout_with_multiple_bound_en
         ("primary", config.cwd.clone()),
         ("secondary", secondary.abs()),
     ]);
-    let user_instructions = config.user_instructions.clone();
-
-    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
+    let loaded = load_project_instructions(&config, &environments, &mut Vec::new())
         .await
         .expect("project instructions should load")
-        .expect("instructions expected");
+        .with_instructions(
+            config.user_instructions.clone(),
+            /*thread_instructions*/ None,
+        )
+        .expect("global instructions");
     let inner = format!("global instructions{AGENTS_MD_SEPARATOR}primary doc");
 
     assert_eq!(loaded.legacy_text(), inner);
@@ -1272,12 +1284,9 @@ async fn project_doc_byte_limit_is_shared_across_environments() {
         ("primary", config.cwd.clone()),
         ("secondary", secondary.abs()),
     ]);
-    let user_instructions = config.user_instructions.clone();
-
-    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
+    let loaded = load_project_instructions(&config, &environments, &mut Vec::new())
         .await
-        .expect("project instructions should load")
-        .expect("instructions expected");
+        .expect("project instructions should load");
 
     assert_eq!(
         loaded.text(),
@@ -1290,7 +1299,7 @@ async fn project_doc_byte_limit_is_shared_across_environments() {
 }
 
 #[tokio::test]
-async fn full_primary_environment_budget_excludes_later_environment_docs() {
+async fn full_primary_environment_budget_skips_later_files_and_environments() {
     const LIMIT: usize = 8;
     let primary = tempfile::tempdir().expect("primary tempdir");
     let secondary = tempfile::tempdir().expect("secondary tempdir");
@@ -1299,29 +1308,23 @@ async fn full_primary_environment_budget_excludes_later_environment_docs() {
     fs::write(primary.path().join("AGENTS.md"), &primary_doc).unwrap();
     fs::write(secondary.path().join("AGENTS.md"), &secondary_doc).unwrap();
     let config = make_config(&primary, LIMIT, /*instructions*/ None).await;
-    let environments = resolved_local_environments([
-        ("primary", config.cwd.clone()),
-        ("secondary", secondary.abs()),
-    ]);
+    fs::create_dir(primary.path().join(".git")).unwrap();
+    let nested = config.cwd.join("nested");
+    fs::create_dir(&nested).unwrap();
+    let skipped = nested.join("AGENTS.md");
+    fs::write(&skipped, "nested instructions").unwrap();
+    let environments =
+        resolved_local_environments([("primary", nested), ("secondary", secondary.abs())]);
 
-    let loaded = load_project_instructions(
-        &config.config,
-        /*user_instructions*/ None,
-        &environments,
-    )
-    .await
-    .expect("project instructions should load")
-    .expect("instructions expected");
-    let project_bytes = loaded
-        .entries
-        .iter()
-        .filter(|entry| matches!(&entry.provenance, InstructionProvenance::Project { .. }))
-        .map(|entry| entry.contents.len())
-        .sum::<usize>();
-
-    assert_eq!(project_bytes, LIMIT);
-    assert!(loaded.text().contains(&primary_doc));
-    assert!(!loaded.text().contains(&secondary_doc));
+    let mut warnings = Vec::new();
+    let loaded = load_project_instructions(&config, &environments, &mut warnings)
+        .await
+        .expect("project instructions should load");
+    insta::assert_snapshot!(warnings.join("\n").replace(skipped.to_string_lossy().as_ref(), "nested/AGENTS.md"), @r"
+    Skipped project instructions in environment `primary` starting at `nested/AGENTS.md` because the 8-byte budget was exhausted. Trim your project instructions to fit the budget. If you need to keep them all, increase `project_doc_max_bytes`.
+    The 8-byte project instruction budget was exhausted before checking environment `secondary` or any later environments. Trim your project instructions to fit the budget. If you need to keep them all, increase `project_doc_max_bytes`.
+    ");
+    assert_eq!(loaded.text(), primary_doc);
 }
 
 #[tokio::test]
@@ -1336,14 +1339,9 @@ async fn secondary_environment_invalid_utf8_does_not_suppress_other_docs() {
         ("secondary", secondary.abs()),
     ]);
 
-    let loaded = load_project_instructions(
-        &config.config,
-        /*user_instructions*/ None,
-        &environments,
-    )
-    .await
-    .expect("project instructions should load")
-    .expect("instructions expected");
+    let loaded = load_project_instructions(&config, &environments, &mut Vec::new())
+        .await
+        .expect("project instructions should load");
 
     assert!(loaded.text().contains("primary doc"));
     assert!(loaded.text().contains("secondary\u{FFFD}doc"));
