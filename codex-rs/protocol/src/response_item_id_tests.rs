@@ -5,7 +5,7 @@ use super::ResponseItemId;
 
 #[test]
 fn creates_prefixed_uuid_v7_ids() {
-    let id = ResponseItemId::new("msg");
+    let id = crate::uuid_v7_item_id_generator_for_test()("msg");
     let uuid = id.strip_prefix("msg_").expect("message prefix");
     assert_eq!(
         Uuid::parse_str(uuid).expect("UUID suffix").get_version(),

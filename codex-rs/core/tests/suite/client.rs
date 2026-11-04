@@ -62,6 +62,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use core_test_support::TestCodexResponsesRequestKind;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
@@ -1832,6 +1833,7 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
         ),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
+        uuid_v7_item_id_generator_for_test(),
         SessionSource::Exec,
         "test_originator".to_string(),
         config.model_verbosity,
@@ -3338,6 +3340,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         codex_model_provider::create_model_provider(provider.clone(), /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
+        uuid_v7_item_id_generator_for_test(),
         SessionSource::Exec,
         "test_originator".to_string(),
         config.model_verbosity,

@@ -1,5 +1,5 @@
 use crate::AgentPath;
-use crate::ResponseItemId;
+use crate::ItemIdGenerator;
 use crate::ThreadId;
 use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::mcp::CallToolResult;
@@ -727,7 +727,10 @@ impl HookPromptFragment {
     }
 }
 
-pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<ResponseItem> {
+pub fn build_hook_prompt_message(
+    fragments: &[HookPromptFragment],
+    item_id_generator: &ItemIdGenerator,
+) -> Option<ResponseItem> {
     let mut content = Vec::new();
     let mut metadata = Vec::new();
     for fragment in fragments {
@@ -744,7 +747,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     Some(ResponseItem::Message {
         status: None,
         encrypted_content: None,
-        id: Some(ResponseItemId::new("msg")),
+        id: Some(item_id_generator("msg")),
         role: "user".to_string(),
         content,
         phase: None,
@@ -920,7 +923,9 @@ mod tests {
             HookPromptFragment::from_single_hook("Retry with care & joy.", "hook-run-1"),
             HookPromptFragment::from_single_hook("Then summarize cleanly.", "hook-run-2"),
         ];
-        let message = build_hook_prompt_message(&original).expect("hook prompt");
+        let message =
+            build_hook_prompt_message(&original, &crate::uuid_v7_item_id_generator_for_test())
+                .expect("hook prompt");
 
         let ResponseItem::Message { id, content, .. } = message else {
             panic!("expected hook prompt message");

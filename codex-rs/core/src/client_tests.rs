@@ -69,6 +69,7 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
@@ -128,6 +129,7 @@ fn test_model_client_with_thread_id(
         codex_model_provider::create_model_provider(provider, /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
+        uuid_v7_item_id_generator_for_test(),
         session_source,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
@@ -539,7 +541,7 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
     use codex_features::Feature;
     use codex_features::Features;
 
-    let (_, turn) = crate::session::tests::make_session_and_context().await;
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
     let step = StepContext::for_test(Arc::new(turn));
     let mut features = Features::default();
     features.enable(Feature::ExecutedToolCallMetadata);
@@ -564,7 +566,11 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
             call_id: id.to_string(),
             output: FunctionCallOutputPayload::from_text(format!("result for {id}")),
         });
-        recorder.attach_direct_call_to_output(&mut item, Some((recorded, permit)));
+        recorder.attach_direct_call_to_output(
+            &mut item,
+            Some((recorded, permit)),
+            &session.item_id_generator,
+        );
         outputs.push(item);
     }
     let persisted_outputs = outputs.clone();
@@ -1675,7 +1681,7 @@ async fn untraced_http_stream_releases_completed_output_before_response_ends() {
         events,
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
-        test_model_provider(),
+        &test_model_client(SessionSource::Cli).state,
         /*last_response_tx*/ None,
     );
 
@@ -1717,7 +1723,7 @@ async fn incomplete_response_traces_attempted_call_without_streaming_it() -> any
             api_stream,
             test_session_telemetry(),
             attempt,
-            test_model_provider(),
+            &test_model_client(SessionSource::Cli).state,
             /*last_response_tx*/ None,
         );
         assert!(matches!(stream.next().await, Some(Err(_))));
@@ -1762,7 +1768,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
         api_stream,
         test_session_telemetry(),
         attempt,
-        test_model_provider(),
+        &test_model_client(SessionSource::Cli).state,
         /*last_response_tx*/ None,
     );
 
@@ -1819,7 +1825,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         api_stream,
         test_session_telemetry(),
         InferenceTraceAttempt::disabled(),
-        test_model_provider(),
+        &test_model_client(SessionSource::Cli).state,
         /*last_response_tx*/ None,
     );
 
@@ -2043,7 +2049,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
         api_stream,
         test_session_telemetry(),
         attempt,
-        test_model_provider(),
+        &test_model_client(SessionSource::Cli).state,
         /*last_response_tx*/ None,
     );
 
@@ -2150,6 +2156,7 @@ fn model_client_with_counting_attestation(
         codex_model_provider::create_model_provider(provider, auth_manager),
         AgentIdentityAuthPolicy::JwtOnly,
         ThreadId::new(),
+        uuid_v7_item_id_generator_for_test(),
         SessionSource::Exec,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
@@ -2344,7 +2351,7 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         },
         test_session_telemetry(),
         attempt,
-        test_model_provider(),
+        &test_model_client(SessionSource::Cli).state,
         vec![Box::new(ReplaceOutput)],
         Some(last_response_tx),
     );

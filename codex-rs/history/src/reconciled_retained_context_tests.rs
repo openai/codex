@@ -3,6 +3,7 @@ use crate::RetainedContextEvent;
 use crate::RetainedInputSource;
 use crate::VerifiedAnswer;
 use crate::VerifiedQuestionAnswer;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use pretty_assertions::assert_eq;
 
 fn instruction(text: &str) -> RetainedUserMessage {
@@ -28,19 +29,30 @@ fn recovery_preserves_source_identity_acceptance_order_and_checkpoint_gaps() {
         ..retained_excerpt.clone()
     };
     let mut retained = RetainedContext::default();
-    retained.record_user_message(initial.clone(), RetainedInputSource::Local(Some(0)));
-    retained.record_user_message(retained_excerpt, RetainedInputSource::Local(Some(1)));
-    retained.record(&RetainedContextEvent::VerifiedAnswer {
-        answer: VerifiedAnswer {
-            turn_id: "answer-turn".to_owned(),
-            call_id: "publish-question".to_owned(),
-            questions: vec![VerifiedQuestionAnswer {
-                question: "Publish?".to_owned(),
-                answer: "Never publicly.".to_owned(),
-            }],
+    retained.record_user_message(
+        initial.clone(),
+        RetainedInputSource::Local(Some(0)),
+        &uuid_v7_item_id_generator_for_test(),
+    );
+    retained.record_user_message(
+        retained_excerpt,
+        RetainedInputSource::Local(Some(1)),
+        &uuid_v7_item_id_generator_for_test(),
+    );
+    retained.record(
+        &RetainedContextEvent::VerifiedAnswer {
+            answer: VerifiedAnswer {
+                turn_id: "answer-turn".to_owned(),
+                call_id: "publish-question".to_owned(),
+                questions: vec![VerifiedQuestionAnswer {
+                    question: "Publish?".to_owned(),
+                    answer: "Never publicly.".to_owned(),
+                }],
+            },
+            acceptance_order: Some(3),
         },
-        acceptance_order: Some(3),
-    });
+        &uuid_v7_item_id_generator_for_test(),
+    );
     retained.mark_user_messages_incomplete();
     let checkpoint = retained.clone();
 
@@ -112,6 +124,7 @@ fn recovery_marks_missing_and_conflicting_orders_incomplete() {
     retained.record_user_message(
         instruction("Inspect the deployment."),
         RetainedInputSource::Local(Some(1)),
+        &uuid_v7_item_id_generator_for_test(),
     );
     assert!(!retained.has_missing_user_messages());
     let checkpoint = retained.clone();
@@ -180,6 +193,7 @@ fn heartbeat_versions_survive_retention_restore_and_reconciliation() {
         retained.record_user_message(
             message.clone(),
             RetainedInputSource::Local(Some(index as u64)),
+            &uuid_v7_item_id_generator_for_test(),
         );
     }
     let expected = [0, 1, 31, 32, 33]

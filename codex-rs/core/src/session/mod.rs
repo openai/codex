@@ -3,7 +3,6 @@ pub(crate) mod startup;
 use crate::PromptCacheKey;
 use crate::WithTurnExtensionData;
 use crate::runtime_auth::RuntimeAuthSlot;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -582,6 +581,17 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+
+pub(crate) fn assign_missing_item_id(
+    item: &mut ResponseItem,
+    item_id_generator: &codex_protocol::ItemIdGenerator,
+) {
+    if item.id().is_none_or(|id| id.is_empty())
+        && let Some(prefix) = item.id_prefix()
+    {
+        item.set_id(Some(item_id_generator(prefix)));
+    }
+}
 
 impl Session {
     /// Spawn and initialize a new session.
@@ -1821,7 +1831,11 @@ impl Session {
             }
             InitialHistory::Forked(mut rollout_items) => {
                 let turn_context = self.new_default_turn().await;
-                Self::assign_missing_rollout_response_item_ids(&mut rollout_items);
+                for record in &mut rollout_items {
+                    if let RolloutItem::ResponseItem(envelope) = record {
+                        self.assign_missing_response_item_id(&mut envelope.item);
+                    }
+                }
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 
@@ -3822,12 +3836,12 @@ impl Session {
     }
 
     /// Prepares media using the originating model and preserves existing item identity.
-    pub(crate) async fn prepare_conversation_items_for_history<'a>(
+    pub(crate) async fn prepare_conversation_items_for_history(
         &self,
         turn_context: &TurnContext,
         model_info: &ModelInfo,
-        items: &'a [ResponseItem],
-    ) -> (Cow<'a, [ResponseItem]>, Vec<ImagePreparationMetadata>) {
+        items: &[ResponseItem],
+    ) -> (Vec<ResponseItem>, Vec<ImagePreparationMetadata>) {
         let mut items = items.to_vec();
         let image_preparation_mode =
             if unified_image_budget_enabled(&turn_context.config.features, model_info) {
@@ -3858,44 +3872,13 @@ impl Session {
         // Most response items get their passthrough turn ID at the durable history boundary.
         for item in &mut items {
             Self::stamp_response_item_for_history(item, &turn_context.sub_id);
+            self.assign_missing_response_item_id(item);
         }
-        let items = Cow::Owned(items);
-        (
-            Self::assign_missing_response_item_ids(items),
-            image_preparations,
-        )
+        (items, image_preparations)
     }
 
-    fn assign_missing_response_item_ids(items: Cow<'_, [ResponseItem]>) -> Cow<'_, [ResponseItem]> {
-        if items
-            .iter()
-            .all(|item| item.id().is_some_and(|id| !id.is_empty()))
-        {
-            return items;
-        }
-        let mut items = items;
-        for item in items.to_mut() {
-            Self::assign_missing_response_item_id(item);
-        }
-        items
-    }
-
-    pub(crate) fn assign_missing_response_item_id(item: &mut ResponseItem) {
-        if item.id().is_some_and(|id| !id.is_empty()) {
-            return;
-        }
-        let Some(prefix) = item.id_prefix() else {
-            return;
-        };
-        item.set_id(Some(ResponseItemId::new(prefix)));
-    }
-
-    fn assign_missing_rollout_response_item_ids(items: &mut [RolloutItem]) {
-        for item in items {
-            if let RolloutItem::ResponseItem(response_item) = item {
-                Self::assign_missing_response_item_id(&mut response_item.item);
-            }
-        }
+    pub(crate) fn assign_missing_response_item_id(&self, item: &mut ResponseItem) {
+        assign_missing_item_id(item, &self.item_id_generator);
     }
 
     pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {
@@ -3955,11 +3938,7 @@ impl Session {
         let (items, image_preparations) = self
             .prepare_conversation_items_for_history(turn_context, model_info, items)
             .await;
-        let items = items
-            .into_owned()
-            .into_iter()
-            .map(ResponseItemEnvelope::new)
-            .collect();
+        let items = items.into_iter().map(ResponseItemEnvelope::new).collect();
         self.record_prepared_conversation_items(
             turn_context,
             model_info,
@@ -4541,7 +4520,6 @@ impl Session {
                 std::slice::from_ref(&response_item),
             )
             .await;
-        let items = items.as_ref();
         let mut response_item = ResponseItemEnvelope::new(items[0].clone());
         // A send confirmed after the pending snapshot must not reach the rollout
         // before this boundary; older readers assign deliveries by physical order.
@@ -4569,7 +4547,7 @@ impl Session {
         }
         {
             let mut state = self.state.lock().await;
-            state.current_time_reminder.note_recorded_items(items);
+            state.current_time_reminder.note_recorded_items(&items);
             state.history.record_annotated_items(
                 std::slice::from_mut(&mut response_item),
                 model_info.truncation_policy.into(),
@@ -4586,7 +4564,7 @@ impl Session {
         ])
         .await;
         drop(boundary);
-        self.send_raw_response_items(turn_context, items).await;
+        self.send_raw_response_items(turn_context, &items).await;
     }
 
     async fn maybe_warn_on_server_model_mismatch(
@@ -4771,7 +4749,7 @@ impl Session {
                 }
             };
             for envelope in &mut items {
-                Self::assign_missing_response_item_id(&mut envelope.item);
+                self.assign_missing_response_item_id(&mut envelope.item);
             }
             // Goal edits are published outside the running task. Keep edits accepted after
             // the compaction input snapshot, in their original order, after its replacement.

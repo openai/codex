@@ -24,7 +24,6 @@ use crate::turn_timing::now_unix_timestamp_ms;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_protocol::AgentPath;
-use codex_protocol::ResponseItemId;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -271,7 +270,7 @@ impl LocalAgentControl {
                 .id
                 .take()
                 .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| ResponseItemId::new("amsg"));
+                .unwrap_or_else(|| (self.runtime.item_id_generator)("amsg"));
             communication.id = Some(message_id.clone());
             MessageDelivery::publish(context.sender_thread_id, message_id, observers)
         });

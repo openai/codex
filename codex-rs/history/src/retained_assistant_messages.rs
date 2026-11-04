@@ -9,6 +9,7 @@ use super::RetainedSource;
 use super::RetainedSourceRole;
 use super::RetainedUserMessage;
 use super::bound_family;
+use codex_protocol::ItemIdGenerator;
 
 impl RetainedContext {
     /// Reports observed storage loss or a retained message that cannot be delivered whole.
@@ -38,6 +39,7 @@ impl RetainedContext {
         &mut self,
         mut message: RetainedUserMessage,
         source: RetainedInputSource,
+        item_id_generator: &ItemIdGenerator,
     ) -> Option<RetainedSource> {
         if source == RetainedInputSource::Local(None) {
             // Leave unsequenced sources to legacy transcript selection. Missing
@@ -73,7 +75,7 @@ impl RetainedContext {
         let revision = message
             .message_id
             .as_ref()
-            .map(|_| codex_protocol::ResponseItemId::new("retained"));
+            .map(|_| item_id_generator("retained"));
         let entry = Ordered {
             revision,
             inherited,

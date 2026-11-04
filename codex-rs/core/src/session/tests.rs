@@ -357,11 +357,13 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
-#[test]
-fn assign_missing_response_item_ids_assigns_agent_message_ids() {
-    let items = Cow::Owned(vec![
+#[tokio::test]
+async fn default_turn_context_assigns_missing_response_item_ids() {
+    let (session, turn_context) = make_session_and_context().await;
+    let items = [
+        user_message("hello"),
         ResponseItem::AgentMessage {
-            id: None,
+            id: Some(ResponseItemId::from_server(String::new())),
             author: "worker".to_string(),
             recipient: "root".to_string(),
             content: vec![AgentMessageInputContent::InputText {
@@ -369,46 +371,21 @@ fn assign_missing_response_item_ids_assigns_agent_message_ids() {
             }],
             internal_chat_message_metadata_passthrough: None,
         },
-        user_message("hello"),
-    ]);
-
-    let items = Session::assign_missing_response_item_ids(items);
-
-    assert!(items[0].id().is_some_and(|id| id.starts_with("amsg_")));
-    assert!(items[1].id().is_some_and(|id| id.starts_with("msg_")));
-}
-
-#[test]
-fn assign_missing_response_item_ids_assigns_additional_tools_ids() {
-    let items = Cow::Owned(vec![ResponseItem::AdditionalTools {
-        id: None,
-        role: "developer".to_string(),
-        tools: Arc::from([]),
-    }]);
-
-    let items = Session::assign_missing_response_item_ids(items);
-
-    assert!(items[0].id().is_some_and(|id| id.starts_with("at_")));
-}
-
-#[tokio::test]
-async fn default_turn_context_assigns_missing_response_item_ids() {
-    let (session, turn_context) = make_session_and_context().await;
-    let response_item = user_message("hello");
-
+        ResponseItem::AdditionalTools {
+            id: None,
+            role: "developer".to_string(),
+            tools: Arc::from([]),
+        },
+    ];
     let (items, _) = session
-        .prepare_conversation_items_for_history(
-            &turn_context,
-            turn_context.model_info(),
-            std::slice::from_ref(&response_item),
-        )
+        .prepare_conversation_items_for_history(&turn_context, turn_context.model_info(), &items)
         .await;
 
-    assert!(
-        items[0]
-            .id()
-            .is_some_and(|item_id| item_id.starts_with("msg_"))
-    );
+    assert_eq!(items.len(), 3);
+    for (item, prefix) in items.iter().zip(["msg_", "amsg_", "at_"]) {
+        let suffix = item.id().unwrap().strip_prefix(prefix).unwrap();
+        assert_eq!(Uuid::parse_str(suffix).unwrap().get_version_num(), 7);
+    }
 }
 
 fn assistant_message(text: &str) -> ResponseItem {
@@ -915,6 +892,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         ),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
+        codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
         codex_protocol::protocol::SessionSource::Exec,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
@@ -2627,12 +2605,14 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
 #[tokio::test]
 async fn record_response_item_and_emit_turn_item_emits_hook_prompt_lifecycle() {
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
-    let response_item = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
-        "Retry with tests.",
-        "hook-run-1",
-    )])
+    let response_item = build_hook_prompt_message(
+        &[HookPromptFragment::from_single_hook(
+            "Retry with tests.",
+            "hook-run-1",
+        )],
+        &session.item_id_generator,
+    )
     .expect("hook prompt message");
-    let response_item_id = response_item.id().expect("hook prompt id").to_string();
 
     session
         .record_response_item_and_emit_turn_item(
@@ -2643,7 +2623,11 @@ async fn record_response_item_and_emit_turn_item_emits_hook_prompt_lifecycle() {
         .await;
 
     let raw_response = rx.recv().await.expect("raw response item event");
-    assert!(matches!(raw_response.msg, EventMsg::RawResponseItem(_)));
+    let EventMsg::RawResponseItem(raw) = raw_response.msg else {
+        panic!("expected raw hook prompt");
+    };
+    let response_item_id = raw.item.id().expect("hook prompt id").to_string();
+    assert!(response_item_id.starts_with("msg_"));
 
     let started = rx.recv().await.expect("started hook prompt event");
     assert!(matches!(
@@ -6937,6 +6921,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         config.model_provider.clone(),
     );
     let agent_control = LocalAgentControl::default();
+    let item_id_generator = Arc::clone(&agent_control.runtime.item_id_generator);
     let exec_policy = Arc::new(ExecPolicyManager::default());
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = get_model_offline_for_tests(config.model.as_deref());
@@ -7010,6 +6995,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     state.history = ContextManager::for_session(
         session_configuration.root_capabilities_restricted,
         &config.features,
+        Arc::clone(&item_id_generator),
     );
     let (environment_manager, resolved_environments) =
         resolved_environments_for_configuration(&session_configuration, &default_environments)
@@ -7122,6 +7108,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
+            Arc::clone(&item_id_generator),
             session_configuration.session_source.clone(),
             session_configuration.originator.clone(),
             config.model_verbosity,
@@ -7153,6 +7140,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let session = Session {
         thread_id,
+        item_id_generator,
         agent_runtime: crate::agent::host::AgentRuntimeServices::Controller,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
@@ -9276,6 +9264,7 @@ where
         config.model_provider.clone(),
     );
     let agent_control = LocalAgentControl::default();
+    let item_id_generator = Arc::clone(&agent_control.runtime.item_id_generator);
     let exec_policy = Arc::new(ExecPolicyManager::default());
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = get_model_offline_for_tests(config.model.as_deref());
@@ -9349,6 +9338,7 @@ where
     state.history = ContextManager::for_session(
         session_configuration.root_capabilities_restricted,
         &config.features,
+        Arc::clone(&item_id_generator),
     );
     let (environment_manager, resolved_turn_environments) =
         resolved_environments_for_configuration(&session_configuration, &default_environments)
@@ -9460,6 +9450,7 @@ where
             ),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
+            Arc::clone(&item_id_generator),
             session_configuration.session_source.clone(),
             session_configuration.originator.clone(),
             config.model_verbosity,
@@ -9491,6 +9482,7 @@ where
 
     let session = Arc::new(Session {
         thread_id,
+        item_id_generator,
         agent_runtime: crate::agent::host::AgentRuntimeServices::Controller,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
@@ -13530,7 +13522,7 @@ async fn sample_rollout(
     _turn_context: &TurnContext,
 ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
     let mut rollout_items = Vec::new();
-    let mut live_history = ContextManager::new();
+    let mut live_history = ContextManager::default();
 
     // Use the same turn_context source as record_initial_history so model_info matches reconstruction.
     let reconstruction_turn = session.new_default_turn().await;

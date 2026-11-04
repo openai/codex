@@ -51,6 +51,7 @@ use codex_history::RetainedContextEvent;
 use codex_history::RetainedInputSource;
 use codex_prompts::render_model_instructions;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
+use codex_protocol::ItemIdGenerator;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::AudioReference;
@@ -97,8 +98,9 @@ fn next_guardian_review_context_revision() -> u64 {
 }
 
 /// Transcript of thread history
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct ContextManager {
+    item_id_generator: ItemIdGenerator,
     /// The oldest items are at the beginning of the vector. Snapshots share the vector until a
     /// caller needs to mutate it, avoiding deep copies for read-only history consumers.
     items: Arc<Vec<ResponseItemEnvelope>>,
@@ -142,6 +144,44 @@ pub(crate) struct ContextManager {
     /// World-state comparison checkpoint. After compaction this may contain only
     /// extension metadata, with model-visible context still awaiting reinjection.
     world_state_baseline: Option<WorldStateSnapshot>,
+}
+
+impl std::fmt::Debug for ContextManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContextManager")
+            .field("items", &self.items)
+            .field("review_history", &self.review_history)
+            .field("retained_context", &self.retained_context)
+            .field("rejected_audio_file_ids", &self.rejected_audio_file_ids)
+            .field("guardian_review_mode", &self.guardian_review_mode)
+            .field(
+                "guardian_include_additional_context",
+                &self.guardian_include_additional_context,
+            )
+            .field(
+                "retain_inherited_user_messages",
+                &self.retain_inherited_user_messages,
+            )
+            .field("history_version", &self.history_version)
+            .field("reset_version", &self.reset_version)
+            .field("user_message_revision", &self.user_message_revision)
+            .field(
+                "guardian_review_context_revision",
+                &self.guardian_review_context_revision,
+            )
+            .field("token_info", &self.token_info)
+            .field(
+                "last_server_reported_usage_item_count",
+                &self.last_server_reported_usage_item_count,
+            )
+            .field(
+                "last_model_output_item_count",
+                &self.last_model_output_item_count,
+            )
+            .field("reference_context_item", &self.reference_context_item)
+            .field("world_state_baseline", &self.world_state_baseline)
+            .finish()
+    }
 }
 
 struct SharedConversationHistory {
@@ -261,15 +301,17 @@ impl SharedConversationHistory {
     }
 }
 
+#[cfg(test)]
 impl Default for ContextManager {
     fn default() -> Self {
-        Self::new()
+        Self::new(codex_protocol_test_support::uuid_v7_item_id_generator_for_test())
     }
 }
 
 impl ContextManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(item_id_generator: ItemIdGenerator) -> Self {
         Self {
+            item_id_generator,
             items: Arc::new(Vec::new()),
             review_history: None,
             retained_context: Arc::default(),
@@ -311,6 +353,7 @@ impl ContextManager {
     pub(crate) fn for_session(
         root_capabilities_restricted: bool,
         features: &ManagedFeatures,
+        item_id_generator: ItemIdGenerator,
     ) -> Self {
         let independent = !features.enabled(Feature::GuardianReuseParentCompaction);
         Self {
@@ -323,7 +366,7 @@ impl ContextManager {
                 GuardianContextMode::ThreadOwned
             },
             review_history: independent.then(TranscriptHistory::default),
-            ..Self::new()
+            ..Self::new(item_id_generator)
         }
     }
 
@@ -332,7 +375,7 @@ impl ContextManager {
     }
 
     pub(crate) fn record_retained_context(&mut self, event: &RetainedContextEvent) -> bool {
-        if !Arc::make_mut(&mut self.retained_context).record(event) {
+        if !Arc::make_mut(&mut self.retained_context).record(event, &self.item_id_generator) {
             return false;
         }
         match event {

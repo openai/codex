@@ -21,6 +21,7 @@ use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::WorldStateItem;
 use codex_protocol::security_risk::SecurityRiskScore;
 use codex_protocol::turn_input::CyberAccessProgram;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
 use core_test_support::responses::strip_metadata_from_items;
@@ -128,6 +129,7 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
     let mut live = ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &crate::config::ManagedFeatures::from(codex_features::Features::with_defaults()),
+        uuid_v7_item_id_generator_for_test(),
     );
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
@@ -2024,8 +2026,9 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
             complete: false,
         },
         codex_history::RetainedInputSource::Local(None),
+        &uuid_v7_item_id_generator_for_test(),
     );
-    retained.record(&answer);
+    retained.record(&answer, &uuid_v7_item_id_generator_for_test());
     let rollout_items = vec![
         RolloutItem::ResponseItem(user_message("before compact").into()),
         RolloutItem::ResponseItem(assistant_message("assistant reply").into()),

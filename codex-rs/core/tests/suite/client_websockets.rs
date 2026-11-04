@@ -2957,6 +2957,7 @@ async fn websocket_harness_with_provider_factory(
         provider_factory(provider.clone(), client_auth_manager),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
+        codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
         SessionSource::Exec,
         "test_originator".to_string(),
         config.model_verbosity,

@@ -775,9 +775,10 @@ pub(crate) async fn run_turn(
                         ));
                     }
                     if stop_outcome.should_block {
-                        if let Some(hook_prompt_message) =
-                            build_hook_prompt_message(&stop_outcome.continuation_fragments)
-                        {
+                        if let Some(hook_prompt_message) = build_hook_prompt_message(
+                            &stop_outcome.continuation_fragments,
+                            &sess.item_id_generator,
+                        ) {
                             sess.record_response_item_and_emit_turn_item(
                                 &turn_context,
                                 &step_context.settings.model_info,
@@ -2805,21 +2806,6 @@ async fn drain_in_flight(
     Ok(())
 }
 
-fn assign_missing_streamed_response_item_id(
-    item: &mut ResponseItem,
-    active_item: Option<&TurnItem>,
-) {
-    if item.id().is_some_and(|id| !id.is_empty()) {
-        return;
-    }
-
-    let active_item_id = active_item
-        .map(|item| ResponseItemId::from_server(item.id()))
-        .filter(|item_id| !item_id.is_empty());
-    item.set_id(active_item_id);
-    Session::assign_missing_response_item_id(item);
-}
-
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -3124,7 +3110,12 @@ async fn try_run_sampling_request(
                             authorization: authorization.clone(),
                         })
                     });
-                assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
+                if item.id().is_none_or(|id| id.is_empty())
+                    && let Some(active_item) = &active_item
+                {
+                    item.set_id(Some(ResponseItemId::from_server(active_item.id())));
+                }
+                sess.assign_missing_response_item_id(&mut item);
                 sess.reserve_assistant_message_order(&turn_context, &item)
                     .await;
                 if analytics_tool_call_ids.len() < MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE {
@@ -3283,7 +3274,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(mut item) => {
-                assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
+                sess.assign_missing_response_item_id(&mut item);
                 sess.reserve_assistant_message_order(&turn_context, &item)
                     .await;
                 if !*draining_for_mailbox

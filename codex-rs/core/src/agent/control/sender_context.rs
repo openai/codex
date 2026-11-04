@@ -103,7 +103,9 @@ impl LocalAgentRuntime {
                                 ContextManager::reconstruct_rollout(
                                     &stored.items,
                                     meta.history_mode,
-                                    ContextManager::new(),
+                                    ContextManager::new(std::sync::Arc::clone(
+                                        &self.item_id_generator,
+                                    )),
                                     // Tool bodies are not sender authorization evidence.
                                     TruncationPolicy::Bytes(0),
                                 )

@@ -11,6 +11,7 @@ pub use source::RetainedSource;
 pub use source::RetainedSourceId;
 pub use source::RetainedSourceRole;
 
+use codex_protocol::ItemIdGenerator;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -386,6 +387,7 @@ impl RetainedContext {
         &mut self,
         mut message: RetainedUserMessage,
         source: RetainedInputSource,
+        item_id_generator: &ItemIdGenerator,
     ) -> Option<RetainedSource> {
         message.bound();
         let inherited = source == RetainedInputSource::Inherited;
@@ -437,7 +439,7 @@ impl RetainedContext {
         let revision = message
             .message_id
             .as_ref()
-            .map(|_| codex_protocol::ResponseItemId::new("retained"));
+            .map(|_| item_id_generator("retained"));
         let entry = Ordered {
             revision,
             inherited,
@@ -470,7 +472,11 @@ impl RetainedContext {
     }
 
     /// Same-event delivery is idempotent; changed contents replace that source's record.
-    pub fn record(&mut self, event: &RetainedContextEvent) -> bool {
+    pub fn record(
+        &mut self,
+        event: &RetainedContextEvent,
+        item_id_generator: &ItemIdGenerator,
+    ) -> bool {
         let mut event = event.clone();
         event.bound();
         match event {
@@ -524,6 +530,7 @@ impl RetainedContext {
                 self.record_assistant_message(
                     message,
                     RetainedInputSource::Local(Some(acceptance_order)),
+                    item_id_generator,
                 );
                 true
             }

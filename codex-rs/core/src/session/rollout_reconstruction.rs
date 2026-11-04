@@ -199,6 +199,7 @@ impl Session {
             ContextManager::for_session(
                 turn_context.root_capabilities_restricted,
                 &turn_context.config.features,
+                std::sync::Arc::clone(&self.item_id_generator),
             ),
             turn_context.model_info().truncation_policy.into(),
         )

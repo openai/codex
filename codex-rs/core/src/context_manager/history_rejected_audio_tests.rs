@@ -57,9 +57,12 @@ fn previously_accepted_file_only_disambiguates_clip_specific_errors() {
         std::slice::from_ref(&good),
     )
     .expect("new audio");
-    context.record(&codex_history::RetainedContextEvent::AcceptedFileAudio {
-        evidence: evidence.into(),
-    });
+    context.record(
+        &codex_history::RetainedContextEvent::AcceptedFileAudio {
+            evidence: evidence.into(),
+        },
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     assert!(
         context
             .accepted_file_audio("another model", "provider")

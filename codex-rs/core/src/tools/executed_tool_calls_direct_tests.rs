@@ -32,6 +32,7 @@ fn direct_request_uses_live_window_after_persisted_budget_is_exhausted() {
         recorder.attach_direct_call_to_output(
             &mut item,
             Some((call, recorder.reserve_direct_call().unwrap())),
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
         );
         item
     };
@@ -99,7 +100,11 @@ fn direct_metadata_follows_output_ids_with_reused_call_ids_and_reverse_completio
         }
         // Completion order and prompt order must not choose which observation belongs here.
         for index in [1, 0] {
-            recorder.attach_direct_call_to_output(&mut outputs[index], prepared[index].take());
+            recorder.attach_direct_call_to_output(
+                &mut outputs[index],
+                prepared[index].take(),
+                &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+            );
             assert!(outputs[index].executed_tool_call_metadata().is_none());
             if supplied_ids {
                 assert_eq!(outputs[index].id(), Some(&expected_ids[index]));
@@ -161,6 +166,7 @@ fn direct_budget_keeps_an_omission_marker_when_it_fits() {
         recorder.attach_direct_call_to_output(
             &mut item,
             Some((call, recorder.reserve_direct_call().unwrap())),
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
         );
 
         expected.set_id(item.id().cloned());
@@ -199,7 +205,11 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     let cloned = recorder.clone();
     let mut overflow = output("overflow");
     let before = serde_json::to_value(&overflow).expect("serializable output");
-    cloned.attach_direct_call_to_output(&mut overflow, prepare(&cloned));
+    cloned.attach_direct_call_to_output(
+        &mut overflow,
+        prepare(&cloned),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     assert_eq!(
         serde_json::to_value(&overflow).expect("serializable output"),
         before,
@@ -216,7 +226,11 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     assert!(prepare(&recorder).is_none());
 
     let mut completed = output("completed");
-    recorder.attach_direct_call_to_output(&mut completed, pending.pop());
+    recorder.attach_direct_call_to_output(
+        &mut completed,
+        pending.pop(),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     assert_eq!(
         completed
             .executed_tool_call_metadata()
@@ -229,11 +243,20 @@ async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     recorder.refresh(&features);
     assert!(prepare(&recorder).is_none());
     let mut stale = output("stale");
-    recorder.attach_direct_call_to_output(&mut stale, Some(replacement));
+    recorder.attach_direct_call_to_output(
+        &mut stale,
+        Some(replacement),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
+    assert!(stale.id().is_none());
     assert!(stale.executed_tool_call_metadata().is_none());
     let current = prepare(&recorder).expect("stale call released its slot");
     let mut current_output = output("current");
-    recorder.attach_direct_call_to_output(&mut current_output, Some(current));
+    recorder.attach_direct_call_to_output(
+        &mut current_output,
+        Some(current),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     assert_eq!(
         current_output
             .executed_tool_call_metadata()
@@ -269,6 +292,7 @@ async fn direct_recording_preserves_encoded_arguments_in_history() {
     recorder.attach_direct_call_to_output(
         &mut item,
         recorder.prepare_direct_call(&call, &ToolCallSource::Direct, &step),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     let wire = serde_json::to_value(&item).unwrap();
     assert_eq!(wire["output"], ordinary_output);

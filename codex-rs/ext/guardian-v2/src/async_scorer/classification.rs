@@ -319,6 +319,7 @@ impl Classification {
             let extra_policy = config.guardian_extra_policy.as_deref().unwrap_or_default();
             let instructions = guardian_config.render_classifier_instructions(policy, extra_policy);
             let sampling = LunaSamplingRequest {
+                item_id_generator: Arc::clone(thread.item_id_generator()),
                 cyber_access_program,
                 parent_response_id,
                 instructions,

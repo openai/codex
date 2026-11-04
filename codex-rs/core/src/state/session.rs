@@ -120,7 +120,7 @@ impl SessionState {
         Self::new_with_auto_compact_window_ids(
             session_configuration,
             AutoCompactWindowIds::new_initial(),
-            ContextManager::new(),
+            ContextManager::default(),
         )
     }
 

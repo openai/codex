@@ -17,6 +17,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use core_test_support::TestCodexResponsesRequestKind;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
@@ -132,6 +133,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         codex_model_provider::create_model_provider(provider.clone(), /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
+        uuid_v7_item_id_generator_for_test(),
         session_source.clone(),
         "test_originator".to_string(),
         config.model_verbosity,
@@ -281,6 +283,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         codex_model_provider::create_model_provider(provider.clone(), /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
+        uuid_v7_item_id_generator_for_test(),
         session_source.clone(),
         "test_originator".to_string(),
         config.model_verbosity,
@@ -415,6 +418,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         codex_model_provider::create_model_provider(provider.clone(), /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
+        uuid_v7_item_id_generator_for_test(),
         session_source.clone(),
         "test_originator".to_string(),
         config.model_verbosity,

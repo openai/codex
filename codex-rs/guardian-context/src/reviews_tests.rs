@@ -1,6 +1,7 @@
 //! Constructor boundaries preserve valid evidence and reject oversize sections.
 
 use super::*;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -9,7 +10,7 @@ fn previous_reviews_checks_count_and_size_without_rewriting_fragments() {
     let fragment = "é".repeat(max_bytes / 2);
     let fragments = vec![
         PreviousReview {
-            id: ResponseItemId::new("review"),
+            id: uuid_v7_item_id_generator_for_test()("review"),
             fragment: fragment.clone(),
         };
         MAX_PREVIOUS_REVIEWS
@@ -37,7 +38,7 @@ fn previous_reviews_checks_count_and_size_without_rewriting_fragments() {
                 invalid
                     .into_iter()
                     .map(|fragment| PreviousReview {
-                        id: ResponseItemId::new("review"),
+                        id: uuid_v7_item_id_generator_for_test()("review"),
                         fragment,
                     })
                     .collect()
@@ -52,12 +53,12 @@ fn previous_reviews_checks_count_and_size_without_rewriting_fragments() {
 #[test]
 fn review_delivery_requires_complete_host_metadata_and_preserves_distinct_completions() {
     let first = PreviousReview {
-        id: ResponseItemId::new("review"),
+        id: uuid_v7_item_id_generator_for_test()("review"),
         fragment: "Approved reading README.md.".to_owned(),
     };
     // A different completion remains new evidence even when its text is identical.
     let second = PreviousReview {
-        id: ResponseItemId::new("review"),
+        id: uuid_v7_item_id_generator_for_test()("review"),
         fragment: first.fragment.clone(),
     };
     let first_message = PreviousReviews::try_from_fragments(vec![first.clone()])

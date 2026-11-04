@@ -1018,7 +1018,7 @@ async fn capture_sender_user_messages(
     if !matches!(item, ResponseItem::FunctionCallOutput { call_id: None, .. }) {
         return None;
     }
-    Session::assign_missing_response_item_id(item);
+    session.assign_missing_response_item_id(item);
     session
         .services
         .local_agent_runtime

@@ -2249,6 +2249,7 @@ dependencies = [
  "codex-extension-items",
  "codex-history",
  "codex-protocol",
+ "codex-protocol-test-support",
  "codex-rollout",
  "codex-secrets",
  "codex-shell-command",
@@ -3759,6 +3760,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-protocol",
+ "codex-protocol-test-support",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -4595,6 +4597,7 @@ name = "codex-protocol-test-support"
 version = "0.0.0"
 dependencies = [
  "codex-protocol",
+ "uuid",
 ]
 
 [[package]]
@@ -5030,6 +5033,7 @@ dependencies = [
  "codex-install-context",
  "codex-otel",
  "codex-protocol",
+ "codex-protocol-test-support",
  "codex-rollout",
  "codex-state",
  "codex-utils-absolute-path",

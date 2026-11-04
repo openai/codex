@@ -14,3 +14,4 @@ workspace = true
 
 [dependencies]
 codex-protocol = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }

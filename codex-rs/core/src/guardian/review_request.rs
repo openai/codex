@@ -22,8 +22,7 @@ pub(in crate::guardian) struct ApprovalEvidence {
     store: Arc<GuardianReviewEvidence>,
     authorization_version: GuardianAuthorizationVersion,
     review_context_revision: u64,
-    root_authorization_version: Option<GuardianAuthorizationVersion>,
-    root_review_context_revision: Option<u64>,
+    root_versions: Option<(GuardianAuthorizationVersion, u64)>,
 }
 
 /// Authorization captured before an attempt, checked while the reviewer is still reserved.
@@ -245,11 +244,13 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 None,
             );
         }
-        let root_authorization_version = root_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.authorization_version);
-        let root_review_context_revision =
-            root_snapshot.map(|snapshot| snapshot.review_context_revision);
+        let root_versions = root_snapshot.map(|snapshot| {
+            (
+                snapshot.authorization_version,
+                snapshot.review_context_revision,
+            )
+        });
+        let (root_authorization_version, root_review_context_revision) = root_versions.unzip();
         // Keep the authorization revision even when no cacheable review evidence exists.
         let history = session.conversation_history_snapshot().await;
         let user_message_revision = history.user_message_revision();
@@ -262,8 +263,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 authorization_version: store.authorization_version(history.as_ref()),
                 review_context_revision,
                 store,
-                root_authorization_version,
-                root_review_context_revision,
+                root_versions,
             });
         drop(history);
         let (outcome, analytics) = run_guardian_review_session_before_deadline(
@@ -331,8 +331,8 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 action,
                 evidence.authorization_version,
                 evidence.review_context_revision,
-                evidence.root_authorization_version,
-                evidence.root_review_context_revision,
+                evidence.root_versions,
+                &self.session.item_id_generator,
             );
         }
     }

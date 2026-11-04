@@ -452,10 +452,13 @@ fn skips_user_instructions_and_env() {
 
 #[test]
 fn parses_hook_prompt_message_as_distinct_turn_item() {
-    let item = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
-        "Retry with exactly the phrase meow meow meow.",
-        "hook-run-1",
-    )])
+    let item = build_hook_prompt_message(
+        &[HookPromptFragment::from_single_hook(
+            "Retry with exactly the phrase meow meow meow.",
+            "hook-run-1",
+        )],
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    )
     .expect("hook prompt message");
 
     let turn_item = parse_turn_item(&item).expect("expected hook prompt turn item");

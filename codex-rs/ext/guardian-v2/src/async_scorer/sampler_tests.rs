@@ -25,6 +25,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::turn_input::CyberAccessProgram;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
@@ -305,6 +306,7 @@ fn assert_classifier_instructions(request: &serde_json::Value) {
 
 pub(in crate::async_scorer) fn sample_request(parent_turn_id: &str) -> LunaSamplingRequest {
     LunaSamplingRequest {
+        item_id_generator: uuid_v7_item_id_generator_for_test(),
         cyber_access_program: None,
         parent_response_id: None,
         instructions: classifier_instructions(),
@@ -702,6 +704,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
 
     let first = sampler
         .sample(LunaSamplingRequest {
+            item_id_generator: uuid_v7_item_id_generator_for_test(),
             cyber_access_program: None,
             parent_response_id: None,
             instructions: classifier_instructions(),
@@ -748,6 +751,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
     sampler.prewarm().await;
     let second = sampler
         .sample(LunaSamplingRequest {
+            item_id_generator: uuid_v7_item_id_generator_for_test(),
             cyber_access_program: None,
             parent_response_id: None,
             instructions: classifier_instructions(),

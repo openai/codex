@@ -518,7 +518,7 @@ async fn encrypted_parent_compaction_requires_original_item_id(mode: GuardianCon
         internal_chat_message_metadata_passthrough: None,
     };
 
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     history.replace_annotated(vec![ResponseItemEnvelope {
         item: item.clone(),
         metadata: Some(CodexHarnessMetadata {

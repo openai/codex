@@ -184,11 +184,9 @@ impl Session {
             image_preparations.extend(prepared_images);
 
             let mut metadata = envelope.metadata;
-            annotated_items.extend(prepared_items.into_owned().into_iter().map(|item| {
-                ResponseItemEnvelope {
-                    item,
-                    metadata: metadata.take(),
-                }
+            annotated_items.extend(prepared_items.into_iter().map(|item| ResponseItemEnvelope {
+                item,
+                metadata: metadata.take(),
             }));
         }
         (annotated_items, image_preparations)

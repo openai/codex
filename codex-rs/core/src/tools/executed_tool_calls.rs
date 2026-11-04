@@ -33,7 +33,6 @@ use codex_protocol::openai_models::ToolMode;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 
-use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolOutput;
@@ -385,6 +384,7 @@ impl ExecutedToolCalls {
         &self,
         item: &mut ResponseItem,
         prepared: Option<(ExecutedToolCall, DirectCallPermit)>,
+        item_id_generator: &codex_protocol::ItemIdGenerator,
     ) {
         let Some((call, permit)) = prepared else {
             return;
@@ -396,9 +396,7 @@ impl ExecutedToolCalls {
         if !permit.recording.ptr_eq(&Arc::downgrade(&state.recording)) {
             return;
         }
-        // Assign the output's ordinary history ID here so reused model call IDs
-        // cannot associate this observation with a different output.
-        Session::assign_missing_response_item_id(item);
+        crate::session::assign_missing_item_id(item, item_id_generator);
         if let Some(id) = item.id() {
             state.direct_calls.insert(id.clone(), call.clone());
         }

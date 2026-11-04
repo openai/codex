@@ -1,6 +1,7 @@
 //! Selects Guardian answer evidence from the review's history snapshot and retains reviews.
 //! Retained answers survive restart even while incompatible checkpoints use legacy review.
 
+use codex_protocol::ItemIdGenerator;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -182,14 +183,15 @@ impl GuardianReviewEvidence {
         action: &str,
         authorization_version: GuardianAuthorizationVersion,
         review_context_revision: u64,
-        root_authorization_version: Option<GuardianAuthorizationVersion>,
-        root_review_context_revision: Option<u64>,
+        root_versions: Option<(GuardianAuthorizationVersion, u64)>,
+        item_id_generator: &ItemIdGenerator,
     ) {
         let Some(completed_at_ms) = assessment.completed_at_ms else {
             return;
         };
+        let (root_authorization_version, root_review_context_revision) = root_versions.unzip();
         let review = Arc::new(GuardianReviewEvidenceRecord {
-            delivery_id: codex_protocol::ResponseItemId::new("guardian_review"),
+            delivery_id: item_id_generator("guardian_review"),
             completed_at_ms,
             authorization_version,
             review_context_revision,

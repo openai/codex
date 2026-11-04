@@ -949,9 +949,12 @@ mod tests {
 
     #[test]
     fn build_v2_compacted_history_filters_to_installed_retention_shape() {
-        let hook = codex_protocol::items::build_hook_prompt_message(&[
-            codex_protocol::items::HookPromptFragment::from_single_hook("hook", "hook-run"),
-        ])
+        let hook = codex_protocol::items::build_hook_prompt_message(
+            &[codex_protocol::items::HookPromptFragment::from_single_hook(
+                "hook", "hook-run",
+            )],
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        )
         .expect("hook prompt");
         let input = vec![
             message("developer", "dev", /*phase*/ None),

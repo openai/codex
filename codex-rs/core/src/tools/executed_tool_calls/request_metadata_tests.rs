@@ -154,6 +154,7 @@ fn large_direct_and_code_mode_metadata_survive_sampling_and_compaction() {
     recorder.attach_direct_call_to_output(
         &mut direct,
         Some((direct_call, recorder.reserve_direct_call().unwrap())),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     assert!(direct.executed_tool_call_metadata().is_none());
 
@@ -225,6 +226,7 @@ fn failed_compaction_preserves_observations_absent_from_trimmed_retries() {
     recorder.attach_direct_call_to_output(
         &mut direct,
         Some((direct_call, recorder.reserve_direct_call().unwrap())),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     assert!(direct.executed_tool_call_metadata().is_none());
     let mut history = vec![direct.clone()];
@@ -280,6 +282,7 @@ fn compaction_keeps_direct_outputs_in_code_mode_binding_validation() {
     recorder.attach_direct_call_to_output(
         &mut direct,
         Some((call.clone(), recorder.reserve_direct_call().unwrap())),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     let mut compact = vec![exec_input("exec"), exec_output("exec"), direct.clone()];
     recorder.attach_to_compaction_prompt(&mut compact);
@@ -302,6 +305,7 @@ fn direct_retained_metadata_budget_sheds_results_then_calls_across_refresh() {
     recorder.attach_direct_call_to_output(
         &mut first,
         Some((call.clone(), recorder.reserve_direct_call().unwrap())),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     let mut expected_first = output("first");
     expected_first.set_id(first.id().cloned());
@@ -337,6 +341,7 @@ fn direct_retained_metadata_budget_sheds_results_then_calls_across_refresh() {
     recorder.clone().attach_direct_call_to_output(
         &mut resource_only_output,
         Some((call.clone(), recorder.reserve_direct_call().unwrap())),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     expected_resource_only.set_id(resource_only_output.id().cloned());
     assert_eq!(resource_only_output, expected_resource_only);
@@ -361,6 +366,7 @@ fn direct_retained_metadata_budget_sheds_results_then_calls_across_refresh() {
     recorder.clone().attach_direct_call_to_output(
         &mut second,
         Some((call.clone(), recorder.reserve_direct_call().unwrap())),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     let mut expected_second = output("second");
     expected_second.set_id(second.id().cloned());
@@ -400,6 +406,7 @@ fn direct_retained_metadata_budget_sheds_results_then_calls_across_refresh() {
     recorder.attach_direct_call_to_output(
         &mut third,
         Some((call, recorder.reserve_direct_call().unwrap())),
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     assert!(third.executed_tool_call_metadata().is_none());
     assert_eq!(
@@ -509,13 +516,21 @@ async fn recorder_refreshes_without_changing_execution_features_or_claiming_miss
         if enabled {
             if let Some(stale) = prior_generation.take() {
                 let mut stale_output = output("stale");
-                calls.attach_direct_call_to_output(&mut stale_output, Some(stale));
+                calls.attach_direct_call_to_output(
+                    &mut stale_output,
+                    Some(stale),
+                    &session.item_id_generator,
+                );
                 assert!(stale_output.executed_tool_call_metadata().is_none());
             }
             prior_generation = calls.prepare_direct_call(&call, &ToolCallSource::Direct, &step);
         }
         let mut direct_output = output(&call.call_id);
-        calls.attach_direct_call_to_output(&mut direct_output, prepared);
+        calls.attach_direct_call_to_output(
+            &mut direct_output,
+            prepared,
+            &session.item_id_generator,
+        );
         assert_eq!(
             direct_output
                 .executed_tool_call_metadata()
@@ -537,7 +552,7 @@ async fn recorder_refreshes_without_changing_execution_features_or_claiming_miss
             let mut replay = output(&call.call_id);
             // Replay the same history item across the configuration refresh.
             replay.set_id(direct_output.id().cloned());
-            calls.attach_direct_call_to_output(&mut replay, prepared);
+            calls.attach_direct_call_to_output(&mut replay, prepared, &session.item_id_generator);
             assert_eq!(
                 replay.executed_tool_call_metadata(),
                 direct_output.executed_tool_call_metadata()

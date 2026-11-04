@@ -41,6 +41,7 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 zstd = { workspace = true }
 
 [dev-dependencies]
+codex-protocol-test-support = { workspace = true }
 anyhow = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }

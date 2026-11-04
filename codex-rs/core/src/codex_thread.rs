@@ -342,6 +342,11 @@ impl CodexThread {
         &self.session.services.thread_extension_data
     }
 
+    /// Generator used for response items produced on behalf of this thread.
+    pub fn item_id_generator(&self) -> &codex_protocol::ItemIdGenerator {
+        &self.session.item_id_generator
+    }
+
     /// Returns tools from this thread’s ready, unshared Apps MCP client.
     /// Returns an empty list if the client is absent, still starting, or uses
     /// a shared catalog. Does not start or wait for discovery.

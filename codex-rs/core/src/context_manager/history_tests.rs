@@ -135,11 +135,12 @@ fn root_history() -> ContextManager {
     ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &ManagedFeatures::from(codex_features::Features::with_defaults()),
+        codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     )
 }
 
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
-    let mut h = ContextManager::new();
+    let mut h = ContextManager::default();
     // Use a generous but fixed token budget; tests only rely on truncation
     // behavior, not on a specific model's token limit.
     h.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
@@ -185,7 +186,7 @@ fn delivered_assistant_context_invalidates_reviews_without_changing_authorizatio
     );
     assert!(!history.record_retained_context(&event));
     assert_eq!(revisions(&history), (delivered_revision, authorization));
-    let mut resumed = ContextManager::new();
+    let mut resumed = ContextManager::default();
     resumed.restore_retained_context(Some(history.retained_context()));
     assert_ne!(revisions(&resumed).0, delivered_revision);
 
@@ -551,8 +552,11 @@ fn guardian_checkpoint_applies_additional_context_policy_after_resume(include: b
     features
         .set_enabled(Feature::GuardianIncludeAdditionalContext, !include)
         .unwrap();
-    let mut history =
-        ContextManager::for_session(/*root_capabilities_restricted*/ false, &features);
+    let mut history = ContextManager::for_session(
+        /*root_capabilities_restricted*/ false,
+        &features,
+        codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     let additional_context: ResponseItem = crate::context::AdditionalContextToolOutput::new(
         "browser_info",
         /*name*/ None,
@@ -590,8 +594,11 @@ fn guardian_checkpoint_applies_additional_context_policy_after_resume(include: b
     features
         .set_enabled(Feature::GuardianIncludeAdditionalContext, include)
         .unwrap();
-    let mut resumed =
-        ContextManager::for_session(/*root_capabilities_restricted*/ false, &features);
+    let mut resumed = ContextManager::for_session(
+        /*root_capabilities_restricted*/ false,
+        &features,
+        codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     resumed.replace_annotated(compacted);
     resumed.restore_review_context(
         /*retained_context*/ None,
@@ -654,7 +661,7 @@ fn world_state_baseline_deduplicates_until_history_is_replaced() {
         state.add_section(TestWorldStateSection);
         state
     };
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
 
     let (initial_fragments, initial_item) = history.update_world_state(&world_state());
     assert_eq!(1, initial_fragments.len());
@@ -690,7 +697,7 @@ fn world_state_transitions_persist_changed_state_and_skip_unchanged_state() {
         }));
         state
     };
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     let (_, full) = history.update_world_state(&world_state("before"));
     let full = full.expect("full checkpoint");
     assert!(full.full);
@@ -910,7 +917,7 @@ fn filters_non_api_messages() {
 
 #[test]
 fn retains_only_harness_authored_configuration_updates() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     let update = ResponseItem::ConfigurationUpdate {
         reasoning: ConfigurationReasoning {
             effort: ReasoningEffort::High,
@@ -961,7 +968,7 @@ fn retains_only_harness_authored_configuration_updates() {
 
 #[test]
 fn drop_last_n_user_turns_removes_post_input_configuration_update_with_its_turn() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     let updates =
         [ReasoningEffort::Low, ReasoningEffort::High].map(|effort| ResponseItemEnvelope {
             item: ResponseItem::ConfigurationUpdate {
@@ -1028,7 +1035,7 @@ fn total_token_usage_respects_saved_reasoning_accounting(
     includes_reasoning: Option<bool>,
     expected: i64,
 ) {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     history.replace(vec![
         reasoning_with_encrypted_content(/*len*/ 1_000),
         user_msg("second"),
@@ -1143,7 +1150,7 @@ fn annotated_history_apis_preserve_envelopes() {
         item: assistant_msg("first"),
         metadata: Some(CodexHarnessMetadata::default()),
     };
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
 
     history.replace_annotated(vec![first_envelope.clone()]);
 
@@ -1184,7 +1191,7 @@ fn record_annotated_items_preserves_metadata_while_processing_item(
             ..Default::default()
         }),
     };
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
 
     history.record_annotated_items(
         std::slice::from_mut(&mut envelope),
@@ -1233,7 +1240,7 @@ async fn for_prompt_annotated_preserves_metadata_while_normalizing_item() {
         },
         metadata: Some(CodexHarnessMetadata::default()),
     };
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     history.replace_annotated(vec![envelope.clone()]);
 
     let normalized = history
@@ -2481,7 +2488,7 @@ async fn normalization_retains_local_shell_outputs() {
 
 #[test]
 fn record_items_truncates_function_call_output_content() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     // Any reasonably small token budget works; the test only cares that
     // truncation happens and the marker is present.
     let policy = TruncationPolicy::Tokens(1_000);
@@ -2525,7 +2532,7 @@ fn record_items_truncates_function_call_output_content() {
 
 #[test]
 fn record_items_truncates_custom_tool_call_output_content() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
@@ -2559,7 +2566,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
 
 #[test]
 fn record_items_respects_custom_token_limit() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
     let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);
     let item = ResponseItem::FunctionCallOutput {
@@ -3552,7 +3559,7 @@ fn record_items_omits_audio_that_exceeds_the_output_budget() {
         },
         internal_chat_message_metadata_passthrough: None,
     };
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::default();
 
     history.record_items([&item], TruncationPolicy::Tokens(50));
 

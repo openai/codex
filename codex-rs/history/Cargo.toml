@@ -19,5 +19,6 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+codex-protocol-test-support = { workspace = true }
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }

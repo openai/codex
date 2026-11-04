@@ -48,6 +48,7 @@ use codex_protocol::protocol::UserMessageAudioKind;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::UserMessageImageKind;
 use codex_protocol::user_input::UserInput;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use codex_rollout::CompactedItem;
 use codex_rollout::RetainedContextEvent;
 use codex_rollout::RolloutConfig;
@@ -1330,8 +1331,8 @@ async fn migration_rolls_back_pre_compaction_turns_from_sqlite_history() {
         .retained_context
         .as_mut()
         .expect("retained context");
-    context.record(&answer_event);
-    context.record(&wake_answer_event);
+    context.record(&answer_event, &uuid_v7_item_id_generator_for_test());
+    context.record(&wake_answer_event, &uuid_v7_item_id_generator_for_test());
     let path = write_rollout(
         home.path(),
         thread_id,
@@ -1429,7 +1430,7 @@ async fn migration_preserves_answers_before_a_rolled_back_steer() {
             .retained_context
             .as_mut()
             .expect("retained context")
-            .record(&answer);
+            .record(&answer, &uuid_v7_item_id_generator_for_test());
         answers.push(answer);
     }
     // Delayed delivery must use the original call boundary, not the turn's latest steer.
@@ -1551,12 +1552,13 @@ async fn migration_rolls_back_nested_deliveries_by_acceptance_order() {
             }))
             .expect("retained instruction"),
             codex_rollout::RetainedInputSource::Local(Some(order)),
+            &uuid_v7_item_id_generator_for_test(),
         );
     }
-    context.record(&deliveries[0]);
+    context.record(&deliveries[0], &uuid_v7_item_id_generator_for_test());
     let first_retained_message =
         serde_json::to_value(&*context).expect("retained context")["assistant_messages"][0].clone();
-    context.record(&deliveries[1]);
+    context.record(&deliveries[1], &uuid_v7_item_id_generator_for_test());
     let outer_call = serde_json::from_value(json!({
         "type": "function_call", "call_id": "exec", "name": "exec", "arguments": "{}"
     }))

@@ -2,14 +2,14 @@
 
 use super::*;
 use crate::CodexHarnessMetadata;
-use codex_protocol::ResponseItemId;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use pretty_assertions::assert_eq;
 
 #[test]
 fn latest_checkpoint_keeps_its_own_producer_even_when_unusable() {
     let older = ResponseItemEnvelope {
         item: ResponseItem::Compaction {
-            id: Some(ResponseItemId::new("old")),
+            id: Some(uuid_v7_item_id_generator_for_test()("old")),
             encrypted_content: "older checkpoint".to_owned(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -21,7 +21,7 @@ fn latest_checkpoint_keeps_its_own_producer_even_when_unusable() {
     for content in [None, Some(String::new()), Some("new checkpoint".to_owned())] {
         let usable = content.as_ref().is_some_and(|text| !text.is_empty());
         let latest = ResponseItem::ContextCompaction {
-            id: Some(ResponseItemId::new("new")),
+            id: Some(uuid_v7_item_id_generator_for_test()("new")),
             encrypted_content: content,
             internal_chat_message_metadata_passthrough: None,
         };

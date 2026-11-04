@@ -17,10 +17,6 @@ use ts_rs::TS;
 pub struct ResponseItemId(String);
 
 impl ResponseItemId {
-    pub fn new(prefix: &str) -> Self {
-        Self::with_suffix(prefix, uuid::Uuid::now_v7())
-    }
-
     pub fn with_suffix(prefix: &str, suffix: impl fmt::Display) -> Self {
         Self(format!("{prefix}_{suffix}"))
     }

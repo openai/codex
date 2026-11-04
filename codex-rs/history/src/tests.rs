@@ -326,6 +326,7 @@ fn delivered_assistant_rollout_survives_an_earlier_read_and_rewrite() -> Result<
                 phase: None,
             },
             RetainedInputSource::Local(metadata.user_input_order),
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
         );
         let rewritten_checkpoint =
             serde_json::from_value(serde_json::to_value(earlier_checkpoint)?)?;

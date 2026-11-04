@@ -4,6 +4,7 @@ use codex_history::RetainedInputSource;
 use codex_history::RetainedUserMessage;
 use codex_history::VerifiedAnswer;
 use codex_history::VerifiedQuestionAnswer;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -11,17 +12,20 @@ fn instructions_preserve_source_order_and_whole_records() {
     let mut context = RetainedContext::default();
     // An answer at the existing 900-token byte limit still fits with order framing.
     let answer = "x".repeat(3_600 - "assistant: Publish?\nuser: \n".len());
-    context.record(&RetainedContextEvent::VerifiedAnswer {
-        answer: VerifiedAnswer {
-            turn_id: "grant".to_owned(),
-            call_id: "ask".to_owned(),
-            questions: vec![VerifiedQuestionAnswer {
-                question: "Publish?".to_owned(),
-                answer: answer.clone(),
-            }],
+    context.record(
+        &RetainedContextEvent::VerifiedAnswer {
+            answer: VerifiedAnswer {
+                turn_id: "grant".to_owned(),
+                call_id: "ask".to_owned(),
+                questions: vec![VerifiedQuestionAnswer {
+                    question: "Publish?".to_owned(),
+                    answer: answer.clone(),
+                }],
+            },
+            acceptance_order: None,
         },
-        acceptance_order: None,
-    });
+        &uuid_v7_item_id_generator_for_test(),
+    );
     context.record_user_message(
         RetainedUserMessage {
             phase: None,
@@ -32,6 +36,7 @@ fn instructions_preserve_source_order_and_whole_records() {
             complete: true,
         },
         RetainedInputSource::Local(None),
+        &uuid_v7_item_id_generator_for_test(),
     );
     let rendered = render_retained_instructions(
         &context,
@@ -65,6 +70,7 @@ fn instructions_preserve_source_order_and_whole_records() {
             complete: true,
         },
         RetainedInputSource::Local(None),
+        &uuid_v7_item_id_generator_for_test(),
     );
     let rendered = render_retained_instructions(
         &context,
@@ -108,6 +114,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
             complete: true,
         },
         RetainedInputSource::Local(Some(0)),
+        &uuid_v7_item_id_generator_for_test(),
     );
     context.record_user_message(
         RetainedUserMessage {
@@ -119,6 +126,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
             complete: true,
         },
         RetainedInputSource::Local(Some(1)),
+        &uuid_v7_item_id_generator_for_test(),
     );
     for presentation in [
         crate::ContextPresentation::SyncFull { session_id: "test" },
@@ -208,6 +216,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
             complete: true,
         },
         RetainedInputSource::Local(Some(2)),
+        &uuid_v7_item_id_generator_for_test(),
     );
     let rendered = render_retained_instructions(
         &context,
@@ -258,17 +267,20 @@ fn legacy_verified_answers_keep_distinct_source_order() {
             "Retained source order: 1\nassistant: Still publish?\nuser: No.\n".to_owned(),
         ]
     );
-    context.record(&RetainedContextEvent::VerifiedAnswer {
-        answer: VerifiedAnswer {
-            turn_id: "large".into(),
-            call_id: "large".into(),
-            questions: vec![VerifiedQuestionAnswer {
-                question: "Publish?".into(),
-                answer: "Only if conditions hold. ".repeat(200),
-            }],
+    context.record(
+        &RetainedContextEvent::VerifiedAnswer {
+            answer: VerifiedAnswer {
+                turn_id: "large".into(),
+                call_id: "large".into(),
+                questions: vec![VerifiedQuestionAnswer {
+                    question: "Publish?".into(),
+                    answer: "Only if conditions hold. ".repeat(200),
+                }],
+            },
+            acceptance_order: None,
         },
-        acceptance_order: None,
-    });
+        &uuid_v7_item_id_generator_for_test(),
+    );
     let raw = crate::collect_verified_answer_candidates(&context);
     let old = crate::render_verified_answers(&context);
     assert!(!old.complete);
@@ -316,7 +328,11 @@ fn delivery_uses_source_revision_and_complete_host_metadata() {
         )
         .retained_instructions()
     };
-    retained.record_user_message(message.clone(), RetainedInputSource::Local(Some(4)));
+    retained.record_user_message(
+        message.clone(),
+        RetainedInputSource::Local(Some(4)),
+        &uuid_v7_item_id_generator_for_test(),
+    );
     let original = compose(&retained);
     let delivered = original.clone().into_annotated_messages();
     let mut next = original.clone();
@@ -367,7 +383,11 @@ fn delivery_uses_source_revision_and_complete_host_metadata() {
 
     // A correction keeps its source ID and acceptance order but gets a new revision.
     message.text = "Do not draft or send.".to_owned();
-    retained.record_user_message(message, RetainedInputSource::Local(Some(4)));
+    retained.record_user_message(
+        message,
+        RetainedInputSource::Local(Some(4)),
+        &uuid_v7_item_id_generator_for_test(),
+    );
     let retained: RetainedContext =
         serde_json::from_value(serde_json::to_value(retained).unwrap()).unwrap();
     let mut corrected = compose(&retained);
@@ -503,6 +523,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
             phase: None,
         },
         RetainedInputSource::Local(Some(6)),
+        &uuid_v7_item_id_generator_for_test(),
     );
     let source = retained
         .source(retained.ordered_entries().next().unwrap().1)
@@ -512,17 +533,20 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
         "original".to_owned(),
     )));
     // The later verified grant renders before the earlier transcript restriction.
-    retained.record(&RetainedContextEvent::VerifiedAnswer {
-        answer: VerifiedAnswer {
-            turn_id: "grant".to_owned(),
-            call_id: "approve-send".to_owned(),
-            questions: vec![VerifiedQuestionAnswer {
-                question: "May I send now?".to_owned(),
-                answer: "Yes.".to_owned(),
-            }],
+    retained.record(
+        &RetainedContextEvent::VerifiedAnswer {
+            answer: VerifiedAnswer {
+                turn_id: "grant".to_owned(),
+                call_id: "approve-send".to_owned(),
+                questions: vec![VerifiedQuestionAnswer {
+                    question: "May I send now?".to_owned(),
+                    answer: "Yes.".to_owned(),
+                }],
+            },
+            acceptance_order: Some(7),
         },
-        acceptance_order: Some(7),
-    });
+        &uuid_v7_item_id_generator_for_test(),
+    );
     let mut history = RetainedTranscript {
         retained,
         messages: vec![ResponseItemEnvelope {
@@ -607,6 +631,7 @@ fn coalesced_repl_text_cannot_attest_to_host_omission_delivery() {
             complete: true,
         },
         RetainedInputSource::Local(Some(0)),
+        &uuid_v7_item_id_generator_for_test(),
     );
     let profile = crate::ContextProfile::synchronous();
     let mut previous = transcript_context(&history, &profile);

@@ -395,7 +395,7 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
 #[test]
 fn budget_reserves_existing_context_and_preserves_required_messages() {
     let trusted = crate::PreviousReviews::try_from_fragments(vec![crate::PreviousReview {
-        id: codex_protocol::ResponseItemId::new("review"),
+        id: codex_protocol_test_support::uuid_v7_item_id_generator_for_test()("review"),
         fragment: "verified review".to_owned(),
     }])
     .unwrap()

@@ -1,5 +1,4 @@
 use super::ConfigurationReasoning;
-use crate::ResponseItemId;
 use crate::models::ResponseItem;
 use crate::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -21,7 +20,9 @@ fn configuration_update_round_trips_without_message_fields() {
         }
     );
 
-    item.set_id(Some(ResponseItemId::new("configuration-id")));
+    item.set_id(Some(crate::uuid_v7_item_id_generator_for_test()(
+        "configuration-id",
+    )));
     item.set_turn_id_if_missing("turn-id");
     item.set_create_time_if_missing(serde_json::Number::from(123));
     assert_eq!(

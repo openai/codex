@@ -2507,11 +2507,9 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
+    let child_history = child_thread.session.clone_history().await;
     assert!(
-        history_contains_text(
-            child_thread.session.clone_history().await.raw_items(),
-            "paginated parent context",
-        ),
+        history_contains_text(child_history.raw_items(), "paginated parent context"),
         "bounded parent context should remain model-visible to the child"
     );
     child_thread.ensure_rollout_materialized().await;
@@ -2558,6 +2556,12 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
     assert!(
         copied_idless_context.id().is_some_and(|id| !id.is_empty()),
         "copied model context should receive response item ids before persistence"
+    );
+    assert!(
+        child_history
+            .raw_items()
+            .any(|item| item == &copied_idless_context.item),
+        "the child should see the same backfilled item that was persisted"
     );
     let copied_parent_context_count = lines
         .iter()
@@ -3426,7 +3430,10 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(marke
         }),
     };
     let mut retained_context = codex_history::RetainedContext::default();
-    retained_context.record(&answer_event);
+    retained_context.record(
+        &answer_event,
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     retained_context.record_sender_user_messages(delivery.metadata.as_ref().unwrap());
     parent_thread
         .session
