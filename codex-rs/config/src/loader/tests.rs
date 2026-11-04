@@ -718,6 +718,63 @@ async fn missing_packaged_defaults_file_returns_an_error() {
     );
 }
 
+#[tokio::test]
+async fn multi_agent_warns_for_explicit_user_and_project_settings() -> std::io::Result<()> {
+    let home = tempdir()?;
+    let workspace = tempdir()?;
+    let cwd = AbsolutePathBuf::try_from(workspace.path())?;
+    let trust_key = TomlValue::String(project_trust_key(workspace.path()));
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir(&project_config_dir)?;
+    let session_flags = [(
+        "features.multi_agent".to_string(),
+        TomlValue::Boolean(false),
+    )];
+    for (user, project, flags, warn) in [
+        ("", "", session_flags.as_slice(), false),
+        ("[features]\nmulti_agent = false", "", &[], true),
+        (
+            "",
+            "[features]\nmulti_agent = true",
+            session_flags.as_slice(),
+            true,
+        ),
+    ] {
+        std::fs::write(
+            home.path().join(CONFIG_TOML_FILE),
+            format!("[projects.{trust_key}]\ntrust_level = 'trusted'\n{user}"),
+        )?;
+        std::fs::write(project_config_dir.join(CONFIG_TOML_FILE), project)?;
+        let stack = load_config_layers_state(
+            &TestFileSystem,
+            home.path(),
+            Some(cwd.clone()),
+            flags,
+            LoaderOverrides::without_managed_config_for_tests(),
+            &crate::NoopThreadConfigLoader,
+        )
+        .await?;
+        let warned = stack
+            .startup_warnings()
+            .unwrap_or_default()
+            .iter()
+            .any(|warning| {
+                warning.contains(
+                    "`[features].multi_agent` is deprecated. It still controls the V1 fallback.",
+                )
+            });
+        assert_eq!(
+            (
+                stack.effective_config()["features"]["multi_agent"].as_bool(),
+                warned
+            ),
+            (Some(false), warn),
+            "user={user:?}, project={project:?}"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn default_windows_managed_config_is_ignored_with_warning() {
