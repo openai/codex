@@ -8,6 +8,7 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioExecutor;
 use hyper_util::rt::TokioIo;
 use pretty_assertions::assert_eq;
+use prost::Message;
 use std::convert::Infallible;
 use tokio::sync::mpsc;
 
@@ -155,6 +156,23 @@ async fn activation_preserves_native_settings_and_thread_metadata() {
         prost::encoding::bytes::encode(/* thread */ 17, &thread, &mut response_bytes);
         (response_bytes, thread)
     };
+
+    // Activation retains stricter runtime requirements than stored list metadata.
+    for (session_id, model_provider) in [("", "p"), ("s", "")] {
+        let (response_bytes, _) = encode_response(1, Some(true), 2);
+        let mut settings =
+            crate::activation_wire::UpdateConfigResponse::decode(Bytes::from(response_bytes))
+                .unwrap();
+        let mut thread =
+            crate::activation_wire::Thread::decode(settings.thread.take().unwrap()).unwrap();
+        thread.session_id = Some(session_id.into());
+        thread.model_provider = Some(model_provider.into());
+        settings.thread = Some(thread.encode_to_vec().into());
+        assert!(matches!(
+            ThreadActivation::from_settings(settings),
+            Err(Error::InvalidResponse)
+        ));
+    }
 
     for (mode, daybreak) in [(1, Some(true)), (2, Some(false)), (2, None)] {
         let (response_bytes, thread) = encode_response(mode, daybreak, 2);
@@ -562,3 +580,6 @@ async fn https_enforces_unmanaged_endpoint_restrictions_before_connecting() {
 }
 #[path = "transcript_tests.rs"]
 mod transcript;
+
+#[path = "discovery_tests.rs"]
+mod discovery;

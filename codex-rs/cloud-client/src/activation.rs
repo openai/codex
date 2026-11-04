@@ -267,10 +267,10 @@ impl Client {
 impl ThreadActivation {
     pub(crate) fn from_settings(response: wire::UpdateConfigResponse) -> Result<Self, Error> {
         let raw_thread = required(response.thread)?;
-        let thread = ThreadSnapshot::try_from_wire(
-            wire::Thread::decode(raw_thread.clone()).map_err(|_| Error::InvalidResponse)?,
-            raw_thread,
-        )?;
+        let thread = ThreadSnapshot::decode(raw_thread)?;
+        if thread.session_id.is_empty() || thread.model_provider.is_empty() {
+            return Err(Error::InvalidResponse);
+        }
         Ok(Self {
             thread,
             collaboration_mode: response
@@ -310,10 +310,16 @@ impl ThreadActivation {
 }
 
 impl ThreadSnapshot {
+    pub(crate) fn decode(raw_protobuf: Bytes) -> Result<Self, Error> {
+        let thread =
+            wire::Thread::decode(raw_protobuf.clone()).map_err(|_| Error::InvalidResponse)?;
+        Self::try_from_wire(thread, raw_protobuf)
+    }
+
     fn try_from_wire(thread: wire::Thread, raw_protobuf: Bytes) -> Result<Self, Error> {
         Ok(Self {
             id: nonempty(thread.id)?,
-            session_id: nonempty(thread.session_id)?,
+            session_id: required(thread.session_id)?,
             forked_from_id: thread.forked_from_id,
             parent_thread_id: thread.parent_thread_id,
             preview: required(thread.preview)?,
@@ -321,7 +327,7 @@ impl ThreadSnapshot {
             daybreak_enabled: thread.daybreak_enabled,
             project_id: thread.project_id,
             history_mode: parse_history_mode(thread.history_mode)?,
-            model_provider: nonempty(thread.model_provider)?,
+            model_provider: required(thread.model_provider)?,
             model: thread.model,
             reasoning_effort: thread.reasoning_effort,
             created_at: required(thread.created_at)?,

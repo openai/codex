@@ -6,6 +6,7 @@
 
 mod activation;
 mod activation_wire;
+mod discovery;
 mod history;
 mod history_wire;
 mod item_wire;
@@ -33,6 +34,12 @@ pub use activation::ThreadEnvironment;
 pub use activation::ThreadHistoryMode;
 pub use activation::ThreadSnapshot;
 pub use activation::ThreadStatus;
+pub use discovery::ThreadListQuery;
+pub use discovery::ThreadPage;
+pub use discovery::ThreadReadState;
+pub use discovery::ThreadSortDirection;
+pub use discovery::ThreadSortKey;
+pub use discovery::ThreadUnreadPosition;
 pub use history::HistoryAccess;
 pub use history::HistoryItem;
 pub use history::HistoryOrder;
