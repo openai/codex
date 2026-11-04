@@ -4,11 +4,14 @@ mod exchange;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub use exchange::ApiTokenMetadata;
+pub use exchange::ChatgptTokenMetadata;
 pub use exchange::WorkloadIdentityExchange;
+pub use exchange::WorkloadIdentityMetadata;
 pub use exchange::WorkloadIdentityToken;
 use thiserror::Error;
 
-/// The inputs needed to exchange a file-backed assertion for ChatGPT auth.
+/// The inputs needed to exchange a file-backed assertion for workload identity auth.
 #[derive(Clone)]
 pub struct WorkloadIdentityConfig {
     pub(crate) assertion_file: PathBuf,

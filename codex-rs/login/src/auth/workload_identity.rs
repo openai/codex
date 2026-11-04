@@ -8,17 +8,18 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use codex_http_client::HttpClientFactory;
-use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
 use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
 use codex_protocol::shell_environment::OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR;
 use codex_workload_identity::WorkloadIdentityConfig;
 use codex_workload_identity::WorkloadIdentityError;
 use codex_workload_identity::WorkloadIdentityExchange;
+use codex_workload_identity::WorkloadIdentityMetadata;
 use codex_workload_identity::WorkloadIdentityToken;
 use thiserror::Error;
 use url::Url;
 
+use super::ApiKeyAuth;
 use super::AuthConfig;
 use super::CodexAuth;
 use super::ExternalAuth;
@@ -131,16 +132,10 @@ pub fn is_workload_identity_selected() -> bool {
 fn resolve_config(
     chatgpt_base_url: &str,
     environment: ProcessEnvironment,
-    chatgpt_login_allowed: bool,
     auth_route_config: AuthRouteConfig,
 ) -> Result<Option<WorkloadIdentitySessionConfig>, WorkloadIdentitySessionError> {
     if !environment.has_marker() {
         return Ok(None);
-    }
-    if !chatgpt_login_allowed {
-        return Err(invalid_config(
-            "workload identity requires a login policy that permits ChatGPT authentication",
-        ));
     }
 
     let federation_rule_id = required_unicode(
@@ -265,18 +260,32 @@ impl ProcessEnvironment {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct WorkloadIdentitySubject {
-    account_id: String,
-    account_user_id: String,
-    user_id: String,
+enum WorkloadIdentitySubject {
+    Chatgpt {
+        account_id: String,
+        account_user_id: String,
+        user_id: String,
+    },
+    Api {
+        organization_id: String,
+        project_id: String,
+        service_account_id: String,
+    },
 }
 
-impl From<&WorkloadIdentityToken> for WorkloadIdentitySubject {
-    fn from(token: &WorkloadIdentityToken) -> Self {
-        Self {
-            account_id: token.chatgpt_account_id.clone(),
-            account_user_id: token.chatgpt_account_user_id.clone(),
-            user_id: token.user_id.clone(),
+impl From<&WorkloadIdentityMetadata> for WorkloadIdentitySubject {
+    fn from(metadata: &WorkloadIdentityMetadata) -> Self {
+        match metadata {
+            WorkloadIdentityMetadata::Chatgpt(metadata) => Self::Chatgpt {
+                account_id: metadata.chatgpt_account_id.clone(),
+                account_user_id: metadata.chatgpt_account_user_id.clone(),
+                user_id: metadata.user_id.clone(),
+            },
+            WorkloadIdentityMetadata::Api(metadata) => Self::Api {
+                organization_id: metadata.api_organization_id.clone(),
+                project_id: metadata.api_project_id.clone(),
+                service_account_id: metadata.user_id.clone(),
+            },
         }
     }
 }
@@ -296,13 +305,19 @@ impl WorkloadIdentitySession {
 
     fn accept_subject(
         &self,
-        token: &WorkloadIdentityToken,
+        metadata: &WorkloadIdentityMetadata,
         previous_account_id: Option<&str>,
     ) -> Result<(), WorkloadIdentityError> {
-        if previous_account_id.is_some_and(|account_id| account_id != token.chatgpt_account_id) {
+        let account_id = match metadata {
+            WorkloadIdentityMetadata::Chatgpt(metadata) => {
+                Some(metadata.chatgpt_account_id.as_str())
+            }
+            WorkloadIdentityMetadata::Api(_) => None,
+        };
+        if previous_account_id.is_some() && previous_account_id != account_id {
             return Err(WorkloadIdentityError::InvalidExchangeResponse);
         }
-        let subject = WorkloadIdentitySubject::from(token);
+        let subject = WorkloadIdentitySubject::from(metadata);
         let mut current = self
             .subject
             .lock()
@@ -379,7 +394,6 @@ impl WorkloadIdentityExternalAuth {
                 .as_deref()
                 .unwrap_or("https://chatgpt.com/backend-api"),
             ProcessEnvironment::read(),
-            auth_config.is_login_method_allowed(ForcedLoginMethod::Chatgpt),
             auth_config.auth_route_config.clone(),
         )?
         .map(|config| Self::from_config_with_registry(config, registry))
@@ -420,19 +434,30 @@ impl WorkloadIdentityExternalAuth {
         token: &WorkloadIdentityToken,
         previous_account_id: Option<&str>,
     ) -> std::io::Result<CodexAuth> {
-        let auth = CodexAuth::from_external_chatgpt_tokens(
-            &token.access_token,
-            &token.chatgpt_account_id,
-            token.chatgpt_plan_type.as_deref(),
-        )
-        .map_err(|_| std::io::Error::other(WorkloadIdentityError::InvalidExchangeResponse))?;
-        if auth.get_chatgpt_user_id().as_deref() != Some(token.user_id.as_str()) {
-            return Err(std::io::Error::other(
-                WorkloadIdentityError::InvalidExchangeResponse,
-            ));
-        }
+        let auth = match &token.metadata {
+            WorkloadIdentityMetadata::Api(metadata) => CodexAuth::ApiKey(ApiKeyAuth {
+                api_key: token.access_token.clone(),
+                workload_identity: Some(metadata.clone()),
+            }),
+            WorkloadIdentityMetadata::Chatgpt(metadata) => {
+                let auth = CodexAuth::from_external_chatgpt_tokens(
+                    &token.access_token,
+                    &metadata.chatgpt_account_id,
+                    metadata.chatgpt_plan_type.as_deref(),
+                )
+                .map_err(|_| {
+                    std::io::Error::other(WorkloadIdentityError::InvalidExchangeResponse)
+                })?;
+                if auth.get_chatgpt_user_id().as_deref() != Some(metadata.user_id.as_str()) {
+                    return Err(std::io::Error::other(
+                        WorkloadIdentityError::InvalidExchangeResponse,
+                    ));
+                }
+                auth
+            }
+        };
         self.session
-            .accept_subject(token, previous_account_id)
+            .accept_subject(&token.metadata, previous_account_id)
             .map_err(std::io::Error::other)?;
         Ok(auth)
     }

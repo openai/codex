@@ -17,6 +17,11 @@ pub(super) fn same_source(previous: Option<&CodexAuth>, current: Option<&CodexAu
     {
         return false;
     }
+    let previous_subject = previous.api_workload_identity();
+    let current_subject = current.api_workload_identity();
+    if previous_subject.is_some() || current_subject.is_some() {
+        return previous_subject == current_subject;
+    }
     let (Ok(previous_token), Ok(current_token)) = (previous.get_token(), current.get_token())
     else {
         return false;

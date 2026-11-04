@@ -20,8 +20,11 @@ use super::ACCESS_TOKEN_TYPE;
 use super::JWT_BEARER_GRANT_TYPE;
 use super::WorkloadIdentityExchange;
 use super::WorkloadIdentityToken;
+use crate::ApiTokenMetadata;
+use crate::ChatgptTokenMetadata;
 use crate::WorkloadIdentityConfig;
 use crate::WorkloadIdentityError;
+use crate::WorkloadIdentityMetadata;
 
 fn assertion_file(assertion: &str) -> (TempDir, PathBuf) {
     let temp_dir = TempDir::new().expect("tempdir");
@@ -44,8 +47,8 @@ fn make_exchange(path: PathBuf, server: &MockServer) -> WorkloadIdentityExchange
     .expect("valid exchange")
 }
 
-fn success(access_token: &str, expires_in: u64) -> ResponseTemplate {
-    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+fn success_body(access_token: &str, expires_in: u64) -> serde_json::Value {
+    serde_json::json!({
         "access_token": access_token,
         "issued_token_type": ACCESS_TOKEN_TYPE,
         "token_type": "Bearer",
@@ -55,51 +58,128 @@ fn success(access_token: &str, expires_in: u64) -> ResponseTemplate {
         "chatgpt_account_user_id": "membership-one",
         "user_id": "user-one",
         "chatgpt_plan_type": "enterprise"
-    }))
+    })
+}
+
+fn success(access_token: &str, expires_in: u64) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(success_body(access_token, expires_in))
+}
+
+fn api_success_body(access_token: &str) -> serde_json::Value {
+    serde_json::json!({
+        "access_token": access_token,
+        "issued_token_type": ACCESS_TOKEN_TYPE,
+        "token_type": "Bearer",
+        "expires_in": 600,
+        "wif_product": "api",
+        "api_organization_id": "org-one",
+        "api_project_id": "proj-one",
+        "user_id": "service-account-one"
+    })
 }
 
 #[tokio::test]
-async fn exchange_sends_three_field_contract_and_caches_valid_response() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .and(header("content-type", "application/x-www-form-urlencoded"))
-        .respond_with(success("sensitive-access-token", /*expires_in*/ 600))
-        .mount(&server)
-        .await;
-    let (_temp_dir, assertion_path) = assertion_file("assertion-one\n");
-    let exchange = make_exchange(assertion_path, &server);
-
-    let expected = WorkloadIdentityToken {
-        access_token: "sensitive-access-token".to_string(),
-        chatgpt_account_id: "workspace-one".to_string(),
-        chatgpt_account_user_id: "membership-one".to_string(),
-        chatgpt_plan_type: Some("enterprise".to_string()),
-        expires_in: 600,
-        scope: "openid profile email chatgpt.workspace.feature.allow-codex-local-access.access"
-            .to_string(),
-        user_id: "user-one".to_string(),
-        version: 1,
-    };
-    assert_eq!(exchange.resolve().await.expect("exchange"), expected);
-    assert_eq!(exchange.resolve().await.expect("cached token"), expected);
-    assert!(!format!("{expected:?}").contains("sensitive-access-token"));
-
-    let requests = server.received_requests().await.expect("requests");
-    assert_eq!(requests.len(), 1);
-    assert_eq!(
-        url::form_urlencoded::parse(&requests[0].body)
-            .into_owned()
-            .collect::<Vec<_>>(),
-        vec![
-            ("grant_type".to_string(), JWT_BEARER_GRANT_TYPE.to_string()),
-            ("assertion".to_string(), "assertion-one".to_string()),
+async fn exchange_sends_same_contract_for_both_products_and_caches_valid_response() {
+    for product in [None, Some("chatgpt"), Some("api")] {
+        let (mut body, metadata) = if product == Some("api") {
             (
-                "federation_rule_id".to_string(),
-                "idpm_rule_one".to_string()
-            ),
-        ]
-    );
+                api_success_body("sensitive-access-token"),
+                WorkloadIdentityMetadata::Api(ApiTokenMetadata {
+                    api_organization_id: "org-one".to_string(),
+                    api_project_id: "proj-one".to_string(),
+                    user_id: "service-account-one".to_string(),
+                }),
+            )
+        } else {
+            (
+                success_body("sensitive-access-token", /*expires_in*/ 600),
+                WorkloadIdentityMetadata::Chatgpt(ChatgptTokenMetadata {
+                    chatgpt_account_id: "workspace-one".to_string(),
+                    chatgpt_account_user_id: "membership-one".to_string(),
+                    chatgpt_plan_type: Some("enterprise".to_string()),
+                    scope: "openid profile email chatgpt.workspace.feature.allow-codex-local-access.access"
+                        .to_string(),
+                    user_id: "user-one".to_string(),
+                }),
+            )
+        };
+        if let Some(product) = product {
+            body["wif_product"] = product.into();
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(header("content-type", "application/x-www-form-urlencoded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let (_temp_dir, assertion_path) = assertion_file("assertion-one\n");
+        let exchange = make_exchange(assertion_path, &server);
+
+        let expected = WorkloadIdentityToken {
+            access_token: "sensitive-access-token".to_string(),
+            expires_in: 600,
+            metadata,
+            version: 1,
+        };
+        assert_eq!(exchange.resolve().await.expect("exchange"), expected);
+        assert_eq!(exchange.resolve().await.expect("cached token"), expected);
+        assert!(!format!("{expected:?}").contains("sensitive-access-token"));
+
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            url::form_urlencoded::parse(&requests[0].body)
+                .into_owned()
+                .collect::<Vec<_>>(),
+            vec![
+                ("grant_type".to_string(), JWT_BEARER_GRANT_TYPE.to_string()),
+                ("assertion".to_string(), "assertion-one".to_string()),
+                (
+                    "federation_rule_id".to_string(),
+                    "idpm_rule_one".to_string()
+                ),
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn exchange_rejects_unknown_products_and_incomplete_api_identity() {
+    let mut invalid_responses = Vec::new();
+    for product in [serde_json::json!("unknown"), serde_json::Value::Null] {
+        let mut body = success_body("access-one", /*expires_in*/ 600);
+        body["wif_product"] = product;
+        invalid_responses.push(body);
+    }
+    for field in [
+        "wif_product",
+        "api_organization_id",
+        "api_project_id",
+        "user_id",
+    ] {
+        let mut body = api_success_body("access-one");
+        body.as_object_mut().expect("response object").remove(field);
+        invalid_responses.push(body);
+        let mut body = api_success_body("access-one");
+        body[field] = " ".into();
+        invalid_responses.push(body);
+    }
+    let (_temp_dir, assertion_path) = assertion_file("assertion-one");
+    for body in invalid_responses {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let exchange = make_exchange(assertion_path.clone(), &server);
+        assert!(matches!(
+            exchange.resolve().await,
+            Err(WorkloadIdentityError::InvalidExchangeResponse)
+        ));
+    }
 }
 
 #[tokio::test]

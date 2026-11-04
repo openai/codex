@@ -68,6 +68,53 @@ fn auth_owner_generation_distinguishes_refreshes_from_identity_changes() {
     }
 }
 
+#[test]
+fn api_workload_identity_changes_retire_previous_owner() {
+    let identity = ApiTokenMetadata {
+        api_organization_id: "organization".into(),
+        api_project_id: "project".into(),
+        user_id: "service-account".into(),
+    };
+    let auth = |workload_identity| {
+        CodexAuth::ApiKey(ApiKeyAuth {
+            api_key: "same-bearer".into(),
+            workload_identity,
+        })
+    };
+    for replacement in [
+        None,
+        Some(ApiTokenMetadata {
+            api_organization_id: "another-organization".into(),
+            ..identity.clone()
+        }),
+        Some(ApiTokenMetadata {
+            api_project_id: "another-project".into(),
+            ..identity.clone()
+        }),
+        Some(ApiTokenMetadata {
+            user_id: "another-service-account".into(),
+            ..identity.clone()
+        }),
+    ] {
+        let previous = auth(Some(identity.clone()));
+        let current = auth(replacement);
+        for (previous, current) in [(previous.clone(), current.clone()), (current, previous)] {
+            let manager = AuthManager::from_auth_for_testing(previous);
+            let before = *manager.auth_change_state_receiver().borrow();
+            manager.set_cached_auth(Some(current));
+            assert_eq!(
+                *manager.auth_change_state_receiver().borrow(),
+                AuthChangeState {
+                    generation: before.generation + 1,
+                    owner_generation: before.owner_generation + 1,
+                    source_generation: before.source_generation + 1,
+                    login_generation: before.login_generation + 1,
+                }
+            );
+        }
+    }
+}
+
 #[tokio::test]
 #[serial_test::serial(codex_auth_env)]
 async fn auth_refresh_read_failure_is_transient_and_preserves_network_permit() {

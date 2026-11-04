@@ -155,14 +155,23 @@ fn login_status_validates_configured_workload_identity() -> Result<()> {
     write_file_auth_config(codex_home.path())?;
     let missing_assertion = codex_home.path().join("missing-identity-token");
 
-    codex_command(codex_home.path())?
-        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
-        .env(OPENAI_FEDERATION_RULE_ID_ENV_VAR, "rule-test")
-        .env(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR, &missing_assertion)
-        .args(["login", "status"])
-        .assert()
-        .failure()
-        .stderr(contains("could not read workload identity assertion file"));
+    for login_method in ["chatgpt", "api"] {
+        let mut command = codex_command(codex_home.path())?;
+        command
+            .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+            .env(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR, &missing_assertion)
+            .env(OPENAI_FEDERATION_RULE_ID_ENV_VAR, "rule-test")
+            .args([
+                "-c",
+                &format!("forced_login_method=\"{login_method}\""),
+                "login",
+                "status",
+            ]);
+        command
+            .assert()
+            .failure()
+            .stderr(contains("could not read workload identity assertion file"));
+    }
 
     Ok(())
 }
