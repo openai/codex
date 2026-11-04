@@ -336,6 +336,7 @@ impl std::fmt::Debug for TurnEnvironment {
 #[derive(Default)]
 pub(crate) struct NewTurnContextOptions {
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) prompt_cache_ttl: Option<crate::PromptCacheTtl>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
 }
 
@@ -390,6 +391,7 @@ pub struct TurnContext {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) prompt_cache_ttl: Option<crate::PromptCacheTtl>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) extension_data: Arc<codex_extension_api::ExtensionData>,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
@@ -477,6 +479,7 @@ impl TurnContext {
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
             final_output_json_schema: None,
+            prompt_cache_ttl: None,
             turn_metadata_state,
             extension_data,
             turn_timing_state: Arc::new(TurnTimingState::default()),
@@ -917,6 +920,7 @@ impl TurnContext {
             windows_sandbox_level: self.windows_sandbox_level,
             available_models,
             final_output_json_schema: self.final_output_json_schema.clone(),
+            prompt_cache_ttl: self.prompt_cache_ttl,
             turn_metadata_state: self.turn_metadata_state.clone(),
             extension_data: Arc::clone(&self.extension_data),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
@@ -1202,6 +1206,7 @@ impl Session {
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             available_models,
             final_output_json_schema: None,
+            prompt_cache_ttl: None,
             turn_metadata_state,
             extension_data,
             turn_timing_state: Arc::new(TurnTimingState::default()),
@@ -1486,6 +1491,7 @@ impl Session {
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         turn_context.final_output_json_schema = options.final_output_json_schema;
+        turn_context.prompt_cache_ttl = options.prompt_cache_ttl;
         turn_context.cyber_access_program =
             cyber_access_program::for_provider(&turn_context.config, options.cyber_access_program);
         // Tool observers retain this turn's selection even after a later turn starts.

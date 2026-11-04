@@ -113,6 +113,8 @@ pub struct RecoverTurnRequest {
     pub turn_id: String,
     pub thread_settings: ThreadSettingsOverrides,
     pub trace: Option<W3cTraceContext>,
+    /// Cache lifetime to reapply when resuming this turn.
+    pub prompt_cache_ttl: Option<PromptCacheTtl>,
     /// Program recorded in the interrupted turn's persisted context.
     pub cyber_access_program: Option<CyberAccessProgram>,
 }
@@ -216,6 +218,15 @@ pub enum CyberAccessProgram {
     DaybreakRed,
 }
 
+/// Minimum lifetime requested for new prompt cache entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PromptCacheTtl {
+    #[serde(rename = "30m")]
+    ThirtyMinutes,
+    #[serde(rename = "12h")]
+    TwelveHours,
+}
+
 /// Options for the new-turn branch of a submission.
 ///
 /// Core only records these options when input starts a turn. When input steers,
@@ -232,6 +243,8 @@ pub struct TurnStartOptions {
     pub final_output_json_schema: Option<Value>,
     /// Service tier for a new turn, without changing the thread's preference.
     pub service_tier: Option<String>,
+    /// Lifetime requested for new Responses prompt cache entries during this turn.
+    pub prompt_cache_ttl: Option<PromptCacheTtl>,
     /// Parent turn lineage recorded if this request starts a new turn.
     pub parent_turn_id: Option<String>,
     /// Agent owning the parent turn, retained when recovering delegated work.

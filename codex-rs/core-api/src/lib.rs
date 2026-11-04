@@ -50,6 +50,7 @@ pub use codex_core::NetworkUnixSocketPermissions;
 pub use codex_core::NewThread;
 pub use codex_core::NotSubmittedReason;
 pub use codex_core::PromptCacheKey;
+pub use codex_core::PromptCacheTtl;
 pub use codex_core::RecoverTurnRequest;
 pub use codex_core::StartIfIdleSubmission;
 pub use codex_core::StartThreadOptions;

@@ -244,6 +244,7 @@ async fn root_turn_suspension_preserves_unfinished_turn_history(fail_child_write
                 turn_id: turn_id.clone(),
                 thread_settings: Default::default(),
                 trace: None,
+                prompt_cache_ttl: None,
                 cyber_access_program: None,
             })
             .await

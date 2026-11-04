@@ -557,6 +557,7 @@ impl Session {
         }
         let options = NewTurnContextOptions {
             final_output_json_schema: start_options.final_output_json_schema,
+            prompt_cache_ttl: start_options.prompt_cache_ttl,
             cyber_access_program: start_options.cyber_access_program,
         };
         let turn_context = match session_configuration {

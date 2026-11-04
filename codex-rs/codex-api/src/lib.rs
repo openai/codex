@@ -37,6 +37,7 @@ pub use crate::common::AccessPrograms;
 pub use crate::common::MemorySummarizeInput;
 pub use crate::common::MemorySummarizeOutput;
 pub use crate::common::OpenAiVerbosity;
+pub use crate::common::PromptCacheOptions;
 pub use crate::common::RawMemory;
 pub use crate::common::RawMemoryMetadata;
 pub use crate::common::Reasoning;

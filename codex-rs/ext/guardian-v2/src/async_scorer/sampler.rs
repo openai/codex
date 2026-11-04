@@ -245,6 +245,7 @@ impl LunaSampler {
             include: Vec::new(),
             service_tier: None,
             prompt_cache_key: Some(format!("guardian-v2:{}", self.config.thread_id)),
+            prompt_cache_options: None,
             text: None,
             client_metadata: None,
             access_programs: None,

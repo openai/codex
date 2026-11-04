@@ -1,4 +1,5 @@
 use codex_core::NotSubmittedReason;
+use codex_core::PromptCacheTtl;
 use codex_core::RecoverTurnRequest;
 use codex_core::StartIfIdleSubmission;
 use codex_core::StartThreadOptions;
@@ -61,6 +62,39 @@ use tokio::sync::Barrier;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+
+#[tokio::test]
+async fn host_prompt_cache_ttl_applies_only_to_the_started_turn() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    for (prompt_cache_ttl, expected) in [
+        (Some(PromptCacheTtl::TwelveHours), Some("12h")),
+        (None, None),
+        (Some(PromptCacheTtl::ThirtyMinutes), Some("30m")),
+    ] {
+        let response = responses::mount_sse_once(&server, responses::sse_completed("cache")).await;
+        test.codex
+            .start_or_steer_turn(user_message_request("hello").on_start(TurnStartOptions {
+                prompt_cache_ttl,
+                ..Default::default()
+            }))
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        assert_eq!(
+            response
+                .single_request()
+                .body_json()
+                .get("prompt_cache_options"),
+            expected
+                .map(|ttl| serde_json::json!({ "ttl": ttl }))
+                .as_ref(),
+        );
+    }
+    Ok(())
+}
 
 /// Accepted steering changes future captures, while rejected input and automatic starts
 /// preserve the policy belonging to each turn.
@@ -666,6 +700,7 @@ async fn recover_turn_if_idle_preserves_id_and_resumes_plan_mode() {
                 ..Default::default()
             },
             trace: None,
+            prompt_cache_ttl: None,
             cyber_access_program: None,
         })
         .await
@@ -923,6 +958,7 @@ async fn recovery_preserves_durable_turn_attribution(
                         ..Default::default()
                     },
                     trace: None,
+                    prompt_cache_ttl: None,
                     cyber_access_program: None,
                 })
                 .await?,

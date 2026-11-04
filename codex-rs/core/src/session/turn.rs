@@ -1820,6 +1820,7 @@ pub(crate) fn build_prompt(
         output_schema_strict: !crate::guardian::is_basic_session_source(
             &turn_context.session_source,
         ),
+        prompt_cache_ttl: turn_context.prompt_cache_ttl,
         cyber_access_program: turn_context.cyber_access_program,
     }
 }

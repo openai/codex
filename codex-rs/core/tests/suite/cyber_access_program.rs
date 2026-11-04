@@ -99,6 +99,7 @@ async fn recover_turn_restores_cyber_access_program_without_making_it_sticky() -
             turn_id: turn_id.clone(),
             thread_settings: Default::default(),
             trace: None,
+            prompt_cache_ttl: None,
             cyber_access_program: persisted_context.cyber_access_program,
         })
         .await?;

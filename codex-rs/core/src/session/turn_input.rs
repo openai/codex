@@ -152,6 +152,7 @@ impl PreparedTurnInputSettings {
             turn_trigger,
             final_output_json_schema,
             service_tier,
+            prompt_cache_ttl,
             parent_turn_id,
             initiating_agent_path,
             root_turn_id,
@@ -168,6 +169,7 @@ impl PreparedTurnInputSettings {
 
         let options = NewTurnContextOptions {
             final_output_json_schema,
+            prompt_cache_ttl,
             cyber_access_program,
         };
         let turn_context = match kind {

@@ -609,9 +609,11 @@ impl CodexThread {
             turn_id,
             thread_settings,
             trace,
+            prompt_cache_ttl,
             cyber_access_program,
         } = request;
         let start_options = TurnStartOptions {
+            prompt_cache_ttl,
             cyber_access_program,
             ..self.session.recovered_turn_start_options(&turn_id).await
         };

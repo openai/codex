@@ -47,6 +47,7 @@ impl Session {
                 service_tier: Some(settings.service_tier.clone().unwrap_or_else(|| {
                     codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()
                 })),
+                prompt_cache_ttl: context.prompt_cache_ttl,
                 cyber_access_program: context.cyber_access_program,
                 ..Default::default()
             },
