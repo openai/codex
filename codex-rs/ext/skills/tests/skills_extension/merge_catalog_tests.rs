@@ -155,12 +155,17 @@ impl MergeHarness {
             step.insert(plugins.as_ref().clone());
         }
         let selected_plugins = step.get::<SelectedPluginSnapshot>().unwrap_or_default();
+        let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
         prepare_step(
             &self.registry,
             codex_extension_api::StepPreparationInput {
                 selected_plugins: &selected_plugins,
                 turn_id: self.turn_store.level_id(),
-                ready_selected_capability_roots: &self.roots,
+                ready_selected_capability_roots: &self
+                    .roots
+                    .iter()
+                    .map(|root| AccessedSelectedCapabilityRoot { root, fs: &access })
+                    .collect::<Vec<_>>(),
                 executor_capability_discovery: self.discovery.as_ref(),
                 executor_capability_discovery_v2: self.snapshots.as_deref(),
                 session_store: &self.session_store,

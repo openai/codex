@@ -528,7 +528,6 @@ enabled = false
         let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-                Arc::clone(&environment_manager),
                 SessionSource::Exec.restriction_product(),
             ),
         );

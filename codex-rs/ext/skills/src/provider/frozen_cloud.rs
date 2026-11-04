@@ -118,7 +118,7 @@ impl SkillProvider for FrozenCloudSkillProvider {
         false
     }
 
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list<'a>(&'a self, query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
         Box::pin(async move {
             Ok(if query.include_cloud_skills {
                 self.catalog.clone()

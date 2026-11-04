@@ -147,7 +147,7 @@ impl SkillsThreadState {
     pub(crate) async fn refresh_executor_catalog(
         &self,
         providers: &SkillProviders,
-        query: SkillListQuery,
+        query: SkillListQuery<'_>,
     ) -> SkillCatalog {
         if let Some(snapshots) = &query.executor_capability_discovery_v2 {
             let snapshots = snapshots.clone();
@@ -204,7 +204,11 @@ impl SkillsThreadState {
 
             let key = ExecutorCatalogCacheKey {
                 turn_id: query.turn_id.clone(),
-                resolved_roots: query.resolved_executor_roots.clone(),
+                roots: query
+                    .executor_roots
+                    .iter()
+                    .map(|root| (root.root.clone(), root.fs.cache_key()))
+                    .collect(),
                 include_bundled_skills: query.include_bundled_skills,
             };
             let catalog = if query.executor_roots.is_empty() {
@@ -228,7 +232,7 @@ impl SkillsThreadState {
     async fn executor_discovery_catalog_snapshot(
         &self,
         providers: &SkillProviders,
-        query: SkillListQuery,
+        query: SkillListQuery<'_>,
     ) -> SkillCatalog {
         let discovery = query.executor_capability_discovery.clone();
         let discovery_failed = discovery.as_ref().is_some_and(|discovery| {
@@ -244,20 +248,16 @@ impl SkillsThreadState {
                 .catalog_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let cached = state.executor_discovery_cache.as_ref().filter(|cached| {
-                cached.matches(
-                    &query.executor_roots,
-                    discovery.as_ref(),
-                    query.include_bundled_skills,
-                )
-            });
+            let cached = state
+                .executor_discovery_cache
+                .as_ref()
+                .filter(|cached| cached.matches(discovery.as_ref(), query.include_bundled_skills));
             if !discovery_failed && let Some(cached) = cached {
                 return cached.catalog.clone();
             }
             cached.is_some()
         };
 
-        let roots = query.executor_roots.clone();
         let include_bundled_skills = query.include_bundled_skills;
         let discovered = providers.list_executor_for_turn(query).await;
         if !already_observed {
@@ -270,7 +270,6 @@ impl SkillsThreadState {
         // Failed discovery is returned to this caller but is never reused by another request.
         state.executor_discovery_cache =
             discovery.map(|discovery| CachedExecutorDiscoveryCatalog {
-                roots,
                 discovery,
                 include_bundled_skills,
                 catalog: discovered.clone(),
@@ -299,7 +298,7 @@ impl SkillsThreadState {
     pub(crate) async fn refresh_cloud_catalog(
         &self,
         providers: &SkillProviders,
-        query: SkillListQuery,
+        query: SkillListQuery<'_>,
         turn_store: &ExtensionData,
     ) -> SkillProviderResult<()> {
         // Wait without holding config/catalog state or the MCP runtime permit.

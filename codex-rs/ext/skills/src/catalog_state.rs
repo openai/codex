@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use codex_exec_server::EnvironmentAccessKey;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
-use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_extension_api::CatalogRefreshBackoff;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientAuthKey;
@@ -124,25 +124,22 @@ impl CachedExecutorV2Catalog {
 #[derive(Clone, Debug)]
 pub(crate) struct ExecutorCatalogCacheKey {
     pub(crate) turn_id: String,
-    pub(crate) resolved_roots: Vec<ResolvedSelectedCapabilityRoot>,
+    pub(crate) roots: Vec<(SelectedCapabilityRoot, EnvironmentAccessKey)>,
     pub(crate) include_bundled_skills: bool,
 }
 
 impl ExecutorCatalogCacheKey {
-    pub(crate) fn matches(&self, query: &crate::provider::SkillListQuery) -> bool {
+    pub(crate) fn matches(&self, query: &crate::provider::SkillListQuery<'_>) -> bool {
         self.turn_id == query.turn_id
-            && self
-                .resolved_roots
-                .iter()
-                .map(ResolvedSelectedCapabilityRoot::selected_root)
-                .eq(query.executor_roots.iter())
             && self.include_bundled_skills == query.include_bundled_skills
-            // Unbound callers cannot establish identity for a cached filesystem catalog.
-            && query.resolved_executor_roots.len() == query.executor_roots.len()
-            && self.resolved_roots.iter().zip(&query.resolved_executor_roots).all(|(previous, current)| {
-                previous.selected_root() == current.selected_root()
-                    && Arc::ptr_eq(previous.environment(), current.environment())
-            })
+            && self.roots.len() == query.executor_roots.len()
+            && self
+                .roots
+                .iter()
+                .zip(&query.executor_roots)
+                .all(|((root, access), current)| {
+                    root == current.root && *access == current.fs.cache_key()
+                })
     }
 }
 
@@ -155,7 +152,6 @@ pub(crate) struct CachedExecutorCatalog {
 /// Keeps the latest result; only successful results for unchanged inputs can be reused.
 #[derive(Clone, Debug)]
 pub(crate) struct CachedExecutorDiscoveryCatalog {
-    pub(crate) roots: Vec<SelectedCapabilityRoot>,
     pub(crate) discovery: ExecutorCapabilityDiscoverySnapshot,
     pub(crate) include_bundled_skills: bool,
     pub(crate) catalog: SkillCatalog,
@@ -164,13 +160,11 @@ pub(crate) struct CachedExecutorDiscoveryCatalog {
 impl CachedExecutorDiscoveryCatalog {
     pub(crate) fn matches(
         &self,
-        roots: &[SelectedCapabilityRoot],
         discovery: Option<&ExecutorCapabilityDiscoverySnapshot>,
         include_bundled_skills: bool,
     ) -> bool {
         discovery.is_some_and(|discovery| {
-            self.roots == roots
-                && self.include_bundled_skills == include_bundled_skills
+            self.include_bundled_skills == include_bundled_skills
                 && self.discovery.sandbox_contexts() == discovery.sandbox_contexts()
                 && self.discovery.roots().len() == discovery.roots().len()
                 && self.discovery.roots().iter().zip(discovery.roots()).all(

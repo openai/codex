@@ -12,7 +12,6 @@ use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
 use crate::step_state::CatalogStatus;
 use crate::step_state::SkillsStepState;
-use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_extension_api::StepPreparationInput;
 
 pub(crate) async fn prepare_catalogs(
@@ -48,13 +47,7 @@ pub(crate) async fn prepare_catalogs(
     SkillsStepState {
         discovery_v2,
         tools_enabled: cloud_enabled
-            || input
-                .step_store
-                .get::<Vec<ResolvedSelectedCapabilityRoot>>()
-                .map_or_else(
-                    || !input.ready_selected_capability_roots.is_empty(),
-                    |roots| !roots.is_empty(),
-                )
+            || !input.ready_selected_capability_roots.is_empty()
             || discovery_v2,
         catalog: thread_state.prepare_step_catalog(cloud, executor, discovery_v2),
         host_catalog,
@@ -70,26 +63,9 @@ async fn discover_executor_catalog(
     config: &SkillsExtensionConfig,
     cloud_enabled: bool,
 ) -> SkillCatalog {
-    // Core supplies captured roots even when none are ready. Descriptor-only callers
-    // retain their unbound discovery path.
-    let captured_roots = input
-        .step_store
-        .get::<Vec<ResolvedSelectedCapabilityRoot>>();
-    let executor_roots = captured_roots
-        .as_ref()
-        .map(|roots| {
-            roots
-                .iter()
-                .map(|root| root.selected_root().clone())
-                .collect()
-        })
-        .unwrap_or_else(|| input.ready_selected_capability_roots.to_vec());
     let query = SkillListQuery {
         turn_id: input.turn_id.to_string(),
-        executor_roots,
-        resolved_executor_roots: captured_roots
-            .map(|roots| roots.as_ref().clone())
-            .unwrap_or_default(),
+        executor_roots: input.ready_selected_capability_roots.to_vec(),
         host_snapshot: None,
         include_host_skills: false,
         include_bundled_skills: config.bundled_skills_enabled,
@@ -121,7 +97,6 @@ async fn discover_host_catalog(
             .list_host_for_turn(SkillListQuery {
                 turn_id: input.turn_id.to_string(),
                 executor_roots: Vec::new(),
-                resolved_executor_roots: Vec::new(),
                 host_snapshot: Some(host_snapshot),
                 include_host_skills: true,
                 include_bundled_skills: false,

@@ -579,7 +579,6 @@ async fn check_acquisition(enabled: bool, version: &'static str) -> Result<()> {
         &mut extensions,
         codex_skills_extension::SkillProviders::new().with_executor_provider(Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
                 /*restriction_product*/ None,
             ),
         )),
@@ -1069,7 +1068,7 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
     let manager = Arc::new(codex_exec_server::EnvironmentManager::default_for_tests());
     install_plugin_providers(
         &mut extensions,
-        PluginProviders::new(Arc::new(ExecutorPluginProvider::new(manager.clone())))
+        PluginProviders::new(Arc::new(ExecutorPluginProvider::new(manager)))
             .with_cloud_provider(cloud.clone()),
     );
     install_with_providers(
@@ -1093,7 +1092,7 @@ async fn auth_rotation_refreshes_plugin_acceptance_before_merged_skills() -> Res
             }))
             .with_executor_provider(Arc::new(
                 ExecutorSkillProvider::new_with_restriction_product(
-                    manager, /*restriction_product*/ None,
+                    /*restriction_product*/ None,
                 ),
             )),
         |_config: &Config| SkillsExtensionConfig {

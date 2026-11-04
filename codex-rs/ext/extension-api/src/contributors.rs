@@ -362,11 +362,18 @@ pub trait SkillInvocationContributor: Send + Sync {
     }
 }
 
+/// A selected capability root bound to filesystem access for the current callback.
+#[derive(Clone, Copy)]
+pub struct AccessedSelectedCapabilityRoot<'a> {
+    pub root: &'a SelectedCapabilityRoot,
+    pub fs: &'a dyn codex_file_system::EnvironmentAccess,
+}
+
 /// Runtime inputs shared by preparation, tool construction, and later context consumers.
 #[derive(Clone, Copy)]
 pub struct StepPreparationInput<'a> {
     pub turn_id: &'a str,
-    pub ready_selected_capability_roots: &'a [SelectedCapabilityRoot],
+    pub ready_selected_capability_roots: &'a [AccessedSelectedCapabilityRoot<'a>],
     pub executor_capability_discovery: Option<&'a ExecutorCapabilityDiscoverySnapshot>,
     pub executor_capability_discovery_v2: Option<&'a [ExecutorCapabilityDiscoveryV2Snapshot]>,
     /// Captured plugin policy; an empty snapshot represents no selected plugins.

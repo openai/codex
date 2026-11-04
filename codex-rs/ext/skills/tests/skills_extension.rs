@@ -21,6 +21,7 @@ use codex_exec_server::ExecutorSkill;
 use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::SkillDiscoveryRoot;
+use codex_extension_api::AccessedSelectedCapabilityRoot;
 use codex_extension_api::ConversationHistory;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
@@ -154,11 +155,40 @@ async fn prepared_world_state(
         .step_store
         .get::<SelectedPluginSnapshot>()
         .unwrap_or_default();
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
+    let captured_roots = input
+        .step_store
+        .get::<Vec<codex_exec_server::ResolvedSelectedCapabilityRoot>>();
+    let captured_access = captured_roots
+        .as_ref()
+        .map(|roots| {
+            roots
+                .iter()
+                .map(|root| {
+                    FileSystemEnvironmentAccessor::unrestricted(root.environment().filesystem_ref())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let accessed_roots = match &captured_roots {
+        Some(roots) => roots
+            .iter()
+            .zip(&captured_access)
+            .map(|(root, fs)| AccessedSelectedCapabilityRoot {
+                root: root.selected_root(),
+                fs,
+            })
+            .collect::<Vec<_>>(),
+        None => ready_selected_capability_roots
+            .iter()
+            .map(|root| AccessedSelectedCapabilityRoot { root, fs: &access })
+            .collect(),
+    };
     prepare_step(
         registry,
         codex_extension_api::StepPreparationInput {
             turn_id: input.turn_id,
-            ready_selected_capability_roots,
+            ready_selected_capability_roots: &accessed_roots,
             executor_capability_discovery: discovery.as_deref(),
             executor_capability_discovery_v2: snapshots.as_deref().map(Vec::as_slice),
             selected_plugins: &selected_plugins,
@@ -207,7 +237,18 @@ async fn prepared_turn_input(
         codex_extension_api::StepPreparationInput {
             selected_plugins: &selected_plugins,
             turn_id: &input.turn_id,
-            ready_selected_capability_roots: &roots,
+            ready_selected_capability_roots: &roots
+                .iter()
+                .filter_map(|root| {
+                    let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
+                    let fs = input
+                        .environments
+                        .iter()
+                        .find(|environment| environment.environment_id == *environment_id)?
+                        .fs;
+                    Some(AccessedSelectedCapabilityRoot { root, fs })
+                })
+                .collect::<Vec<_>>(),
             executor_capability_discovery: discovery.as_deref(),
             executor_capability_discovery_v2: snapshots.as_deref().map(Vec::as_slice),
             session_store,
@@ -829,7 +870,7 @@ async fn nonempty_executor_empty_host_records_catalog_metrics() -> TestResult {
         })
         .await;
 
-    let selected_roots = vec![SelectedCapabilityRoot {
+    let selected_roots = [SelectedCapabilityRoot {
         id: "lint-fix".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: "env-1".to_string(),
@@ -1597,7 +1638,7 @@ async fn selected_executor_catalog_caches_root_selections_per_turn_and_reuses_di
         ("cache-turn-1", vec![first_root.clone()], true, 4),
         ("cache-turn-2", vec![first_root.clone()], true, 5),
         ("cache-turn-2", vec![first_root.clone()], false, 6),
-        ("cache-turn-2", vec![first_root], false, 6),
+        ("cache-turn-2", vec![first_root.clone()], false, 6),
     ] {
         let mut next_config = current_config.clone();
         next_config.bundled_skills_enabled = include_bundled_skills;
@@ -1635,6 +1676,46 @@ async fn selected_executor_catalog_caches_root_selections_per_turn_and_reuses_di
         assert_eq!(
             previous_list_calls + expected_new_calls,
             list_calls.load(Ordering::Relaxed)
+        );
+    }
+
+    // Keep the turn, root, and filesystem fixed while access changes and is restored.
+    let open = FileSystemEnvironmentAccessor::unrestricted(cache_environment.filesystem_ref());
+    let changed = FileSystemEnvironmentAccessor::new(
+        cache_environment.filesystem_ref(),
+        codex_exec_server::FileSystemSandboxContext::from_permission_profile(
+            codex_protocol::models::PermissionProfile::read_only(),
+            PathUri::parse("file:///skills")?,
+        ),
+    );
+    let turn_store = ExtensionData::new("cache-turn-2");
+    for (access, expected_new_calls) in [
+        (&open as &dyn codex_exec_server::EnvironmentAccess, 6),
+        (&changed, 7),
+        (&changed, 7),
+        (&open, 8),
+    ] {
+        prepare_step(
+            &registry,
+            codex_extension_api::StepPreparationInput {
+                turn_id: "cache-turn-2",
+                ready_selected_capability_roots: &[AccessedSelectedCapabilityRoot {
+                    root: &first_root,
+                    fs: access,
+                }],
+                executor_capability_discovery: None,
+                executor_capability_discovery_v2: None,
+                selected_plugins: &Default::default(),
+                session_store: &session_store,
+                thread_store: &thread_store,
+                turn_store: &turn_store,
+                step_store: &ExtensionData::new("permission-step"),
+            },
+        )
+        .await;
+        assert_eq!(
+            previous_list_calls + expected_new_calls,
+            list_calls.load(Ordering::Relaxed),
         );
     }
 
@@ -1694,7 +1775,6 @@ async fn overlapping_executor_catalogs_render_their_own_roots() -> TestResult {
     let root_b = root("skill-b")?;
     let mut builder = ExtensionRegistryBuilder::new();
     let provider = codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*restriction_product*/ None,
     );
     install_with_providers(
@@ -2668,9 +2748,7 @@ async fn v2_root_aliases_and_read_cache_use_the_captured_environment() -> TestRe
         .get_environment("local")
         .ok_or("replacement environment")?;
     let providers = SkillProviders::new().with_executor_provider(Arc::new(
-        ExecutorSkillProvider::new_with_restriction_product(
-            manager, /*restriction_product*/ None,
-        ),
+        ExecutorSkillProvider::new_with_restriction_product(/*restriction_product*/ None),
     ));
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(&mut builder, providers, skills_extension_config);
@@ -3040,7 +3118,7 @@ async fn model_context_window_scales_executor_and_cloud_catalogs() -> TestResult
         .await;
     assert!(thread_fragments.is_empty());
 
-    let selected_roots = vec![SelectedCapabilityRoot {
+    let selected_roots = [SelectedCapabilityRoot {
         id: "skills".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: "env-1".to_string(),
@@ -3172,7 +3250,7 @@ async fn executor_catalog_emits_at_most_four_warnings() -> TestResult {
             thread_store: &thread_store,
         })
         .await;
-    let selected_roots = vec![SelectedCapabilityRoot {
+    let selected_roots = [SelectedCapabilityRoot {
         id: "skills".to_string(),
         location: CapabilityRootLocation::Environment {
             environment_id: "env-1".to_string(),
@@ -3551,7 +3629,7 @@ fn expected_catalog_metric_samples(catalog_surface: &str, count: i64) -> Vec<Rec
 }
 
 impl SkillProvider for StaticSkillProvider {
-    fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list<'a>(&'a self, _query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
         let list_call = self
             .list_calls
             .as_ref()
@@ -3705,7 +3783,7 @@ async fn shared_catalog_keeps_captured_executor_and_separates_bindings_in_one_tu
         Some(std::time::Duration::from_millis(100)),
     )?;
     let provider = Arc::new(ExecutorSkillProvider::new_with_restriction_product(
-        manager, /*restriction_product*/ None,
+        /*restriction_product*/ None,
     ));
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(

@@ -15,7 +15,7 @@ struct CloudTurnProvider {
 }
 
 impl SkillProvider for CloudTurnProvider {
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list<'a>(&'a self, query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
         Box::pin(async move {
             self.lists.fetch_add(1, Ordering::SeqCst);
             *self.resource_key.lock().expect("resource key lock") = query

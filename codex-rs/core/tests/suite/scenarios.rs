@@ -1500,14 +1500,12 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context(
         "Follow the disabled plugin workflow.",
     )?;
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
-    let provider = ExecutorSkillProvider::new_with_restriction_product(
-        Arc::clone(&environment_manager),
-        /*restriction_product*/ None,
-    )
-    .with_disabled_skill_paths(HashMap::from([(
-        LOCAL_ENVIRONMENT_ID.to_string(),
-        HashSet::from([PathUri::from_host_native_path(disabled)?]),
-    )]));
+    let provider =
+        ExecutorSkillProvider::new_with_restriction_product(/*restriction_product*/ None)
+            .with_disabled_skill_paths(HashMap::from([(
+                LOCAL_ENVIRONMENT_ID.to_string(),
+                HashSet::from([PathUri::from_host_native_path(disabled)?]),
+            )]));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     codex_mcp_extension::install_plugins(&mut extensions, environment_manager);
     let (started, captured) = oneshot::channel();
@@ -1917,7 +1915,7 @@ async fn skill_read_recovers_omitted_installation_and_reads_selected_environment
     // Supply already-reconciled catalog fixtures; exercise production preparation and reads.
     struct InstallationSkills(SkillCatalog);
     impl SkillProvider for InstallationSkills {
-        fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+        fn list<'a>(&'a self, _query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
             Box::pin(async { Ok(self.0.clone()) })
         }
 
@@ -2006,7 +2004,6 @@ async fn skill_read_recovers_omitted_installation_and_reads_selected_environment
             .with_cloud_provider(Arc::new(InstallationSkills(catalog)))
             .with_executor_provider(Arc::new(
                 ExecutorSkillProvider::new_with_restriction_product(
-                    Arc::new(EnvironmentManager::default_for_tests()),
                     /*restriction_product*/ None,
                 ),
             )),

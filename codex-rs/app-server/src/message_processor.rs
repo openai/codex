@@ -354,7 +354,6 @@ impl MessageProcessor {
         let restriction_product = session_source.restriction_product();
         let executor_skill_provider: Arc<dyn codex_skills_extension::SkillProvider> = Arc::new(
             codex_skills_extension::ExecutorSkillProvider::new_with_restriction_product(
-                Arc::clone(&environment_manager_for_extensions),
                 restriction_product,
             ),
         );

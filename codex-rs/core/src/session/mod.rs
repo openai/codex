@@ -4413,11 +4413,30 @@ impl Session {
                     &turn_context.disabled_plugin_ids,
                 )
                 .await;
+            let mut filesystem_access = HashMap::new();
+            for environment in environments.turn_environments() {
+                let environment_id = &environment.selection.environment_id;
+                let grants = turn_context.granted_permissions(environment_id);
+                filesystem_access.insert(environment_id, environment.fs_accessor(grants));
+            }
+            let accessed_roots = ready_selected_capability_roots
+                .iter()
+                .filter_map(|root| {
+                    let codex_protocol::capabilities::CapabilityRootLocation::Environment {
+                        environment_id,
+                        ..
+                    } = &root.location;
+                    Some(codex_extension_api::AccessedSelectedCapabilityRoot {
+                        root,
+                        fs: filesystem_access.get(environment_id)?,
+                    })
+                })
+                .collect::<Vec<_>>();
             for contributor in self.services.extensions.tool_contributors() {
                 contributor
                     .prepare_for_step(codex_extension_api::StepPreparationInput {
                         turn_id: &turn_context.sub_id,
-                        ready_selected_capability_roots: &ready_selected_capability_roots,
+                        ready_selected_capability_roots: &accessed_roots,
                         executor_capability_discovery: executor_capability_discovery.as_deref(),
                         executor_capability_discovery_v2: executor_capability_discovery_v2
                             .as_deref(),

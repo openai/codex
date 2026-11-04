@@ -3,7 +3,6 @@
 use super::*;
 use codex_exec_server::DiscoverV2CapabilitiesResponse;
 use codex_exec_server::DiscoveredPluginFiles;
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
 use codex_exec_server::ExecutorPlugin;
 use codex_exec_server::ExecutorSkill;
@@ -56,7 +55,6 @@ fn installation(
 #[tokio::test]
 async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestResult {
     let provider = Arc::new(ExecutorSkillProvider::new_with_restriction_product(
-        Arc::new(EnvironmentManager::default_for_tests()),
         /*restriction_product*/ None,
     ));
     let dependencies = Some(SkillDependencies {
@@ -94,7 +92,6 @@ async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestR
     let query = SkillListQuery {
         turn_id: "turn-1".to_string(),
         executor_roots: Vec::new(),
-        resolved_executor_roots: Vec::new(),
         host_snapshot: None,
         include_host_skills: false,
         include_bundled_skills: false,
@@ -284,26 +281,28 @@ async fn v2_steps_refresh_metadata_and_preserve_separate_environments() -> TestR
 
 #[tokio::test]
 async fn v2_empty_failed_and_partial_results_never_load_legacy_roots() -> TestResult {
-    let provider = ExecutorSkillProvider::new_with_restriction_product(
-        Arc::new(EnvironmentManager::default_for_tests()),
-        /*restriction_product*/ None,
-    );
+    let provider =
+        ExecutorSkillProvider::new_with_restriction_product(/*restriction_product*/ None);
     let successful = installation("executor-a")?;
     let failed = ExecutorCapabilityDiscoveryV2Snapshot {
         environment_id: "executor-b".to_string(),
         result: Err("discovery unavailable".to_string()),
     };
+    let root = SelectedCapabilityRoot {
+        id: "legacy".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "unavailable-legacy-executor".to_string(),
+            path: PathUri::parse("file:///legacy").unwrap(),
+        },
+    };
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let query = |snapshots| SkillListQuery {
         turn_id: "turn-1".to_string(),
-        // A legacy lookup would report an unavailable environment. V2 must ignore this root.
-        executor_roots: vec![SelectedCapabilityRoot {
-            id: "legacy".to_string(),
-            location: CapabilityRootLocation::Environment {
-                environment_id: "unavailable-legacy-executor".to_string(),
-                path: PathUri::parse("file:///legacy").unwrap(),
-            },
+        // V2 must ignore this unavailable legacy root.
+        executor_roots: vec![AccessedSelectedCapabilityRoot {
+            root: &root,
+            fs: &access,
         }],
-        resolved_executor_roots: Vec::new(),
         host_snapshot: None,
         include_host_skills: false,
         include_bundled_skills: false,

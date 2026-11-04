@@ -10,9 +10,8 @@ use crate::HostSkillsSnapshot;
 use codex_exec_server::EnvironmentAccess;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot;
-use codex_exec_server::ResolvedSelectedCapabilityRoot;
+use codex_extension_api::AccessedSelectedCapabilityRoot;
 use codex_mcp::McpResourceClient;
-use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -29,11 +28,11 @@ pub use host::HostSkillProvider;
 
 pub(crate) const MAX_SKILL_RESOURCE_CONTENT_BYTES: usize = 1024 * 1024;
 
-#[derive(Clone, Debug)]
-pub struct SkillListQuery {
+/// Catalog inputs with executor roots bound to filesystem access for this callback.
+#[derive(Clone)]
+pub struct SkillListQuery<'a> {
     pub turn_id: String,
-    pub executor_roots: Vec<SelectedCapabilityRoot>,
-    pub resolved_executor_roots: Vec<ResolvedSelectedCapabilityRoot>,
+    pub executor_roots: Vec<AccessedSelectedCapabilityRoot<'a>>,
     pub host_snapshot: Option<Arc<HostSkillsSnapshot>>,
     pub include_host_skills: bool,
     pub include_bundled_skills: bool,
@@ -95,7 +94,7 @@ pub trait SkillProvider: Send + Sync {
     }
 
     /// Providers set `is_partial` when listing omits entries; warnings are diagnostic only.
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog>;
+    fn list<'a>(&'a self, query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog>;
 
     fn read<'a>(
         &'a self,

@@ -27,7 +27,6 @@ impl<C: Send + Sync + 'static> SkillsExtension<C> {
         let query = SkillListQuery {
             turn_id: input.turn_id.to_string(),
             executor_roots: Vec::new(),
-            resolved_executor_roots: Vec::new(),
             host_snapshot: None,
             include_host_skills: false,
             include_bundled_skills: config.bundled_skills_enabled,

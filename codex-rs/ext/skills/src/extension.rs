@@ -213,7 +213,6 @@ where
                 .list_for_turn(SkillListQuery {
                     turn_id: thread_store.level_id().to_string(),
                     executor_roots: Vec::new(),
-                    resolved_executor_roots: Vec::new(),
                     host_snapshot: None,
                     include_host_skills: false,
                     include_bundled_skills: config.bundled_skills_enabled,
@@ -358,7 +357,6 @@ where
             let query = SkillListQuery {
                 turn_id: input.turn_id.clone(),
                 executor_roots: Vec::new(),
-                resolved_executor_roots: Vec::new(),
                 host_snapshot: host_snapshot.clone(),
                 include_host_skills: host_skills.is_none() && !host_catalog_in_world_state,
                 include_bundled_skills: config.bundled_skills_enabled,

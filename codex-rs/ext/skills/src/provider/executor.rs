@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use codex_exec_server::EnvironmentAccess;
 mod discovery_v2;
 
-use codex_exec_server::EnvironmentManager;
-use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_extension_api::SelectedPluginSnapshot;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::protocol::Product;
@@ -38,18 +35,13 @@ use crate::provider::SkillSearchRequest;
 /// Discovers and reads skills through the filesystem owned by an execution environment.
 #[derive(Clone, Debug)]
 pub struct ExecutorSkillProvider {
-    environment_manager: Arc<EnvironmentManager>,
     restriction_product: Option<Product>,
     disabled_skill_paths: HashMap<String, HashSet<PathUri>>,
 }
 
 impl ExecutorSkillProvider {
-    pub fn new_with_restriction_product(
-        environment_manager: Arc<EnvironmentManager>,
-        restriction_product: Option<Product>,
-    ) -> Self {
+    pub fn new_with_restriction_product(restriction_product: Option<Product>) -> Self {
         Self {
-            environment_manager,
             restriction_product,
             disabled_skill_paths: HashMap::new(),
         }
@@ -87,7 +79,7 @@ pub(crate) fn attribute_executor_plugins(
 }
 
 impl SkillProvider for ExecutorSkillProvider {
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list<'a>(&'a self, query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
         Box::pin(async move {
             if let Some(snapshots) = &query.executor_capability_discovery_v2 {
                 return Ok(self.list_from_discovery_v2(snapshots));
@@ -96,7 +88,9 @@ impl SkillProvider for ExecutorSkillProvider {
                 return Ok(self.list_from_discovery(&discovery));
             }
             let mut catalog = SkillCatalog::default();
-            for selected_root in query.executor_roots {
+            for bound in query.executor_roots {
+                let fs = bound.fs;
+                let selected_root = bound.root;
                 let selected_root_id = &selected_root.id;
                 let CapabilityRootLocation::Environment {
                     environment_id,
@@ -104,30 +98,8 @@ impl SkillProvider for ExecutorSkillProvider {
                 } = &selected_root.location;
                 let authority =
                     SkillAuthority::new(SkillSourceKind::Executor, selected_root_id.clone());
-                let file_system = query
-                    .resolved_executor_roots
-                    .iter()
-                    .find(|root| root.selected_root() == &selected_root)
-                    .map(|root| root.environment().get_filesystem())
-                    .or_else(|| {
-                        self.environment_manager
-                            .get_environment(environment_id)
-                            .map(|environment| environment.get_filesystem())
-                    });
-                let Some(file_system) = file_system else {
-                    catalog.warnings.push(format!(
-                        "Selected capability root `{selected_root_id}` references unavailable environment `{environment_id}`."
-                    ));
-                    continue;
-                };
-                // TODO(anp): Take this accessor from the selected turn root when discovery receives
-                // turn permissions; until then, preserve direct access through its existing filesystem.
-                let outcome = load_environment_skills_from_root(
-                    &FileSystemEnvironmentAccessor::unrestricted(&file_system),
-                    path,
-                    self.restriction_product,
-                )
-                .await;
+                let outcome =
+                    load_environment_skills_from_root(fs, path, self.restriction_product).await;
                 catalog.warnings.extend(outcome.warnings);
                 for skill in outcome.skills {
                     catalog.push_entry(catalog_entry_from_skill(

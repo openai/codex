@@ -1,7 +1,3 @@
-use codex_exec_server::FileSystemEnvironmentAccessor;
-use codex_exec_server::FileSystemSandboxContext;
-use codex_skills_extension::HostSkillsLoadInput;
-use core_test_support::test_codex::TestCodexHarness;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -19,9 +15,10 @@ use codex_core::WaitForEnvironmentToolConfig;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcessEvent;
+use codex_exec_server::FileSystemEnvironmentAccessor;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoveOptions;
@@ -73,6 +70,7 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::HostSkillProvider;
+use codex_skills_extension::HostSkillsLoadInput;
 use codex_skills_extension::SkillProvider;
 use codex_skills_extension::SkillProviderSource;
 use codex_skills_extension::SkillProviders;
@@ -110,6 +108,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
 use core_test_support::skip_if_target_windows;
 use core_test_support::skip_if_wine_exec;
+use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
@@ -155,7 +154,7 @@ struct PausedCatalogSkillProvider {
 }
 
 impl SkillProvider for PausedCatalogSkillProvider {
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list<'a>(&'a self, query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
         Box::pin(async move {
             if query.host_snapshot.is_none() {
                 return Ok(SkillCatalog::default());
@@ -214,7 +213,7 @@ impl ExtensionEventSink for ChannelEventSink {
 }
 
 impl SkillProvider for StaticSkillProvider {
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list<'a>(&'a self, query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
         // Keep thread context empty so the catalog is exercised through the
         // production turn-input path, where the host snapshot is available.
         let catalog = if query.host_snapshot.is_some() {
@@ -248,7 +247,7 @@ impl SkillProvider for StaticSkillProvider {
 }
 
 impl SkillProvider for CatalogSkillProvider {
-    fn list(&self, _query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+    fn list<'a>(&'a self, _query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
         Box::pin(async { Ok(self.catalog.clone()) })
     }
 
@@ -1600,10 +1599,7 @@ async fn opted_in_executor_provider_skips_host_discovery_but_injects_discovered_
     install_with_providers(
         &mut extensions,
         SkillProviders::new().with_executor_provider(Arc::new(
-            ExecutorSkillProvider::new_with_restriction_product(
-                Arc::new(EnvironmentManager::default_for_tests()),
-                /*restriction_product*/ None,
-            ),
+            ExecutorSkillProvider::new_with_restriction_product(/*restriction_product*/ None),
         )),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
@@ -1831,10 +1827,7 @@ async fn executor_only_provider_preserves_structured_repo_skill_without_discover
     install_with_providers(
         &mut extensions,
         SkillProviders::new().with_executor_provider(Arc::new(
-            ExecutorSkillProvider::new_with_restriction_product(
-                Arc::new(EnvironmentManager::default_for_tests()),
-                /*restriction_product*/ None,
-            ),
+            ExecutorSkillProvider::new_with_restriction_product(/*restriction_product*/ None),
         )),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
@@ -1982,10 +1975,7 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
     install_with_providers(
         &mut extensions,
         SkillProviders::new().with_executor_provider(Arc::new(
-            ExecutorSkillProvider::new_with_restriction_product(
-                Arc::new(EnvironmentManager::default_for_tests()),
-                /*restriction_product*/ None,
-            ),
+            ExecutorSkillProvider::new_with_restriction_product(/*restriction_product*/ None),
         )),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
@@ -2407,16 +2397,6 @@ async fn explicit_executor_skill_prompt_rejects_oversized_resource() -> Result<(
         )],
         warnings: Vec::new(),
     };
-    let environment_manager = match environment.exec_server_url() {
-        Some(url) => {
-            EnvironmentManager::create_for_tests(
-                Some(url.to_string()),
-                /*local_runtime_paths*/ None,
-            )
-            .await
-        }
-        None => EnvironmentManager::default_for_tests(),
-    };
     let (event_tx, event_rx) = std::sync::mpsc::channel();
     let mut extensions =
         ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
@@ -2426,7 +2406,6 @@ async fn explicit_executor_skill_prompt_rejects_oversized_resource() -> Result<(
             .with_executor_provider(Arc::new(CatalogSkillProvider { catalog }))
             .with_executor_provider(Arc::new(
                 ExecutorSkillProvider::new_with_restriction_product(
-                    Arc::new(environment_manager),
                     /*restriction_product*/ None,
                 ),
             )),
