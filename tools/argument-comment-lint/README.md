@@ -64,7 +64,7 @@ rustup toolchain install nightly-2026-08-20 \
   --component rustc-dev \
   --component rust-src
 rustup run nightly-2026-08-20 cargo install --locked \
-  cargo-dylint@6.1.0 dylint-link@6.1.0
+  cargo-dylint@6.3.0 dylint-link@6.3.0
 ```
 
 Run the lint crate tests:

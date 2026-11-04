@@ -200,14 +200,14 @@ def ensure_source_prerequisites(env: MutableMapping[str, str]) -> None:
         "argument-comment-lint source wrapper requires cargo-dylint and dylint-link.\n"
         "Install them with:\n"
         f"  rustup run {TOOLCHAIN_CHANNEL} cargo install --locked "
-        "cargo-dylint@6.1.0 dylint-link@6.1.0",
+        "cargo-dylint@6.3.0 dylint-link@6.3.0",
     )
     require_command(
         "dylint-link",
         "argument-comment-lint source wrapper requires cargo-dylint and dylint-link.\n"
         "Install them with:\n"
         f"  rustup run {TOOLCHAIN_CHANNEL} cargo install --locked "
-        "cargo-dylint@6.1.0 dylint-link@6.1.0",
+        "cargo-dylint@6.3.0 dylint-link@6.3.0",
     )
 
 

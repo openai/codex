@@ -25,8 +25,8 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 60
     env:
-      CARGO_DYLINT_VERSION: 6.1.0
-      DYLINT_LINK_VERSION: 6.1.0
+      CARGO_DYLINT_VERSION: 6.3.0
+      DYLINT_LINK_VERSION: 6.3.0
 
     strategy:
       fail-fast: false

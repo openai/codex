@@ -51,8 +51,8 @@ jobs:
     name: Argument comment lint package
     runs-on: ubuntu-24.04
     env:
-      CARGO_DYLINT_VERSION: 6.1.0
-      DYLINT_LINK_VERSION: 6.1.0
+      CARGO_DYLINT_VERSION: 6.3.0
+      DYLINT_LINK_VERSION: 6.3.0
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -85,7 +85,7 @@ jobs:
         run: python3 -m unittest discover -s tools/argument-comment-lint -p 'test_*.py'
       - name: Test argument comment lint package
         working-directory: tools/argument-comment-lint
-        run: bash ./test-with-clippy-compat.sh
+        run: cargo test --locked
         env:
           RUST_MIN_STACK: "8388608" # 8 MiB
 
