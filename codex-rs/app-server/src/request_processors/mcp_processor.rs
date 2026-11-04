@@ -13,7 +13,7 @@ use std::future::Future;
 
 use crate::thread_state::ThreadStateManager;
 
-const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const MCP_THREAD_ID_META_KEY: &str = "threadId";
 
 #[derive(Clone)]
 pub(crate) struct McpRequestProcessor {
@@ -611,6 +611,7 @@ impl McpRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let outgoing = Arc::clone(&self.outgoing);
         let McpResourceReadParams {
+            meta,
             thread_id,
             origin_call_id,
             server,
@@ -619,7 +620,24 @@ impl McpRequestProcessor {
             target,
         } = params;
         let mut resource_params = ReadResourceRequestParams::new(uri);
-        let mut meta = serde_json::Map::new();
+        let mut meta = meta.unwrap_or_default();
+        let is_codex_apps = server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+        let reserved_key = meta.iter().find_map(|(key, value)| match key.as_str() {
+            "x-codex-turn-metadata"
+            | MCP_THREAD_ID_META_KEY
+            | codex_mcp::MCP_CONNECTION_LEASE_META_KEY => Some(key.as_str()),
+            "connector_id" | "link_id" if is_codex_apps => Some(key.as_str()),
+            // This legacy routing hint can override an explicit app and account target.
+            "_codex_apps" if is_codex_apps && value.get("resource_uri").is_some() => {
+                Some("_codex_apps.resource_uri")
+            }
+            _ => None,
+        });
+        if let Some(key) = reserved_key {
+            return Err(invalid_request(format!(
+                "reserved resource read metadata key: {key}"
+            )));
+        }
         if let Some(connector_id) = connector_id {
             meta.insert(
                 "x-codex-turn-metadata".to_string(),
@@ -631,7 +649,7 @@ impl McpRequestProcessor {
         if origin_call_id.is_none()
             && let Some(target) = target
         {
-            if server != codex_mcp::CODEX_APPS_MCP_SERVER_NAME
+            if !is_codex_apps
                 || target.connector_id.trim().is_empty()
                 || target
                     .link_id
@@ -657,12 +675,11 @@ impl McpRequestProcessor {
             let request_id = request_id.clone();
 
             let task = async move {
-                let origin_call_id =
-                    origin_call_id.filter(|_| server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
+                let origin_call_id = origin_call_id.filter(|_| is_codex_apps);
                 let result = match origin_call_id.as_deref() {
                     Some(call_id) => {
                         thread
-                            .read_mcp_resource_for_call(call_id, &resource_params.uri)
+                            .read_mcp_resource_for_call(call_id, resource_params)
                             .await
                     }
                     None => thread.read_mcp_resource(&server, resource_params).await,
@@ -778,7 +795,7 @@ fn with_mcp_tool_call_thread_id_meta(
     match meta {
         Some(serde_json::Value::Object(mut map)) => {
             map.insert(
-                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                MCP_THREAD_ID_META_KEY.to_string(),
                 serde_json::Value::String(thread_id.to_string()),
             );
             Some(serde_json::Value::Object(map))
@@ -786,7 +803,7 @@ fn with_mcp_tool_call_thread_id_meta(
         None => {
             let mut map = serde_json::Map::new();
             map.insert(
-                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                MCP_THREAD_ID_META_KEY.to_string(),
                 serde_json::Value::String(thread_id.to_string()),
             );
             Some(serde_json::Value::Object(map))

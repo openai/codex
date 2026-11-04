@@ -10,6 +10,7 @@ pub use codex_rmcp_client::McpProtocolMode;
 pub use connection_manager::NetworkPolicyMetadata;
 pub use connection_manager::NetworkPolicyMetadataProvider;
 pub use connection_manager::tool_is_model_visible;
+pub use connection_pool::LEASE_META_KEY as MCP_CONNECTION_LEASE_META_KEY;
 pub use connection_pool::McpConnectionPool;
 pub use elicitation::ElicitationLifecycle;
 pub use elicitation::ElicitationReviewRequest;

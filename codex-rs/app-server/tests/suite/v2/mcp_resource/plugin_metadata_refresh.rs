@@ -247,6 +247,7 @@ async fn list_plugin_skills(
 async fn read_mcp_skill_resource(app_server: &mut TestAppServer, thread_id: &str) -> Result<()> {
     let request = app_server
         .send_mcp_resource_read_request(McpResourceReadParams {
+            meta: None,
             thread_id: Some(thread_id.to_string()),
             origin_call_id: None,
             server: "codex_apps".to_string(),

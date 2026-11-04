@@ -39,7 +39,8 @@ use crate::tool_catalog_cache::McpToolCatalogCacheContext;
 /// Opt-in resource lifecycle for negotiated stdio connections. Tool calls and resource reads
 /// carry a host-owned lease ID. Catalog requests remain independent of a particular lease.
 pub(crate) const LEASE_CAPABILITY: &str = "codex/connection-lease";
-pub(crate) const LEASE_META_KEY: &str = "codex/connectionLease";
+/// Request metadata set by the host when a connection lease is negotiated.
+pub const LEASE_META_KEY: &str = "codex/connectionLease";
 const LEASE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]

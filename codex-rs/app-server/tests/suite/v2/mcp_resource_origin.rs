@@ -122,6 +122,16 @@ async fn widget_reads_survive_history_modes_compaction_restarts_and_app_only_vis
         {
             let response = read_widget(&mut app_server, &thread.id, call_id).await?;
             assert_eq!(
+                calls
+                    .read_metadata
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .get("example/trace"),
+                Some(&json!(call_id))
+            );
+            assert_eq!(
                 response,
                 McpResourceReadResponse {
                     contents: vec![McpResourceContent::Text {
@@ -163,6 +173,7 @@ async fn widget_reads_survive_history_modes_compaction_restarts_and_app_only_vis
         ] {
             let request_id = app_server
                 .send_mcp_resource_read_request(McpResourceReadParams {
+                    meta: None,
                     thread_id,
                     origin_call_id: Some(call_id.to_string()),
                     server: "codex_apps".to_string(),
@@ -287,6 +298,10 @@ async fn read_widget(
         .request(|request_id| ClientRequest::McpResourceRead {
             request_id,
             params: McpResourceReadParams {
+                meta: Some(serde_json::Map::from_iter([(
+                    "example/trace".into(),
+                    json!(call_id),
+                )])),
                 thread_id: Some(thread_id.to_string()),
                 origin_call_id: Some(call_id.to_string()),
                 server: "codex_apps".to_string(),

@@ -112,6 +112,10 @@ pub struct ListMcpServerStatusResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpResourceReadParams {
+    /// Additional MCP request metadata. Account and turn routing keys are reserved.
+    #[serde(rename = "_meta")]
+    #[ts(rename = "_meta", optional = nullable)]
+    pub meta: Option<serde_json::Map<String, JsonValue>>,
     #[ts(optional = nullable)]
     pub thread_id: Option<String>,
     /// Originating MCP tool call used to select the resource's app.

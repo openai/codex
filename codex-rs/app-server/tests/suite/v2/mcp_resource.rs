@@ -121,6 +121,8 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
+#[path = "mcp_resource/caller_metadata.rs"]
+mod caller_metadata;
 #[path = "mcp_resource/plugin_metadata_refresh.rs"]
 mod plugin_metadata_refresh;
 
@@ -170,22 +172,28 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    for thread_id in [Some(thread.id), None] {
-        for target in [
-            None,
-            Some(McpResourceReadTarget {
-                connector_id: "calendar".to_string(),
-                link_id: Some("link_calendar".to_string()),
-            }),
-            Some(McpResourceReadTarget {
-                connector_id: "calendar".to_string(),
-                link_id: None,
-            }),
-        ] {
+    let metadata_value = json!({"sequence": [1, 2]});
+    let targets = [
+        None,
+        Some(McpResourceReadTarget {
+            connector_id: "calendar".to_string(),
+            link_id: Some("link_calendar".to_string()),
+        }),
+        Some(McpResourceReadTarget {
+            connector_id: "calendar".to_string(),
+            link_id: None,
+        }),
+    ];
+    for thread_id in [Some(thread.id.clone()), None] {
+        for target in &targets {
             let read_response: McpResourceReadResponse = mcp
                 .request(|request_id| ClientRequest::McpResourceRead {
                     request_id,
                     params: McpResourceReadParams {
+                        meta: Some(serde_json::Map::from_iter([(
+                            "example/trace".into(),
+                            metadata_value.clone(),
+                        )])),
                         thread_id: thread_id.clone(),
                         origin_call_id: None,
                         server: "codex_apps".to_string(),
@@ -203,12 +211,13 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
             let metadata = metadata
                 .last()
                 .expect("resource read reached the MCP server");
+            assert_eq!(metadata.get("example/trace"), Some(&metadata_value));
             assert_eq!(
                 (
                     metadata.get("connector_id").cloned(),
                     metadata.get("link_id").cloned()
                 ),
-                match &target {
+                match target {
                     Some(target) => (
                         Some(json!(target.connector_id)),
                         Some(json!(target.link_id)),
@@ -218,6 +227,40 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
             );
         }
     }
+
+    let reads_before_invalid_requests = apps_server_calls.read_metadata.lock().unwrap().len();
+    let other_route = json!({"resource_uri": "/calendar/link_other/events"});
+    let [_, pinned, no_auth] = targets;
+    for (key, value, origin_call_id, target) in [
+        ("connector_id", json!("spoofed"), None, None),
+        ("link_id", json!("spoofed"), Some("call".into()), None),
+        ("_codex_apps", other_route.clone(), None, pinned),
+        ("_codex_apps", other_route, None, no_auth),
+    ] {
+        let request_id = mcp
+            .send_mcp_resource_read_request(McpResourceReadParams {
+                thread_id: Some(thread.id.clone()),
+                origin_call_id,
+                meta: Some(serde_json::Map::from_iter([(key.into(), value)])),
+                server: "codex_apps".into(),
+                uri: TEST_RESOURCE_URI.into(),
+                connector_id: None,
+                target,
+            })
+            .await?;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        assert_eq!(error.error.code, -32600);
+        assert!(error.error.message.contains(key));
+    }
+
+    assert_eq!(
+        apps_server_calls.read_metadata.lock().unwrap().len(),
+        reads_before_invalid_requests
+    );
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
@@ -271,6 +314,7 @@ async fn mcp_resource_read_preserves_protocol_errors(protocol: ProtocolVersion) 
         for thread_id in [Some(thread.id.clone()), None] {
             let request_id = mcp
                 .send_mcp_resource_read_request(McpResourceReadParams {
+                    meta: None,
                     thread_id,
                     origin_call_id: None,
                     server: server.to_string(),
@@ -487,6 +531,7 @@ apps = true
         .request(|request_id| ClientRequest::McpResourceRead {
             request_id,
             params: McpResourceReadParams {
+                meta: None,
                 thread_id: None,
                 origin_call_id: None,
                 server: "codex_apps".to_string(),
@@ -501,6 +546,7 @@ apps = true
         .request(|request_id| ClientRequest::McpResourceRead {
             request_id,
             params: McpResourceReadParams {
+                meta: None,
                 thread_id: None,
                 origin_call_id: None,
                 server: "codex_apps".to_string(),
@@ -543,6 +589,7 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
         .request(ClientRequest::McpResourceRead {
             request_id: RequestId::Integer(1),
             params: McpResourceReadParams {
+                meta: None,
                 thread_id: Some("00000000-0000-4000-8000-000000000000".to_string()),
                 origin_call_id: None,
                 server: "codex_apps".to_string(),
@@ -670,6 +717,7 @@ async fn metadata_and_mcp_requests_complete_while_unrelated_resume_loads_config(
                 sender.request(ClientRequest::McpResourceRead {
                     request_id: RequestId::Integer(7),
                     params: McpResourceReadParams {
+                        meta: None,
                         thread_id: Some(thread.id.clone()),
                         origin_call_id: None,
                         server: "resource_server".to_string(),
@@ -1403,7 +1451,7 @@ fn expected_resource_read_response() -> McpResourceReadResponse {
 
 #[derive(Debug, Default)]
 pub(super) struct ResourceAppsMcpCalls {
-    read_metadata: Mutex<Vec<serde_json::Map<String, serde_json::Value>>>,
+    pub(super) read_metadata: Mutex<Vec<serde_json::Map<String, serde_json::Value>>>,
     list_resources: AtomicUsize,
     main_prompt_reads: AtomicUsize,
     reference_reads: AtomicUsize,

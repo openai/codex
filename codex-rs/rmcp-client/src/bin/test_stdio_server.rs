@@ -697,8 +697,16 @@ impl ServerHandler for TestToolServer {
     async fn read_resource(
         &self,
         ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, McpError> {
+        if uri == "test://codex/request-metadata" {
+            let metadata = serde_json::Value::Object(context.meta.0.0);
+            return Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                metadata.to_string(),
+                uri,
+            )])
+            .into());
+        }
         if uri == MEMO_URI {
             Ok(
                 ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
