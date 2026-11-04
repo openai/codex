@@ -10134,6 +10134,27 @@ job_max_runtime_seconds = 900
 }
 
 #[tokio::test]
+async fn legacy_multi_agent_opt_out_survives_a_session_override() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        "[features]\nmulti_agent = false\n",
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .cli_overrides(vec![("features.multi_agent".to_string(), true.into())])
+        .build()
+        .await?;
+    assert!(config.features.enabled(Feature::Collab));
+    assert_eq!(
+        legacy_multi_agent_disabled_sources(&config.config_layer_stack),
+        ["user"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_agent_controls() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {

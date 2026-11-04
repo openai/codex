@@ -696,11 +696,17 @@ impl SessionTelemetry {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
         mcp_servers: Vec<&str>,
+        legacy_multi_agent_disabled_sources: &[&str],
     ) {
         log_and_trace_event!(
             self,
             common: {
                 event.name = "codex.conversation_starts",
+                config.legacy_multi_agent_disabled_sources = if legacy_multi_agent_disabled_sources.is_empty() {
+                    "none".to_string()
+                } else {
+                    legacy_multi_agent_disabled_sources.join(",")
+                },
                 provider_name = %provider_name,
                 auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
                 auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,

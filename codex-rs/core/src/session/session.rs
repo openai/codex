@@ -1512,6 +1512,7 @@ impl Session {
                     .permissions
                     .legacy_sandbox_policy(session_configuration.cwd().as_path()),
                 mcp_server_names.iter().map(String::as_str).collect(),
+                &crate::config::legacy_multi_agent_disabled_sources(&config.config_layer_stack),
             );
 
             let default_shell = session_configuration

@@ -201,6 +201,7 @@ use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
 pub(crate) use metrics::emit_session_start_metrics;
+pub(crate) use metrics::legacy_multi_agent_disabled_sources;
 pub use network_config::EnvironmentNetworkConfigError;
 pub use network_config::NetworkConfigInputs;
 pub use network_config::PreparedNetworkConfig;
