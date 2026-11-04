@@ -151,6 +151,7 @@ impl PreparedTurnInputSettings {
         let TurnStartOptions {
             turn_trigger,
             final_output_json_schema,
+            direct_only_tool_namespaces,
             service_tier,
             prompt_cache_ttl,
             parent_turn_id,
@@ -168,6 +169,7 @@ impl PreparedTurnInputSettings {
         updates.service_tier_for_turn = service_tier;
 
         let options = NewTurnContextOptions {
+            direct_only_tool_namespaces,
             final_output_json_schema,
             prompt_cache_ttl,
             cyber_access_program,

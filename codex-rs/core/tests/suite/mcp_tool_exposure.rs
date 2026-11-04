@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_config::Constrained;
 use codex_core::EnvironmentConfig;
 use codex_core::TurnInputRequest;
+use codex_core::TurnStartOptions;
 use codex_core::config::Config;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_extension_api::ExtensionFuture;
@@ -1083,6 +1084,106 @@ async fn code_mode_only_exposes_direct_model_only_mcp_namespaces() -> Result<()>
         "direct-model-only MCP namespace should not be available through exec: {body}"
     );
 
+    Ok(())
+}
+
+#[test_case::test_case(false; "responses")]
+#[test_case::test_case(true; "responses_lite")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_refreshes_direct_tool_routing_between_turns(
+    use_responses_lite: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps = AppsTestServer::mount_searchable(&server).await?;
+    let calendar = vec![SEARCH_CALENDAR_NAMESPACE.to_owned()];
+    let cases = [
+        (None, false),
+        (Some(calendar.clone()), true),
+        (Some(Vec::new()), false),
+        (Some(calendar), true),
+        (None, false),
+    ];
+    let responses = mount_sse_sequence(&server, completed_response_sequence(cases.len())).await;
+    let test = search_capable_apps_builder(apps.chatgpt_base_url)
+        .with_model_info_override("gpt-5.5", move |model| {
+            model.use_responses_lite = use_responses_lite
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeOnly)
+                .expect("enable code mode only");
+            config
+                .features
+                .enable(Feature::IncrementalTools)
+                .expect("enable incremental tools");
+        })
+        .build(&server)
+        .await?;
+
+    let mut previous_input = Vec::new();
+    for (index, (direct_only_tool_namespaces, expect_direct)) in cases.into_iter().enumerate() {
+        test.codex
+            .start_or_steer_turn(
+                TurnInputRequest::user_input(vec![UserInput::Text {
+                    text: "inspect calendar tools".into(),
+                    text_elements: Vec::new(),
+                }])
+                .on_start(TurnStartOptions {
+                    direct_only_tool_namespaces,
+                    ..Default::default()
+                }),
+            )
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        let requests = responses.requests();
+        assert_eq!(requests.len(), index + 1);
+        let body = requests[index].body_json();
+        let declares_calendar = |item: &Value| {
+            namespace_child_tool(item, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_CREATE_TOOL)
+                .is_some()
+        };
+        if use_responses_lite {
+            let input = body["input"].as_array().expect("Responses Lite input");
+            assert!(
+                input.starts_with(&previous_input),
+                "history changed on turn {index}"
+            );
+            let appended = &input[previous_input.len()..];
+            assert_eq!(
+                appended
+                    .iter()
+                    .filter(|item| item["type"] == "additional_tools")
+                    .any(declares_calendar),
+                expect_direct,
+                "calendar declaration on turn {index}",
+            );
+            if index > 0 && !expect_direct {
+                let removed = format!("- {SEARCH_CALENDAR_NAMESPACE}");
+                assert!(
+                    appended.iter().any(|item| {
+                        item["role"] == "developer"
+                            && item["content"][0]["text"]
+                                .as_str()
+                                .is_some_and(|text| text.lines().any(|line| line == removed))
+                    }),
+                    "missing calendar removal on turn {index}"
+                );
+            }
+            previous_input.clone_from(input);
+        } else {
+            assert_eq!(
+                declares_calendar(&body),
+                expect_direct,
+                "calendar exposure on turn {index}"
+            );
+        }
+    }
     Ok(())
 }
 

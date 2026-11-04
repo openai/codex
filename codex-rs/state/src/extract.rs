@@ -578,6 +578,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 root_turn_id: None,
+                direct_only_tool_namespaces: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(
                     std::env::current_dir()
@@ -622,6 +623,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 root_turn_id: None,
+                direct_only_tool_namespaces: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(
                     std::env::current_dir()
@@ -666,6 +668,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 root_turn_id: None,
+                direct_only_tool_namespaces: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(&fallback_cwd))
                     .expect("absolute fallback cwd"),
@@ -699,6 +702,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 root_turn_id: None,
+                direct_only_tool_namespaces: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(
                     std::env::current_dir()

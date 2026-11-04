@@ -241,6 +241,9 @@ pub struct TurnStartOptions {
     /// Structured-output schema for a new turn. When steering, Core rejects
     /// the input if the active turn uses a different schema.
     pub final_output_json_schema: Option<Value>,
+    /// Direct-only tool namespaces for a new turn. Omission inherits the thread's
+    /// configuration. An empty list clears it for this turn. Ignored when steering.
+    pub direct_only_tool_namespaces: Option<Vec<String>>,
     /// Service tier for a new turn, without changing the thread's preference.
     pub service_tier: Option<String>,
     /// Lifetime requested for new Responses prompt cache entries during this turn.

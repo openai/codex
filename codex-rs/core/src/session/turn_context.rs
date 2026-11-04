@@ -335,6 +335,7 @@ impl std::fmt::Debug for TurnEnvironment {
 /// Request options for one turn, separate from persistent thread settings.
 #[derive(Default)]
 pub(crate) struct NewTurnContextOptions {
+    pub(crate) direct_only_tool_namespaces: Option<Vec<String>>,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) prompt_cache_ttl: Option<crate::PromptCacheTtl>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
@@ -351,6 +352,8 @@ pub struct TurnContext {
     /// Turn-scoped configuration. Read step-specific settings such as service tier and
     /// approvals reviewer from the corresponding `StepContext` instead.
     pub config: Arc<Config>,
+    /// Thread defaults displaced by an explicit routing override for this turn.
+    pub(crate) overridden_direct_only_tool_namespaces: Option<Vec<String>>,
     /// Preferences captured before token-budget defaults from the turn's initial model.
     pub(crate) configured_token_budget: Option<TokenBudgetConfig>,
     /// Captured once so later steps do not re-read config layers to detect user preferences.
@@ -451,6 +454,7 @@ impl TurnContext {
             trace_id: current_span_trace_id(),
             realtime_active: self.realtime_active,
             code_mode_available: self.code_mode_available,
+            overridden_direct_only_tool_namespaces: None,
             configured_token_budget: config.token_budget.clone(),
             use_model_token_budget_defaults: config.features.enabled(Feature::TokenBudget)
                 && !has_explicit_settings(&config),
@@ -894,6 +898,9 @@ impl TurnContext {
             realtime_active: self.realtime_active,
             code_mode_available: self.code_mode_available,
             config: Arc::new(config),
+            overridden_direct_only_tool_namespaces: self
+                .overridden_direct_only_tool_namespaces
+                .clone(),
             configured_token_budget: self.configured_token_budget.clone(),
             use_model_token_budget_defaults: self.use_model_token_budget_defaults,
             auth_manager: self.auth_manager.clone(),
@@ -962,6 +969,10 @@ impl TurnContext {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             root_turn_id: self.turn_metadata_state.root_turn_id(),
+            direct_only_tool_namespaces: self
+                .overridden_direct_only_tool_namespaces
+                .as_ref()
+                .map(|_| self.config.code_mode.direct_only_tool_namespaces.clone()),
             disabled_plugin_ids: Some(self.disabled_plugin_ids.clone()),
             cwd,
             approval_policy: self.approval_policy(),
@@ -1180,6 +1191,7 @@ impl Session {
             realtime_active: false,
             code_mode_available: true,
             config: per_turn_config,
+            overridden_direct_only_tool_namespaces: None,
             configured_token_budget,
             use_model_token_budget_defaults,
             auth_manager,
@@ -1345,8 +1357,15 @@ impl Session {
         git_enrichment_policy: GitEnrichmentPolicy,
     ) -> Arc<TurnContext> {
         let primary_turn_environment = turn_environments.primary();
-        let per_turn_config =
+        let mut per_turn_config =
             self.build_per_turn_config(&session_configuration, turn_environments.local_selection());
+        let overridden_direct_only_tool_namespaces =
+            options.direct_only_tool_namespaces.map(|namespaces| {
+                std::mem::replace(
+                    &mut per_turn_config.code_mode.direct_only_tool_namespaces,
+                    namespaces,
+                )
+            });
         // Legacy turn consumers still refer to the primary executor's repository.
         let cwd = primary_turn_environment
             .and_then(|environment| environment.cwd().to_abs_path().ok())
@@ -1475,6 +1494,8 @@ impl Session {
         if let Some(discovery) = skill_discovery {
             turn_context.extension_data.insert(discovery);
         }
+        turn_context.overridden_direct_only_tool_namespaces =
+            overridden_direct_only_tool_namespaces;
         turn_context.code_mode_available = self.services.code_mode_service.is_available();
         turn_context.extension_data.insert(trusted_plugin_roots);
         turn_context.active_host_plugin_identities = Some(

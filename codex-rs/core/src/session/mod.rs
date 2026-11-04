@@ -1950,6 +1950,23 @@ impl Session {
         } = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
+        // An automatic turn can have a persisted routing override without establishing the
+        // user-turn context baseline. Recover its own latest context by surviving turn ID.
+        let restored_turn_routing = turn_attribution.as_ref().and_then(|turn| {
+            rollout_items
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::TurnContext(context)
+                        if context.turn_id.as_deref() == Some(turn.turn_id.as_str()) =>
+                    {
+                        Some(context)
+                    }
+                    _ => None,
+                })
+                .and_then(|context| context.direct_only_tool_namespaces.clone())
+                .map(|namespaces| (turn.turn_id.clone(), namespaces))
+        });
         // Keep the recorded rollout unchanged. Prepare its reconstructed history before
         // installing it, so legacy media is processed once for this resume or fork and
         // will be processed again if the rollout is reconstructed in a future session.
@@ -2015,6 +2032,7 @@ impl Session {
             );
             state.last_started_turn_id = last_started_turn_id;
             state.turn_attribution = turn_attribution;
+            state.restored_turn_routing = restored_turn_routing;
             if let Some(world_state) = world_state_baseline {
                 state.history.set_world_state_baseline(world_state);
             }

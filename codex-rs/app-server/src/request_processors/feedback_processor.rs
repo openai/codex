@@ -850,6 +850,7 @@ mod tests {
                 item: RolloutItem::TurnContext(TurnContextItem {
                     turn_id: Some((*turn_id).to_string()),
                     root_turn_id: None,
+                    direct_only_tool_namespaces: None,
                     disabled_plugin_ids: None,
                     cwd: AbsolutePathBuf::from_absolute_path(tempdir.path())
                         .expect("absolute feedback rollout directory"),

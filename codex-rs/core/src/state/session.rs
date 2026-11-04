@@ -96,6 +96,8 @@ pub(crate) struct SessionState {
     pub(crate) last_started_turn_id: Option<String>,
     /// Latest regular turn, retained across completion, settings changes, and compaction.
     pub(crate) turn_attribution: Option<TurnAttribution>,
+    /// Explicit namespaces from the recovered turn's own rollout record.
+    pub(crate) restored_turn_routing: Option<(String, Vec<String>)>,
     /// Runtime accounting state for the active auto-compaction window.
     auto_compact_window: AutoCompactWindow,
     context_window_id_generator: ContextWindowIdGenerator,
@@ -150,6 +152,7 @@ impl SessionState {
             previous_turn_settings: None,
             last_started_turn_id: None,
             turn_attribution: None,
+            restored_turn_routing: None,
             auto_compact_window: AutoCompactWindow::new_with_ids(auto_compact_window_ids),
             context_window_id_generator,
             async_compaction: crate::session::async_compaction::AsyncCompactionState::default(),
@@ -223,6 +226,7 @@ impl SessionState {
                 .replace_compacted(items, reviewer_compaction_hash.as_deref()),
             HistoryReplacement::Reset => {
                 self.turn_attribution = None;
+                self.restored_turn_routing = None;
                 self.history.replace_annotated(items);
                 true
             }
@@ -286,18 +290,25 @@ impl SessionState {
     }
 
     pub(crate) fn recovered_turn_start_options(&self, turn_id: &str) -> TurnStartOptions {
-        self.turn_attribution
+        let mut options = self
+            .turn_attribution
             .as_ref()
             .filter(|attribution| attribution.turn_id == turn_id)
             .map(TurnAttribution::start_options)
-            .unwrap_or_else(|| TurnStartOptions {
-                // Older rollouts only persisted the root on the model-context record.
-                root_turn_id: self
-                    .reference_context_item()
-                    .filter(|context| context.turn_id.as_deref() == Some(turn_id))
-                    .and_then(|context| context.root_turn_id),
-                ..Default::default()
-            })
+            .unwrap_or_default();
+        if let Some(context) = self
+            .reference_context_item()
+            .filter(|context| context.turn_id.as_deref() == Some(turn_id))
+        {
+            // Older rollouts only persisted the root on the model-context record.
+            options.root_turn_id = options.root_turn_id.or(context.root_turn_id);
+            options.direct_only_tool_namespaces = context.direct_only_tool_namespaces;
+        } else if let Some((id, namespaces)) = &self.restored_turn_routing
+            && id == turn_id
+        {
+            options.direct_only_tool_namespaces = Some(namespaces.clone());
+        }
+        options
     }
 
     // Token/rate limit helpers
