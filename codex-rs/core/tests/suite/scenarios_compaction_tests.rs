@@ -1,7 +1,7 @@
-//! Snapshots remote `/compact`, its persisted replacement, and the next user turn.
+//! Snapshots pending mail across remote compaction, restart, and normal inference.
 
 use super::*;
-use codex_history::RolloutItem;
+use core_test_support::responses::strip_metadata_from_json;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -17,75 +17,91 @@ async fn remote_slash_compact_preserves_context_across_windows() -> Result<()> {
                 ev_completed("plan-response"),
             ]),
             sse(vec![
-                json!({
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "compaction",
-                        "encrypted_content": "REMOTE_SLASH_COMPACT_CHECKPOINT",
-                    },
-                }),
+                compaction_output("REMOTE_SLASH_COMPACT_CHECKPOINT"),
                 ev_completed("compact-response"),
+            ]),
+            sse(vec![
+                compaction_output("RECOMPACTED_CHECKPOINT"),
+                ev_completed("recompact-response"),
             ]),
             sse(vec![
                 ev_assistant_message("continue", "Start by validating the release candidate."),
                 ev_completed("continue-response"),
             ]),
+            sse(vec![
+                compaction_output("AFTER_MAIL_WAS_SAMPLED"),
+                ev_completed("sampled-compact-response"),
+            ]),
         ],
     )
     .await;
-    let test = test_codex()
+    let configure = |config: &mut Config| {
+        configure_scenario_catalog(config);
+        config.workspace_roots = vec![config.cwd.clone()];
+        config.model_auto_compact_token_limit = Some(i64::MAX);
+    };
+    let mut builder = test_codex()
         .with_model("gpt-6-astra")
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            configure_scenario_catalog(config);
-            config.workspace_roots = vec![config.cwd.clone()];
-        })
-        .build_with_auto_env(&server)
-        .await?;
+        .with_config(configure);
+    let mut test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn("Plan the release.").await?;
+    let mail = json!({
+        "type": "agent_message", "id": "agent_pending-result",
+        "author": "/root/worker", "recipient": "/root",
+        "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER\nThe worker found a release blocker."}],
+    });
+    test.codex
+        .inject_response_items(vec![serde_json::from_value(mail.clone())?])
+        .await?;
+    for compaction in 0..2 {
+        test.codex.submit(Op::Compact).await?;
+        wait_for_event(&test.codex, |event| {
+            assert!(!matches!(event, EventMsg::Error(_)), "{event:?}");
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        if compaction == 0 {
+            builder = builder.with_model("gpt-6-astra").with_config(configure);
+            test = builder.restart_with_auto_env(&server, &test).await?;
+        }
+    }
+
+    test.submit_turn("Continue with the first step.").await?;
     test.codex.submit(Op::Compact).await?;
     wait_for_event(&test.codex, |event| {
-        assert!(!matches!(event, EventMsg::Error(_)), "{event:?}");
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-
-    // Observe the checkpoint before a later turn can initialize or update its context.
-    test.codex.flush_rollout().await?;
-    let rollout = fs::read_to_string(test.codex.rollout_path().expect("rollout path"))?;
-    let replacement = rollout
-        .lines()
-        .map(codex_rollout::parse_rollout_line)
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .find_map(|line| match line.item {
-            RolloutItem::Compacted(compacted) => compacted.replacement_history,
-            _ => None,
-        })
-        .expect("persisted compaction replacement")
-        .into_iter()
-        .map(|envelope| serde_json::to_value(envelope.item))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    test.submit_turn("Continue with the first step.").await?;
+    let history = test.codex.conversation_history_snapshot().await;
+    assert!(
+        !history
+            .items()
+            .any(|item| matches!(item, ResponseItem::AgentMessage { .. }))
+    );
     let requests = mock.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 5);
     assert_eq!(requests[1].inputs_of_type("compaction_trigger").len(), 1);
     assert_eq!(
-        requests[2].inputs_of_type("compaction")[0]["encrypted_content"],
-        "REMOTE_SLASH_COMPACT_CHECKPOINT"
+        requests[3].inputs_of_type("compaction")[0]["encrypted_content"],
+        "RECOMPACTED_CHECKPOINT"
+    );
+    assert_eq!(
+        strip_metadata_from_json(json!(requests[3].inputs_of_type("agent_message"))),
+        json!([mail]),
     );
 
     insta::assert_snapshot!(
         "remote_slash_compact",
         context_snapshot::format_context_snapshot(
-            "A user invokes /compact through remote compaction, persists the replacement history, then continues in the new window.",
+            "Pending mail survives repeated /compact and cold resume, then normal inference acknowledges it for subsequent compaction.",
             &[
                 SnapshotEntry::captured(&requests[0]).labeled("Before /compact"),
                 SnapshotEntry::captured(&requests[1]).labeled("Remote /compact request"),
-                SnapshotEntry::items(&replacement).labeled("Stored replacement before next turn"),
-                SnapshotEntry::captured(&requests[2]).labeled("First turn after /compact"),
+                SnapshotEntry::captured(&requests[2]).labeled("Repeated /compact after resume"),
+                SnapshotEntry::captured(&requests[3]).labeled("First turn after /compact"),
+                SnapshotEntry::captured(&requests[4]).labeled("Compaction after mail was sampled"),
             ],
             &ContextSnapshotOptions::default().include_request_settings(),
         )

@@ -43,7 +43,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             ..Default::default()
         }),
     };
-    let replacement_history = vec![
+    let mut replacement_history = vec![
         ResponseItemEnvelope {
             item: summary_item.clone(),
             metadata: Some(CodexHarnessMetadata::default()),
@@ -82,6 +82,11 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
         .await;
 
+    for (index, envelope) in replacement_history.iter_mut().enumerate() {
+        let metadata = envelope.metadata.get_or_insert_default();
+        metadata.history_sequence = Some(index as u64 + 1);
+        metadata.sampled_through_sequence = Some(0);
+    }
     assert_eq!(reconstructed.history, replacement_history);
     assert_eq!(42, reconstructed.window_number);
     assert_eq!(Some(first_window_id), reconstructed.first_window_id);

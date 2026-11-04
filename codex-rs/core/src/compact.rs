@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::compact_pending_input::is_retained_pending_mail;
 use crate::context::BaseInstructionsFragment;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
@@ -413,6 +414,34 @@ async fn run_compact_task_inner_impl(
         // This replacement history skips `record_conversation_items`; only the appended summary
         // belongs to this compaction turn.
         summary_item.set_turn_id_if_missing(&turn_context.sub_id);
+    }
+    // Use the final compactor input, so an overflow retry cannot restore discarded input.
+    let pending_sequence =
+        crate::compact_pending_input::pending_mail_sequence(history.annotated_items());
+    if let Some(first) = pending_sequence {
+        let summary = new_history
+            .pop()
+            .ok_or_else(|| CodexErr::Fatal("local compaction summary is missing".to_string()))?;
+        new_history.extend(
+            history
+                .annotated_items()
+                .iter()
+                .filter(|envelope| is_retained_pending_mail(envelope, first))
+                .cloned(),
+        );
+        new_history.sort_by_key(|envelope| {
+            envelope
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.history_sequence)
+        });
+        new_history = crate::compact_remote_v2::truncate_retained_messages_for_remote_compaction(
+            new_history,
+            COMPACT_USER_MESSAGE_MAX_TOKENS,
+            &history.file_audio_durations,
+        );
+        new_history =
+            crate::compact_pending_input::insert_summary(new_history, summary, pending_sequence);
     }
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
 

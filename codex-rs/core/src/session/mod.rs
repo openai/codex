@@ -4461,6 +4461,7 @@ impl Session {
         }
         let (executor_hook_sources, mcp, tool_router, extension_data) = prepared_tools??;
         Ok(Arc::new(StepContext {
+            sampled_through_sequence: None,
             serving_assessment: None,
             preempt: turn_context
                 .config
@@ -4773,6 +4774,7 @@ impl Session {
                         .cloned(),
                 );
             }
+            state.history.checkpoint_sampling(&mut items);
             let replacement_history = items.clone();
             state
                 .history

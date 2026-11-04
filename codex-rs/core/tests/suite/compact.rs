@@ -4595,6 +4595,16 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let mail = json!({
+        "type": "agent_message", "id": "agent_pending-result",
+        "author": "/root/worker", "recipient": "/root",
+        "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER\nThe worker found a release blocker."}],
+    });
+    codex
+        .inject_response_items(vec![serde_json::from_value(mail.clone()).unwrap()])
+        .await
+        .unwrap();
+
     codex.submit(Op::Compact).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -4620,6 +4630,11 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = responses_mock.requests();
+    assert_eq!(
+        responses::strip_metadata_from_json(json!(requests[2].inputs_of_type("agent_message"))),
+        json!([mail]),
+    );
+    assert!(requests[4].inputs_of_type("agent_message").is_empty());
     assert_eq!(
         requests.len(),
         5,

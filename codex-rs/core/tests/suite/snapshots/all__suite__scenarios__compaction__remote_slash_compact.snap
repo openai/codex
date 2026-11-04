@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios_compaction_tests.rs
-expression: "context_snapshot::format_context_snapshot(\"A user invokes /compact through remote compaction, persists the replacement history, then continues in the new window.\",\n&[SnapshotEntry::captured(&requests[0]).labeled(\"Before /compact\"),\nSnapshotEntry::captured(&requests[1]).labeled(\"Remote /compact request\"),\nSnapshotEntry::items(&replacement).labeled(\"Stored replacement before next turn\"),\nSnapshotEntry::captured(&requests[2]).labeled(\"First turn after /compact\"),],\n&ContextSnapshotOptions::default().include_request_settings(),)"
+expression: "context_snapshot::format_context_snapshot(\"Pending mail survives repeated /compact and cold resume, then normal inference acknowledges it for subsequent compaction.\",\n&[SnapshotEntry::captured(&requests[0]).labeled(\"Before /compact\"),\nSnapshotEntry::captured(&requests[1]).labeled(\"Remote /compact request\"),\nSnapshotEntry::captured(&requests[2]).labeled(\"Repeated /compact after resume\"),\nSnapshotEntry::captured(&requests[3]).labeled(\"First turn after /compact\"),\nSnapshotEntry::captured(&requests[4]).labeled(\"Compaction after mail was sampled\"),],\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
-Scenario: A user invokes /compact through remote compaction, persists the replacement history, then continues in the new window.
+Scenario: Pending mail survives repeated /compact and cold resume, then normal inference acknowledges it for subsequent compaction.
 
 ## Window 1
 Settings:
@@ -104,11 +104,12 @@ Settings:
 -- request 2 (compaction; Remote /compact request) --
 08:message/assistant:
     The release plan has three steps.
-09:compaction_trigger
+09:agent_message
+10:compaction_trigger
 
 ## Window 2 (after request 2: input diverged at item 07)
-Settings: unavailable (items only)
--- request 3 (items; Stored replacement before next turn) --
+Settings: same as window 1
+-- request 3 (compaction; Repeated /compact after resume) --
 00:additional_tools/developer (3; hash=e019c949fc483f83):
         - namespace/functions; hash=03340277aa23936f
           - custom/exec
@@ -194,8 +195,10 @@ Settings: unavailable (items only)
 06:message/user:
     Plan the release.
 07:compaction:encrypted=true; chars=31; hash=8255caf138edede8
+08:agent_message
+09:compaction_trigger
 
-## Window 3 (after request 3)
+## Window 3 (after request 3: input diverged at item 02)
 Settings: same as window 1
 -- request 4 (turn; First turn after /compact) --
 00:additional_tools/developer (3; hash=e019c949fc483f83):
@@ -233,8 +236,21 @@ Settings: same as window 1
 
 02:message/developer[2]:
     [01] <permissions instructions>
-        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
-        Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+        NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+        ### Examples
+        Good examples of prefixes:
+        - ["npm", "run", "dev"]
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
         </permissions instructions>
     [02] <collaboration_mode># Collaboration Mode: Default
 
@@ -274,14 +290,30 @@ Settings: same as window 1
     <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
 05:message/user:
     <environment_context>
-      <cwd><CWD></cwd>
+      <cwd><CWD 2></cwd>
       <shell><HOST_SHELL></shell>
       <current_date><CURRENT_DATE></current_date>
       <timezone><HOST_TIMEZONE></timezone>
-      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
+      <filesystem><workspace_roots><root><CWD 2></root></workspace_roots><permission_profile type="managed">...ntry></file_system></permission_profile></filesystem> [hash=8fc9d186c1133657]
     </environment_context>
 06:message/user:
     Plan the release.
-07:compaction:encrypted=true; chars=31; hash=8255caf138edede8
-08:message/user:
+07:compaction:encrypted=true; chars=22; hash=5180312a53382d23
+08:agent_message
+09:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
+    Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
+    </permissions instructions>
+10:message/user:
+    <environment_context>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD 2></root></workspace_roots><permission_profile type="disabled"...e="unrestricted" /></permission_profile></filesystem> [hash=46e2a5c52f0891de]
+    </environment_context>
+11:message/user:
     Continue with the first step.
+-- request 5 (compaction; Compaction after mail was sampled) --
+12:message/assistant:
+    Start by validating the release candidate.
+13:compaction_trigger

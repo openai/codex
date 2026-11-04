@@ -61,6 +61,30 @@ const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
 const TEST_WAV_SAMPLE_RATE: u32 = 8_000;
 
+#[test]
+fn sampling_checkpoint_excludes_input_appended_during_request() {
+    let mut history = create_history_with_items(vec![user_msg("included in the request")]);
+    let request_sequence = history.input_sequence();
+    history.record_items(
+        [&user_msg("arrived while sampling")],
+        TruncationPolicy::Tokens(10_000),
+    );
+    history.record_annotated_items(
+        &mut [ResponseItemEnvelope {
+            item: assistant_msg("response to the earlier request"),
+            metadata: Some(CodexHarnessMetadata {
+                sampled_through_sequence: Some(request_sequence),
+                ..Default::default()
+            }),
+        }],
+        TruncationPolicy::Tokens(10_000),
+    );
+    assert_eq!(
+        crate::context_manager::sampled_through(history.annotated_items()),
+        request_sequence,
+    );
+}
+
 fn unknown_content_metadata() -> InternalChatMessageMetadataPassthrough {
     InternalChatMessageMetadataPassthrough {
         content_item_kinds: Some(vec![ContentItemKind("unknown".to_string())]),
@@ -926,6 +950,8 @@ fn retains_only_harness_authored_configuration_updates() {
     let trusted = ResponseItemEnvelope {
         item: update.clone(),
         metadata: Some(CodexHarnessMetadata {
+            history_sequence: Some(4),
+            sampled_through_sequence: Some(0),
             harness_authored_configuration: true,
             ..Default::default()
         }),
@@ -991,6 +1017,7 @@ fn drop_last_n_user_turns_removes_post_input_configuration_update_with_its_turn(
         ResponseItemEnvelope::new(assistant_msg("removed answer")),
     ]);
     history.record_annotated_items(&mut items, TruncationPolicy::Tokens(10_000));
+    let surviving = &items[..surviving.len()];
 
     history.drop_last_n_user_turns(/*num_turns*/ 1);
 
@@ -1148,7 +1175,11 @@ fn cloned_history_shares_items_until_mutated() {
 fn annotated_history_apis_preserve_envelopes() {
     let first_envelope = ResponseItemEnvelope {
         item: assistant_msg("first"),
-        metadata: Some(CodexHarnessMetadata::default()),
+        metadata: Some(CodexHarnessMetadata {
+            history_sequence: Some(7),
+            sampled_through_sequence: Some(4),
+            ..Default::default()
+        }),
     };
     let mut history = ContextManager::default();
 
@@ -1238,7 +1269,11 @@ async fn for_prompt_annotated_preserves_metadata_while_normalizing_item() {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
-        metadata: Some(CodexHarnessMetadata::default()),
+        metadata: Some(CodexHarnessMetadata {
+            history_sequence: Some(7),
+            sampled_through_sequence: Some(4),
+            ..Default::default()
+        }),
     };
     let mut history = ContextManager::default();
     history.replace_annotated(vec![envelope.clone()]);
@@ -1395,7 +1430,9 @@ async fn for_prompt_replaces_unavailable_message_images() {
         }
     }))
     .unwrap();
-    assert_eq!(projected, vec![ResponseItemEnvelope::new(expected)]);
+    let mut expected_envelope = history.annotated_items()[0].clone();
+    expected_envelope.item = expected;
+    assert_eq!(projected, vec![expected_envelope]);
     assert_eq!(raw_items(&history), vec![original]);
 }
 

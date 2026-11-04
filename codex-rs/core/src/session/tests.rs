@@ -292,6 +292,7 @@ impl StepContext {
         });
         settings.service_tier = turn.config.service_tier.clone();
         Arc::new(Self {
+            sampled_through_sequence: None,
             preempt: turn
                 .config
                 .features
@@ -2816,6 +2817,8 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
             item: expected_item.clone(),
             metadata: Some(CodexHarnessMetadata {
                 user_input_order: Some(0),
+                history_sequence: Some(1),
+                sampled_through_sequence: Some(0),
                 ..Default::default()
             }),
         }),
@@ -2988,11 +2991,11 @@ async fn annotated_history_uses_explicit_model_without_a_step(
             .executed_tool_calls
             .mcp_attribution_snapshot(),
     );
-    for envelope in &mut expected {
-        envelope
-            .metadata
-            .get_or_insert_default()
-            .history_truncation_token_limit = Some(expected_budget);
+    for (index, envelope) in expected.iter_mut().enumerate() {
+        let metadata = envelope.metadata.get_or_insert_default();
+        metadata.history_sequence = Some(index as u64 + 1);
+        metadata.sampled_through_sequence = Some(0);
+        metadata.history_truncation_token_limit = Some(expected_budget);
         let (ResponseItem::FunctionCallOutput { output, .. }
         | ResponseItem::CustomToolCallOutput { output, .. }) = &mut envelope.item
         else {
@@ -3171,7 +3174,11 @@ async fn prepares_resumed_history_before_installing_it() {
     );
     assert_eq!(
         history.annotated_items()[0].metadata,
-        Some(CodexHarnessMetadata::default())
+        Some(CodexHarnessMetadata {
+            history_sequence: Some(1),
+            sampled_through_sequence: Some(0),
+            ..Default::default()
+        })
     );
 }
 
@@ -4254,7 +4261,11 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
     assert_eq!(raw_history_items(&live_history), vec![expected_item]);
     assert_eq!(
         live_history.annotated_items()[0].metadata,
-        Some(CodexHarnessMetadata::default())
+        Some(CodexHarnessMetadata {
+            history_sequence: Some(1),
+            sampled_through_sequence: Some(0),
+            ..Default::default()
+        })
     );
 
     session.flush_rollout().await.expect("rollout should flush");

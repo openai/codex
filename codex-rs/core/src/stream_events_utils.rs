@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionData;
+use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ModeKind;
@@ -96,10 +97,18 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
     let turn_context = &step_context.turn;
-    sess.record_conversation_items(
+    sess.record_annotated_conversation_items(
         turn_context,
         &step_context.settings.model_info,
-        std::slice::from_ref(item),
+        vec![ResponseItemEnvelope {
+            item: item.clone(),
+            metadata: step_context
+                .sampled_through_sequence
+                .map(|sequence| CodexHarnessMetadata {
+                    sampled_through_sequence: Some(sequence),
+                    ..Default::default()
+                }),
+        }],
     )
     .await;
     if turn_context.config.otel.agent_response_logging_enabled() {

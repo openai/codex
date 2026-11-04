@@ -1,0 +1,93 @@
+---
+source: core/tests/suite/scenarios_injected_agent_mail.rs
+expression: "context_snapshot::format_context_snapshot(\"An injected agent message that interrupts sampling is included in the first request after mid-turn compaction.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: An injected agent message that interrupts sampling is included in the first request after mid-turn compaction.
+
+## Window 1
+-- request 1 (request) --
+00:message/developer:
+    You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open...I. You are expected to be precise, safe, and helpful. [hash=5125daec1ed78d99]
+
+    Your capabilities:
+
+    - Receive user prompts and other context provided by the harness, such as files in the workspace.
+    - Communicate with the user by streaming thinking & responses, and by making & updating plans.
+    - Emit function calls to run terminal commands and apply patches. Depending on how this specific run is ... More on this in the "Sandbox and approvals" section. [hash=31cf026fa7b25d6d]
+
+    <OMITTED 180 LINES; ~3987 TOKENS; hash=dd34d4527287c62a>
+    ## Shell commands
+
+    When using the shell, you must adhere to the following guidelines:
+
+    - When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much ...he `rg` command is not found, then use alternatives.) [hash=67af3ff3b546e946]
+    - Do not use python scripts to attempt to output larger chunks of a file.
+
+
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Plan the next action.
+
+## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
+-- request 2 (request) --
+00:message/developer:
+    You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open...I. You are expected to be precise, safe, and helpful. [hash=5125daec1ed78d99]
+
+    Your capabilities:
+
+    - Receive user prompts and other context provided by the harness, such as files in the workspace.
+    - Communicate with the user by streaming thinking & responses, and by making & updating plans.
+    - Emit function calls to run terminal commands and apply patches. Depending on how this specific run is ... More on this in the "Sandbox and approvals" section. [hash=31cf026fa7b25d6d]
+
+    <OMITTED 180 LINES; ~3987 TOKENS; hash=dd34d4527287c62a>
+    ## Shell commands
+
+    When using the shell, you must adhere to the following guidelines:
+
+    - When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much ...he `rg` command is not found, then use alternatives.) [hash=67af3ff3b546e946]
+    - Do not use python scripts to attempt to output larger chunks of a file.
+
+
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Plan the next action.
+04:reasoning:summary=reasoning reasoning reasoning reasoning reasoning reasoning reasoning reasoning reasoning reasoning reas...ing reasoning reasoning reasoning reasoning reasoning [hash=ca3a0b1992c1437f]:encrypted=true
+05:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 3 (after request 2: input diverged at item 04, settings changed (parallel_tool_calls, tools))
+-- request 3 (request) --
+00:message/developer:
+    You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open...I. You are expected to be precise, safe, and helpful. [hash=5125daec1ed78d99]
+
+    Your capabilities:
+
+    - Receive user prompts and other context provided by the harness, such as files in the workspace.
+    - Communicate with the user by streaming thinking & responses, and by making & updating plans.
+    - Emit function calls to run terminal commands and apply patches. Depending on how this specific run is ... More on this in the "Sandbox and approvals" section. [hash=31cf026fa7b25d6d]
+
+    <OMITTED 180 LINES; ~3987 TOKENS; hash=dd34d4527287c62a>
+    ## Shell commands
+
+    When using the shell, you must adhere to the following guidelines:
+
+    - When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much ...he `rg` command is not found, then use alternatives.) [hash=67af3ff3b546e946]
+    - Do not use python scripts to attempt to output larger chunks of a file.
+
+
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Plan the next action.
+04:message/user:
+    <COMPACTION_SUMMARY>
+    AUTO_COMPACT_SUMMARY
+05:agent_message

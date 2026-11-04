@@ -15,6 +15,8 @@ use crate::compact::CompactionAnalyticsDetails;
 use crate::compact::compaction_status_from_result;
 use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
+use crate::compact_pending_input::MAX_RETAINED_AGENT_MESSAGE_TOKENS;
+use crate::compact_pending_input::is_retained_pending_mail;
 use crate::compact_remote_history::HistoryItemGroup;
 use crate::compact_remote_history::history_item_groups;
 use crate::context::world_state::WorldState;
@@ -88,7 +90,6 @@ enum RetainedImageBudget {
 }
 
 pub(crate) const RETAINED_MESSAGE_TOKEN_BUDGET: usize = 64_000;
-const MAX_RETAINED_AGENT_MESSAGE_TOKENS: i64 = 10_000;
 // Compact attempts can run much longer than normal turns, so keep the per-transport
 // retry budget smaller than the general Responses stream retry budget.
 const MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES: u64 = 2;
@@ -507,11 +508,16 @@ fn build_v2_compacted_history(
         crate::context_manager::rejected_audio::checkpoint_input_has_no_file_error_sources(
             &prompt_input,
         );
+    let pending_sequence = crate::compact_pending_input::pending_mail_sequence(&prompt_input);
     let retained = v2_history_item_groups(prompt_input)
-        .filter(|group| is_retained_for_remote_compaction_v2(&group.source, features))
+        .filter(|group| {
+            is_retained_for_remote_compaction_v2(&group.source, features)
+                || pending_sequence
+                    .is_some_and(|first| is_retained_pending_mail(&group.source, first))
+        })
         .flat_map(HistoryItemGroup::into_items)
         .collect::<Vec<_>>();
-    let mut retained = truncate_retained_messages(
+    let retained = truncate_retained_messages(
         retained,
         RETAINED_MESSAGE_TOKEN_BUDGET,
         image_budget,
@@ -528,7 +534,8 @@ fn build_v2_compacted_history(
             .get_or_insert_default()
             .compaction_without_file_error_sources = true;
     }
-    retained.push(checkpoint);
+    let retained =
+        crate::compact_pending_input::insert_summary(retained, checkpoint, pending_sequence);
     (retained, retained_image_count)
 }
 

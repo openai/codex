@@ -22,6 +22,8 @@ use tokio_util::sync::CancellationToken;
 /// Request-scoped state that may change between model sampling requests.
 #[derive(Clone)]
 pub(crate) struct StepContext {
+    /// Input prefix captured for this normal inference attempt, acknowledged with its output.
+    pub(crate) sampled_through_sequence: Option<u64>,
     /// Final serving value for this invocation; retained by its code cell across waits.
     pub(crate) serving_assessment: Option<Arc<crate::guardian::ServingAssessment>>,
     pub(crate) turn: Arc<TurnContext>,

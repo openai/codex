@@ -102,6 +102,7 @@ fn next_guardian_review_context_revision() -> u64 {
 #[derive(Clone)]
 pub(crate) struct ContextManager {
     item_id_generator: ItemIdGenerator,
+    sampling: super::sampling::SamplingProgress,
     /// The oldest items are at the beginning of the vector. Snapshots share the vector until a
     /// caller needs to mutate it, avoiding deep copies for read-only history consumers.
     items: Arc<Vec<ResponseItemEnvelope>>,
@@ -313,6 +314,7 @@ impl ContextManager {
     pub(crate) fn new(item_id_generator: ItemIdGenerator) -> Self {
         Self {
             item_id_generator,
+            sampling: Default::default(),
             items: Arc::new(Vec::new()),
             review_history: None,
             retained_context: Arc::default(),
@@ -622,6 +624,7 @@ impl ContextManager {
         policy: TruncationPolicy,
     ) {
         for envelope in items {
+            self.sampling.record(envelope);
             if let Some(source) =
                 self.record_item_with_metadata(&envelope.item, envelope.metadata.as_ref(), policy)
             {
@@ -665,6 +668,7 @@ impl ContextManager {
             item: item.clone(),
             metadata: metadata.cloned(),
         };
+        self.sampling.record(&mut processed);
         if let ResponseItem::FunctionCallOutput { output, .. }
         | ResponseItem::CustomToolCallOutput { output, .. } = &mut processed.item
         {
@@ -808,6 +812,14 @@ impl ContextManager {
         self.history_version
     }
 
+    pub(crate) fn input_sequence(&self) -> u64 {
+        self.sampling.last_sequence
+    }
+
+    pub(crate) fn checkpoint_sampling(&mut self, items: &mut [ResponseItemEnvelope]) {
+        self.sampling.checkpoint(items);
+    }
+
     // Estimate token usage using byte-based heuristics from the truncation helpers.
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
@@ -865,7 +877,8 @@ impl ContextManager {
         self.replace_annotated(items.into_iter().map(ResponseItemEnvelope::new).collect());
     }
 
-    pub(crate) fn replace_annotated(&mut self, items: Vec<ResponseItemEnvelope>) {
+    pub(crate) fn replace_annotated(&mut self, mut items: Vec<ResponseItemEnvelope>) {
+        self.sampling = super::sampling::SamplingProgress::restore(&mut items);
         self.retained_context = Arc::default();
         self.user_message_revision = self.user_message_revision.saturating_add(1);
         if let Some(review_history) = &mut self.review_history {

@@ -616,6 +616,7 @@ pub(crate) async fn run_turn(
                 guardian_budget_compacted = false;
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
+                    mailbox_preempted,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
                 if model_needs_follow_up {
@@ -729,9 +730,10 @@ pub(crate) async fn run_turn(
                             if run_pending_session_start_hooks(&sess, &turn_context).await {
                                 return Ok(None);
                             }
-                            // After a signaled step, drain the steer even if compaction
+                            // After interrupted sampling, drain pending input even if compaction
                             // leaves the estimated context above the token limit.
                             can_drain_pending_input = !model_needs_follow_up
+                                || mailbox_preempted
                                 || step_context
                                     .preempt
                                     .as_ref()
@@ -1885,6 +1887,10 @@ async fn run_sampling_request(
             sess.clone_history().await
         };
         let input_item_count = history.raw_items().len();
+        let sampling_step_context = Arc::new(StepContext {
+            sampled_through_sequence: Some(history.input_sequence()),
+            ..step_context.as_ref().clone()
+        });
         let mut prompt_input = history
             .for_prompt(
                 &step_context.settings.model_info.input_modalities,
@@ -1948,7 +1954,7 @@ async fn run_sampling_request(
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
-            Arc::clone(&step_context),
+            sampling_step_context,
             Arc::clone(&turn_store),
             client_session,
             &responses_metadata,
@@ -2017,6 +2023,7 @@ async fn run_sampling_request(
             return Ok((
                 SamplingRequestResult {
                     needs_follow_up: true,
+                    mailbox_preempted: draining_for_mailbox,
                     last_agent_message: None,
                 },
                 notify_messages,
@@ -2166,6 +2173,8 @@ pub(crate) async fn built_tools(
 #[derive(Debug)]
 struct SamplingRequestResult {
     needs_follow_up: bool,
+    /// Queued mail interrupted sampling and must be drained before the next request.
+    mailbox_preempted: bool,
     last_agent_message: Option<String>,
 }
 
@@ -3035,6 +3044,7 @@ async fn try_run_sampling_request(
                 // TODO: Reconcile any response item already being presented to the client.
                 break Ok(SamplingRequestResult {
                     needs_follow_up: true,
+                    mailbox_preempted: false,
                     last_agent_message,
                 });
             }
@@ -3070,6 +3080,7 @@ async fn try_run_sampling_request(
                     // receiving the interrupt. Do not retry without that pending input.
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
+                        mailbox_preempted: true,
                         last_agent_message,
                     });
                 }
@@ -3269,6 +3280,7 @@ async fn try_run_sampling_request(
                     }
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
+                        mailbox_preempted: true,
                         last_agent_message,
                     });
                 }
@@ -3478,6 +3490,7 @@ async fn try_run_sampling_request(
                 }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
+                    mailbox_preempted: *draining_for_mailbox,
                     last_agent_message,
                 });
             }
