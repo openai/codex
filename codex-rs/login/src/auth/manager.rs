@@ -3003,7 +3003,16 @@ impl AuthManager {
                             }
                             cached_auth
                         }
-                        RefreshTokenError::Transient(_) => None,
+                        // A temporary provider outage is not a logout. Preserve the identity
+                        // only while its cached credentials still satisfy the current policy.
+                        RefreshTokenError::Transient(_) => cached_auth.filter(|auth| {
+                            validate_auth_restrictions(
+                                Some(&self.allowed_login_methods()),
+                                self.effective_chatgpt_workspaces().as_deref(),
+                                auth,
+                            )
+                            .is_ok()
+                        }),
                         RefreshTokenError::Policy(_) => cached_auth,
                     }
                 }
@@ -3160,10 +3169,16 @@ impl AuthManager {
     }
 
     pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<Vec<String>>) {
+        // Fence reloads that validated credentials before this policy change.
+        let Ok(_auth_guard) = self.inner.write() else {
+            return;
+        };
         if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write()
             && *guard != workspace_id
         {
             *guard = workspace_id;
+            self.auth_change_state_tx
+                .send_modify(|state| state.generation += 1);
         }
     }
 
