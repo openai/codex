@@ -3329,6 +3329,16 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         "[tui]\nstatus_line = ['model-with-reasoning', 'thread-name']\n",
     )?;
     let config = app.chat_widget.config_ref().clone();
+    let model =
+        app_test_support::create_mock_responses_server_repeating_assistant("Side answer").await;
+    std::fs::write(
+        config.codex_home.join("config.toml"),
+        // Each thread reloads this footer. Omit the platform-specific working directory.
+        format!(
+            "openai_base_url = '{}/v1'\n[tui]\nstatus_line = ['model-with-reasoning']",
+            model.uri()
+        ),
+    )?;
     let parent_thread_id = ThreadId::from_string(
         &app_test_support::create_fake_rollout(
             config.codex_home.as_path(),
@@ -3381,7 +3391,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         &mut tui,
         &mut app_server,
         parent_thread_id,
-        /*user_message*/ None,
+        Some("Side question".into()),
     ))
     .await?;
 
@@ -3399,8 +3409,27 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             .is_closed
     );
 
+    // Give Ctrl-/ its earliest opportunity to switch back after /btw queues the prompt.
+    while !app.can_read_terminal_after_thread_switch(&tui, &app_event_rx) {
+        let event = app_event_rx.try_recv()?;
+        boxed_future!(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    }
+    macro_rules! keys {
+        ($($key:expr),+) => {{
+            for key in [$($key),+] {
+                boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key))).await?;
+            }
+            drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+        }};
+    }
+    let toggle = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
+    for expected in [parent_thread_id, side_thread_id] {
+        keys!(toggle);
+        assert_eq!(app.active_thread_id, Some(expected));
+    }
+
     let mut saw_thread_started = false;
-    for _ in 0..20 {
+    loop {
         let event = time::timeout(
             std::time::Duration::from_secs(/*secs*/ 2),
             app_server.next_event(),
@@ -3410,11 +3439,19 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         .expect("app-server event stream should remain open");
         if let codex_app_server_client::AppServerEvent::ServerNotification(notification) =
             event.event
-            && let ServerNotification::ThreadStarted(notification) = notification.as_ref()
-            && notification.thread.id == side_thread_id.to_string()
         {
-            saw_thread_started = true;
-            break;
+            match notification.as_ref() {
+                ServerNotification::ThreadStarted(started)
+                    if started.thread.id == side_thread_id.to_string() =>
+                {
+                    saw_thread_started = true;
+                }
+                ServerNotification::TurnStarted(started) => {
+                    assert_eq!(started.thread_id, side_thread_id.to_string());
+                    break;
+                }
+                _ => {}
+            }
         }
     }
 
@@ -3433,16 +3470,15 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         .await?;
     app.select_agents_overview_thread(&mut tui, &mut app_server, parent_thread_id)
         .await?;
-    Box::pin(app.handle_start_side(
-        &mut tui,
-        &mut app_server,
+    drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+    app.app_event_tx.send(AppEvent::StartSide {
         parent_thread_id,
-        /*user_message*/ None,
-    ))
-    .await?;
+        user_message: None,
+    });
+    assert!(!app.can_read_terminal_after_thread_switch(&tui, &app_event_rx));
+    drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
     assert_eq!(app.active_thread_id, Some(side_thread_id));
     assert_eq!(app.side_threads.len(), 1);
-    drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
     enable_side_retention(&mut app)?;
     tui.set_owned_screen(/*owned*/ true)?;
     read_side_history(&mut app, &mut tui, "child")?;
@@ -3533,14 +3569,6 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         ))
     );
 
-    macro_rules! keys {
-        ($($key:expr),+) => {{
-            for key in [$($key),+] {
-                boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key))).await?;
-            }
-            drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
-        }};
-    }
     let leader = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
     let [minus, repeat, release] = [
         KeyEventKind::Press,
@@ -3605,7 +3633,6 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     };
     let inactive = composer_gutter(&mut app, &mut tui)?;
 
-    let toggle = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
     keys!(toggle);
     assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
     let wide = side_frame(&mut app, &mut tui, size)?;

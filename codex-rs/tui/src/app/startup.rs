@@ -168,6 +168,21 @@ impl App {
         self.pending_thread_switch_resets != 0 && self.side_retention_enabled(tui)
     }
 
+    /// Drain a side pair's queued prompts and transcript updates before a key can switch focus.
+    pub(super) fn can_read_terminal_after_thread_switch(
+        &self,
+        tui: &tui::Tui,
+        app_event_rx: &mpsc::UnboundedReceiver<AppEvent>,
+    ) -> bool {
+        self.pending_thread_switch_resets == 0
+            && (app_event_rx.is_empty()
+                || (!self.side_retention_enabled(tui)
+                    && self
+                        .current_displayed_thread_id()
+                        .and_then(|id| self.side_pair_key(id))
+                        .is_none()))
+    }
+
     /// Keep the provisional loading frame until queued history reaches the owned transcript.
     /// Visible startup decisions and the agent overview must still render immediately.
     pub(super) fn render_startup_frame(
@@ -1547,9 +1562,7 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                         AppRunControl::Continue
                     }
-                    // Dispatch the current composer's queued submission before a focus key can switch threads.
-                    event = tui_events.next(), if app.pending_thread_switch_resets == 0
-                        && (!app.side_retention_enabled(tui) || app_event_rx.is_empty())
+                    event = tui_events.next(), if app.can_read_terminal_after_thread_switch(tui, &app_event_rx)
                         && (app.reconnect.offline || !block_terminal_input_for_pending_startup_events) => {
                         if let Some(event) = event {
                             if (matches!(
