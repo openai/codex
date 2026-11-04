@@ -1,6 +1,7 @@
 pub mod account;
 mod agent_path;
 pub mod auth;
+mod context_window_id;
 mod item_id_generator;
 mod response_item_id;
 mod response_usage;
@@ -9,6 +10,7 @@ mod session_id;
 mod thread_id;
 mod tool_name;
 pub use agent_path::AgentPath;
+pub use context_window_id::ContextWindowId;
 pub use item_id_generator::ItemIdGenerator;
 #[cfg(test)]
 use item_id_generator::uuid_v7_item_id_generator_for_test;

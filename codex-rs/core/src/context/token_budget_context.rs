@@ -6,6 +6,7 @@ use crate::context::world_state::WorldStateUpdate;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::message_from_parts;
 use codex_protocol::AgentPath;
+use codex_protocol::ContextWindowId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
@@ -14,22 +15,21 @@ use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TokenBudgetContext {
     agent_path: AgentPath,
-    first_window_id: Uuid,
-    previous_window_id: Option<Uuid>,
-    window_id: Uuid,
+    first_window_id: ContextWindowId,
+    previous_window_id: Option<ContextWindowId>,
+    window_id: ContextWindowId,
 }
 
 impl TokenBudgetContext {
     pub(crate) fn new(
         agent_path: AgentPath,
-        first_window_id: Uuid,
-        previous_window_id: Option<Uuid>,
-        window_id: Uuid,
+        first_window_id: ContextWindowId,
+        previous_window_id: Option<ContextWindowId>,
+        window_id: ContextWindowId,
     ) -> Self {
         Self {
             agent_path,
@@ -73,14 +73,14 @@ impl ContextualUserFragment for TokenBudgetContext {
     }
 
     fn body(&self) -> ContentItem {
-        let first_window_id = self.first_window_id;
-        let window_id = self.window_id;
+        let first_window_id = &self.first_window_id;
+        let window_id = &self.window_id;
         let mut lines = vec![
             format!("Agent name: {}", self.agent_path),
             format!("First context window id: {first_window_id}"),
             format!("Current context window id: {window_id}"),
         ];
-        if let Some(previous_window_id) = self.previous_window_id {
+        if let Some(previous_window_id) = &self.previous_window_id {
             lines.push(format!("Previous context window id: {previous_window_id}"));
         }
         input_text(format!("\n{}\n", lines.join("\n")))

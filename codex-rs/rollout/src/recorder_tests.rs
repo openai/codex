@@ -698,7 +698,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
     let config = test_config(home.path());
     let session_id = SessionId::default();
     let thread_id = ThreadId::new();
-    let initial_window_id = Uuid::now_v7().to_string();
+    let initial_window_id = codex_protocol::ContextWindowId::new_uuid_v7().to_string();
     let recorder = RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(

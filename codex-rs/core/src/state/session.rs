@@ -337,7 +337,7 @@ impl SessionState {
         self.auto_compact_window.window_number()
     }
 
-    pub(crate) fn auto_compact_window_ids(&self) -> AutoCompactWindowIds {
+    pub(crate) fn auto_compact_window_ids(&self) -> &AutoCompactWindowIds {
         self.auto_compact_window.ids()
     }
 

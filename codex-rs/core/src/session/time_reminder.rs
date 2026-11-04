@@ -41,7 +41,7 @@ pub(super) fn apply_persistent_defaults(config: &mut Config) {
 pub(crate) struct CurrentTimeReminderState {
     last_delivery_time: Option<DateTime<Utc>>,
     last_window_id: Option<String>,
-    last_clock_failure: Option<(String, uuid::Uuid)>,
+    last_clock_failure: Option<(String, codex_protocol::ContextWindowId)>,
     pending_user_or_tool_output_boundary: bool,
 }
 
@@ -134,7 +134,7 @@ impl Session {
             let mut state = self.state.lock().await;
             let failure = (
                 turn_context.sub_id.clone(),
-                state.auto_compact_window_ids().window_id,
+                state.auto_compact_window_ids().window_id.clone(),
             );
             // A compacted window may no longer contain the earlier notice.
             if state.current_time_reminder.last_clock_failure.as_ref() == Some(&failure) {

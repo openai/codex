@@ -13,6 +13,7 @@
 //! is a stop-gap that prevents additional local persistence writes from slipping
 //! in unnoticed.
 
+use codex_protocol::ContextWindowId;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -300,7 +301,7 @@ async fn thread_list_repeated_cursor_returns_internal_error() -> Result<()> {
             history_mode: Default::default(),
             history_base: None,
             subagent_history_start_ordinal: None,
-            initial_window_id: Uuid::now_v7().to_string(),
+            initial_window_id: ContextWindowId::new_uuid_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(codex_home.path().to_path_buf()),
@@ -548,7 +549,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
             history_mode: Default::default(),
             history_base: None,
             subagent_history_start_ordinal: None,
-            initial_window_id: Uuid::now_v7().to_string(),
+            initial_window_id: ContextWindowId::new_uuid_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(codex_home.path().to_path_buf()),

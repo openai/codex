@@ -37,7 +37,6 @@ use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
-use uuid::Uuid;
 
 #[tokio::test]
 async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> Result<()> {
@@ -77,7 +76,7 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> 
             history_mode: ThreadHistoryMode::Paginated,
             history_base: None,
             subagent_history_start_ordinal: None,
-            initial_window_id: Uuid::now_v7().to_string(),
+            initial_window_id: codex_protocol::ContextWindowId::new_uuid_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: Some(codex_home.path().to_path_buf()),

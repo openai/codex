@@ -367,6 +367,7 @@ use codex_mcp::effective_mcp_servers;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
+use codex_protocol::ContextWindowId;
 use codex_protocol::ResponseItemId;
 use codex_protocol::approvals::ExecApprovalKind;
 use codex_protocol::config_types::CollaborationMode;
@@ -2017,11 +2018,11 @@ impl Session {
                 state.history.set_world_state_baseline(world_state);
             }
             let fallback_ids = state.auto_compact_window_ids();
-            let window_id = window_id.unwrap_or(fallback_ids.window_id);
+            let window_id = window_id.unwrap_or_else(|| fallback_ids.window_id.clone());
             state.restore_auto_compact_window(
                 window_number,
                 AutoCompactWindowIds {
-                    first_window_id: first_window_id.unwrap_or(window_id),
+                    first_window_id: first_window_id.unwrap_or_else(|| window_id.clone()),
                     previous_window_id,
                     window_id,
                 },
@@ -4952,7 +4953,7 @@ impl Session {
             let state = self.state.lock().await;
             (
                 state.session_configuration.session_source.clone(),
-                state.auto_compact_window_ids(),
+                state.auto_compact_window_ids().clone(),
             )
         };
         let separate_guardian_developer_message =
@@ -5254,15 +5255,18 @@ impl Session {
         self.current_window().await.0
     }
 
-    pub(crate) async fn current_window(&self) -> (String, u64, Uuid) {
+    pub(crate) async fn current_window(&self) -> (String, u64, ContextWindowId) {
         let state = self.state.lock().await;
         self.current_window_from_state(&state)
     }
 
-    pub(crate) fn current_window_from_state(&self, state: &SessionState) -> (String, u64, Uuid) {
+    pub(crate) fn current_window_from_state(
+        &self,
+        state: &SessionState,
+    ) -> (String, u64, ContextWindowId) {
         let thread_id = self.thread_id;
         let window_number = state.auto_compact_window_number();
-        let context_window_id = state.auto_compact_window_ids().window_id;
+        let context_window_id = state.auto_compact_window_ids().window_id.clone();
         (
             format!("{thread_id}:{window_number}"),
             window_number,

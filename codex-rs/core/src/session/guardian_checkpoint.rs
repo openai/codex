@@ -20,7 +20,10 @@ impl Session {
             mcp_resource_origins: self.services.mcp_runtime.resource_origin_checkpoint(),
             window_number: Some(state.auto_compact_window_number()),
             first_window_id: Some(window_ids.first_window_id.to_string()),
-            previous_window_id: window_ids.previous_window_id.map(|id| id.to_string()),
+            previous_window_id: window_ids
+                .previous_window_id
+                .as_ref()
+                .map(ToString::to_string),
             window_id: Some(window_ids.window_id.to_string()),
             compaction_response_id: None,
             latest_token_usage_record: state.latest_token_usage_record.clone(),

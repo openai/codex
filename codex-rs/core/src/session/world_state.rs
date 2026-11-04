@@ -195,7 +195,7 @@ impl Session {
                 .resolved_context_window()
                 .is_some();
         if token_budget_enabled {
-            let window_ids = self.state.lock().await.auto_compact_window_ids();
+            let window_ids = self.state.lock().await.auto_compact_window_ids().clone();
             world_state.add_section(TokenBudgetContext::new(
                 turn_context
                     .session_source

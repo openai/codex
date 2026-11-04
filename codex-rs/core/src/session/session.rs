@@ -33,6 +33,7 @@ use codex_http_client::RouteAwareClientPool;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::SharedModelProvider;
 use codex_prompts::render_model_instructions;
+use codex_protocol::ContextWindowId;
 use codex_protocol::ItemIdGenerator;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -815,7 +816,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         compaction_metadata: CompactionTurnMetadata,
-        (window_id, window_number, context_window_id): (String, u64, uuid::Uuid),
+        (window_id, window_number, context_window_id): (String, u64, ContextWindowId),
     ) -> CodexResponsesMetadata {
         let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
             self.installation_id.clone(),
@@ -835,7 +836,7 @@ impl Session {
         turn_context: &TurnContext,
         responses_metadata: CodexResponsesMetadata,
         window_number: u64,
-        context_window_id: uuid::Uuid,
+        context_window_id: ContextWindowId,
     ) -> CodexResponsesMetadata {
         CodexResponsesMetadata {
             history_initialization: Some(self.history_initialization),
@@ -1631,7 +1632,7 @@ impl Session {
             session_configuration.thread_name = thread_name.clone();
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
-                initial_auto_compact_window_ids,
+                initial_auto_compact_window_ids.clone(),
                 ContextManager::for_session(
                     session_configuration.root_capabilities_restricted,
                     &config.features,

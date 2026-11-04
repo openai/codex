@@ -2393,7 +2393,7 @@ mod tests {
             history_mode: ThreadHistoryMode::Legacy,
             history_base: None,
             subagent_history_start_ordinal: None,
-            initial_window_id: uuid::Uuid::now_v7().to_string(),
+            initial_window_id: codex_protocol::ContextWindowId::new_uuid_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: thread_metadata(),
         }

@@ -6,12 +6,13 @@ use crate::context_manager::ContextManager;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::user_input::UserInput;
+use codex_protocol_test_support::uuid_v7_item_id_generator_for_test;
 use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 
 #[test]
 fn history_sums_measured_and_unknown_file_audio() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::new(uuid_v7_item_id_generator_for_test());
     let item = ResponseInputItem::from(
         ["short", "unknown"]
             .map(|file_id| UserInput::Audio {

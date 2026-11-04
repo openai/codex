@@ -3,11 +3,11 @@ use crate::context::world_state::WorldStateSnapshot;
 use crate::context_manager::is_user_turn_boundary;
 use codex_history::ResponseItemEnvelope;
 use codex_history::TurnAttribution;
+use codex_protocol::ContextWindowId;
 use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_utils_output_truncation::TruncationPolicy;
 use std::collections::BTreeSet;
-use uuid::Uuid;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -23,17 +23,17 @@ pub(crate) struct RolloutReconstruction {
     pub(super) turn_attribution: Option<TurnAttribution>,
     pub(super) world_state_baseline: Option<WorldStateSnapshot>,
     pub(super) window_number: u64,
-    pub(super) first_window_id: Option<Uuid>,
-    pub(super) previous_window_id: Option<Uuid>,
-    pub(super) window_id: Option<Uuid>,
+    pub(super) first_window_id: Option<ContextWindowId>,
+    pub(super) previous_window_id: Option<ContextWindowId>,
+    pub(super) window_id: Option<ContextWindowId>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ReconstructedWindow {
     number: u64,
-    first_id: Option<Uuid>,
-    previous_id: Option<Uuid>,
-    id: Option<Uuid>,
+    first_id: Option<ContextWindowId>,
+    previous_id: Option<ContextWindowId>,
+    id: Option<ContextWindowId>,
 }
 
 #[derive(Debug, Default)]
@@ -653,31 +653,31 @@ impl ContextManager {
     }
 }
 
-fn parse_uuid_v7(value: &str) -> Option<Uuid> {
-    Uuid::parse_str(value)
-        .ok()
-        .filter(|uuid| uuid.get_version_num() == 7)
-}
-
 fn reconstructed_window_from_compaction(compacted: &CompactedItem) -> Option<ReconstructedWindow> {
     Some(ReconstructedWindow {
         number: compacted.window_number?,
-        first_id: compacted.first_window_id.as_deref().and_then(parse_uuid_v7),
+        first_id: compacted
+            .first_window_id
+            .as_deref()
+            .and_then(ContextWindowId::parse),
         previous_id: compacted
             .previous_window_id
             .as_deref()
-            .and_then(parse_uuid_v7),
-        id: compacted.window_id.as_deref().and_then(parse_uuid_v7),
+            .and_then(ContextWindowId::parse),
+        id: compacted
+            .window_id
+            .as_deref()
+            .and_then(ContextWindowId::parse),
     })
 }
 
 fn reconstructed_window_from_session_context_window(
     context_window: &SessionContextWindow,
 ) -> Option<ReconstructedWindow> {
-    let id = parse_uuid_v7(&context_window.window_id)?;
+    let id = ContextWindowId::parse(&context_window.window_id)?;
     Some(ReconstructedWindow {
         number: 0,
-        first_id: Some(id),
+        first_id: Some(id.clone()),
         previous_id: None,
         id: Some(id),
     })
