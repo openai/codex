@@ -2643,6 +2643,8 @@ dependencies = [
  "hyper-util",
  "pretty_assertions",
  "prost",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",

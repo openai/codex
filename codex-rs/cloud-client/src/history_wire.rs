@@ -1,9 +1,6 @@
 //! Native paginated history envelopes. Raw rows and unary responses retain unknown fields.
-use bytes::Buf;
 use bytes::Bytes;
 use prost::Message;
-use std::marker::PhantomData;
-use tonic::codec::Codec;
 
 #[derive(Clone, Message)]
 pub(super) struct TurnsRequest {
@@ -57,30 +54,4 @@ pub(super) struct ItemEntry {
     pub started_at_ms: Option<i64>,
     #[prost(int64, optional, tag = "4")]
     pub completed_at_ms: Option<i64>,
-}
-// Tonic still enforces message bounds and status trailers. Only payload decoding
-// is delayed so callers can retain the original complete protobuf response.
-pub(super) struct RawResponseCodec<T>(pub PhantomData<T>);
-impl<T: Message + Send + 'static> Codec for RawResponseCodec<T> {
-    type Encode = T;
-    type Decode = Bytes;
-    type Encoder = tonic_prost::ProstEncoder<T>;
-    type Decoder = RawDecoder;
-    fn encoder(&mut self) -> Self::Encoder {
-        tonic_prost::ProstCodec::<T, Page>::default().encoder()
-    }
-    fn decoder(&mut self) -> Self::Decoder {
-        RawDecoder
-    }
-}
-pub(super) struct RawDecoder;
-impl tonic::codec::Decoder for RawDecoder {
-    type Item = Bytes;
-    type Error = tonic::Status;
-    fn decode(
-        &mut self,
-        buffer: &mut tonic::codec::DecodeBuf<'_>,
-    ) -> Result<Option<Bytes>, tonic::Status> {
-        Ok(Some(buffer.copy_to_bytes(buffer.remaining())))
-    }
 }

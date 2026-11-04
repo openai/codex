@@ -98,6 +98,122 @@ async fn assert_request(fixture: &mut Fixture, method: &str, expected: &[u8]) {
     assert_eq!(body, frame(expected));
 }
 #[tokio::test]
+async fn activation_sends_only_identity_and_excludes_turns() {
+    let mut fixture = fixture(response(vec![frame(&[])], tonic::Status::ok(""))).await;
+    assert!(matches!(
+        fixture.client.activate("t").await,
+        Err(MutationError::OutcomeUnknown(Error::InvalidResponse))
+    ));
+    // exclude_turns=true (field 7), thread_id="t" (field 18).
+    assert_request(&mut fixture, "UpdateConfig", &[56, 1, 0x92, 1, 1, b't']).await;
+}
+
+#[tokio::test]
+async fn activation_preserves_native_settings_and_thread_metadata() {
+    // Native Thread fields encoded independently of the client's wire types.
+    let thread_base: &[u8] = &[
+        0x22, 1, b'v', // cli_version (4)
+        0x28, 1, // created_at (5)
+        0x32, 1, b'/', // cwd (6)
+        0x48, 0, // ephemeral (9)
+        0x72, 1, b't', // id (14)
+        0x82, 1, 1, b'p', // model_provider (16)
+        0xaa, 1, 0, // preview (21)
+        0xda, 1, 1, b's', // session_id (27)
+        0xe2, 1, 2, 8, 99, // source (28): future simple value
+        0xea, 1, 2, 0x12, 0, // status (29): idle
+        0xfa, 1, 0, // turns (31): empty
+        0x80, 2, 2, // updated_at (32)
+    ];
+    let encode_response = |mode: u8, daybreak: Option<bool>, approval: u8| {
+        let mut thread = thread_base.to_vec();
+        if let Some(enabled) = daybreak {
+            thread.extend_from_slice(&[0x38, u8::from(enabled)]); // daybreak_enabled (7)
+        }
+        // Settings has developer_instructions (1), model (2), and reasoning_effort (3).
+        let settings = Bytes::from_static(if mode == 1 {
+            b"\x0a\x01d\x12\x01m\x1a\x04high"
+        } else {
+            b"\x12\x01m"
+        });
+        let mut collaboration_mode = vec![8, mode];
+        prost::encoding::bytes::encode(/* settings */ 2, &settings, &mut collaboration_mode);
+        let mut response_bytes = vec![0x12, 2, 8, approval, 0x18, 1]; // approval and reviewer
+        prost::encoding::bytes::encode(
+            /* collaboration_mode */ 4,
+            &collaboration_mode,
+            &mut response_bytes,
+        );
+        // instruction_sources (8) wraps repeated string values (1).
+        response_bytes.extend_from_slice(b"\x42\x0c\x0a\x0a/AGENTS.md");
+        response_bytes.extend_from_slice(&[
+            0x2a, 1, b'/', // cwd (5)
+            0x52, 1, b'm', // model (10)
+            0x5a, 1, b'p', // model_provider (11)
+            0x7a, 4, 0x12, 2, 8, 1, // sandbox (15): read-only with network access
+        ]);
+        prost::encoding::bytes::encode(/* thread */ 17, &thread, &mut response_bytes);
+        (response_bytes, thread)
+    };
+
+    for (mode, daybreak) in [(1, Some(true)), (2, Some(false)), (2, None)] {
+        let (response_bytes, thread) = encode_response(mode, daybreak, 2);
+        let mut server = fixture(response(
+            vec![frame(&response_bytes)],
+            tonic::Status::ok(""),
+        ))
+        .await;
+        let activation = server.client.activate("t").await.unwrap();
+        assert_eq!(activation.thread.protobuf().as_ref(), thread.as_slice());
+        let json = serde_json::to_value(&activation).unwrap();
+        assert_eq!(json["thread"]["source"], "unknown");
+        assert_eq!(
+            json["thread"].get("daybreakEnabled"),
+            Some(&serde_json::json!(daybreak))
+        );
+        assert_eq!(
+            json["instructionSources"],
+            serde_json::json!(["/AGENTS.md"])
+        );
+        assert_eq!(json["approvalPolicy"], "on-request");
+        assert_eq!(json["approvalsReviewer"], "user");
+        assert_eq!(
+            json["sandbox"],
+            serde_json::json!({"type": "readOnly", "networkAccess": true})
+        );
+        assert_eq!(
+            json["collaborationMode"],
+            serde_json::json!({
+                "mode": if mode == 1 { "plan" } else { "default" },
+                "settings": {
+                    "model": "m",
+                    "developer_instructions": if mode == 1 { Some("d") } else { None },
+                    "reasoning_effort": if mode == 1 { Some("high") } else { None }
+                }
+            })
+        );
+        assert_request(&mut server, "UpdateConfig", &[56, 1, 0x92, 1, 1, b't']).await;
+        assert!(server.requests.try_recv().is_err());
+    }
+
+    // Unknown security policy must remain an error, never a default.
+    let (response_bytes, _) = encode_response(1, Some(true), 99);
+    let mut server = fixture(response(
+        vec![frame(&response_bytes)],
+        tonic::Status::ok(""),
+    ))
+    .await;
+    assert!(matches!(
+        server.client.activate("t").await,
+        Err(MutationError::OutcomeUnknown(Error::UnsupportedResponse(
+            "approval policy"
+        )))
+    ));
+    assert_request(&mut server, "UpdateConfig", &[56, 1, 0x92, 1, 1, b't']).await;
+    assert!(server.requests.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn resume_sends_protobuf_and_preserves_admission_flags() {
     for wait in [false, true] {
         let mut fixture = fixture(response(vec![frame(&[])], tonic::Status::ok(""))).await;

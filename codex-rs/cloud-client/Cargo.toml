@@ -12,6 +12,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+serde = { workspace = true }
 async-stream = { workspace = true }
 bytes = { workspace = true }
 codex-http-client = { workspace = true }
@@ -27,6 +28,7 @@ tokio = { workspace = true, features = ["time"] }
 url = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

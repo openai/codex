@@ -220,6 +220,12 @@ async fn invalid_input_never_sends_and_diagnostics_redact() {
         fixture.client.interrupt_turn(&input).await,
         Err(MutationError::InvalidRequest)
     ));
+    for thread_id in ["".to_owned(), " ".to_owned(), "t".repeat(MAX_MESSAGE_BYTES)] {
+        assert!(matches!(
+            fixture.client.activate(&thread_id).await,
+            Err(MutationError::InvalidRequest)
+        ));
+    }
     assert!(fixture.requests.try_recv().is_err());
 }
 #[tokio::test]
@@ -282,18 +288,27 @@ async fn server_rejection_and_transport_status_do_not_prove_no_admission() {
 async fn mutations_require_explicit_successful_grpc_status() {
     let mut ok_trailers = http::HeaderMap::new();
     ok_trailers.insert("grpc-status", http::HeaderValue::from_static("0"));
-    for (initial_status, trailers, include_message) in [
-        (None, None, true),
-        (None, Some(http::HeaderMap::new()), true),
-        (Some("0"), None, true),
-        (Some("0"), None, false),
-        (Some("0"), Some(ok_trailers), true),
+    for (initial_status, trailers, include_message, expect_success) in [
+        (None, None, true, false),
+        (None, Some(http::HeaderMap::new()), true, false),
+        (Some("0"), None, true, false),
+        (Some("0"), None, false, false),
+        (Some("0"), Some(ok_trailers.clone()), true, false),
+        (None, Some(ok_trailers), true, true),
     ] {
-        for method in ["AddUserMessage", "InterruptTurn"] {
-            let payload = if method == "AddUserMessage" {
-                admitted(/*outcome*/ 1)
-            } else {
-                vec![]
+        for method in ["AddUserMessage", "InterruptTurn", "UpdateConfig"] {
+            let payload = match method {
+                "AddUserMessage" => admitted(/*outcome*/ 1),
+                "InterruptTurn" => vec![],
+                "UpdateConfig" => [
+                    // Approval, reviewer, cwd, model, provider and read-only sandbox.
+                    b"\x12\x02\x08\x02\x18\x01\x2a\x01/\x52\x01m\x5a\x01p\x7a\x02\x12\x00".to_vec(),
+                    message(
+                        /*tag*/ 17,
+                        b"\x22\x01v\x28\x01\x32\x01/\x48\x00\x72\x01t\x82\x01\x01p\xaa\x01\x00\xda\x01\x01s\xe2\x01\x02\x08\x01\xea\x01\x02\x12\x00\x80\x02\x02",
+                    ),
+                ].concat(),
+                _ => unreachable!(),
             };
             let frames = include_message
                 .then(|| Frame::data(frame(&payload)))
@@ -303,7 +318,7 @@ async fn mutations_require_explicit_successful_grpc_status() {
             if let Some(status) = initial_status {
                 builder = builder.header("grpc-status", status);
             }
-            let fixture = fixture(
+            let mut fixture = fixture(
                 builder
                     .body(Body::new(StreamBody::new(futures::stream::iter(
                         frames.map(Ok::<_, Infallible>),
@@ -317,6 +332,8 @@ async fn mutations_require_explicit_successful_grpc_status() {
                     .add_user_message(&request())
                     .await
                     .map(|_| ())
+            } else if method == "UpdateConfig" {
+                fixture.client.activate("t").await.map(|_| ())
             } else {
                 fixture
                     .client
@@ -327,10 +344,16 @@ async fn mutations_require_explicit_successful_grpc_status() {
                     })
                     .await
             };
-            assert!(matches!(
-                result,
-                Err(MutationError::OutcomeUnknown(Error::InvalidResponse))
-            ));
+            if expect_success {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(MutationError::OutcomeUnknown(Error::InvalidResponse))
+                ));
+            }
+            fixture.requests.recv().await.unwrap();
+            assert!(fixture.requests.try_recv().is_err());
         }
     }
 }

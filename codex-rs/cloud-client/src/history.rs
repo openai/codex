@@ -117,7 +117,7 @@ impl Client {
         request: &ListTurnsRequest,
     ) -> Result<HistoryPage<HistoryTurn>, Error> {
         let payload = self
-            .history_rpc(
+            .raw_unary(
                 wire::TurnsRequest {
                     thread_id: request.thread_id.clone(),
                     cursor: request.page.cursor.clone(),
@@ -144,7 +144,7 @@ impl Client {
         request: &ListItemsRequest,
     ) -> Result<HistoryPage<HistoryItem>, Error> {
         let payload = self
-            .history_rpc(
+            .raw_unary(
                 wire::ItemsRequest {
                     thread_id: request.thread_id.clone(),
                     turn_id: request.turn_id.clone(),
@@ -175,28 +175,6 @@ impl Client {
             })
         })
         .map_err(|_| Error::InvalidResponse)
-    }
-    async fn history_rpc<T: Message + Send + 'static>(
-        &self,
-        value: T,
-        path: &'static str,
-    ) -> Result<Bytes, Error> {
-        let mut grpc = self.grpc.clone();
-        let mut request = tonic::Request::new(value);
-        *request.metadata_mut() =
-            tonic::metadata::MetadataMap::from_headers(self.credentials.headers.clone());
-        let response = tokio::time::timeout(
-            crate::REQUEST_TIMEOUT,
-            grpc.unary(
-                request,
-                http::uri::PathAndQuery::from_static(path),
-                wire::RawResponseCodec::<T>(std::marker::PhantomData),
-            ),
-        )
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(Error::from)?;
-        Ok(response.into_inner())
     }
 }
 fn decode_page<T>(

@@ -144,7 +144,7 @@ impl Client {
             .map_err(|_| MutationError::OutcomeUnknown(Error::InvalidResponse))?;
         Ok(())
     }
-    async fn mutate<T: Message + Send + 'static>(
+    pub(crate) async fn mutate<T: Message + Send + 'static>(
         &self,
         value: T,
         path: &'static str,
@@ -163,7 +163,7 @@ impl Client {
                 .server_streaming(
                     request,
                     http::uri::PathAndQuery::from_static(path),
-                    crate::history_wire::RawResponseCodec::<T>(std::marker::PhantomData),
+                    crate::wire::RawResponseCodec::<T>(std::marker::PhantomData),
                 )
                 .await?;
             // An initial OK makes tonic skip final-status validation. A unary
