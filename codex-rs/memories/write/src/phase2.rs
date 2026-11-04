@@ -22,9 +22,9 @@ use codex_model_provider::ModelProvider;
 use codex_protocol::MemoryVersion;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::MemoryStore;
@@ -338,24 +338,28 @@ mod agent {
             .disable(Feature::SkillMcpDependencyInstall);
 
         // Preserve the parent's explicit choice to skip Codex-managed sandboxing.
-        match parent_permission_profile {
-            PermissionProfile::Disabled => agent_config
-                .permissions
-                .set_permission_profile(PermissionProfile::Disabled),
-            PermissionProfile::External { network } => agent_config
-                .permissions
-                .set_permission_profile(PermissionProfile::External { network }),
+        let permission_profile = match parent_permission_profile {
             PermissionProfile::Managed { .. } => {
                 // The consolidation agent only needs local memory-root write access and no network.
-                agent_config.set_legacy_sandbox_policy(SandboxPolicy::WorkspaceWrite {
-                    writable_roots: vec![root],
-                    network_access: false,
-                    exclude_tmpdir_env_var: true,
-                    exclude_slash_tmp: true,
-                })
+                let permission_profile = PermissionProfile::workspace_write_with(
+                    std::slice::from_ref(&root),
+                    NetworkSandboxPolicy::Restricted,
+                    /*exclude_tmpdir_env_var*/ true,
+                    /*exclude_slash_tmp*/ true,
+                );
+                agent_config.workspace_roots = vec![root];
+                agent_config.workspace_roots_explicit = true;
+                agent_config
+                    .permissions
+                    .set_workspace_roots(agent_config.workspace_roots.clone());
+                permission_profile
             }
-        }
-        .ok()?;
+            permission_profile => permission_profile,
+        };
+        agent_config
+            .permissions
+            .set_permission_profile(permission_profile)
+            .ok()?;
 
         agent_config.model = Some(
             config
