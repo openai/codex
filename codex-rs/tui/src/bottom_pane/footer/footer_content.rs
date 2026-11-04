@@ -8,14 +8,14 @@ use ratatui::widgets::Widget;
 
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::terminal_hyperlinks::HyperlinkLine;
-use crate::ui_tree::UiNode;
+use crate::ui_tree::UiTree;
 
 /// Owned content for the footer's negotiated left-hand area.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FooterContent {
     Line(Line<'static>),
     HyperlinkLine(HyperlinkLine),
-    Extension { content: UiNode },
+    Extension { content: UiTree },
 }
 
 impl FooterContent {

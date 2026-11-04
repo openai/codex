@@ -1,5 +1,6 @@
 //! Render the visible prefix of a horizontal display tree into one terminal line.
 
+use super::MAX_TEXT_BYTES;
 use super::UiNode;
 use super::UiTree;
 use crate::history_cell::sanitize_user_text;
@@ -8,27 +9,14 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::TerminalHyperlink;
 use ratatui::style::Modifier;
 
-const MAX_DEPTH: usize = 16;
-const MAX_NODES: usize = 256;
-const MAX_TEXT_BYTES: usize = 16 * 1024;
-
-struct Budget {
-    nodes: usize,
-    text_bytes: usize,
-}
-
-impl UiNode {
+impl UiTree {
     /// Render one row. On overflow, fit an unlinked ellipsis inside the supplied width.
     pub(crate) fn render_line(&self, width: u16) -> HyperlinkLine {
         let width = usize::from(width);
-        if width == 0 {
+        let Some(root) = self.0.as_ref().filter(|_| width > 0) else {
             return HyperlinkLine::default();
-        }
-        let mut budget = Budget {
-            nodes: MAX_NODES,
-            text_bytes: MAX_TEXT_BYTES,
         };
-        let mut line = node_line(Some(self), /*depth*/ 0, &mut budget).unwrap_or_default();
+        let mut line = node_line(root, width);
         if line.width() > width {
             line.line = truncate_line_to_width(line.line, width - 1);
             line.clip_hyperlinks_to_width(line.width());
@@ -38,30 +26,18 @@ impl UiNode {
     }
 }
 
-fn node_line(node: Option<&UiNode>, depth: usize, budget: &mut Budget) -> Option<HyperlinkLine> {
-    if budget.nodes == 0 {
-        return None;
-    }
-    budget.nodes -= 1;
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    match node? {
-        UiNode::Text { props, .. } => {
-            let raw = &props.text;
-            if budget.text_bytes == 0 && !raw.is_empty() {
-                return None;
-            }
-            let end = raw.floor_char_boundary(raw.len().min(budget.text_bytes));
-            let first = raw[..end].split('\n').next().unwrap_or_default();
-            budget.text_bytes -= first.len();
-            let visible = sanitize_user_text(first.into()).replace('\t', "    ");
-            Some(visible.into())
+fn node_line(node: &UiNode, width: usize) -> HyperlinkLine {
+    match node {
+        UiNode::String(raw) => {
+            // Built-in values are constructed directly, bypassing the wire decoder.
+            let raw = &raw[..raw.floor_char_boundary(MAX_TEXT_BYTES)];
+            let first = raw.split('\n').next().unwrap_or_default();
+            sanitize_user_text(first.into())
+                .replace('\t', "    ")
+                .into()
         }
-        UiNode::Link {
-            props, children, ..
-        } => {
-            let mut line = row_line(children, /*gap*/ 0, depth, budget)?;
+        UiNode::Link { props, children } => {
+            let mut line = row_line(children, /*gap*/ 0, width);
             for span in &mut line.line.spans {
                 span.style = span.style.add_modifier(Modifier::UNDERLINED);
             }
@@ -69,48 +45,40 @@ fn node_line(node: Option<&UiNode>, depth: usize, budget: &mut Budget) -> Option
             if width > 0 {
                 line.hyperlinks = vec![TerminalHyperlink::web(0..width, props.href.0.clone())];
             }
-            Some(line)
+            line
         }
-        UiNode::Row {
-            props, children, ..
-        } => {
-            // A spacing unit is four points; a terminal cell is eight points across.
-            let gap = (props.gap.unwrap_or(0.0).clamp(0.0, 32.0) / 2.0).ceil() as usize;
-            row_line(children, gap, depth, budget)
-        }
-        UiNode::Spacer { .. } => Some(" ".into()),
-        UiNode::Divider { .. } => Some("│".into()),
+        UiNode::Row { props, children } => row_line(children, props.gap, width),
+        UiNode::Text { children, .. } => row_line(children, /*gap*/ 0, width),
     }
 }
 
-fn row_line(
-    children: &[UiTree],
-    gap: usize,
-    depth: usize,
-    budget: &mut Budget,
-) -> Option<HyperlinkLine> {
-    let mut result: Option<HyperlinkLine> = None;
+fn row_line(children: &[Option<UiNode>], gap: u64, width: usize) -> HyperlinkLine {
+    let mut result = HyperlinkLine::default();
     let mut used = 0;
-    for child in children {
-        if budget.nodes == 0 {
-            break;
-        }
-        let Some(child) = node_line(child.as_ref(), depth + 1, budget) else {
+    for child in children.iter().flatten() {
+        let child = node_line(child, width);
+        let child_width = child.width();
+        if child_width == 0 {
             continue;
-        };
-        let spacing = if result.is_some() { gap } else { 0 };
-        let line = result.get_or_insert_default();
-        if spacing > 0 {
-            line.line.push_span(" ".repeat(spacing));
         }
-        let offset = used + spacing;
-        used = offset + child.width();
-        line.line.spans.extend(child.line.spans);
-        line.hyperlinks
+        if used > 0 && gap > 0 {
+            // One column past the viewport is sufficient to detect overflow.
+            let spacing = gap.min((width + 1 - used) as u64) as usize;
+            result.line.push_span(" ".repeat(spacing));
+            used += spacing;
+        }
+        let offset = used;
+        result.line.spans.extend(child.line.spans);
+        result
+            .hyperlinks
             .extend(child.hyperlinks.into_iter().map(|mut link| {
                 link.columns = link.columns.start + offset..link.columns.end + offset;
                 link
             }));
+        used += child_width;
+        if used > width {
+            break;
+        }
     }
     result
 }

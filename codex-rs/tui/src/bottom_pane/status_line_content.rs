@@ -4,11 +4,11 @@ use super::STATUS_LINE_SEPARATOR;
 use super::footer_content::FooterContent;
 use super::status_line_from_segments;
 use super::status_line_setup::StatusLineItem;
-use crate::ui_tree::Key;
 use crate::ui_tree::LinkHref;
 use crate::ui_tree::LinkProps;
-use crate::ui_tree::StackProps;
+use crate::ui_tree::RowProps;
 use crate::ui_tree::UiNode;
+use crate::ui_tree::UiTree;
 use codex_protocol::ThreadId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,27 +38,27 @@ impl StatusLineRenderer {
         let mut children = Vec::new();
         for (item, text) in segments {
             if !children.is_empty() {
-                children.push(Some(UiNode::text(/*key*/ None, STATUS_LINE_SEPARATOR)));
+                children.push(Some(UiNode::String(STATUS_LINE_SEPARATOR.to_owned())));
             }
-            let key = Some(Key::String(item.to_string()));
+            let text = UiNode::String(text);
             let node = if item == StatusLineItem::PullRequestNumber
                 && let Some(href) = pull_request_url.and_then(|url| LinkHref::try_from(url).ok())
             {
                 UiNode::Link {
-                    key,
                     props: LinkProps { href, title: None },
-                    children: vec![Some(UiNode::text(/*key*/ None, text))],
+                    children: vec![Some(text)],
                 }
             } else {
-                UiNode::text(key, text)
+                text
             };
             children.push(Some(node));
         }
         let tree = UiNode::Row {
-            key: Some(Key::String("status-line".to_string())),
-            props: StackProps::default(),
+            props: RowProps { gap: 0 },
             children,
         };
-        Some(FooterContent::Extension { content: tree })
+        Some(FooterContent::Extension {
+            content: UiTree(Some(tree)),
+        })
     }
 }

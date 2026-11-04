@@ -25,17 +25,18 @@ fn composer() -> ChatComposer {
 #[test]
 fn extension_status_line_clips_links_to_footer_layout() {
     let mut composer = composer();
-    let tree = serde_json::from_value(serde_json::json!({
-        "type": "row", "props": {}, "children": [
-            { "type": "text", "props": { "text": "plain" } },
-            { "type": "row", "props": {}, "children": [
-                { "type": "text", "props": { "text": " · " } },
+    let tree = r#"{
+        "type": "row", "props": {"gap": 0}, "children": [
+            "plain",
+            { "type": "row", "props": {"gap": 0}, "children": [
+                " · ",
                 { "type": "link", "props": { "href": "https://example.com/pr/42" }, "children": [
-                    { "type": "text", "props": { "text": "PR #42" } }
+                    "PR #42"
                 ] }
             ] }
         ]
-    }))
+    }"#
+    .parse()
     .unwrap();
     composer.set_status_line(Some(FooterContent::Extension { content: tree }));
 
