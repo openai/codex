@@ -3550,9 +3550,24 @@ struct RecordedHistogram {
 #[derive(Default)]
 struct RecordingMetrics {
     samples: Mutex<Vec<RecordedHistogram>>,
+    counters: Mutex<Vec<RecordedCounter>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecordedCounter {
+    name: String,
+    increment: i64,
+    tags: Vec<(String, String)>,
 }
 
 impl RecordingMetrics {
+    fn counters(&self) -> Vec<RecordedCounter> {
+        self.counters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     fn samples(&self) -> Vec<RecordedHistogram> {
         self.samples
             .lock()
@@ -3572,8 +3587,18 @@ impl ExtensionMetrics for RecordingMetrics {
         self.histogram(name, value, tags);
     }
 
-    fn counter(&self, name: &str, _inc: i64, _tags: &[(&str, &str)]) {
-        panic!("unexpected counter: {name}");
+    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
+        self.counters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(RecordedCounter {
+                name: name.to_string(),
+                increment: inc,
+                tags: tags
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                    .collect(),
+            });
     }
 
     fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {

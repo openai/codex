@@ -73,6 +73,9 @@ pub(crate) fn skill_tools(
         .get::<SkillsSessionState>()
         .and_then(|state| state.mcp_resources.clone());
     let analytics = SkillAnalytics::from_stores(session_store, thread_store);
+    let metrics = step_store
+        .get::<Arc<dyn ExtensionMetrics>>()
+        .map(|metrics| Arc::clone(metrics.as_ref()));
     let context = SkillToolContext {
         thread_id: thread_store.level_id().to_string(),
         providers,
@@ -87,10 +90,14 @@ pub(crate) fn skill_tools(
         }),
         Arc::new(read::ReadTool {
             context: context.clone(),
+            metrics: metrics.clone(),
         }),
     ];
     if context.step_state.discovery_v2 {
-        tools.push(Arc::new(installations::InstallationsTool { context }));
+        tools.push(Arc::new(installations::InstallationsTool {
+            context,
+            metrics,
+        }));
     }
     tools
 }

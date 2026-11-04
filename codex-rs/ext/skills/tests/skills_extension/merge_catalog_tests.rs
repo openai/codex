@@ -16,6 +16,9 @@ use serde_json::json;
 #[path = "source_telemetry_tests.rs"]
 mod source_telemetry_tests;
 
+#[path = "tool_metrics_tests.rs"]
+mod tool_metrics_tests;
+
 fn cloud_skill(name: &str) -> SkillCatalogEntry {
     let package = format!("skill://Plugin_123/{name}");
     SkillCatalogEntry::new(
@@ -145,6 +148,7 @@ impl MergeHarness {
         &self,
         step: &ExtensionData,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+        step.get_or_init(|| self.catalog_metrics.clone() as Arc<dyn ExtensionMetrics>);
         if let Some(snapshots) = &self.snapshots {
             step.insert(snapshots.clone());
         }

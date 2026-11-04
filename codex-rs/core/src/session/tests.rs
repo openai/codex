@@ -465,9 +465,8 @@ fn single_histogram_attributes(
         .collect()
 }
 
-#[test]
-fn extension_metrics_preserve_session_metadata_tags() {
-    let metrics = MetricsClient::new(
+fn test_metrics_client() -> MetricsClient {
+    MetricsClient::new(
         MetricsConfig::in_memory(
             "test",
             "codex-core",
@@ -476,7 +475,12 @@ fn extension_metrics_preserve_session_metadata_tags() {
         )
         .with_runtime_reader(),
     )
-    .expect("in-memory metrics client");
+    .expect("in-memory metrics client")
+}
+
+#[test]
+fn extension_metrics_preserve_session_metadata_tags() {
+    let metrics = test_metrics_client();
     let session_telemetry = SessionTelemetry::new(
         ThreadId::new(),
         "gpt-5.4",
@@ -565,25 +569,24 @@ async fn world_state_extension_metrics_follow_turn_model_switch() {
             Vec<codex_extension_api::WorldStateSectionContribution>,
         > {
             Box::pin(async move {
-                input
-                    .extension_metrics
-                    .expect("turn metrics should be available")
-                    .histogram("codex.test.extension.turn", /*value*/ 1, &[]);
+                for metrics in [
+                    input.extension_metrics.expect("turn metrics"),
+                    Arc::clone(
+                        input
+                            .step_store
+                            .get::<Arc<dyn codex_extension_api::ExtensionMetrics>>()
+                            .expect("step metrics")
+                            .as_ref(),
+                    ),
+                ] {
+                    metrics.histogram("codex.test.extension.turn", /*value*/ 1, &[]);
+                }
                 Vec::new()
             })
         }
     }
 
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory(
-            "test",
-            "codex-core",
-            env!("CARGO_PKG_VERSION"),
-            InMemoryMetricExporter::default(),
-        )
-        .with_runtime_reader(),
-    )
-    .expect("in-memory metrics client");
+    let metrics = test_metrics_client();
     let (mut session, mut turn_context) = make_session_and_context().await;
     turn_context.session_telemetry = turn_context
         .session_telemetry
@@ -594,16 +597,27 @@ async fn world_state_extension_metrics_follow_turn_model_switch() {
     } else {
         "gpt-5.4"
     };
-    let turn_context = Arc::new(
-        turn_context
-            .with_model(next_model.to_string(), &session.services.models_manager)
-            .await,
-    );
+    let mut turn_context = turn_context
+        .with_model(next_model.to_string(), &session.services.models_manager)
+        .await;
+    turn_context.session_telemetry = turn_context
+        .session_telemetry
+        .clone()
+        .with_model("startup-model", "startup-model");
+    let turn_context = Arc::new(turn_context);
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
     builder.prompt_contributor(Arc::new(WorldStateMetricsRecorder));
     session.services.extensions = Arc::new(builder.build());
 
-    let _world_state = build_world_state_from_turn_context(&session, &turn_context).await;
+    let session = Arc::new(session);
+    let step = session
+        .capture_step_context(turn_context, &CancellationToken::new())
+        .await
+        .expect("step capture should succeed after switching to a supported model");
+    session
+        .build_world_state_for_step(&step, /*new_window*/ false)
+        .await
+        .expect("world state preparation should succeed and emit extension metrics");
 
     let snapshot = metrics.snapshot().expect("metrics snapshot");
     let attributes = single_histogram_attributes(&snapshot, "codex.test.extension.turn");

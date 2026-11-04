@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_analytics::InvocationType;
+use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
@@ -87,6 +88,7 @@ enum ReadMetadata {
 #[derive(Clone)]
 pub(super) struct ReadTool {
     pub(super) context: SkillToolContext,
+    pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
 impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
@@ -116,289 +118,351 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
         'call: 'a,
     {
         Box::pin(async move {
-            let (args, source) = if self.context.step_state.discovery_v2 {
-                let args: ReadInstallationArgs = parse_args(&call)?;
-                (args.read, args.source)
-            } else {
-                (parse_args::<ReadArgs>(&call)?, None)
-            };
-            if let Some(source) = &source {
-                source.validate()?;
-            }
-            let response_byte_budget = call.response_byte_budget(MAX_SKILL_RESPONSE_BYTES);
-            validate_handle("package", args.package.as_str(), MAX_HANDLE_BYTES)?;
-            if let Some(resource) = args.resource.as_deref() {
-                validate_handle("resource", resource, MAX_HANDLE_BYTES)?;
-            }
-
-            let matches = self.context.matching_packages(&args.package);
-            let (skill_entry, selected_source, output_authority) = matches
-                .iter()
-                .find_map(|(entry, matched_source)| {
-                    let selected_source = match &source {
-                        None => matched_source.clone(),
-                        Some(filter) => std::iter::once(matched_source.clone())
-                            .chain(entry.source_locations())
-                            .find(|candidate| filter.matches(candidate))?,
-                    };
-                    let authority =
-                        SkillToolAuthority::from_authority(&selected_source.authority)?.selector();
-                    Some((*entry, selected_source, authority))
-                })
-                .ok_or_else(|| {
-                    FunctionCallError::RespondToModel(if source.is_some() {
-                        "skill package is not available from the requested source".to_string()
-                    } else {
-                        "skill package is not available".to_string()
-                    })
-                })?;
-            let authority = selected_source.authority.clone();
-            let package = selected_source.package.clone();
-            let main_prompt = selected_source.main_prompt.clone();
-            let requested_resource = match args.resource {
-                None => main_prompt.clone(),
-                Some(resource) if resource == main_prompt.as_str() => main_prompt.clone(),
-                Some(resource) => main_prompt
-                    .bind_environment_package_resource(&package, resource.clone())
-                    .unwrap_or_else(|| SkillResourceId::new(resource)),
-            };
-            // Record the selected route before either cache or provider can serve the read.
-            // This is an attempted read, not a successful invocation or a backend RPC.
-            tracing::event!(
-                name: "codex.skill_read.source_selected",
-                target: "codex_otel.trace_safe",
-                tracing::Level::INFO,
-                event.name = "codex.skill_read.source_selected",
-                conversation.id = %self.context.thread_id,
-                turn_id = %call.turn_id,
-                call_id = %call.call_id,
-                tool_namespace = SKILLS_NAMESPACE,
-                tool_name = TOOL_NAME,
-                skill_source = match output_authority {
-                    SkillToolAuthoritySelector::Cloud => "cloud",
-                    SkillToolAuthoritySelector::Executor => "executor",
-                },
-                skill_name = %skill_entry.name,
-                skill_plugin_id = selected_source.plugin_id.as_deref(),
-                skill_resource_kind = if requested_resource == main_prompt {
-                    "main_prompt"
+            let mut outcome = "internal_error";
+            let result = async {
+                let (args, source) = if self.context.step_state.discovery_v2 {
+                    let args: ReadInstallationArgs =
+                        parse_args(&call).inspect_err(|_| outcome = "invalid_arguments")?;
+                    (args.read, args.source)
                 } else {
-                    "supporting_resource"
-                },
-                is_continuation = args.cursor.is_some(),
-                "Selected skill read source"
-            );
-            let (context, access_key) = match output_authority {
-                SkillToolAuthoritySelector::Cloud => (
-                    SkillReadContext::Cloud {
-                        mcp_resources: self.context.mcp_resources.clone(),
-                    },
-                    None,
-                ),
-                SkillToolAuthoritySelector::Executor => {
-                    let fs = requested_resource
-                        .environment_path()
-                        .and_then(|(id, _)| {
-                            call.environments
-                                .iter()
-                                .find(|env| env.environment_id == id)
-                        })
-                        .map(codex_extension_api::ToolEnvironment::fs)
-                        .ok_or_else(|| {
-                            FunctionCallError::RespondToModel(
-                                "skill environment is not available for this callback".to_string(),
-                            )
-                        })?;
-                    (SkillReadContext::Executor { fs }, Some(fs.cache_key()))
-                }
-            };
-            let cursor_start = |contents: &str| {
-                if self.context.step_state.discovery_v2 {
-                    parse_pagination_cursor(
-                        args.cursor.as_deref(),
-                        &(&source, &package, contents),
-                        "skills.read",
+                    (
+                        parse_args::<ReadArgs>(&call)
+                            .inspect_err(|_| outcome = "invalid_arguments")?,
+                        None,
                     )
-                } else {
-                    parse_pagination_cursor(args.cursor.as_deref(), contents, "skills.read")
+                };
+                if let Some(source) = &source {
+                    source
+                        .validate()
+                        .inspect_err(|_| outcome = "invalid_arguments")?;
                 }
-            };
-            // Reuse the snapshot to avoid reading the whole file for each page. File edits
-            // are not detected on cache hits, so a continuation can return old contents.
-            // Snapshots have no expiry and are not cleared after the final page.
-            let cached = args.cursor.as_deref().and_then(|_| {
-                let access = access_key.as_ref()?;
-                let snapshot = self
-                    .context
-                    .thread_state
-                    .executor_read_snapshot
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let snapshot = snapshot.as_ref().filter(|snapshot| {
-                    snapshot.authority == authority
-                        && snapshot.package == package
-                        && snapshot.result.resource == requested_resource
-                        && snapshot.access == *access
-                })?;
-                let start = cursor_start(&snapshot.result.contents).ok()?;
-                Some((Arc::clone(&snapshot.result), start))
-            });
-            let (result, start) = match cached {
-                Some(cached) => cached,
-                None => {
-                    let result = self
+                let response_byte_budget = call.response_byte_budget(MAX_SKILL_RESPONSE_BYTES);
+                validate_handle("package", args.package.as_str(), MAX_HANDLE_BYTES)
+                    .inspect_err(|_| outcome = "invalid_arguments")?;
+                if let Some(resource) = args.resource.as_deref() {
+                    validate_handle("resource", resource, MAX_HANDLE_BYTES)
+                        .inspect_err(|_| outcome = "invalid_arguments")?;
+                }
+
+                let matches = self.context.matching_packages(&args.package);
+                let (skill_entry, selected_source, output_authority) = matches
+                    .iter()
+                    .find_map(|(entry, matched_source)| {
+                        let selected_source = match &source {
+                            None => matched_source.clone(),
+                            Some(filter) => std::iter::once(matched_source.clone())
+                                .chain(entry.source_locations())
+                                .find(|candidate| filter.matches(candidate))?,
+                        };
+                        let authority =
+                            SkillToolAuthority::from_authority(&selected_source.authority)?
+                                .selector();
+                        Some((*entry, selected_source, authority))
+                    })
+                    .ok_or_else(|| {
+                        outcome = if !matches.is_empty() {
+                            "source_unavailable"
+                        } else if args.package.alias_source().is_some()
+                            && self
+                                .context
+                                .step_state
+                                .catalog
+                                .aliases
+                                .resolve(&args.package)
+                                .is_none()
+                        {
+                            "unresolved_alias"
+                        } else {
+                            "package_unavailable"
+                        };
+                        FunctionCallError::RespondToModel(if source.is_some() {
+                            "skill package is not available from the requested source".to_string()
+                        } else {
+                            "skill package is not available".to_string()
+                        })
+                    })?;
+                let authority = selected_source.authority.clone();
+                let package = selected_source.package.clone();
+                let main_prompt = selected_source.main_prompt.clone();
+                let requested_resource = match args.resource {
+                    None => main_prompt.clone(),
+                    Some(resource) if resource == main_prompt.as_str() => main_prompt.clone(),
+                    Some(resource) => main_prompt
+                        .bind_environment_package_resource(&package, resource.clone())
+                        .unwrap_or_else(|| SkillResourceId::new(resource)),
+                };
+                // Record the selected route before either cache or provider can serve the read.
+                // This is an attempted read, not a successful invocation or a backend RPC.
+                tracing::event!(
+                    name: "codex.skill_read.source_selected",
+                    target: "codex_otel.trace_safe",
+                    tracing::Level::INFO,
+                    event.name = "codex.skill_read.source_selected",
+                    conversation.id = %self.context.thread_id,
+                    turn_id = %call.turn_id,
+                    call_id = %call.call_id,
+                    tool_namespace = SKILLS_NAMESPACE,
+                    tool_name = TOOL_NAME,
+                    skill_source = match output_authority {
+                        SkillToolAuthoritySelector::Cloud => "cloud",
+                        SkillToolAuthoritySelector::Executor => "executor",
+                    },
+                    skill_name = %skill_entry.name,
+                    skill_plugin_id = selected_source.plugin_id.as_deref(),
+                    skill_resource_kind = if requested_resource == main_prompt {
+                        "main_prompt"
+                    } else {
+                        "supporting_resource"
+                    },
+                    is_continuation = args.cursor.is_some(),
+                    "Selected skill read source"
+                );
+                let (context, access_key) = match output_authority {
+                    SkillToolAuthoritySelector::Cloud => (
+                        SkillReadContext::Cloud {
+                            mcp_resources: self.context.mcp_resources.clone(),
+                        },
+                        None,
+                    ),
+                    SkillToolAuthoritySelector::Executor => {
+                        let fs = requested_resource
+                            .environment_path()
+                            .and_then(|(id, _)| {
+                                call.environments
+                                    .iter()
+                                    .find(|env| env.environment_id == id)
+                            })
+                            .map(codex_extension_api::ToolEnvironment::fs)
+                            .ok_or_else(|| {
+                                outcome = "environment_unavailable";
+                                FunctionCallError::RespondToModel(
+                                    "skill environment is not available for this callback"
+                                        .to_string(),
+                                )
+                            })?;
+                        (SkillReadContext::Executor { fs }, Some(fs.cache_key()))
+                    }
+                };
+                let cursor_start = |contents: &str| {
+                    if self.context.step_state.discovery_v2 {
+                        parse_pagination_cursor(
+                            args.cursor.as_deref(),
+                            &(&source, &package, contents),
+                            "skills.read",
+                        )
+                    } else {
+                        parse_pagination_cursor(args.cursor.as_deref(), contents, "skills.read")
+                    }
+                };
+                // Reuse the snapshot to avoid reading the whole file for each page. File edits
+                // are not detected on cache hits, so a continuation can return old contents.
+                // Snapshots have no expiry and are not cleared after the final page.
+                let cached = args.cursor.as_deref().and_then(|_| {
+                    let access = access_key.as_ref()?;
+                    let snapshot = self
                         .context
                         .thread_state
-                        .read_skill(
-                            &self.context.providers,
-                            SkillReadRequest {
-                                authority: authority.clone(),
-                                package: package.clone(),
-                                resource: requested_resource.clone(),
-                                context,
-                            },
-                        )
-                        .await
-                        .map_err(|err| {
-                            tracing::warn!(
-                                error = %err,
-                                turn_id = %call.turn_id,
-                                call_id = %call.call_id,
-                                resource = requested_resource.as_str(),
-                                "skills.read provider request failed"
-                            );
-                            FunctionCallError::RespondToModel(
-                                "failed to read skill resource".to_string(),
-                            )
-                        })?;
-                    if result.resource != requested_resource {
-                        return Err(FunctionCallError::Fatal(
-                            "skill provider returned a different resource".to_string(),
-                        ));
-                    }
-                    let start = cursor_start(&result.contents)?;
-                    (Arc::new(result), start)
-                }
-            };
-            if start > result.contents.len() || !result.contents.is_char_boundary(start) {
-                return Err(FunctionCallError::RespondToModel(
-                    "skills.read cursor is invalid".to_string(),
-                ));
-            }
-            // Shadow candidates use the merged identity, not the selected read route.
-            if skill_entry.authority.kind == SkillSourceKind::Cloud
-                && let Some(state) = self
-                    .context
-                    .thread_state
-                    .shadow_selection_turn(&call.turn_id)
-            {
-                state.record_invocation(skill_entry.main_prompt.as_str());
-            }
-            let metadata = if self.context.step_state.discovery_v2 {
-                let mut installations = Vec::new();
-                let mut installations_truncated = false;
-                let mut installation_bytes = 2; // JSON array brackets.
-                let installation_budget =
-                    MAX_INSTALLATION_METADATA_BYTES.min(response_byte_budget / 4);
-                // Prefer the installation used by this read before other sources fill the budget.
-                for source in
-                    std::iter::once(selected_source.clone()).chain(skill_entry.source_locations())
-                {
-                    let Some(installation) = InstallationLocation::from_source(&source) else {
-                        continue;
-                    };
-                    if installations.contains(&installation) {
-                        continue;
-                    }
-                    let size =
-                        serialized_len(&installation)? + usize::from(!installations.is_empty());
-                    if installation_bytes + size > installation_budget {
-                        installations_truncated = true;
-                        continue;
-                    }
-                    installation_bytes += size;
-                    installations.push(installation);
-                }
-                installations_truncated |= matches.iter().any(|(entry, _)| {
-                    entry
-                        .source_locations()
-                        .filter_map(|source| InstallationLocation::from_source(&source))
-                        .any(|location| !installations.contains(&location))
+                        .executor_read_snapshot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let snapshot = snapshot.as_ref().filter(|snapshot| {
+                        snapshot.authority == authority
+                            && snapshot.package == package
+                            && snapshot.result.resource == requested_resource
+                            && snapshot.access == *access
+                    })?;
+                    let start = cursor_start(&snapshot.result.contents).ok()?;
+                    Some((Arc::clone(&snapshot.result), start))
                 });
-                ReadMetadata::Installations(InstallationReadMetadata {
-                    installations,
-                    installations_truncated,
-                })
-            } else {
-                let skill_root = if output_authority == SkillToolAuthoritySelector::Executor {
-                    main_prompt
-                        .environment_path()
-                        .and_then(|(_, path)| path.parent())
-                        .map(|path| path.inferred_native_path_string())
-                } else {
-                    None
-                };
-                ReadMetadata::Legacy(LegacyReadMetadata { skill_root })
-            };
-            let response = page_response(
-                result.resource.as_str(),
-                &result.contents,
-                &metadata,
-                start,
-                response_byte_budget,
-                |offset| {
-                    if self.context.step_state.discovery_v2 {
-                        pagination_cursor(&(&source, &package, result.contents.as_str()), offset)
-                    } else {
-                        pagination_cursor(result.contents.as_str(), offset)
+                let (result, start) = match cached {
+                    Some(cached) => cached,
+                    None => {
+                        let result = self
+                            .context
+                            .thread_state
+                            .read_skill(
+                                &self.context.providers,
+                                SkillReadRequest {
+                                    authority: authority.clone(),
+                                    package: package.clone(),
+                                    resource: requested_resource.clone(),
+                                    context,
+                                },
+                            )
+                            .await
+                            .map_err(|err| {
+                                outcome = "read_failed";
+                                tracing::warn!(
+                                    error = %err,
+                                    turn_id = %call.turn_id,
+                                    call_id = %call.call_id,
+                                    resource = requested_resource.as_str(),
+                                    "skills.read provider request failed"
+                                );
+                                FunctionCallError::RespondToModel(
+                                    "failed to read skill resource".to_string(),
+                                )
+                            })?;
+                        if result.resource != requested_resource {
+                            return Err(FunctionCallError::Fatal(
+                                "skill provider returned a different resource".to_string(),
+                            ));
+                        }
+                        let start = cursor_start(&result.contents)
+                            .inspect_err(|_| outcome = "invalid_cursor")?;
+                        (Arc::new(result), start)
                     }
-                },
-            )?;
-            let response_authority = if matches!(
-                &response.metadata,
-                ReadMetadata::Installations(metadata)
-                    if metadata.installations.iter().any(|location| {
-                        matches!(location, InstallationLocation::Cloud { .. })
-                    })
-            ) {
-                SkillToolAuthoritySelector::Cloud
-            } else {
-                output_authority
-            };
-            let output = skill_json_output(&response, response_authority)?;
-            if output_authority == super::SkillToolAuthoritySelector::Executor
-                && response.next_cursor.is_some()
-                && result.contents.len() <= MAX_SKILL_RESOURCE_CONTENT_BYTES
-                && let Some(access) = access_key
-            {
-                *self
-                    .context
-                    .thread_state
-                    .executor_read_snapshot
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    Some(ExecutorReadSnapshot {
-                        authority,
-                        package,
-                        access,
-                        result,
+                };
+                if start > result.contents.len() || !result.contents.is_char_boundary(start) {
+                    outcome = "invalid_cursor";
+                    return Err(FunctionCallError::RespondToModel(
+                        "skills.read cursor is invalid".to_string(),
+                    ));
+                }
+                // Shadow candidates use the merged identity, not the selected read route.
+                if skill_entry.authority.kind == SkillSourceKind::Cloud
+                    && let Some(state) = self
+                        .context
+                        .thread_state
+                        .shadow_selection_turn(&call.turn_id)
+                {
+                    state.record_invocation(skill_entry.main_prompt.as_str());
+                }
+                let metadata = if self.context.step_state.discovery_v2 {
+                    let mut installations = Vec::new();
+                    let mut installations_truncated = false;
+                    let mut installation_bytes = 2; // JSON array brackets.
+                    let installation_budget =
+                        MAX_INSTALLATION_METADATA_BYTES.min(response_byte_budget / 4);
+                    // Prefer the installation used by this read before other sources fill the budget.
+                    for source in std::iter::once(selected_source.clone())
+                        .chain(skill_entry.source_locations())
+                    {
+                        let Some(installation) = InstallationLocation::from_source(&source) else {
+                            continue;
+                        };
+                        if installations.contains(&installation) {
+                            continue;
+                        }
+                        let size =
+                            serialized_len(&installation)? + usize::from(!installations.is_empty());
+                        if installation_bytes + size > installation_budget {
+                            installations_truncated = true;
+                            continue;
+                        }
+                        installation_bytes += size;
+                        installations.push(installation);
+                    }
+                    installations_truncated |= matches.iter().any(|(entry, _)| {
+                        entry
+                            .source_locations()
+                            .filter_map(|source| InstallationLocation::from_source(&source))
+                            .any(|location| !installations.contains(&location))
                     });
-            }
+                    ReadMetadata::Installations(InstallationReadMetadata {
+                        installations,
+                        installations_truncated,
+                    })
+                } else {
+                    let skill_root = if output_authority == SkillToolAuthoritySelector::Executor {
+                        main_prompt
+                            .environment_path()
+                            .and_then(|(_, path)| path.parent())
+                            .map(|path| path.inferred_native_path_string())
+                    } else {
+                        None
+                    };
+                    ReadMetadata::Legacy(LegacyReadMetadata { skill_root })
+                };
+                let response = page_response(
+                    result.resource.as_str(),
+                    &result.contents,
+                    &metadata,
+                    start,
+                    response_byte_budget,
+                    |offset| {
+                        if self.context.step_state.discovery_v2 {
+                            pagination_cursor(
+                                &(&source, &package, result.contents.as_str()),
+                                offset,
+                            )
+                        } else {
+                            pagination_cursor(result.contents.as_str(), offset)
+                        }
+                    },
+                )
+                .inspect_err(|error| {
+                    outcome = match error {
+                        FunctionCallError::RespondToModel(_) => "response_budget",
+                        FunctionCallError::Fatal(_) => "internal_error",
+                    };
+                })?;
+                let response_authority = if matches!(
+                    &response.metadata,
+                    ReadMetadata::Installations(metadata)
+                        if metadata.installations.iter().any(|location| {
+                            matches!(location, InstallationLocation::Cloud { .. })
+                        })
+                ) {
+                    SkillToolAuthoritySelector::Cloud
+                } else {
+                    output_authority
+                };
+                let output = skill_json_output(&response, response_authority)?;
+                if output_authority == super::SkillToolAuthoritySelector::Executor
+                    && response.next_cursor.is_some()
+                    && result.contents.len() <= MAX_SKILL_RESOURCE_CONTENT_BYTES
+                    && let Some(access) = access_key
+                {
+                    *self
+                        .context
+                        .thread_state
+                        .executor_read_snapshot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(ExecutorReadSnapshot {
+                            authority,
+                            package,
+                            access,
+                            result,
+                        });
+                }
 
-            if requested_resource == main_prompt
-                && args.cursor.is_none()
-                && let Some(analytics) = self.context.analytics.as_ref()
-            {
-                analytics.track_skill_invocation(
-                    skill_entry,
-                    &selected_source,
-                    call.model.clone(),
-                    call.turn_id.clone(),
-                    InvocationType::Implicit,
+                if requested_resource == main_prompt
+                    && args.cursor.is_none()
+                    && let Some(analytics) = self.context.analytics.as_ref()
+                {
+                    analytics.track_skill_invocation(
+                        skill_entry,
+                        &selected_source,
+                        call.model.clone(),
+                        call.turn_id.clone(),
+                        InvocationType::Implicit,
+                    );
+                }
+
+                outcome = "success";
+                Ok(output)
+            }
+            .await;
+            if let Some(metrics) = &self.metrics {
+                metrics.counter(
+                    "codex.skills.read.result",
+                    /*inc*/ 1,
+                    &[
+                        ("outcome", outcome),
+                        (
+                            "discovery_version",
+                            if self.context.step_state.discovery_v2 {
+                                "v2"
+                            } else {
+                                "v1"
+                            },
+                        ),
+                    ],
                 );
             }
-
-            Ok(output)
+            result
         })
     }
 }

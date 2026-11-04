@@ -4316,6 +4316,9 @@ impl Session {
             }
             let extension_data =
                 codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
+            extension_data.insert(extension_metrics::from_session_telemetry(
+                session_telemetry.clone(),
+            ));
             extension_data.insert_arc(Arc::clone(&settings.model_info.model));
             extension_data.insert_arc(
                 self.host_skills_for_step(&turn_context, &environments)
