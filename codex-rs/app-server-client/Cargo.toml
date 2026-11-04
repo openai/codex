@@ -17,6 +17,7 @@ codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-transport = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-cloud-client = { path = "../cloud-client" }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
@@ -25,9 +26,11 @@ codex-protocol = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
+color-eyre = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tokio-tungstenite = { workspace = true }
 toml = { workspace = true }

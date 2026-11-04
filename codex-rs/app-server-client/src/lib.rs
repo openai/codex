@@ -21,6 +21,7 @@
 //! unread notifications cannot prevent request responses from being delivered.
 
 mod cloud;
+pub mod cloud_backend;
 mod path;
 mod remote;
 mod remote_websocket;

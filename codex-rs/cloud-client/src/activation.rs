@@ -482,7 +482,7 @@ fn parse_subagent_source(value: wire::SubAgentSource) -> Result<SubAgentSource, 
     }
 }
 
-fn parse_status(value: wire::ThreadStatus) -> Result<ThreadStatus, Error> {
+pub(super) fn parse_status(value: wire::ThreadStatus) -> Result<ThreadStatus, Error> {
     match required(value.value)? {
         wire::thread_status::Value::NotLoaded(_) => Ok(ThreadStatus::NotLoaded),
         wire::thread_status::Value::Idle(_) => Ok(ThreadStatus::Idle),

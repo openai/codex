@@ -1,5 +1,7 @@
 //! Typed live transcript updates for the attached thread.
 use crate::Error;
+use crate::Event;
+use crate::ThreadStatus;
 use crate::transcript_wire as wire;
 use std::fmt;
 
@@ -97,6 +99,7 @@ redacted_debug!(
 );
 
 // Field numbers in the ASB Notification.value oneof.
+const THREAD_STATUS_CHANGED: u32 = 3;
 const TURN_STARTED: u32 = 21;
 const TURN_COMPLETED: u32 = 23;
 pub(super) const ITEM_STARTED: u32 = 27;
@@ -120,6 +123,25 @@ impl From<prost::DecodeError> for DecodeFailure {
 pub(super) fn required<T>(value: Option<T>) -> Result<T, DecodeFailure> {
     value.ok_or(DecodeFailure::MissingField)
 }
+impl Event {
+    /// Returns a supported status update for this thread from an Attach notification.
+    pub fn thread_status_for(&self, thread_id: &str) -> Option<ThreadStatus> {
+        let Self::Notification(bytes) = self else {
+            return None;
+        };
+        let (tag, values) = wire::notification(bytes).ok().flatten()?;
+        if tag != THREAD_STATUS_CHANGED {
+            return None;
+        }
+        let envelope = wire::merge_messages::<wire::Envelope<wire::StatusUpdate>>(values).ok()?;
+        let params = envelope.params?;
+        if params.thread_id.as_deref() != Some(thread_id) {
+            return None;
+        }
+        crate::activation::parse_status(params.status?).ok()
+    }
+}
+
 impl TranscriptEvent {
     pub(crate) fn decode(thread_id: &str, payload: &[u8]) -> Result<Option<Self>, Error> {
         match Self::decode_present_fields(thread_id, payload) {

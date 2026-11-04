@@ -67,6 +67,13 @@ pub(super) struct Envelope<T: Message + Default + std::fmt::Debug> {
     pub params: Option<T>,
 }
 #[derive(Clone, Message)]
+pub(super) struct StatusUpdate {
+    #[prost(message, optional, tag = "1")]
+    pub status: Option<crate::activation_wire::ThreadStatus>,
+    #[prost(string, optional, tag = "2")]
+    pub thread_id: Option<String>,
+}
+#[derive(Clone, Message)]
 pub(super) struct PatchUpdate {
     #[prost(message, optional, tag = "1")]
     pub changes: Option<Changes>,
