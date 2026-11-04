@@ -238,7 +238,7 @@ fn forward(
         return;
     }
     let notification = match event {
-        cloud::Event::Transcript(event) => match events::transcript(*event) {
+        cloud::Event::Transcript(event) => match events::transcript(event.thread_id, event.update) {
             Ok(Some(notification)) => notification,
             Ok(None) => return,
             Err(_) => cloud_error(id, "The cloud sent an unsupported transcript event."),
