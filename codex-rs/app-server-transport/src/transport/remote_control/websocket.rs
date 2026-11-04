@@ -51,6 +51,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -1050,7 +1051,18 @@ impl RemoteControlWebsocket {
                     }
                 }
             };
-            let (payloads, write_complete_tx) = {
+            let item_page = queued_server_envelope
+                .event
+                .item_list_response_id()
+                .filter(|_| tracing::enabled!(tracing::Level::DEBUG))
+                .map(|id| {
+                    (
+                        id.clone(),
+                        queued_server_envelope.stream_id.clone(),
+                        Instant::now(),
+                    )
+                });
+            let (payloads, seq_id) = {
                 let mut state = state.lock().await;
                 let seq_key = (
                     queued_server_envelope.client_id.clone(),
@@ -1090,20 +1102,49 @@ impl RemoteControlWebsocket {
                     .next_seq_id_by_stream
                     .insert(seq_key, seq_id.saturating_add(1));
 
-                (payloads, queued_server_envelope.write_complete_tx)
+                (payloads, seq_id)
             };
 
+            let log_item_page_write = item_page.map(|(request_id, stream_id, prepare_started)| {
+                let frame_count = payloads.len();
+                let wire_bytes = payloads.iter().map(String::len).sum::<usize>();
+                let write_started = Instant::now();
+                move |outcome: &str| {
+                    tracing::debug!(
+                        %request_id,
+                        stream_id = %stream_id.0,
+                        seq_id,
+                        frame_count,
+                        wire_bytes,
+                        prepare_ms = (write_started - prepare_started).as_millis() as u64,
+                        write_ms = write_started.elapsed().as_millis() as u64,
+                        outcome,
+                        "remote control item page write finished"
+                    )
+                }
+            });
             for payload in payloads {
                 tokio::select! {
-                    _ = shutdown_token.cancelled() => return Ok(()),
+                    _ = shutdown_token.cancelled() => {
+                        if let Some(log) = log_item_page_write {
+                            log("interrupted");
+                        }
+                        return Ok(());
+                    }
                     send_result = websocket_writer.send(tungstenite::Message::Text(payload.into())) => {
                         if let Err(err) = send_result {
+                            if let Some(log) = log_item_page_write {
+                                log("write_error");
+                            }
                             return Err(io::Error::other(err));
                         }
                     }
                 }
             }
-            if let Some(write_complete_tx) = write_complete_tx {
+            if let Some(log) = log_item_page_write {
+                log("success");
+            }
+            if let Some(write_complete_tx) = queued_server_envelope.write_complete_tx {
                 let _ = write_complete_tx.send(());
             }
         }
