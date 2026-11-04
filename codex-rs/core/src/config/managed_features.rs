@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
 use codex_config::Constrained;
 use codex_config::ConstrainedWithSource;
 use codex_config::ConstraintError;
@@ -15,6 +17,31 @@ use codex_features::FeatureOverrides;
 use codex_features::Features;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
+
+/// A project's explicit opt-in replaces only a strictly lower-priority V1 opt-out.
+pub(super) fn project_overrides_legacy_subagent_opt_out(layers: &ConfigLayerStack) -> bool {
+    let mut project_enabled = false;
+    for layer in layers.layers_high_to_low() {
+        if let Some(features) = layer.config.get("features").and_then(toml::Value::as_table)
+            && features
+                .keys()
+                .any(|key| feature_for_key(key) == Some(Feature::Collab))
+        {
+            return project_enabled;
+        }
+        if matches!(layer.name, ConfigLayerSource::Project { .. })
+            && layer
+                .config
+                .get("agents")
+                .and_then(|agents| agents.get("enabled"))
+                .and_then(toml::Value::as_bool)
+                == Some(true)
+        {
+            project_enabled = true;
+        }
+    }
+    false
+}
 
 /// Wrapper around [`Features`] which enforces constraints defined in
 /// `FeatureRequirementsToml` and provides normalization to ensure constraints

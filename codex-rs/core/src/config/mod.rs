@@ -3576,7 +3576,7 @@ impl Config {
             web_search_request: override_tools_web_search_request,
         };
 
-        let configured_features = Features::from_sources(
+        let mut configured_features = Features::from_sources(
             FeatureConfigSource {
                 features: cfg.features.as_ref(),
                 experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
@@ -3586,6 +3586,12 @@ impl Config {
             },
             feature_overrides,
         );
+        if cfg.agents.as_ref().and_then(|agents| agents.enabled) == Some(true)
+            && !configured_features.enabled(Feature::Collab)
+            && managed_features::project_overrides_legacy_subagent_opt_out(&config_layer_stack)
+        {
+            configured_features.enable(Feature::Collab);
+        }
         let features = ManagedFeatures::from_configured_with_warnings(
             configured_features,
             feature_requirements,

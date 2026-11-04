@@ -1,6 +1,12 @@
 use anyhow::Result;
+use codex_config::CONFIG_TOML_FILE;
+use codex_config::LoaderOverrides;
+use codex_config::loader::project_trust_key;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::ConfigOverrides;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
@@ -30,6 +36,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -404,6 +411,98 @@ async fn multi_agent_config_precedence_overrides_remote_model_selector() -> Resu
     .await?;
     assert!(tool_names(&v2_body).contains(&MULTI_AGENT_V2_NAMESPACE.to_string()));
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn migrating_only_the_project_agent_setting_preserves_v1_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let home = TempDir::new()?;
+    let project = TempDir::new()?;
+    let project_key = toml::Value::String(project_trust_key(project.path()));
+    std::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        format!(
+            "[features]\nmulti_agent = false\n[projects.{project_key}]\ntrust_level = 'trusted'"
+        ),
+    )?;
+    let project_dir = project.path().join(".codex");
+    std::fs::create_dir(&project_dir)?;
+    let config = || {
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(project.path().to_path_buf()),
+                ..Default::default()
+            })
+    };
+    let migrated = "[agents]\nenabled = true";
+    for (project_settings, builder, model_version, expected_namespace) in [
+        ("", config(), None, None),
+        (
+            "[features]\nmulti_agent = true",
+            config(),
+            None,
+            Some("multi_agent_v1"),
+        ),
+        (migrated, config(), None, Some("multi_agent_v1")),
+        (
+            migrated,
+            config(),
+            Some(MultiAgentVersion::V2),
+            Some(MULTI_AGENT_V2_NAMESPACE),
+        ),
+        (
+            "[agents]\nenabled = true\n[features]\nmulti_agent = false",
+            config(),
+            None,
+            None,
+        ),
+        (
+            migrated,
+            config().cli_overrides(vec![("features.multi_agent".to_string(), false.into())]),
+            None,
+            None,
+        ),
+        (
+            migrated,
+            config().cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                    "[features]\nmulti_agent = false",
+                ),
+            ),
+            None,
+            None,
+        ),
+    ] {
+        std::fs::write(project_dir.join(CONFIG_TOML_FILE), project_settings)?;
+        let mut loaded = builder.build().await?;
+        let mut model = remote_model("project-agent-selector");
+        model.multi_agent_version = model_version;
+        let body = response_body_for_remote_model(model, move |fixture| {
+            // Use the real layered config with the fixture's model and mock transport.
+            loaded.model = fixture.model.clone();
+            loaded.model_provider = fixture.model_provider.clone();
+            loaded.codex_self_exe = fixture.codex_self_exe.clone();
+            *fixture = loaded;
+        })
+        .await?;
+        let agent_tools: Vec<_> = tool_names(&body)
+            .into_iter()
+            .filter(|name| {
+                matches!(
+                    name.as_str(),
+                    "multi_agent_v1" | MULTI_AGENT_V2_NAMESPACE | "spawn_agent"
+                )
+            })
+            .collect();
+        assert_eq!(
+            agent_tools,
+            expected_namespace.into_iter().collect::<Vec<_>>(),
+            "project config: {project_settings:?}, model: {model_version:?}"
+        );
+    }
     Ok(())
 }
 
