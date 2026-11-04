@@ -5,6 +5,8 @@ expression: snapshot
 Focus Main Composer | leader c (ctrl-x c) | Global focus_main_composer Focus Main Composer Focus the main conversation composer. leader c (ctrl-x c) Default
 Focus Sidebar Content | leader s (ctrl-x s) | Global focus_sidebar_content Focus Sidebar Content Focus the side conversation, or hide it when already focused. leader s (ctrl-x s) Default
 Hide Pane | leader - (ctrl-x -) | Global hide_pane Hide Pane Hide the focused sidebar pane. leader - (ctrl-x -) Default
+Focus Pane Left | leader left (ctrl-x left), leader h (ctrl-x h) | Global focus_pane_left Focus Pane Left Focus the parent conversation. leader left (ctrl-x left), leader h (ctrl-x h) Default
+Focus Pane Right | leader right (ctrl-x right), leader l (ctrl-x l) | Global focus_pane_right Focus Pane Right Focus the open side conversation. leader right (ctrl-x right), leader l (ctrl-x l) Default
 Open Agents | unbound | Global open_agents Open Agents Open the agent command center. unbound Default
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
 Find Transcript | f3 | Global find_transcript Find Transcript Find text in the full transcript. f3 Default
@@ -13,5 +15,3 @@ Open External Editor | ctrl-g | Global open_external_editor Open External Editor
 Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
 Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the terminal UI. ctrl-l Default
 Toggle Vim Mode | unbound | Global toggle_vim_mode Toggle Vim Mode Turn Vim composer mode on or off. unbound Default
-Toggle Raw Output | alt-r | Global toggle_raw_output Toggle Raw Output Toggle raw scrollback mode. alt-r Default
-Toggle Side Conversation | ctrl-/ | Global toggle_side_conversation Toggle Side Conversation Switch between a side conversation and its parent. ctrl-/ Default

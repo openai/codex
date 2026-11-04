@@ -3323,6 +3323,11 @@ async fn docked_replay_finishes_while_skills_refresh_is_pending() -> Result<()> 
 #[tokio::test]
 async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    // Both pane footers should fit the same way on Unix and Windows.
+    std::fs::write(
+        &app.local_settings.user_config_path,
+        "[tui]\nstatus_line = ['model-with-reasoning', 'thread-name']\n",
+    )?;
     let config = app.chat_widget.config_ref().clone();
     let parent_thread_id = ThreadId::from_string(
         &app_test_support::create_fake_rollout(
@@ -3652,8 +3657,10 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         if width == 100 {
             app.pending_server_profiles
                 .insert(side_thread_id, read_only.clone());
-            keys!(prefix, main);
-            assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+            for completion in [main, KeyCode::Left.into()] {
+                keys!(prefix, completion);
+                assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+            }
             assert!(app.transcript_view.is_select_mode());
             assert!(
                 app.side_companions[&parent_thread_id]
@@ -3684,6 +3691,17 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
                 app.chat_widget.composer_text_with_pending(),
                 "parent draft-"
             );
+            // With the pane hidden, right must leave both the Find text and its caret alone.
+            app.transcript_view.begin_search();
+            assert!(app.transcript_view.paste_search(parent_row));
+            let (_, end) = app.transcript_view.search_footer(width).unwrap();
+            keys!(KeyCode::Left.into());
+            let footer = app.transcript_view.search_footer(width).unwrap();
+            assert!(footer.1 < end);
+            keys!(prefix, KeyCode::Right.into());
+            assert_eq!(app.transcript_view.search_footer(width), Some(footer));
+            assert!(!app.side_threads[&side_thread_id].pane_open);
+            app.transcript_view.cancel_search();
             boxed_future!(app.handle_start_side(
                 &mut tui,
                 &mut app_server,
@@ -3739,8 +3757,10 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
     app.pending_server_profiles
         .insert(parent_thread_id, read_only);
-    keys!(prefix, side);
-    assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
+    for completion in [side, KeyCode::Right.into()] {
+        keys!(prefix, completion);
+        assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
+    }
     assert!(app.transcript_view.is_select_mode());
     app.pending_server_profiles.remove(&parent_thread_id);
     keys!(prefix, side);
@@ -3752,6 +3772,45 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             .has_active_interaction()
     );
     app.transcript_view.end_select_mode();
+
+    // At 99 columns only the focused conversation is painted, but both panes are still open.
+    side_frame(&mut app, &mut tui, Size::new(/*width*/ 99, /*height*/ 18))?;
+    assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
+    keys!(KeyCode::Char('v').into(), KeyCode::Right.into());
+    let selected = app.transcript_view.selected_text(&app.transcript_cells);
+    assert!(selected.as_deref().is_some_and(|text| !text.is_empty()));
+    keys!(prefix, KeyCode::Right.into());
+    assert_eq!(
+        app.transcript_view.selected_text(&app.transcript_cells),
+        selected
+    );
+
+    keys!(prefix, KeyCode::Char('h').into());
+    assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
+    assert!(app.side_threads[&side_thread_id].pane_open);
+    side_frame(&mut app, &mut tui, Size::new(/*width*/ 99, /*height*/ 18))?;
+    assert!(app.transcript_view.begin_select_mode(&app.transcript_cells));
+    keys!(KeyCode::Char('v').into(), KeyCode::Right.into());
+    let parent_text = app.transcript_view.selected_text(&app.transcript_cells);
+    assert!(parent_text.as_deref().is_some_and(|text| !text.is_empty()));
+    keys!(prefix, KeyCode::Left.into());
+    assert_eq!(
+        app.transcript_view.selected_text(&app.transcript_cells),
+        parent_text
+    );
+
+    keys!(prefix, KeyCode::Char('l').into());
+    assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+    assert_eq!(
+        app.transcript_view.selected_text(&app.transcript_cells),
+        selected
+    );
+    app.transcript_view.end_select_mode();
+    // Ctrl-/ preserves interaction, so it exposes whether right actually cleaned up the parent.
+    keys!(toggle);
+    assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
+    assert!(!app.transcript_view.has_active_interaction());
+    keys!(toggle);
 
     read_side_history(&mut app, &mut tui, "child")?;
     // The upload finishes before the app event loop can park the now-inactive child.

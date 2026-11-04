@@ -1,6 +1,7 @@
 //! Entry points for the configuration browser and its existing child editors.
 
 use super::ChatWidget;
+use crate::activation_key_guard::ActivationKeySuppression;
 use crate::config_panel::ConfigEditor;
 use crate::config_panel::ConfigEditorHandoff;
 use crate::config_panel::ConfigPanel;
@@ -69,7 +70,11 @@ impl ChatWidget {
             }
         }
         if let Some(activated_at) = handoff.active_at() {
-            self.suppress_current_view_key_until_release(handoff.activation_key, activated_at);
+            self.suppress_current_view_key_until_release(
+                handoff.activation_key,
+                activated_at,
+                ActivationKeySuppression::ViewTransition,
+            );
         }
         self.bottom_pane.config_editor_opened();
     }

@@ -322,19 +322,21 @@ impl App {
         self.local_settings.workspace_enabled(&self.config) && tui.is_owned_screen()
     }
 
-    pub(super) fn main_composer_shortcut_available(&self, tui: &tui::Tui) -> bool {
+    pub(super) fn conversation_focus_available(&self, tui: &tui::Tui) -> bool {
         self.side_retention_enabled(tui)
             && self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
-            && (!self.reconnect.offline || self.active_side_parent_thread_id().is_none())
     }
 
-    pub(super) fn side_pane_switch_available(&self) -> bool {
-        !self.reconnect.offline
-            && self
-                .current_displayed_thread_id()
-                .and_then(|id| self.side_pair_key(id))
-                .is_some()
+    pub(super) fn main_composer_shortcut_available(&self) -> bool {
+        !self.reconnect.offline || self.active_side_parent_thread_id().is_none()
+    }
+
+    pub(super) fn switchable_side_child(&self) -> Option<ThreadId> {
+        if self.reconnect.offline {
+            return None;
+        }
+        self.side_pair_key(self.current_displayed_thread_id()?)
     }
 
     pub(super) fn side_pair_key(&self, thread_id: ThreadId) -> Option<ThreadId> {

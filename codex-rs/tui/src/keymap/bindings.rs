@@ -107,7 +107,11 @@ impl KeymapActionId {
         self.context == KeymapContext::Global
             && matches!(
                 self.action,
-                "focus_main_composer" | "focus_sidebar_content" | "hide_pane"
+                "focus_main_composer"
+                    | "focus_sidebar_content"
+                    | "hide_pane"
+                    | "focus_pane_left"
+                    | "focus_pane_right"
             )
     }
 
@@ -306,6 +310,8 @@ define_runtime_action_bindings! {
         focus_main_composer,
         focus_sidebar_content,
         hide_pane,
+        focus_pane_left,
+        focus_pane_right,
         open_warnings => runtime_only,
         open_external_editor,
         copy,

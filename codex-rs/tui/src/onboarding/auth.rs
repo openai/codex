@@ -441,7 +441,7 @@ impl AuthModeWidget {
             self.activation_key_guard = Some(ActivationKeyGuard::new_at(
                 KeyBinding::from_event(key_event),
                 Instant::now(),
-                /*key_releases_reported*/ false,
+                /*reported_repeats_only*/ false,
             ));
         }
         self.handle_sign_in_option(option);

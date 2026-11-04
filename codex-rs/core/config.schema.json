@@ -5284,6 +5284,8 @@
               "find_transcript": null,
               "focus_activity": null,
               "focus_main_composer": null,
+              "focus_pane_left": null,
+              "focus_pane_right": null,
               "focus_sidebar_content": null,
               "hide_pane": null,
               "leader": null,
@@ -6123,6 +6125,22 @@
           ],
           "description": "Focus the main conversation composer."
         },
+        "focus_pane_left": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Focus the parent conversation."
+        },
+        "focus_pane_right": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Focus the open side conversation."
+        },
         "focus_sidebar_content": {
           "allOf": [
             {
@@ -6353,6 +6371,8 @@
             "find_transcript": null,
             "focus_activity": null,
             "focus_main_composer": null,
+            "focus_pane_left": null,
+            "focus_pane_right": null,
             "focus_sidebar_content": null,
             "hide_pane": null,
             "leader": null,

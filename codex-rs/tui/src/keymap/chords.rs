@@ -56,6 +56,7 @@ const TRANSCRIPT_ACTIONS: u32 = 1 << 20;
 const BACKEND_CYCLING: u32 = 1 << 21;
 const SIDE_PANE: u32 = 1 << 22;
 const MAIN_COMPOSER_FOCUS: u32 = 1 << 23;
+const PANE_DIRECTION: u32 = 1 << 24;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
@@ -158,6 +159,10 @@ impl KeymapContextSet {
         }
     }
 
+    pub(crate) const fn with_pane_directions(self) -> Self {
+        Self(self.0 | PANE_DIRECTION)
+    }
+
     pub(crate) const fn with_main_composer_focus(self) -> Self {
         Self(self.0 | MAIN_COMPOSER_FOCUS)
     }
@@ -172,10 +177,10 @@ impl KeymapContextSet {
             return self.0 & BACKEND_CYCLING != 0;
         }
         if action.is_side_pane() {
-            let required = if action.action == "focus_main_composer" {
-                MAIN_COMPOSER_FOCUS
-            } else {
-                SIDE_PANE
+            let required = match action.action {
+                "focus_pane_left" | "focus_pane_right" => PANE_DIRECTION,
+                "focus_main_composer" => MAIN_COMPOSER_FOCUS,
+                _ => SIDE_PANE,
             };
             return self.0 & required != 0;
         }

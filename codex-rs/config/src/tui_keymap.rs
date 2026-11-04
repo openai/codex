@@ -143,6 +143,10 @@ pub struct TuiGlobalKeymap {
     pub focus_sidebar_content: Option<KeybindingsSpec>,
     /// Hide the focused sidebar pane.
     pub hide_pane: Option<KeybindingsSpec>,
+    /// Focus the parent conversation.
+    pub focus_pane_left: Option<KeybindingsSpec>,
+    /// Focus the open side conversation.
+    pub focus_pane_right: Option<KeybindingsSpec>,
     /// Open the shared agent-session overview.
     pub open_agents: Option<KeybindingsSpec>,
     /// Open the transcript overlay.

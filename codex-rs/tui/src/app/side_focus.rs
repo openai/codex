@@ -2,6 +2,7 @@
 //! immediately, but Park and Finish transfer transcript views through the app event queue.
 
 use super::*;
+use crate::activation_key_guard::ActivationKeySuppression;
 use crate::transcript_view::TranscriptView;
 
 impl App {
@@ -12,42 +13,68 @@ impl App {
         key: KeyEvent,
     ) -> bool {
         let bindings = &self.keymap.app;
-        let main = bindings.focus_main_composer.is_pressed(key);
+        let left = bindings.focus_pane_left.is_pressed(key);
+        let right = bindings.focus_pane_right.is_pressed(key);
+        let main =
+            bindings.focus_main_composer.is_pressed(key) && self.main_composer_shortcut_available();
         let sidebar = bindings.focus_sidebar_content.is_pressed(key);
-        if !(main || sidebar || bindings.hide_pane.is_pressed(key))
-            || !self.main_composer_shortcut_available(tui)
-            || (!main && !self.side_pane_switch_available())
-        {
+        let hide = bindings.hide_pane.is_pressed(key);
+        if !(left || right || main || sidebar || hide) || !self.conversation_focus_available(tui) {
+            return false;
+        }
+        let child = self.switchable_side_child();
+        if (sidebar || hide) && child.is_none() {
             return false;
         }
         if key.kind != KeyEventKind::Press {
+            // A matching repeat still belongs to the shortcut. Keep it out of the focused editor.
             return true;
         }
         let activation = self
             .routed_key_activation
             .take()
             .unwrap_or_else(|| KeyBinding::from_event(key));
-        let result = if main {
+        let previous_thread = self.current_displayed_thread_id();
+        let on_child = child.is_some_and(|id| previous_thread == Some(id));
+        let leaves_transcript = main
+            && !on_child
+            && (self.transcript_view.has_active_interaction()
+                || self.backtrack.overlay_preview_active);
+        let result = if main || (left && on_child) {
             self.focus_main_composer(tui, app_server).await
-        } else if sidebar
-            && let Some(parent) = self.current_displayed_thread_id()
-            && let Some(child) = self.side_pair_key(parent)
-            && child != parent
+        } else if (sidebar || right)
+            && !on_child
+            && let Some(child) = child
+            && (sidebar || self.side_threads[&child].pane_open)
         {
-            let result = self.toggle_side_conversation(tui, app_server).await;
+            let result = self.select_agent_thread(tui, app_server, child).await;
             if result.is_ok() && self.current_displayed_thread_id() == Some(child) {
                 // The outgoing parent's view is still here until Park runs.
                 self.focus_current_parent_view(tui);
             }
             result
-        } else {
+        } else if hide || sidebar {
             self.hide_focused_side_pane(tui, app_server).await
+        } else {
+            // A direction with no reachable neighbor leaves the current interaction intact.
+            Ok(())
         };
         if let Err(err) = result {
             self.chat_widget.add_error_message(err.to_string());
         }
-        self.chat_widget
-            .suppress_current_view_key_until_release(activation, Instant::now());
+        let view_changed =
+            leaves_transcript || self.current_displayed_thread_id() != previous_thread;
+        let suppression = if view_changed {
+            ActivationKeySuppression::ViewTransition
+        } else {
+            // A no-op leaves the editor in place, so prefer accepting fresh input.
+            ActivationKeySuppression::ReportedRepeats
+        };
+        self.chat_widget.suppress_current_view_key_until_release(
+            activation,
+            Instant::now(),
+            suppression,
+        );
         true
     }
 

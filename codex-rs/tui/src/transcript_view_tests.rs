@@ -1314,6 +1314,7 @@ fn user_prompt_has_a_background_without_a_terminal_palette() {
 #[test]
 fn spoken_prompt_selection_keeps_its_fallback_contrast() {
     use crate::history_cell::new_spoken_user_prompt;
+    use crate::terminal_palette::rgb_color;
     use ratatui::style::Color;
     use ratatui::style::Modifier;
 
@@ -1352,8 +1353,8 @@ fn spoken_prompt_selection_keeps_its_fallback_contrast() {
                     (
                         Some("one\n"),
                         Color::Red,
-                        Color::Rgb(238, 238, 238),
-                        Color::Rgb(68, 68, 68),
+                        rgb_color((238, 238, 238)),
+                        rgb_color((68, 68, 68)),
                         true
                     )
                 );

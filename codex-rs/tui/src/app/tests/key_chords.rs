@@ -1165,6 +1165,37 @@ async fn selection_after_live_commit_uses_the_refreshed_frame() -> Result<()> {
 }
 
 #[tokio::test]
+async fn pane_direction_without_neighbor_preserves_fresh_typing() -> Result<()> {
+    let (mut app, mut tui, mut app_server) = chord_app().await?;
+    super::enable_side_retention(&mut app)?;
+    tui.set_owned_screen(/*owned*/ true)?;
+
+    press(&mut app, &mut tui, &mut app_server, ctrl('x')).await?;
+    press(
+        &mut app,
+        &mut tui,
+        &mut app_server,
+        KeyCode::Char('h').into(),
+    )
+    .await?;
+    for ch in "hello".chars() {
+        press(
+            &mut app,
+            &mut tui,
+            &mut app_server,
+            KeyCode::Char(ch).into(),
+        )
+        .await?;
+    }
+    // Flush the burst of typed characters before inspecting the draft.
+    press(&mut app, &mut tui, &mut app_server, KeyCode::End.into()).await?;
+
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "hello");
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
     let (mut app, mut rx, _op_rx) = super::make_test_app_with_channels().await;
     let mut app_server = start_config_write_test_app_server(&app).await?;
@@ -1182,6 +1213,8 @@ async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
         ("[global]\nhide_pane = 'f12'", 12),
         ("[global]\nfocus_main_composer = 'f12'", 12),
         ("[global]\nfocus_sidebar_content = 'f12 s'", 12),
+        ("[global]\nfocus_pane_left = 'f12 h'", 12),
+        ("[global]\nfocus_pane_right = 'f12 l'", 12),
     ] {
         app.keymap =
             RuntimeKeymap::for_session(&toml::from_str(config)?, /*workspace*/ true).unwrap();
@@ -1242,5 +1275,17 @@ async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
         press(&mut app, &mut tui, &mut stopped, key.into()).await?;
     }
     assert_eq!(app.chat_widget.composer_text_with_pending(), "draft!%");
+    // Bare letters and arrows still edit the draft.
+    for key in [
+        KeyCode::Char('h'),
+        KeyCode::Left,
+        KeyCode::Char('l'),
+        KeyCode::Right,
+        KeyCode::Char('!'),
+        KeyCode::Right,
+    ] {
+        press(&mut app, &mut tui, &mut stopped, key.into()).await?;
+    }
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "draft!%lh!");
     Ok(())
 }

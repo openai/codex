@@ -2,6 +2,7 @@
 
 use super::clipboard::PendingCopy;
 use super::*;
+use crate::activation_key_guard::ActivationKeySuppression;
 use crate::bottom_pane::BottomPaneView;
 use crate::clipboard_copy::CopyStatus;
 use crate::clipboard_copy::worker::CopyResult;
@@ -91,9 +92,10 @@ impl ChatWidget {
         &mut self,
         key: KeyBinding,
         activated_at: Instant,
+        suppression: ActivationKeySuppression,
     ) {
         self.bottom_pane
-            .suppress_current_view_key_until_release(key, activated_at);
+            .suppress_current_view_key_until_release(key, activated_at, suppression);
     }
 
     pub(crate) fn consume_view_transition_key_event(&mut self, key_event: KeyEvent) -> bool {

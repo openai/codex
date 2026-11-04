@@ -26,15 +26,20 @@ pub(in crate::keymap) fn register(
             .filter(|binding| binding.is_leader())
             .count(),
     );
+    use KeyCode::Char;
     use KeymapContext::Chat;
     use KeymapContext::Global;
-    for (context, name, completion) in [
-        (Global, "change_host", 'b'),
-        (Global, "select_transcript", '['),
-        (Chat, "open_presets", 'p'),
-        (Global, "focus_main_composer", 'c'),
-        (Global, "focus_sidebar_content", 's'),
-        (Global, "hide_pane", '-'),
+    for (context, name, completion, spec) in [
+        (Global, "change_host", Char('b'), "b"),
+        (Global, "select_transcript", Char('['), "["),
+        (Chat, "open_presets", Char('p'), "p"),
+        (Global, "focus_main_composer", Char('c'), "c"),
+        (Global, "focus_sidebar_content", Char('s'), "s"),
+        (Global, "hide_pane", Char('-'), "-"),
+        (Global, "focus_pane_left", KeyCode::Left, "left"),
+        (Global, "focus_pane_left", Char('h'), "h"),
+        (Global, "focus_pane_right", KeyCode::Right, "right"),
+        (Global, "focus_pane_right", Char('l'), "l"),
     ] {
         if remaining == 0 {
             break;
@@ -56,9 +61,9 @@ pub(in crate::keymap) fn register(
                 action,
                 chord: KeyChord {
                     prefix,
-                    completion: crate::key_hint::plain(KeyCode::Char(completion)),
+                    completion: crate::key_hint::plain(completion),
                 },
-                spec: format!("leader {completion}"),
+                spec: format!("leader {spec}"),
             };
             if !resolved.chords.bindings.iter().any(|existing| {
                 binding.overlaps(existing.action) && existing.chord == binding.chord

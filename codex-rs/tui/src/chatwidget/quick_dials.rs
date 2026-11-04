@@ -587,7 +587,7 @@ impl ChatWidget {
                 Some(crate::activation_key_guard::ActivationKeyGuard::new_at(
                     KeyBinding::from_event(key),
                     Instant::now(),
-                    /*key_releases_reported*/ false,
+                    /*reported_repeats_only*/ false,
                 ));
         }
         consumed
