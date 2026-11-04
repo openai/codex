@@ -77,7 +77,7 @@ enabled = false
             plugins_manager.plugin_skill_snapshots_for_config(&plugins_input),
         );
         let snapshot = skills_service
-            .snapshot_for_config(&skills_input, /*fs*/ None)
+            .snapshot_for_config(&skills_input, /*repository*/ None)
             .await;
 
         assert_eq!(

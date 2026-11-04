@@ -922,7 +922,7 @@ async fn repository_skill_cache_cannot_read_inaccessible_files(
                 Vec::new(),
                 test.config.config_layer_stack.clone(),
             ),
-            Some(Arc::clone(&file_system)),
+            Some(&open),
         )
         .await;
     let [revoked_skill, gated_skill] = ["repo-revoked", "repo-gated"].map(|name| {

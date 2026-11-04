@@ -3,6 +3,7 @@ use std::os::unix::fs::symlink;
 use std::sync::Arc;
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillMetadata;
@@ -55,12 +56,13 @@ async fn host_loading_reuses_walk_inventory_for_symlinked_skill_pack() {
         ManifestMetadataBehavior::Immediate,
     ));
     let file_system: Arc<dyn ExecutorFileSystem> = recording.clone();
+    let access = FileSystemEnvironmentAccessor::unrestricted(&file_system);
     let root_scan_slots = Semaphore::new(MAX_CONCURRENT_ROOT_SCANS);
     let future = load_and_merge_host_skill_roots(
         vec![HostSkillRoot::host(
             host_root.abs(),
             SkillScope::User,
-            file_system,
+            &access,
         )],
         &root_scan_slots,
         /*restriction_product*/ None,

@@ -689,8 +689,16 @@ async fn warm_plugins_and_skills_for_session_init(
         effective_skill_roots,
         turn_environments,
     );
+    let access = fs
+        .as_ref()
+        .map(codex_exec_server::FileSystemEnvironmentAccessor::unrestricted);
     skills_service
-        .snapshot_for_config(&skills_input, fs)
+        .snapshot_for_config(
+            &skills_input,
+            access
+                .as_ref()
+                .map(|access| access as &dyn codex_file_system::EnvironmentAccess),
+        )
         .await
         .outcome()
         .errors

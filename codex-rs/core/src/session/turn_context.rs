@@ -1364,9 +1364,17 @@ impl Session {
                 effective_skill_roots,
                 &turn_environments,
             );
+            let access = fs
+                .as_ref()
+                .map(codex_exec_server::FileSystemEnvironmentAccessor::unrestricted);
             self.services
                 .skills_service
-                .snapshot_for_config(&skills_input, fs)
+                .snapshot_for_config(
+                    &skills_input,
+                    access
+                        .as_ref()
+                        .map(|access| access as &dyn EnvironmentAccess),
+                )
                 .await
         };
         let step_settings = Arc::new(ResolvedStepSettings::new(

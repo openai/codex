@@ -1,6 +1,7 @@
 use std::io;
 
-use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::EnvironmentAccess;
+use codex_exec_server::EnvironmentAccessExt;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::ReadFileOptions;
 use codex_skills::ParsedSkillMetadata;
@@ -24,7 +25,7 @@ pub(super) struct LoadedSkillMetadata {
 }
 
 pub(super) async fn load_host_skill_metadata(
-    file_system: &dyn ExecutorFileSystem,
+    file_system: &dyn EnvironmentAccess,
     skill_path: &AbsolutePathBuf,
     metadata: &SkillMetadataDiscovery,
     plugin_root: Option<&AbsolutePathBuf>,
@@ -38,7 +39,7 @@ pub(super) async fn load_host_skill_metadata(
         SkillMetadataDiscovery::Absent => return LoadedSkillMetadata::default(),
         SkillMetadataDiscovery::Probe(path) => {
             match file_system
-                .get_metadata(path, GetMetadataOptions::default(), /*sandbox*/ None)
+                .get_metadata(path, GetMetadataOptions::default())
                 .await
             {
                 Ok(metadata) if metadata.is_file => {}
@@ -59,11 +60,7 @@ pub(super) async fn load_host_skill_metadata(
     };
 
     let contents = match file_system
-        .read_file_text(
-            metadata_path,
-            ReadFileOptions::default(),
-            /*sandbox*/ None,
-        )
+        .read_file_text(metadata_path, ReadFileOptions::default())
         .await
     {
         Ok(contents) => contents,

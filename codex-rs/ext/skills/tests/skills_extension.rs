@@ -3271,7 +3271,7 @@ async fn host_catalog_compacts_shared_paths_under_budget_pressure() -> TestResul
     let snapshot = service
         .snapshot_for_config(
             &HostSkillsLoadInput::new(codex_home, Vec::new(), config_layer_stack),
-            Some(Arc::clone(&LOCAL_FS)),
+            Some(&codex_exec_server::FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS)),
         )
         .await;
     assert_eq!(snapshot.outcome().errors, Vec::new());

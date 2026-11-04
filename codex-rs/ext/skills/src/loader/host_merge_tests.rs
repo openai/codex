@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -61,6 +62,7 @@ struct PluginSkillsFixture {
     native_root: AbsolutePathBuf,
     migrated_root: AbsolutePathBuf,
     identity: PluginIdentity,
+    access: FileSystemEnvironmentAccessor<'static>,
 }
 
 impl PluginSkillsFixture {
@@ -88,6 +90,7 @@ impl PluginSkillsFixture {
             plugin_path,
             native_root,
             migrated_root,
+            access: FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
             identity: PluginIdentity {
                 plugin_id: "sample@test".to_string(),
                 remote_plugin_id: Some("remote-sample".to_string()),
@@ -95,7 +98,7 @@ impl PluginSkillsFixture {
         }
     }
 
-    fn root(&self, path: AbsolutePathBuf) -> HostSkillRoot {
+    fn root(&self, path: AbsolutePathBuf) -> HostSkillRoot<'_> {
         HostSkillRoot::plugin(
             PluginSkillRoot {
                 path,
@@ -104,11 +107,11 @@ impl PluginSkillsFixture {
                 plugin_root: self.plugin_path.clone(),
                 discovery_mode: SkillDiscoveryMode::Recursive,
             },
-            Arc::clone(&LOCAL_FS),
+            &self.access,
         )
     }
 
-    fn roots(&self) -> Vec<HostSkillRoot> {
+    fn roots(&self) -> Vec<HostSkillRoot<'_>> {
         [self.migrated_root.clone(), self.native_root.clone()]
             .into_iter()
             .map(|path| self.root(path))
@@ -324,6 +327,7 @@ async fn recognizes_symlinked_migrated_command_roots() {
 
 #[tokio::test]
 async fn host_root_scans_wait_for_shared_capacity() {
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let temp = TempDir::new().expect("temp dir");
     let root = AbsolutePathBuf::from_absolute_path(temp.path()).expect("absolute skill root");
     let root_scan_slots = Semaphore::new(/*permits*/ 1);
@@ -331,11 +335,7 @@ async fn host_root_scans_wait_for_shared_capacity() {
         .try_acquire()
         .expect("root scan slot should be available");
     let load = load_and_merge_host_skill_roots(
-        vec![HostSkillRoot::host(
-            root,
-            SkillScope::Repo,
-            Arc::clone(&LOCAL_FS),
-        )],
+        vec![HostSkillRoot::host(root, SkillScope::Repo, &access)],
         &root_scan_slots,
         /*restriction_product*/ None,
         /*plugin_skill_snapshots*/ None,
@@ -352,14 +352,15 @@ async fn host_root_scans_wait_for_shared_capacity() {
 
 #[tokio::test]
 async fn duplicate_host_root_paths_preserve_first_root_scope() {
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let temp = TempDir::new().expect("temp dir");
     let root = AbsolutePathBuf::from_absolute_path(temp.path()).expect("absolute skill root");
     write_skill(&root, "demo", "demo", "Shared skill");
 
     let outcome = load_and_merge_host_skill_roots(
         vec![
-            HostSkillRoot::host(root.clone(), SkillScope::Repo, Arc::clone(&LOCAL_FS)),
-            HostSkillRoot::host(root.clone(), SkillScope::User, Arc::clone(&LOCAL_FS)),
+            HostSkillRoot::host(root.clone(), SkillScope::Repo, &access),
+            HostSkillRoot::host(root.clone(), SkillScope::User, &access),
         ],
         &Semaphore::new(/*permits*/ 2),
         /*restriction_product*/ None,
@@ -383,6 +384,7 @@ async fn duplicate_host_root_paths_preserve_first_root_scope() {
 #[cfg(unix)]
 #[tokio::test]
 async fn deduplicated_symlinked_skill_preserves_first_discovery_path() {
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let source = TempDir::new().expect("source temp dir");
     let first = TempDir::new().expect("first root temp dir");
     let second = TempDir::new().expect("second root temp dir");
@@ -403,8 +405,8 @@ async fn deduplicated_symlinked_skill_preserves_first_discovery_path() {
 
     let outcome = load_and_merge_host_skill_roots(
         vec![
-            HostSkillRoot::host(first_root.clone(), SkillScope::Repo, Arc::clone(&LOCAL_FS)),
-            HostSkillRoot::host(second_root, SkillScope::User, Arc::clone(&LOCAL_FS)),
+            HostSkillRoot::host(first_root.clone(), SkillScope::Repo, &access),
+            HostSkillRoot::host(second_root, SkillScope::User, &access),
         ],
         &Semaphore::new(/*permits*/ 2),
         /*restriction_product*/ None,
@@ -461,11 +463,12 @@ async fn merges_host_root_results_in_input_order_when_scans_finish_out_of_order(
     ));
     let recording = Arc::new(recording);
     let file_system: Arc<dyn ExecutorFileSystem> = recording.clone();
-    let host_roots = roots
-        .iter()
-        .map(|root| HostSkillRoot::host(root.clone().abs(), SkillScope::User, file_system.clone()))
-        .collect::<Vec<_>>();
     let load = tokio::spawn(async move {
+        let access = FileSystemEnvironmentAccessor::unrestricted(&file_system);
+        let host_roots = roots
+            .iter()
+            .map(|root| HostSkillRoot::host(root.clone().abs(), SkillScope::User, &access))
+            .collect::<Vec<_>>();
         load_and_merge_host_skill_roots(
             host_roots,
             &Semaphore::new(MAX_CONCURRENT_ROOT_SCANS),
@@ -512,6 +515,7 @@ async fn merges_host_root_results_in_input_order_when_scans_finish_out_of_order(
 /// Equal-name skills retain native path order so URI escaping does not reorder the catalog.
 #[tokio::test]
 async fn same_name_skills_preserve_native_path_order() {
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let temp = TempDir::new().expect("temp dir");
     let root = dunce::canonicalize(temp.path())
         .expect("canonical skill root")
@@ -520,11 +524,7 @@ async fn same_name_skills_preserve_native_path_order() {
     write_skill(&root, "a", "demo", "ASCII path");
 
     let outcome = load_and_merge_host_skill_roots(
-        vec![HostSkillRoot::host(
-            root.clone(),
-            SkillScope::User,
-            Arc::clone(&LOCAL_FS),
-        )],
+        vec![HostSkillRoot::host(root.clone(), SkillScope::User, &access)],
         &Semaphore::new(/*permits*/ 1),
         /*restriction_product*/ None,
         /*plugin_skill_snapshots*/ None,

@@ -1,3 +1,4 @@
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -22,6 +23,7 @@ use crate::provider::SkillReadRequest;
 #[tokio::test]
 async fn host_catalog_entries_carry_their_render_metadata() -> Result<(), Box<dyn std::error::Error>>
 {
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let root = std::env::temp_dir().join(format!(
         "codex-skills-extension-host-provider-{}-{unique}",
@@ -39,11 +41,7 @@ async fn host_catalog_entries_carry_their_render_metadata() -> Result<(), Box<dy
     )?;
     let root = AbsolutePathBuf::try_from(std::fs::canonicalize(root)?)?;
     let outcome = load_and_merge_host_skill_roots(
-        vec![HostSkillRoot::host(
-            root.clone(),
-            SkillScope::User,
-            Arc::clone(&LOCAL_FS),
-        )],
+        vec![HostSkillRoot::host(root.clone(), SkillScope::User, &access)],
         &Semaphore::new(/*permits*/ 1),
         /*restriction_product*/ None,
         /*plugin_skill_snapshots*/ None,
@@ -73,6 +71,7 @@ async fn host_catalog_entries_carry_their_render_metadata() -> Result<(), Box<dy
 #[tokio::test]
 async fn host_catalog_resource_spellings_read_the_discovered_skill()
 -> Result<(), Box<dyn std::error::Error>> {
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let root = tempfile::tempdir()?;
     let skill_path = root.path().join("demo skill%23").join("SKILL.md");
     std::fs::create_dir_all(
@@ -84,11 +83,7 @@ async fn host_catalog_resource_spellings_read_the_discovered_skill()
     std::fs::write(&skill_path, contents)?;
     let root_path = AbsolutePathBuf::try_from(std::fs::canonicalize(root.path())?)?;
     let outcome = load_and_merge_host_skill_roots(
-        vec![HostSkillRoot::host(
-            root_path,
-            SkillScope::User,
-            Arc::clone(&LOCAL_FS),
-        )],
+        vec![HostSkillRoot::host(root_path, SkillScope::User, &access)],
         &Semaphore::new(/*permits*/ 1),
         /*restriction_product*/ None,
         /*plugin_skill_snapshots*/ None,
@@ -130,6 +125,7 @@ async fn host_catalog_resource_spellings_read_the_discovered_skill()
 #[tokio::test]
 async fn host_catalog_preserves_symlinked_skill_discovery_paths()
 -> Result<(), Box<dyn std::error::Error>> {
+    let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let root = tempfile::tempdir()?;
     let source = tempfile::tempdir()?;
     let source_skill_dir = source.path().join("linked-skill");
@@ -142,11 +138,7 @@ async fn host_catalog_preserves_symlinked_skill_discovery_paths()
 
     let root = AbsolutePathBuf::try_from(std::fs::canonicalize(root.path())?)?;
     let outcome = load_and_merge_host_skill_roots(
-        vec![HostSkillRoot::host(
-            root.clone(),
-            SkillScope::User,
-            Arc::clone(&LOCAL_FS),
-        )],
+        vec![HostSkillRoot::host(root.clone(), SkillScope::User, &access)],
         &Semaphore::new(/*permits*/ 1),
         /*restriction_product*/ None,
         /*plugin_skill_snapshots*/ None,

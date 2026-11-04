@@ -15,7 +15,7 @@ use super::SKILLS_METADATA_DIR;
 use super::SKILLS_METADATA_FILENAME;
 
 const MAX_SKILLS_ENTRIES_PER_ROOT: usize = 20_000;
-pub(super) const MAX_CONCURRENT_SKILL_LOADS: usize = 64;
+pub(crate) const MAX_CONCURRENT_SKILL_LOADS: usize = 64;
 
 pub(super) enum DirectorySymlinkPolicy {
     Follow,

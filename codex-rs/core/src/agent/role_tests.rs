@@ -684,7 +684,11 @@ enabled = false
     let snapshot = skills_service
         .snapshot_for_config(
             &skills_input,
-            Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
+            Some(
+                &codex_exec_server::FileSystemEnvironmentAccessor::unrestricted(
+                    &codex_exec_server::LOCAL_FS,
+                ),
+            ),
         )
         .await;
     let outcome = snapshot.outcome();

@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 use std::io;
-use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::Weak;
 use tokio::sync::oneshot;
 
 use codex_config::ConfigLayerSource;
@@ -10,7 +8,9 @@ use codex_config::ConfigLayerStack;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
-use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::EnvironmentAccess;
+use codex_exec_server::EnvironmentAccessKey;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::SkillScope;
@@ -35,7 +35,7 @@ pub(crate) struct EmptyRemoteRootsCache {
 }
 
 struct EmptyRemoteRoots {
-    fs: Weak<dyn ExecutorFileSystem>,
+    fs: EnvironmentAccessKey,
     cwd: AbsolutePathBuf,
     markers: Vec<String>,
     watch: EmptyRootsWatch,
@@ -53,18 +53,20 @@ impl EmptyRemoteRootsCache {
     }
 }
 
-pub(crate) async fn resolve_skill_roots(
-    repository_file_system: Option<Arc<dyn ExecutorFileSystem>>,
+pub(crate) async fn resolve_skill_roots<'a>(
+    repository_file_system: Option<&'a dyn EnvironmentAccess>,
+    host: &'a dyn EnvironmentAccess,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
     empty_remote_roots: Option<&Mutex<EmptyRemoteRootsCache>>,
-) -> Vec<HostSkillRoot> {
+) -> Vec<HostSkillRoot<'a>> {
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
     resolve_skill_roots_with_home_dir(
         repository_file_system,
+        host,
         config_layer_stack,
         cwd,
         home_dir.as_ref(),
@@ -75,26 +77,31 @@ pub(crate) async fn resolve_skill_roots(
     .await
 }
 
-async fn resolve_skill_roots_with_home_dir(
-    repository_file_system: Option<Arc<dyn ExecutorFileSystem>>,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit filesystem authorities and a home override keep root-order tests deterministic"
+)]
+async fn resolve_skill_roots_with_home_dir<'a>(
+    repository_file_system: Option<&'a dyn EnvironmentAccess>,
+    host: &'a dyn EnvironmentAccess,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
     empty_remote_roots: Option<&Mutex<EmptyRemoteRootsCache>>,
-) -> Vec<HostSkillRoot> {
+) -> Vec<HostSkillRoot<'a>> {
     let mut roots =
-        roots_from_layer_stack(config_layer_stack, home_dir, repository_file_system.clone());
+        roots_from_layer_stack(config_layer_stack, home_dir, repository_file_system, host);
     roots.extend(
         plugin_skill_roots
             .into_iter()
-            .map(|root| HostSkillRoot::plugin(root, Arc::clone(&LOCAL_FS))),
+            .map(|root| HostSkillRoot::plugin(root, host)),
     );
     roots.extend(
         extra_skill_roots
             .into_iter()
-            .map(|path| local_root(path, SkillScope::User)),
+            .map(|path| HostSkillRoot::host(path, SkillScope::User, host)),
     );
     roots.extend(
         repo_agents_skill_roots(
@@ -109,11 +116,12 @@ async fn resolve_skill_roots_with_home_dir(
     roots
 }
 
-fn roots_from_layer_stack(
+fn roots_from_layer_stack<'a>(
     config_layer_stack: &ConfigLayerStack,
     home_dir: Option<&AbsolutePathBuf>,
-    repository_file_system: Option<Arc<dyn ExecutorFileSystem>>,
-) -> Vec<HostSkillRoot> {
+    repository_file_system: Option<&'a dyn EnvironmentAccess>,
+    host: &'a dyn EnvironmentAccess,
+) -> Vec<HostSkillRoot<'a>> {
     let mut roots = Vec::new();
 
     for layer in config_layer_stack.all_layers_high_to_low() {
@@ -123,38 +131,42 @@ fn roots_from_layer_stack(
 
         match &layer.name {
             ConfigLayerSource::Project { .. } => {
-                if let Some(repository_file_system) = &repository_file_system {
+                if let Some(repository_file_system) = repository_file_system {
                     roots.push(HostSkillRoot::host(
                         config_folder.join(SKILLS_DIR_NAME),
                         SkillScope::Repo,
-                        Arc::clone(repository_file_system),
+                        repository_file_system,
                     ));
                 }
             }
             ConfigLayerSource::User { .. } => {
                 // Deprecated user skills location (`$CODEX_HOME/skills`), kept for backward
                 // compatibility.
-                roots.push(local_root(
+                roots.push(HostSkillRoot::host(
                     config_folder.join(SKILLS_DIR_NAME),
                     SkillScope::User,
+                    host,
                 ));
 
                 if let Some(home_dir) = home_dir {
-                    roots.push(local_root(
+                    roots.push(HostSkillRoot::host(
                         home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
                         SkillScope::User,
+                        host,
                     ));
                 }
 
-                roots.push(local_root(
+                roots.push(HostSkillRoot::host(
                     system_cache_root_dir(&config_folder),
                     SkillScope::System,
+                    host,
                 ));
             }
             ConfigLayerSource::System { .. } => {
-                roots.push(local_root(
+                roots.push(HostSkillRoot::host(
                     config_folder.join(SKILLS_DIR_NAME),
                     SkillScope::Admin,
+                    host,
                 ));
             }
             ConfigLayerSource::PackagedDefaults { .. }
@@ -169,31 +181,26 @@ fn roots_from_layer_stack(
     roots
 }
 
-fn local_root(path: AbsolutePathBuf, scope: SkillScope) -> HostSkillRoot {
-    HostSkillRoot::host(path, scope, Arc::clone(&LOCAL_FS))
-}
-
-async fn repo_agents_skill_roots(
-    repository_file_system: Option<Arc<dyn ExecutorFileSystem>>,
+async fn repo_agents_skill_roots<'a>(
+    repository_file_system: Option<&'a dyn EnvironmentAccess>,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
     empty_remote_roots: Option<&Mutex<EmptyRemoteRootsCache>>,
-) -> Vec<HostSkillRoot> {
+) -> Vec<HostSkillRoot<'a>> {
     let Some(repository_file_system) = repository_file_system else {
         return Vec::new();
     };
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
-    let cache = empty_remote_roots.filter(|_| !Arc::ptr_eq(&repository_file_system, &LOCAL_FS));
-    let file_system = Arc::downgrade(&repository_file_system);
+    let file_system = repository_file_system.cache_key();
+    let host = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
+    let cache = empty_remote_roots.filter(|_| !file_system.same_file_system(&host.cache_key()));
     let generation = if let Some(cache) = cache {
         let mut cache = cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut register = true;
         if let Some(entry) = cache.entry.as_mut().filter(|entry| {
-            entry.fs.ptr_eq(&file_system)
-                && entry.cwd == *cwd
-                && entry.markers == project_root_markers
+            entry.fs == file_system && entry.cwd == *cwd && entry.markers == project_root_markers
         }) {
             if let EmptyRootsWatch::Registering(registered) = &mut entry.watch {
                 match registered.try_recv() {
@@ -214,25 +221,18 @@ async fn repo_agents_skill_roots(
         None
     };
     let (project_root, marker, mut complete) =
-        find_project_root(repository_file_system.as_ref(), cwd, &project_root_markers).await;
+        find_project_root(repository_file_system, cwd, &project_root_markers).await;
     let directories = dirs_between_project_root_and_cwd(cwd, &project_root);
     let mut roots = Vec::new();
     let mut missing = Vec::new();
     let mut results = futures::stream::iter(directories)
-        .map(|directory| {
-            let repository_file_system = Arc::clone(&repository_file_system);
-            async move {
-                let agents_skills = directory.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
-                let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
-                let result = repository_file_system
-                    .get_metadata(
-                        &agents_skills_uri,
-                        GetMetadataOptions::default(),
-                        /*sandbox*/ None,
-                    )
-                    .await;
-                (agents_skills, result)
-            }
+        .map(|directory| async move {
+            let agents_skills = directory.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
+            let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
+            let result = repository_file_system
+                .get_metadata(&agents_skills_uri, GetMetadataOptions::default())
+                .await;
+            (agents_skills, result)
         })
         .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
     while let Some((agents_skills, result)) = results.next().await {
@@ -240,7 +240,7 @@ async fn repo_agents_skill_roots(
             Ok(metadata) if metadata.is_directory => roots.push(HostSkillRoot::host(
                 agents_skills,
                 SkillScope::Repo,
-                Arc::clone(&repository_file_system),
+                repository_file_system,
             )),
             Ok(_) => complete = false,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -285,13 +285,13 @@ async fn repo_agents_skill_roots(
             });
             // A cold question never waits for an extra round trip. Until the executor
             // acknowledges coverage, other questions take the ordinary live scan.
-            let repository_file_system = Arc::clone(&repository_file_system);
+            let present = marker.as_ref().map(PathUri::from_abs_path);
+            let watch = repository_file_system.watch_missing(missing, present);
             tokio::spawn(async move {
-                let present = marker.as_ref().map(PathUri::from_abs_path);
                 tokio::select! {
                     biased;
                     _ = ready.closed() => {}
-                    watch = repository_file_system.watch_missing(missing, present) => match watch {
+                    watch = watch => match watch {
                         Ok(Some(invalidated)) => {
                             tracing::debug!("watch established for empty remote repository skills");
                             let _ = ready.send(invalidated);
@@ -326,7 +326,7 @@ fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec
 }
 
 async fn find_project_root(
-    repository_file_system: &dyn ExecutorFileSystem,
+    repository_file_system: &dyn EnvironmentAccess,
     cwd: &AbsolutePathBuf,
     project_root_markers: &[String],
 ) -> (AbsolutePathBuf, Option<AbsolutePathBuf>, bool) {
@@ -345,11 +345,7 @@ async fn find_project_root(
         .map(|(ancestor, marker_path)| async move {
             let marker_path_uri = PathUri::from_abs_path(&marker_path);
             let result = repository_file_system
-                .get_metadata(
-                    &marker_path_uri,
-                    GetMetadataOptions::default(),
-                    /*sandbox*/ None,
-                )
+                .get_metadata(&marker_path_uri, GetMetadataOptions::default())
                 .await;
             (ancestor, marker_path, result)
         })

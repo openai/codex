@@ -7196,7 +7196,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let skills_snapshot = session
         .services
         .skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(&codex_exec_server::FileSystemEnvironmentAccessor::unrestricted(&skill_fs)),
+        )
         .await;
     let turn_context = Session::make_turn_context(
         thread_id,
@@ -9531,7 +9534,10 @@ where
     let skills_snapshot = session
         .services
         .skills_service
-        .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+        .snapshot_for_config(
+            &skills_input,
+            Some(&codex_exec_server::FileSystemEnvironmentAccessor::unrestricted(&skill_fs)),
+        )
         .await;
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
