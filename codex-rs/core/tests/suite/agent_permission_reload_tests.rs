@@ -30,6 +30,15 @@ enum WorkerPermissions {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sibling_wake_preserves_worker_permissions(selection: WorkerPermissions) -> Result<()> {
     let server = start_mock_server().await;
+    // Windows' restricted-token backend requires full-disk reads. Other targets
+    // additionally exercise retention of read allowlists and explicit denials.
+    let supports_read_restrictions =
+        core_test_support::test_target_os() != core_test_support::TestTargetOs::Windows;
+    let root_read = if supports_read_restrictions {
+        ""
+    } else {
+        "\":root\" = \"read\""
+    };
     let files = tempfile::tempdir()?;
     let instructions = files.path().join("instructions.md");
     std::fs::write(&instructions, "Keep responses brief.")?;
@@ -38,16 +47,16 @@ async fn sibling_wake_preserves_worker_permissions(selection: WorkerPermissions)
 default_permissions = "startup"
 model_instructions_file = {}
 [features]
-memories = true
+memories = {supports_read_restrictions}
 network_proxy = true
 [memories]
 generate_memories = false
-use_memories = true
+use_memories = {supports_read_restrictions}
 [permissions.startup.filesystem]
 ":workspace_roots" = "read"
+{root_read}
 [permissions.startup.network]
 enabled = true
-proxy_url = "http://127.0.0.1:0"
 enable_socks5 = false
 [permissions.startup.network.domains]
 "allowed.example" = "allow"
@@ -101,22 +110,27 @@ extends = "startup"
         .with_cloud_config_bundle(cloud_config)
         .with_config(configure);
     let initial = builder.build_with_auto_env(&server).await?;
-    // Start with the loader's restrictive profile, including its memory read grant.
+    // Start with the loader's profile, including a memory read grant where supported.
     let profile = initial.config.permissions.permission_profile().clone();
-    let memory_root = initial
-        .config
-        .codex_home
-        .join(initial.config.memories.version.directory_name());
     let mut filesystem = profile.file_system_sandbox_policy();
-    assert!(!filesystem.has_full_disk_read_access());
-    assert!(
-        filesystem
-            .can_read_local_path_with_cwd(memory_root.as_path(), initial.config.cwd.as_path())
+    assert_eq!(
+        filesystem.has_full_disk_read_access(),
+        !supports_read_restrictions
     );
-    filesystem.entries.push(FileSystemSandboxEntry::new(
-        initial.workspace_path_uri("secrets")?.into(),
-        FileSystemAccessMode::Deny,
-    ));
+    if supports_read_restrictions {
+        let memory_root = initial
+            .config
+            .codex_home
+            .join(initial.config.memories.version.directory_name());
+        assert!(
+            filesystem
+                .can_read_local_path_with_cwd(memory_root.as_path(), initial.config.cwd.as_path())
+        );
+        filesystem.entries.push(FileSystemSandboxEntry::new(
+            initial.workspace_path_uri("secrets")?.into(),
+            FileSystemAccessMode::Deny,
+        ));
+    }
     submit_thread_settings(
         &initial.codex,
         ThreadSettingsOverrides {
@@ -128,7 +142,7 @@ extends = "startup"
         },
     )
     .await?;
-    // Selecting another profile retains the denial but switches to its stricter proxy policy.
+    // Selecting another profile retains its restrictions and switches to a stricter proxy policy.
     submit_thread_settings(
         &initial.codex,
         ThreadSettingsOverrides {
@@ -198,10 +212,11 @@ extends = "startup"
     let worker_snapshot = worker.config_snapshot().await;
     let worker_permissions = worker_snapshot.permission_profile;
     let worker_network = worker.config().await.permissions.network.clone();
-    assert!(
+    assert_eq!(
         worker_permissions
             .file_system_sandbox_policy()
-            .has_denied_read_restrictions()
+            .has_denied_read_restrictions(),
+        supports_read_restrictions
     );
     submit_thread_settings(
         sender,

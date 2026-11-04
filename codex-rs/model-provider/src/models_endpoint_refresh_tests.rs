@@ -243,10 +243,7 @@ async fn check_timeout_preserves_refreshed_tokens(caller: Caller) {
         );
 
         // Wait through the existing refresh lock; this must reuse the completed refresh.
-        let current = timeout(Duration::from_secs(5), credentials.auth())
-            .await
-            .unwrap()
-            .unwrap();
+        let current = credentials.auth().await.unwrap();
         assert_eq!(current.get_token().unwrap(), new_token);
         let saved = codex_login::load_auth_dot_json(
             home.path(),

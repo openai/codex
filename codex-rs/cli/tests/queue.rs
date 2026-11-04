@@ -278,6 +278,8 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     use codex_app_server_protocol::ThreadListResponse;
     use codex_app_server_protocol::ThreadQueueListParams;
     use codex_app_server_protocol::ThreadQueueListResponse;
+    use codex_app_server_protocol::ThreadReadParams;
+    use codex_app_server_protocol::ThreadReadResponse;
     use codex_app_server_protocol::ThreadSetNameParams;
     use codex_app_server_protocol::ThreadSetNameResponse;
     use codex_app_server_protocol::ThreadStartParams;
@@ -541,6 +543,34 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
                     .to_string()
                     .contains(cold_message)
             );
+            // The mock receives the request before the resumed turn finishes. Deletion
+            // requires an idle thread, and archiving removed our original subscription.
+            timeout(Duration::from_secs(30), async {
+                loop {
+                    let read: ThreadReadResponse = app
+                        .request_typed(ClientRequest::ThreadRead {
+                            request_id: RequestId::Integer(5),
+                            params: ThreadReadParams {
+                                thread_id: thread_id.clone(),
+                                include_turns: true,
+                            },
+                        })
+                        .await?;
+                    if let Some(last) = read.thread.turns.last()
+                        && last.id != completed.turn.id
+                        && last.status == TurnStatus::Completed
+                        && matches!(
+                            read.thread.status,
+                            ThreadStatus::Idle | ThreadStatus::NotLoaded
+                        )
+                    {
+                        return anyhow::Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .context("resumed queued turn did not finish before deletion")??;
         }
     }
     Ok(())

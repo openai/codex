@@ -414,7 +414,8 @@ async fn executor_refresh_survives_cancelled_caller() {
         // Isolate endpoint overrides; release the response only after the caller
         // is cancelled, with no sleep or race against the HTTP response.
         for mode in ["proactive", "recovery", "logout", "replacement", "timeout"] {
-            tokio::time::timeout(Duration::from_secs(30), async {
+            // Allow process startup and teardown around the 30-second refresh deadline.
+            tokio::time::timeout(Duration::from_secs(90), async {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
                 let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())

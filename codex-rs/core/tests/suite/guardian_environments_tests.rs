@@ -46,6 +46,8 @@ async fn direct_mcp_approval_uses_the_server_owners_denied_paths() -> Result<()>
     let test = test_codex()
         .with_exec_server_url(executor.websocket_url.clone())
         .with_config(move |config| {
+            // This test reviews the denied paths without reading project documents under them.
+            config.project_doc_max_bytes = 0;
             config.mcp_servers.set(mcp_servers).expect("set MCP server");
             config.mcp_optional_startup_grace = Duration::ZERO;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);

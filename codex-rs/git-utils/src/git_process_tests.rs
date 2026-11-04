@@ -37,19 +37,40 @@ async fn assert_timed_out_git_wrapper_does_not_leave_child_process_running(
     };
     #[cfg(windows)]
     let mut command = {
-        let mut command = Command::new("powershell.exe");
-        let child_command = "Set-Content -LiteralPath $env:CHILD_READY_FILE -Value ready; while (-not (Test-Path $env:RELEASE_CHILD_FILE)) { Start-Sleep -Milliseconds 25 }; Start-Sleep -Seconds 1; Set-Content -LiteralPath $env:CHILD_SURVIVED_FILE -Value survived; Start-Sleep -Seconds 60";
-        let wrapper_command = match wrapper_lifetime {
-            GitWrapperLifetime::WaitForChild => format!(
-                "$child = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', '{child_command}') -PassThru -NoNewWindow; [System.IO.File]::WriteAllText($env:CHILD_PID_FILE, [string]$child.Id); Wait-Process -Id $child.Id"
-            ),
-            GitWrapperLifetime::ExitBeforeTimeout => format!(
-                "$child = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', '{child_command}') -PassThru -NoNewWindow; [System.IO.File]::WriteAllText($env:CHILD_PID_FILE, [string]$child.Id); while (-not (Test-Path $env:RELEASE_WRAPPER_FILE)) {{ Start-Sleep -Milliseconds 25 }}"
-            ),
-        };
-        command
-            .args(["-NoProfile", "-NonInteractive", "-Command"])
-            .arg(wrapper_command);
+        let script = temp_dir.path().join("git_wrapper.py");
+        std::fs::write(
+            &script,
+            r#"import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+def wait_for(name):
+    while not Path(os.environ[name]).exists():
+        time.sleep(0.025)
+
+if sys.argv[1] == "child":
+    Path(os.environ["CHILD_READY_FILE"]).touch()
+    wait_for("RELEASE_CHILD_FILE")
+    time.sleep(1)
+    Path(os.environ["CHILD_SURVIVED_FILE"]).touch()
+    time.sleep(60)
+else:
+    child = subprocess.Popen([sys.executable, __file__, "child"])
+    Path(os.environ["CHILD_PID_FILE"]).write_text(str(child.pid))
+    if sys.argv[1] == "wait":
+        child.wait()
+    else:
+        wait_for("RELEASE_WRAPPER_FILE")
+"#,
+        )
+        .expect("write Git wrapper fixture");
+        let mut command = Command::new("python.exe");
+        command.arg(script).arg(match wrapper_lifetime {
+            GitWrapperLifetime::WaitForChild => "wait",
+            GitWrapperLifetime::ExitBeforeTimeout => "exit",
+        });
         command
     };
     command

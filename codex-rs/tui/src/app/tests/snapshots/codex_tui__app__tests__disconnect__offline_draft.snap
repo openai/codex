@@ -5,7 +5,7 @@ expression: "format!(\"{}\\n{}\",\nlines_to_single_string(&app.transcript_cells.
 
 › only once
 
-• Reconnecting to server… (0s)
+• Reconnecting to server… (<elapsed>)
 
 • Queued follow-up inputs
   ↳ queued before disconnect

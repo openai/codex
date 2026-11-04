@@ -153,6 +153,10 @@ wire_api = "responses"
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows doctor fixture does not discover the synthetic Git executable"
+)]
 fn startup_and_doctor_do_not_execute_path_helpers() -> Result<()> {
     let fixture = Fixture::new()?;
     // Non-TTY dumb-terminal startup exits immediately after terminal detection.

@@ -76,7 +76,7 @@ enum Recovery {
 #[test_case::test_case(0, Recovery::Rejected; "nonretryable_failure")]
 #[tokio::test]
 async fn lifecycle_waits_for_recovery(retries: usize, recovery: Recovery) {
-    let _clock = freeze_clock();
+    let clock = freeze_clock();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let environment = Arc::new(
         Environment::create_for_tests(Some(format!("ws://{}", listener.local_addr().unwrap())))
@@ -160,7 +160,9 @@ async fn lifecycle_waits_for_recovery(retries: usize, recovery: Recovery) {
     if recovery == Recovery::TimesOut {
         response_rx.await.unwrap();
         assert!(received.try_recv().is_err());
-        tokio::time::advance(Duration::from_secs(26)).await;
+        // Socket setup is complete. Let Tokio advance through the client's
+        // retry timers until it exhausts its recovery budget.
+        drop(clock);
     }
     let event = received.recv().await.unwrap().msg;
     match recovery {

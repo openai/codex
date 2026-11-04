@@ -5,7 +5,6 @@ use super::managed_worktree_creation::check_background_terminals;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_event::ManagedWorktreeTransition;
-use crate::app_server_session::ForkGoalContinuation::DeferUntilNextTurn;
 use crate::history_cell::McpInventoryLoadingCell as LoadingCell;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
 
@@ -452,13 +451,10 @@ impl App {
         let preserve_history = has_rollout && !is_new_worktree;
         let transitioned = if preserve_history {
             app_server
-                .fork_thread_at(
+                .fork_thread_for_directory_change(
                     &local_settings,
                     config.clone(),
                     thread_id,
-                    /*last_turn_id*/ None,
-                    /*before_turn_id*/ None,
-                    DeferUntilNextTurn,
                     selected_profile.as_ref(),
                 )
                 .await

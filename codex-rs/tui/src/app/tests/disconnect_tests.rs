@@ -17,6 +17,12 @@ use serde_json::json;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
+fn normalize_reconnect_status(popup: &str) -> String {
+    let status =
+        regex_lite::Regex::new(r"(?m)^[•◦] (Reconnecting to server… )\([\dhms ]+\)").unwrap();
+    status.replace(popup, "• ${1}(<elapsed>)").into_owned()
+}
+
 #[tokio::test]
 async fn lost_mutation_reply_preserves_work_without_resubmitting() -> Result<()> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
@@ -127,7 +133,7 @@ async fn lost_mutation_reply_preserves_work_without_resubmitting() -> Result<()>
                     .unwrap()
                     .display_lines(/*width*/ 80)
             ),
-            render_bottom_popup(&app.chat_widget, /*width*/ 80)
+            normalize_reconnect_status(&render_bottom_popup(&app.chat_widget, /*width*/ 80))
         )
     );
     let mut keymap = codex_config::types::TuiKeymap::default();
@@ -591,14 +597,9 @@ async fn rejected_initial_thread_start_reconnects_and_submits_prompt_once() -> R
             TuiEvent::Paste("startup draft".into()),
         )
         .await?;
-        let reconnect_status =
-            regex_lite::Regex::new(r"^[•◦] (Reconnecting to server… )\([\dhms ]+\)")?;
         assert_snapshot!(
             "rejected_startup_reconnecting",
-            reconnect_status.replace(
-                &render_bottom_popup(&app.chat_widget, /*width*/ 80),
-                "• ${1}(<elapsed>)",
-            )
+            normalize_reconnect_status(&render_bottom_popup(&app.chat_widget, /*width*/ 80))
         );
 
         let mut launch_choices = crate::app_server_session::StartupLaunchChoices::default();

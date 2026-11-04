@@ -75,6 +75,9 @@ def _workspace_root_test_impl(ctx):
         runfiles = runfiles.merge(ctx.runfiles(files = [runfile]))
         runfiles = runfiles.merge(runfile_dep[DefaultInfo].default_runfiles)
 
+    if ctx.file.windows_runtime:
+        runfiles = runfiles.merge(ctx.runfiles(files = [ctx.file.windows_runtime]))
+
     location_targets = {}
     for target in (
         ctx.attr.data +
@@ -115,6 +118,12 @@ def _windows_runfile_env_exports(ctx):
         lines.append('call :resolve_runfile "{}"'.format(_runfile_logical_path(runfile)))
         lines.append("if errorlevel 1 exit /b 1")
         lines.append('set "{}=!resolve_runfile_result!"'.format(env_var))
+    if ctx.file.windows_runtime:
+        lines.extend([
+            'call :resolve_runfile "{}"'.format(_runfile_logical_path(ctx.file.windows_runtime)),
+            "if errorlevel 1 exit /b 1",
+            'set "PATH=!resolve_runfile_result!\\bin;!PATH!"',
+        ])
     return "\n".join(lines)
 
 def _runfile_env_file(target):
@@ -163,6 +172,7 @@ workspace_root_test = rule(
             mandatory = True,
         ),
         "test_threads": attr.int(),
+        "windows_runtime": attr.label(allow_single_file = True),
         "workspace_root_marker": attr.label(
             allow_single_file = True,
             mandatory = True,
@@ -206,6 +216,7 @@ def codex_rust_crate(
         integration_test_args = [],
         unit_test_args = [],
         binary_test_target_compatible_with = [],
+        binary_unit_test_windows_runtime = None,
         integration_test_timeout = None,
         test_data_extra = [],
         test_shard_counts = {},
@@ -258,6 +269,7 @@ def codex_rust_crate(
         integration_test_args: Optional args for integration test binaries.
         unit_test_args: Optional args for the unit test binary.
         binary_test_target_compatible_with: Platform constraints for binary unit tests.
+        binary_unit_test_windows_runtime: Runtime directory containing bin/ DLLs for Windows binary unit tests.
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
         test_data_extra: Extra runtime data for tests.
@@ -481,6 +493,7 @@ def codex_rust_crate(
         workspace_root_test(
             name = binary_unit_test_name,
             env = test_env,
+            windows_runtime = binary_unit_test_windows_runtime,
             test_bin = ":" + binary_unit_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             target_compatible_with = binary_test_target_compatible_with,

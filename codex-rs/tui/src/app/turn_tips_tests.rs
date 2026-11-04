@@ -485,7 +485,7 @@ async fn working_tip_stays_put_through_mouse_selection() -> Result<()> {
         if kind == Down(Left) {
             insta::assert_snapshot!(
                 "working_tip_mouse_down",
-                crate::chatwidget::tests::helpers::normalize_snapshot_paths(screen)
+                crate::chatwidget::tests::helpers::normalize_working_snapshot(screen)
             );
         }
     }
@@ -529,7 +529,7 @@ async fn working_tip_stays_put_through_mouse_selection() -> Result<()> {
     }
     insta::assert_snapshot!(
         "working_tip_selected",
-        crate::chatwidget::tests::helpers::normalize_snapshot_paths(buffer_text(
+        crate::chatwidget::tests::helpers::normalize_working_snapshot(buffer_text(
             crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
         ))
     );

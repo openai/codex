@@ -226,6 +226,18 @@ async fn cli_fork_omits_implicit_model_and_effort() -> Result<()> {
     Ok(())
 }
 
+// These tests drop startup with thread/start still in flight. Its recorder
+// can still be waiting for a reply after the request assertions have passed.
+async fn stop_interrupted_startup_recorder(
+    proxy: tokio::task::JoinHandle<Result<()>>,
+) -> Result<()> {
+    proxy.abort();
+    match tokio::time::timeout(Duration::from_secs(15), proxy).await? {
+        Err(error) if error.is_cancelled() => Ok(()),
+        result => result?,
+    }
+}
+
 async fn run_until_thread_start(
     server: AppServerSession,
     config: Config,
@@ -798,7 +810,7 @@ async fn fresh_startup_falls_back_only_for_unsupported_config_read() -> Result<(
             ),
             (&serde_json::Value::Null, &serde_json::Value::Null)
         );
-        tokio::time::timeout(Duration::from_secs(/*secs*/ 15), proxy).await???;
+        stop_interrupted_startup_recorder(proxy).await?;
     }
     Ok(())
 }
@@ -864,7 +876,7 @@ async fn startup_reads_server_defaults_before_starting_thread() -> Result<()> {
         ),
         (&serde_json::Value::Null, &serde_json::Value::Null),
     );
-    tokio::time::timeout(Duration::from_secs(/*secs*/ 15), proxy).await???;
+    stop_interrupted_startup_recorder(proxy).await?;
     Ok(())
 }
 

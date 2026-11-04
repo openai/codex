@@ -169,18 +169,40 @@ if payload["prompt"] == "blocked":
     );
     std::fs::write(&script_path, script)
         .unwrap_or_else(|error| panic!("write queue hook script: {error}"));
+    let python = if cfg!(windows) {
+        "python.exe"
+    } else {
+        "python3"
+    };
     let hooks = serde_json::json!({
         "hooks": {
             "UserPromptSubmit": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("python3 {}", script_path.display()),
+                    "command": format!(r#"{python} "{}""#, script_path.display()),
                 }]
             }]
         }
     });
     std::fs::write(home.join("hooks.json"), hooks.to_string())
         .unwrap_or_else(|error| panic!("write queue hooks: {error}"));
+}
+
+async fn wait_for_hooked_turn(test: &TestCodex) {
+    core_test_support::wait_for_event(test.codex.as_ref(), |event| {
+        match event {
+            EventMsg::HookCompleted(hook) => {
+                eprintln!(
+                    "queue hook finished: {:?} {:?}",
+                    hook.run.status, hook.run.entries
+                );
+            }
+            EventMsg::Error(error) => panic!("queue turn failed: {}", error.message),
+            _ => eprintln!("queue turn event: {event}"),
+        }
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 }
 
 async fn test_queue() -> anyhow::Result<(Arc<dyn QueueStore>, TempDir)> {
@@ -740,6 +762,7 @@ async fn rejected_queue_messages_are_consumed_without_retrying_or_blocking_follo
     let test = test_codex()
         .with_extensions(extensions)
         .with_pre_build_hook(write_rejecting_prompt_hook)
+        .with_windows_cmd_shell()
         .with_config(trust_discovered_hooks)
         .with_config(|config| config.include_environment_context = false)
         .build_with_auto_env(&server)
@@ -759,10 +782,7 @@ async fn rejected_queue_messages_are_consumed_without_retrying_or_blocking_follo
     // instead of sharing one wall-clock deadline across all three turns.
     test.submit_text_turn("A").await?;
     for _ in 0..2 {
-        wait_for_event_match(test.codex.as_ref(), |event| {
-            matches!(event, EventMsg::TurnComplete(_)).then_some(())
-        })
-        .await;
+        wait_for_hooked_turn(&test).await;
     }
     wait_for_queue_empty(&queue, thread_id).await?;
 
@@ -793,6 +813,7 @@ async fn explicitly_started_rejected_queue_messages_are_consumed() -> anyhow::Re
         responses::mount_sse_once(&server, responses::sse_completed("unexpected-turn")).await;
     let test = test_codex()
         .with_pre_build_hook(write_rejecting_prompt_hook)
+        .with_windows_cmd_shell()
         .with_config(trust_discovered_hooks)
         .with_config(|config| config.include_environment_context = false)
         .build_with_auto_env(&server)
@@ -812,10 +833,7 @@ async fn explicitly_started_rejected_queue_messages_are_consumed() -> anyhow::Re
     .await?
     .expect("explicitly started input should be submitted");
     assert!(matches!(submission, StartIfIdleSubmission::Started { .. }));
-    wait_for_event_match(test.codex.as_ref(), |event| {
-        matches!(event, EventMsg::TurnComplete(_)).then_some(())
-    })
-    .await;
+    wait_for_hooked_turn(&test).await;
     assert!(queue.list(thread_id).await?.is_empty());
     let hook_log = std::fs::read_to_string(test.codex_home_path().join("queue_prompt_hook.log"))?;
     assert_eq!(vec!["blocked"], hook_log.lines().collect::<Vec<_>>());

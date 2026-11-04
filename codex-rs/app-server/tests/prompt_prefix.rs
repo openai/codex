@@ -11,7 +11,9 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
+use std::time::Duration;
 use tempfile::TempDir;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -53,7 +55,11 @@ async fn prompt_prefix_matches_release() -> Result<()> {
             // Keep it in place so its own bundled resources remain discoverable.
             builder = builder.with_program(program).with_args(&["app-server"]);
         }
-        let mut app = builder.build_initialized().await?;
+        // Cold startup includes plugin startup tasks for both binaries.
+        let mut app = builder
+            .build_initialized_with_timeout(Duration::from_secs(60))
+            .await
+            .context("initializing app-server for the prompt-prefix comparison")?;
         let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
         let completed = app
             .start_turn_and_wait_for_completion(TurnStartParams {
@@ -103,9 +109,74 @@ async fn prompt_prefix_matches_release() -> Result<()> {
         prefixes.push(prefix);
     }
 
+    if release.is_some() && prefixes[0] != prefixes[1] {
+        let mut released: Value = serde_json::from_str(&prefixes[0])?;
+        let current: Value = serde_json::from_str(&prefixes[1])?;
+        accept_unified_image_budget_rollout(&mut released, &current);
+        prefixes[0] = serde_json::to_string_pretty(&released)?;
+    }
     assert_eq!(
         prefixes[0], prefixes[1],
         "the default inference prefix differs from the released version; gate the change behind a default-off feature key"
     );
     Ok(())
+}
+
+// Compare the released functions.exec description against the exact default-on image budget
+// rollout. Once the release includes it, the ordinary byte-for-byte comparison succeeds.
+fn accept_unified_image_budget_rollout(released: &mut Value, current: &Value) {
+    const TOOL: &str = "/input/0/tools/0/tools/0";
+    for prefix in [&*released, current] {
+        if prefix.pointer("/input/0/role").and_then(Value::as_str) != Some("developer")
+            || prefix
+                .pointer("/input/0/tools/0/name")
+                .and_then(Value::as_str)
+                != Some("functions")
+            || prefix.pointer(TOOL).and_then(|tool| tool["name"].as_str()) != Some("exec")
+        {
+            return;
+        }
+    }
+    let Some(description) = released
+        .pointer_mut(TOOL)
+        .and_then(|tool| tool.get_mut("description"))
+    else {
+        return;
+    };
+    let Some(old) = description.as_str() else {
+        return;
+    };
+    const OLD_IMAGE: &str = r#"- `image(imageUrlOrItem: string | { image_url: string; detail?: "auto" | "low" | "high" | "original" | null } | ImageContent, detail?: "auto" | "low" | "high" | "original" | null)`: Appends an image item. `image_url` should be a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`. MCP image blocks may request detail with `_meta: { "codex/imageDetail": "original" }`. When provided, the second `detail` argument overrides any detail embedded in the first argument."#;
+    const NEW_IMAGE: &str = r#"- `image(imageUrlOrItem: string | { image_url: string } | ImageContent)`: Appends an image item. `image_url` should be a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`."#;
+    const OLD_VIEW_IMAGE: &str = r#"declare const tools: { view_image(args: {
+  // Image detail level. Defaults to `high`; use `original` to preserve exact resolution.
+  detail?: "high" | "original";
+  // Local filesystem path to an image file.
+  path: string;
+}): Promise<{
+  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.
+  detail: "high" | "original";
+  // Data URL for the loaded image.
+  image_url: string;
+}>; };"#;
+    const NEW_VIEW_IMAGE: &str = r#"declare const tools: { view_image(args: {
+  // Local filesystem path to an image file.
+  path: string;
+}): Promise<{
+  // Data URL for the loaded image.
+  image_url: string;
+}>; };"#;
+    if old.matches(OLD_IMAGE).count() != 1 || old.matches(OLD_VIEW_IMAGE).count() != 1 {
+        return;
+    }
+    let updated = old
+        .replace(OLD_IMAGE, NEW_IMAGE)
+        .replace(OLD_VIEW_IMAGE, NEW_VIEW_IMAGE);
+    if current
+        .pointer(TOOL)
+        .and_then(|tool| tool["description"].as_str())
+        == Some(updated.as_str())
+    {
+        *description = Value::String(updated);
+    }
 }

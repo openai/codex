@@ -620,7 +620,15 @@ async fn daemon_startup(command: &str) -> Result<()> {
         ))
     }
     .await;
-    // Always stop the detached daemon, including on timeout or failed assertions.
+    // Elevated fresh Bedrock onboarding already verified that no daemon started.
+    if elevated
+        && command == "bedrock"
+        && let Ok((session, Ok(Ok(())))) = &result
+    {
+        session.terminate();
+        return Ok(());
+    }
+    // Stop the detached daemon, including on timeout or failed assertions.
     let stopped = Command::new(&codex)
         .env_clear()
         .envs(&env)

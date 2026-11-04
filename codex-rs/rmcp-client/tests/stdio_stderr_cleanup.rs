@@ -63,17 +63,10 @@ fn fd_count() -> Result<usize> {
     Ok(fs::read_dir(directory)?.count())
 }
 
-async fn read_pid(path: &Path) -> Result<i32> {
-    for _ in 0..100 {
-        if let Ok(text) = fs::read_to_string(path)
-            && let Ok(pid) = text.trim().parse::<i32>()
-            && pid > 1
-        {
-            return Ok(pid);
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    anyhow::bail!("fixture PID unavailable: {}", path.display())
+fn read_pid(path: &Path) -> Result<i32> {
+    let pid = fs::read_to_string(path)?.trim().parse::<i32>()?;
+    anyhow::ensure!(pid > 1, "invalid fixture PID in {}", path.display());
+    Ok(pid)
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -115,15 +108,22 @@ trigger_path = pathlib.Path(sys.argv[3])
 written_path = pathlib.Path(sys.argv[4])
 signal.alarm(MAX_FIXTURE_LIFETIME_SECONDS)
 server_pid_path.write_text(str(os.getpid()))
+ready_reader, ready_writer = os.pipe()
 if os.fork() == 0:  # fork() returns zero in the child.
+    os.close(ready_reader)
     os.setsid()
     signal.alarm(MAX_FIXTURE_LIFETIME_SECONDS)
     os.close(sys.stdin.fileno())
     os.close(sys.stdout.fileno())
     escaped_pid_path.write_text(str(os.getpid()))
+    os.write(ready_writer, b"1")
+    os.close(ready_writer)
     # Exit even if SIGALRM was ignored; the test normally kills this child sooner.
     time.sleep(MAX_FIXTURE_LIFETIME_SECONDS)
     os._exit(os.EX_OK)
+os.close(ready_writer)
+with os.fdopen(ready_reader, "rb") as ready:
+    assert ready.read(1) == b"1"
 def emit_diagnostic():
     while not trigger_path.exists():
         time.sleep(0.01)
@@ -154,10 +154,6 @@ for line in sys.stdin:
         Arc::new(LocalStdioServerLauncher::new(std::env::current_dir()?)),
     )
     .await?;
-    let server_pid = read_pid(&server_pid_file).await?;
-    let escaped = EscapedChild(read_pid(&child_pid_file).await?);
-    assert_eq!(unsafe { libc::getpgid(server_pid) }, server_pid);
-    assert_eq!(unsafe { libc::getpgid(escaped.0) }, escaped.0);
     client
         .initialize(
             InitializeRequestParams::new(
@@ -178,6 +174,10 @@ for line in sys.stdin:
             }),
         )
         .await?;
+    let server_pid = read_pid(&server_pid_file)?;
+    let escaped = EscapedChild(read_pid(&child_pid_file)?);
+    assert_eq!(unsafe { libc::getpgid(server_pid) }, server_pid);
+    assert_eq!(unsafe { libc::getpgid(escaped.0) }, escaped.0);
     // Keep the current-thread Tokio runtime blocked until the server has
     // written stderr. The reader cannot run before teardown starts.
     fs::write(&trigger_file, "")?;

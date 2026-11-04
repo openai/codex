@@ -369,6 +369,8 @@ async fn direct_patch_review_matches_live_action_without_writes(
     )?;
     let environment_id = serde_json::to_string(&environment.environment_id)?;
     let snapshot = snapshot
+        .replace(&file.replace('\\', "\\\\"), "\"<CWD>/guardian-direct.txt\"")
+        .replace(&cwd.replace('\\', "\\\\"), "\"<CWD>\"")
         .replace(&file, "\"<CWD>/guardian-direct.txt\"")
         .replace(&cwd, "\"<CWD>\"")
         .replace(&environment_id, "\"<ENVIRONMENT>\"");
@@ -494,8 +496,21 @@ async fn direct_permissions_review_matches_live_action() -> Result<()> {
     let cwd = serde_json::to_string(&environment.cwd.inferred_native_path_string())?;
     let environment_id = serde_json::to_string(&environment.environment_id)?;
     let snapshot = snapshot
+        .replace(&cwd.replace('\\', "\\\\"), "\"<CWD>\"")
         .replace(&cwd, "\"<CWD>\"")
         .replace(&environment_id, "\"<ENVIRONMENT>\"");
+    // Foreign executor paths use canonical entries instead of host-native read/write lists.
+    // Normalize only the equivalent single write grant; other paths or access modes stay visible.
+    let canonical_write = serde_json::to_string_pretty(&json!({
+        "entries": [{
+            "access": "write",
+            "path": {"path": "<CWD>", "type": "path"},
+        }],
+    }))?
+    .replace('\n', "\n            ");
+    let compact_write =
+        serde_json::to_string_pretty(&json!({"write": ["<CWD>"]}))?.replace('\n', "\n            ");
+    let snapshot = snapshot.replace(&canonical_write, &compact_write);
     insta::assert_snapshot!("guardian_direct_permissions", snapshot);
     direct.thread.shutdown_and_wait().await?;
     test.codex.shutdown_and_wait().await?;
@@ -509,6 +524,9 @@ async fn direct_patch_review_skips_writable_file_without_writes() -> Result<()> 
         super::configure_scenario_catalog(config);
         config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        // Writable patches can bypass review only when a sandbox is available.
+        config.permissions.windows_sandbox_mode =
+            Some(codex_config::types::WindowsSandboxModeToml::Unelevated);
         config
             .permissions
             .set_permission_profile(PermissionProfile::workspace_write())
