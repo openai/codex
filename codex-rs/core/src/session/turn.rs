@@ -131,6 +131,7 @@ use codex_skills::build_skill_name_counts;
 use codex_skills::collect_explicit_skill_mentions;
 use codex_skills::tool_kind_for_path;
 use codex_skills_extension::HostSkillPrompts;
+use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::InjectedHostSkillPrompts;
 use codex_skills_extension::validate_required_skills;
 use codex_thread_store::PersistContext;
@@ -1178,7 +1179,8 @@ async fn required_mcp_servers_for_input(
     } else {
         HashMap::new()
     };
-    let skills_snapshot = turn_context.skills_snapshot();
+    let environments = sess.services.turn_environments.snapshot().await;
+    let skills_snapshot = sess.host_skills_for_step(turn_context, &environments).await;
     let skills_outcome = skills_snapshot.outcome();
     let mentioned_skills =
         collect_explicit_skill_mentions(user_input, skills_outcome, &connector_slug_counts);
@@ -1249,7 +1251,8 @@ async fn build_skills_and_plugins(
     } else {
         Vec::new()
     };
-    let skills_snapshot = turn_context.skills_snapshot();
+    let skills_snapshot =
+        HostSkillsSnapshot::for_step(&step_context.extension_data, &turn_context.extension_data)?;
     let skills_outcome = skills_snapshot.outcome();
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
     let extension_injection_items =

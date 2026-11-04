@@ -111,9 +111,7 @@ async fn discover_host_catalog(
     input: &StepPreparationInput<'_>,
     config: &SkillsExtensionConfig,
 ) -> Option<SkillCatalog> {
-    let host_snapshot = input
-        .turn_store
-        .get::<HostSkillsSnapshot>()
+    let host_snapshot = HostSkillsSnapshot::for_step(input.step_store, input.turn_store)
         .filter(|_| providers.has_host_provider())?;
     if !config.include_instructions && !config.shadow_selection_enabled {
         return Some(SkillCatalog::default());

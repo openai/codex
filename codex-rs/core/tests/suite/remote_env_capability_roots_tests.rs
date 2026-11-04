@@ -9,6 +9,64 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 
+/// A Linux/macOS executor can exercise the old Windows enum boundary without launching MXC.
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_skill_discovery_reports_unsupported_remote_sandbox() -> Result<()> {
+    let executor = core_test_support::exec_server::ExecServerProcess::start().await?;
+    let environment =
+        codex_exec_server::Environment::create_for_tests(Some(executor.websocket_url.clone()))?;
+    assert!(!environment.info().await?.capabilities.windows_mxc);
+    let workspace = tempfile::tempdir()?;
+    std::fs::create_dir(workspace.path().join(".git"))?;
+    let root = workspace.path().join(".agents/skills");
+    std::fs::create_dir_all(root.join("existing"))?;
+    std::fs::write(
+        root.join("existing/SKILL.md"),
+        "---\nname: existing\ndescription: Existing repository skill.\n---\nSECRET_SKILL_BODY\n",
+    )?;
+    let cwd = AbsolutePathBuf::from_absolute_path(workspace.path())?;
+    let input = codex_skills_extension::HostSkillsLoadInput::new(
+        cwd.clone(),
+        Vec::new(),
+        Default::default(),
+    );
+    let service = codex_skills_extension::HostSkillsService::new_with_restriction_product(
+        cwd.clone(),
+        /*bundled_skills_enabled*/ false,
+        /*restriction_product*/ None,
+    );
+    let fs = environment.get_filesystem();
+    let unrestricted = codex_exec_server::FileSystemEnvironmentAccessor::unrestricted(&fs);
+    let snapshot = service
+        .snapshot_for_config_on_executor(&input, Some((&fs, &unrestricted)))
+        .await;
+    assert_eq!(snapshot.outcome().skills.len(), 1);
+    assert_eq!(snapshot.outcome().errors, Vec::new());
+
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+                PathUri::from_host_native_path(&root)?.into(),
+                FileSystemAccessMode::Read,
+            )]),
+            NetworkSandboxPolicy::Restricted,
+        ),
+        PathUri::from_abs_path(&cwd),
+    );
+    sandbox.windows_sandbox_selection = codex_exec_server::WindowsSandboxSelection::Mxc;
+    let restricted = codex_exec_server::FileSystemEnvironmentAccessor::new(&fs, sandbox);
+    let snapshot = service
+        .snapshot_for_config_on_executor(&input, Some((&fs, &restricted)))
+        .await;
+    assert!(snapshot.outcome().skills.is_empty());
+    assert_eq!(snapshot.outcome().errors, vec![codex_skills::SkillError {
+        path: AbsolutePathBuf::from_absolute_path(root)?,
+        message: "exec-server does not support the requested MXC Windows sandbox; update the executor".to_string(),
+    }]);
+    Ok(())
+}
+
 /// Roots supplied at startup or loaded from history work again when their environment is reselected.
 #[test_case(false; "api roots")]
 #[test_case(true; "saved roots")]

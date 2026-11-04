@@ -26,7 +26,7 @@ use crate::loader::HostSkillRoot;
 
 const AGENTS_DIR_NAME: &str = ".agents";
 const SKILLS_DIR_NAME: &str = "skills";
-const MAX_CONCURRENT_ANCESTOR_PROBES: usize = 256;
+const MAX_CONCURRENT_ANCESTOR_PROBES: usize = 8;
 
 #[derive(Default)]
 pub(crate) struct EmptyRemoteRootsCache {
@@ -53,11 +53,16 @@ impl EmptyRemoteRootsCache {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit discovery inputs and cache"
+)]
 pub(crate) async fn resolve_skill_roots<'a>(
     repository_file_system: Option<&'a dyn EnvironmentAccess>,
     host: &'a dyn EnvironmentAccess,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
+    project_markers: Option<&dyn EnvironmentAccess>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
     empty_remote_roots: Option<&Mutex<EmptyRemoteRootsCache>>,
@@ -69,6 +74,7 @@ pub(crate) async fn resolve_skill_roots<'a>(
         host,
         config_layer_stack,
         cwd,
+        project_markers,
         home_dir.as_ref(),
         plugin_skill_roots,
         extra_skill_roots,
@@ -86,6 +92,7 @@ async fn resolve_skill_roots_with_home_dir<'a>(
     host: &'a dyn EnvironmentAccess,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
+    project_markers: Option<&dyn EnvironmentAccess>,
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
     extra_skill_roots: Vec<AbsolutePathBuf>,
@@ -108,6 +115,7 @@ async fn resolve_skill_roots_with_home_dir<'a>(
             repository_file_system,
             config_layer_stack,
             cwd,
+            project_markers,
             empty_remote_roots,
         )
         .await,
@@ -182,16 +190,17 @@ fn roots_from_layer_stack<'a>(
 }
 
 async fn repo_agents_skill_roots<'a>(
-    repository_file_system: Option<&'a dyn EnvironmentAccess>,
+    repository_fs_accessor: Option<&'a dyn EnvironmentAccess>,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
+    project_markers: Option<&dyn EnvironmentAccess>,
     empty_remote_roots: Option<&Mutex<EmptyRemoteRootsCache>>,
 ) -> Vec<HostSkillRoot<'a>> {
-    let Some(repository_file_system) = repository_file_system else {
+    let Some(repository_fs_accessor) = repository_fs_accessor else {
         return Vec::new();
     };
     let project_root_markers = project_root_markers_from_stack(config_layer_stack);
-    let file_system = repository_file_system.cache_key();
+    let file_system = repository_fs_accessor.cache_key();
     let host = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let cache = empty_remote_roots.filter(|_| !file_system.same_file_system(&host.cache_key()));
     let generation = if let Some(cache) = cache {
@@ -220,8 +229,16 @@ async fn repo_agents_skill_roots<'a>(
     } else {
         None
     };
-    let (project_root, marker, mut complete) =
-        find_project_root(repository_file_system, cwd, &project_root_markers).await;
+    let ResolvedProjectRoot {
+        path: project_root,
+        marker,
+        mut complete,
+    } = find_project_root(
+        project_markers.unwrap_or(repository_fs_accessor),
+        config_layer_stack,
+        cwd,
+    )
+    .await;
     let directories = dirs_between_project_root_and_cwd(cwd, &project_root);
     let mut roots = Vec::new();
     let mut missing = Vec::new();
@@ -229,7 +246,7 @@ async fn repo_agents_skill_roots<'a>(
         .map(|directory| async move {
             let agents_skills = directory.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
             let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
-            let result = repository_file_system
+            let result = repository_fs_accessor
                 .get_metadata(&agents_skills_uri, GetMetadataOptions::default())
                 .await;
             (agents_skills, result)
@@ -240,13 +257,22 @@ async fn repo_agents_skill_roots<'a>(
             Ok(metadata) if metadata.is_directory => roots.push(HostSkillRoot::host(
                 agents_skills,
                 SkillScope::Repo,
-                repository_file_system,
+                repository_fs_accessor,
             )),
             Ok(_) => complete = false,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 if generation.is_some() {
                     missing.push(PathUri::from_abs_path(&agents_skills));
                 }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                complete = false;
+                // Let loading report an unsupported sandbox backend instead of hiding this root.
+                roots.push(HostSkillRoot::host(
+                    agents_skills,
+                    SkillScope::Repo,
+                    repository_fs_accessor,
+                ));
             }
             Err(error) => {
                 complete = false;
@@ -286,7 +312,7 @@ async fn repo_agents_skill_roots<'a>(
             // A cold question never waits for an extra round trip. Until the executor
             // acknowledges coverage, other questions take the ordinary live scan.
             let present = marker.as_ref().map(PathUri::from_abs_path);
-            let watch = repository_file_system.watch_missing(missing, present);
+            let watch = repository_fs_accessor.watch_missing(missing, present);
             tokio::spawn(async move {
                 tokio::select! {
                     biased;
@@ -325,19 +351,30 @@ fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec
     }
 }
 
+/// Repository boundary and the observations required to watch an empty discovery result.
+struct ResolvedProjectRoot {
+    path: AbsolutePathBuf,
+    marker: Option<AbsolutePathBuf>,
+    complete: bool,
+}
+
 async fn find_project_root(
     repository_file_system: &dyn EnvironmentAccess,
+    config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
-    project_root_markers: &[String],
-) -> (AbsolutePathBuf, Option<AbsolutePathBuf>, bool) {
+) -> ResolvedProjectRoot {
+    let project_root_markers = project_root_markers_from_stack(config_layer_stack);
     if project_root_markers.is_empty() {
-        return (cwd.clone(), None, true);
+        return ResolvedProjectRoot {
+            path: cwd.clone(),
+            marker: None,
+            complete: true,
+        };
     }
 
-    let mut complete = true;
     let mut probes = Vec::new();
     for ancestor in cwd.ancestors() {
-        for marker in project_root_markers {
+        for marker in &project_root_markers {
             probes.push((ancestor.clone(), ancestor.join(marker)));
         }
     }
@@ -352,19 +389,34 @@ async fn find_project_root(
         .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
     while let Some((ancestor, marker_path, result)) = results.next().await {
         match result {
-            Ok(_) => return (ancestor, Some(marker_path), complete),
+            Ok(_) => {
+                return ResolvedProjectRoot {
+                    path: ancestor,
+                    marker: Some(marker_path),
+                    complete: true,
+                };
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
-                complete = false;
                 tracing::warn!(
                     "failed to stat project root marker {}: {error:#}",
                     marker_path.display()
                 );
+                // An inconclusive nearer marker must not expose a parent repository's skills.
+                return ResolvedProjectRoot {
+                    path: ancestor,
+                    marker: None,
+                    complete: false,
+                };
             }
         }
     }
 
-    (cwd.clone(), None, complete)
+    ResolvedProjectRoot {
+        path: cwd.clone(),
+        marker: None,
+        complete: true,
+    }
 }
 
 fn dirs_between_project_root_and_cwd(

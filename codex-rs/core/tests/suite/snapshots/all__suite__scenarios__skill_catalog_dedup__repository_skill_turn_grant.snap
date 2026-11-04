@@ -1,0 +1,108 @@
+---
+source: core/tests/suite/scenarios_skill_catalog_dedup.rs
+assertion_line: 518
+expression: "context_snapshot::format_context_snapshot(\"A repository skill appears after approval. The next turn withdraws it, then restores it after reapproval.\",\n&bodies.iter().map(context_snapshot::SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
+---
+Scenario: A repository skill appears after approval. The next turn withdraws it, then restores it after reapproval.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.5"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (8; hash=ce2513bce5d90d3c):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - function/request_permissions: Request additional filesystem or network permissions from the user and wait for the client to gra...; args=[environment_id, permissions, reason]; hash=2ed084e2fc688abd
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
+    - web_search; hash=f103e327c6870a46
+-- request 1 (request) --
+00:message/developer:
+    You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to c...rate with them until their goal is genuinely handled. [hash=2a3efec66e7f8963]
+
+    # Personality
+
+    You have a vivid inner life as Codex: intelligent, playful, curious, and deeply present. One of your gif...re capable and imaginative inside their own thinking. [hash=0ff01c25471fbbef]
+
+    You are an epistemically curious collaborator. You explore the user’s ideas with care, ask good question...m casual moments that make serious work easier to do. [hash=131b64bb994b0d68]
+
+    <OMITTED 133 LINES; ~4925 TOKENS; hash=16dc03a668b62476>
+    - You provide user updates frequently, every 30s.
+    - When exploring, such as searching or reading files, you provide user updates as you go. You explain wh...in particular you do not start each one the same way. [hash=ad300cdda4074574]
+    - When working for a while, you keep updates informative and varied, but you stay concise.
+    - Once you have enough context, and if the work is substantial, you offer a longer plan. This is the onl...at may run past two sentences and include formatting. [hash=a4f9789e757eef2f]
+    - If you create a checklist or task list, you update item statuses incrementally as each item is completed rather than marking every item done only at the end.
+    - Before performing file edits of any kind, you provide updates explaining what edits you are making.
+    - Tone of your updates must match your personality.
+
+01:message/developer[2]:
+    [01] <permissions instructions>
+        Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+        # Escalation Requests
+
+        Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+        - Pipes: |
+        - Logical operators: &&, ||
+        <OMITTED 49 LINES; ~825 TOKENS; hash=b34b831026c6991f>
+        - ["gh", "pr", "check"]
+        - ["cargo", "test"]
+
+
+        # request_permissions Tool
+
+        The built-in `request_permissions` tool is available in this session. Invoke it when you need to request... only the specific permissions required for the task. [hash=a29255aad0722385]
+        </permissions instructions>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><WORKSPACE_ROOT 1></root></workspace_roots><permission_profile type...ype="restricted" /></permission_profile></filesystem> [hash=923530c158fc12f3]
+    </environment_context>
+03:message/user:
+    Request access to the repository skills.
+-- request 2 (request) --
+04:function_call/request_permissions:{"permissions":{"file_system":{"read":["<CWD>/.agents/skills"]},"network":null},"reason":"Read repository skills"}
+05:function_call_output:{"permissions":{"network":null,"file_system":{"read":["<CWD>/.agents/skills"]}},"scope":"turn"}
+06:message/developer:
+    <skills_instructions>
+    ## Host skills
+
+    ## Skills
+    A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
+    ### Skill roots
+    - `r0` = `<SKILLS_ROOT>`
+    ### Available skills
+    - approved-skill: Approved repository instructions. (file: r0/approved-skill/SKILL.md)
+    </skills_instructions>
+-- request 3 (request) --
+07:message/developer:
+    <skills_instructions>
+    ## Host skills update
+    Some previously listed skills are no longer available. Verify current access before relying on a skill from this source.
+    </skills_instructions>
+08:message/user:
+    Use $approved-skill.
+-- request 4 (request) --
+09:function_call/request_permissions:{"permissions":{"file_system":{"read":["<CWD>/.agents/skills"]},"network":null},"reason":"Read repository skills"}
+10:function_call_output:{"permissions":{"network":null,"file_system":{"read":["<CWD>/.agents/skills"]}},"scope":"turn"}
+11:message/developer:
+    <skills_instructions>
+    ## Host skills update
+    Some previously unavailable skills are available again. Verify current access before relying on a skill from this source.
+    </skills_instructions>

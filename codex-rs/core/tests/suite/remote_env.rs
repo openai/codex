@@ -1454,11 +1454,6 @@ async fn send_environment_info(websocket: &mut WebSocketStream<TcpStream>) {
         .expect("environment info response");
 }
 
-async fn serve_environment_info(listener: TcpListener) {
-    let mut websocket = accept_initialized_exec_server(listener).await;
-    send_environment_info(&mut websocket).await;
-}
-
 pub(super) async fn serve_environment_with_agents_md(
     listener: TcpListener,
     contents: &str,
@@ -1476,12 +1471,20 @@ async fn serve_environment_with_instruction_files(
     contents: &str,
     skill: Option<&str>,
     attach: tokio::sync::oneshot::Receiver<()>,
-    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> usize {
     let mut websocket = accept_initialized_exec_server(listener).await;
     attach.await.expect("attach signal");
     send_environment_info(&mut websocket).await;
+    serve_instruction_file_requests(websocket, contents, skill, shutdown).await
+}
 
+async fn serve_instruction_file_requests(
+    mut websocket: WebSocketStream<TcpStream>,
+    contents: &str,
+    skill: Option<&str>,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> usize {
     let mut agents_md_reads = 0;
     loop {
         let request = tokio::select! {
@@ -3561,7 +3564,15 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
     })
     .await;
 
-    serve_environment_info(listener).await;
+    let mut websocket = accept_initialized_exec_server(listener).await;
+    send_environment_info(&mut websocket).await;
+    let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+    let executor = tokio::spawn(serve_instruction_file_requests(
+        websocket,
+        "",
+        /*skill*/ None,
+        shutdown_rx,
+    ));
     test.codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id,
@@ -3648,6 +3659,8 @@ async fn deferred_executor_compaction_preserves_then_updates_environment_once() 
         Some(&json!("zsh"))
     );
 
+    shutdown.send(()).expect("stop executor");
+    executor.await?;
     Ok(())
 }
 

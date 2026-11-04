@@ -167,6 +167,7 @@ async fn load_skills_under_root(
         plugin_roots,
         mut namespace_roots,
         warnings,
+        error,
     } = discover_skills(
         file_system,
         &PathUri::from_abs_path(root),
@@ -179,6 +180,16 @@ async fn load_skills_under_root(
     .await;
     for warning in warnings {
         error!("{warning}");
+    }
+    if let Some(message) = error {
+        return (
+            Vec::new(),
+            Arc::default(),
+            vec![SkillError {
+                path: root.clone(),
+                message,
+            }],
+        );
     }
     if skills.is_empty() {
         return (Vec::new(), Arc::default(), Vec::new());

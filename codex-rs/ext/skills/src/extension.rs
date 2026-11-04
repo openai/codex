@@ -347,7 +347,7 @@ where
             let mcp_resources = session_store
                 .get::<SkillsSessionState>()
                 .and_then(|state| state.mcp_resources.clone());
-            let host_snapshot = turn_store.get::<HostSkillsSnapshot>();
+            let host_snapshot = HostSkillsSnapshot::for_step(input.step_store, turn_store);
             let host_catalog_in_world_state =
                 turn_store.get::<HostSkillsCatalogInWorldState>().is_some();
             let Some(step_state) = input.step_store.get::<SkillsStepState>() else {

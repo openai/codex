@@ -65,7 +65,9 @@ fn edits_beyond_the_catalog_description_cap_keep_the_same_fingerprint() {
             )
             .unwrap();
         prepared
-            .entries_for_render(&rendered)
+            .entries_for_render(
+                &rendered, /*grants*/ None, /*primary_environment*/ None,
+            )
             .into_values()
             .next()
             .unwrap()

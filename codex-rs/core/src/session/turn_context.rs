@@ -11,6 +11,7 @@ use crate::exec_policy::AllowPrefixRules;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use crate::shell_snapshot::ShellSnapshotSandbox;
+use crate::skills::HostSkillDiscovery;
 use crate::tools::sandboxing::configured_windows_sandbox_selection;
 use crate::tools::sandboxing::executor_windows_sandbox_selection;
 use arc_swap::ArcSwap;
@@ -438,7 +439,10 @@ impl TurnContext {
     ) -> Self {
         let session_telemetry = step_settings.telemetry(&self.session_telemetry);
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
-        extension_data.insert(self.skills_snapshot().as_ref().clone());
+        extension_data.insert_arc(self.skills_snapshot());
+        if let Some(discovery) = self.extension_data.get::<HostSkillDiscovery>() {
+            extension_data.insert_arc(discovery);
+        }
 
         Self {
             sub_id,
@@ -508,6 +512,34 @@ impl TurnContext {
             .get(environment_id)
             .cloned();
         merge_permission_profiles(session_grants.as_ref(), turn_grants.as_ref())
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned grant state must not authorize further operations"
+    )]
+    pub(crate) fn turn_skill_filesystem_grants(
+        &self,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> Option<codex_skills_extension::TurnSkillFilesystemGrants> {
+        let grants = self
+            .turn_grants
+            .lock()
+            .expect("turn permission grants lock poisoned");
+        let environment_ids = environments
+            .turn_environments()
+            .map(|environment| &environment.selection.environment_id)
+            .filter(|id| {
+                grants
+                    .granted_permissions_by_environment_id
+                    .get(*id)
+                    .and_then(|profile| profile.file_system.as_ref())
+                    .is_some_and(|fs| !fs.is_empty())
+            })
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        (!environment_ids.is_empty())
+            .then_some(codex_skills_extension::TurnSkillFilesystemGrants { environment_ids })
     }
 
     #[expect(
@@ -1294,6 +1326,10 @@ impl Session {
     }
 
     #[instrument(name = "turn_context.build", level = "trace", skip_all, fields(?build_mode))]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned session grants must not authorize discovery"
+    )]
     async fn new_turn_context_from_configuration(
         &self,
         sub_id: String,
@@ -1347,7 +1383,7 @@ impl Session {
             &plugin_outcome,
             per_turn_config.codex_home.as_path(),
         );
-        let skills_snapshot = if matches!(build_mode, TurnContextBuildMode::InjectItems)
+        let skill_discovery = if matches!(build_mode, TurnContextBuildMode::InjectItems)
             || crate::guardian::is_basic_session_source(&session_configuration.session_source)
             || (per_turn_config
                 .features
@@ -1355,7 +1391,7 @@ impl Session {
                 && !self.services.extensions.requires_host_skill_discovery())
         {
             // Executor and orchestrator catalogs are supplied independently of host skills.
-            HostSkillsSnapshot::new(Arc::new(SkillLoadOutcome::default()))
+            None
         } else {
             let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
             let (skills_input, fs) = crate::skills::skills_load_input_for_environments(
@@ -1364,18 +1400,37 @@ impl Session {
                 effective_skill_roots,
                 &turn_environments,
             );
-            let access = fs
-                .as_ref()
-                .map(codex_exec_server::FileSystemEnvironmentAccessor::unrestricted);
-            self.services
+            let access = fs.map(|environment| {
+                let grants = self
+                    .services
+                    .granted_permissions_by_environment_id
+                    .lock()
+                    .expect("session permission grants lock poisoned")
+                    .get(&environment.selection.environment_id)
+                    .cloned();
+                environment.fs_accessor(grants)
+            });
+            let snapshot = self
+                .services
                 .skills_service
-                .snapshot_for_config(
+                .snapshot_for_config_on_executor(
                     &skills_input,
-                    access
-                        .as_ref()
-                        .map(|access| access as &dyn EnvironmentAccess),
+                    fs.zip(access.as_ref()).map(|(environment, access)| {
+                        (
+                            environment.environment().filesystem_ref(),
+                            access as &dyn EnvironmentAccess,
+                        )
+                    }),
                 )
-                .await
+                .await;
+            let repository = fs
+                .zip(access.as_ref())
+                .map(|(environment, access)| (environment.cwd().clone(), access.cache_key()));
+            Some(HostSkillDiscovery {
+                input: Arc::new(skills_input),
+                repository,
+                snapshot: Arc::new(snapshot),
+            })
         };
         let step_settings = Arc::new(ResolvedStepSettings::new(
             Arc::clone(&session_configuration.step_settings),
@@ -1407,8 +1462,14 @@ impl Session {
             turn_environments,
             cwd,
             sub_id,
-            skills_snapshot,
+            skill_discovery
+                .as_ref()
+                .map(|discovery| discovery.snapshot.as_ref().clone())
+                .unwrap_or_else(|| HostSkillsSnapshot::new(Arc::new(SkillLoadOutcome::default()))),
         );
+        if let Some(discovery) = skill_discovery {
+            turn_context.extension_data.insert(discovery);
+        }
         turn_context.code_mode_available = self.services.code_mode_service.is_available();
         turn_context.extension_data.insert(trusted_plugin_roots);
         turn_context.active_host_plugin_identities = Some(

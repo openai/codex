@@ -31,6 +31,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::super::skills_extension::CatalogSkillProvider;
+use super::super::skills_extension::RepositoryGrant;
+use super::super::skills_extension::repository_skill_grant_history;
 
 #[test_case::test_case(false; "descriptions")]
 #[test_case::test_case(true; "omit_descriptions")]
@@ -467,6 +469,60 @@ async fn skill_catalog_deltas_survive_resume_and_rebuild_after_compaction() -> R
         context_snapshot::format_request_history_snapshot(
             "Skill additions and edits share the remaining metadata budget across turns and resume. Removals stay silent and do not refund budget. Compaction rebuilds the current catalog and resets the allowance.",
             &requests,
+            &ContextSnapshotOptions::default().include_request_settings(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repository_skill_turn_grant() -> Result<()> {
+    let Some((requests, skill_root)) =
+        repository_skill_grant_history(RepositoryGrant::Turn).await?
+    else {
+        return Ok(());
+    };
+    let withdrawn = requests
+        .iter()
+        .map(|request| {
+            request
+                .message_input_texts("developer")
+                .iter()
+                .any(|text| text.contains("Some previously listed skills are no longer available."))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(withdrawn, [false, false, true, true]);
+    assert!(
+        requests[3]
+            .message_input_texts("developer")
+            .iter()
+            .any(|text| {
+                text.contains("Some previously unavailable skills are available again.")
+            })
+    );
+    // Normalize the executor's temporary path before long tool arguments are clipped and hashed.
+    let skill_root = serde_json::to_string(&skill_root.inferred_native_path_string())?;
+    let mut bodies = requests
+        .iter()
+        .map(responses::ResponsesRequest::body_json)
+        .collect::<Vec<_>>();
+    for body in &mut bodies {
+        for item in body["input"].as_array_mut().expect("request input") {
+            for field in ["arguments", "output"] {
+                if let Some(serde_json::Value::String(text)) = item.get_mut(field) {
+                    *text = text.replace(&skill_root, r#""<CWD>/.agents/skills""#);
+                }
+            }
+        }
+    }
+    insta::assert_snapshot!(
+        "repository_skill_turn_grant",
+        context_snapshot::format_context_snapshot(
+            "A repository skill appears after approval. The next turn withdraws it, then restores it after reapproval.",
+            &bodies
+                .iter()
+                .map(context_snapshot::SnapshotEntry::body)
+                .collect::<Vec<_>>(),
             &ContextSnapshotOptions::default().include_request_settings(),
         )
     );

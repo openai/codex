@@ -56,6 +56,11 @@ pub use sources::SkillProviders;
 pub use state::SkillsThreadState;
 pub use telemetry::record_plugin_turn_usage;
 
+/// Selected environments whose discovery can use a turn-scoped filesystem grant.
+pub struct TurnSkillFilesystemGrants {
+    pub environment_ids: std::collections::HashSet<String>,
+}
+
 /// Recognizes persisted explicit skill prompts without exposing their fragment implementation.
 pub fn is_skill_prompt_fragment(text: &str) -> bool {
     <fragments::SkillInstructions as codex_extension_api::ContextualUserFragment>::matches_text(

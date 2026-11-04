@@ -4317,6 +4317,18 @@ impl Session {
             let extension_data =
                 codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
             extension_data.insert_arc(Arc::clone(&settings.model_info.model));
+            extension_data.insert_arc(
+                self.host_skills_for_step(&turn_context, &environments)
+                    .await,
+            );
+            if turn_context
+                .config
+                .features
+                .enabled(Feature::SkillCatalogDeltas)
+                && let Some(grants) = turn_context.turn_skill_filesystem_grants(&environments)
+            {
+                extension_data.insert(grants);
+            }
             if let Some(messages) = settings
                 .model_info
                 .model_messages

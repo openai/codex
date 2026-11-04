@@ -689,15 +689,17 @@ async fn warm_plugins_and_skills_for_session_init(
         effective_skill_roots,
         turn_environments,
     );
-    let access = fs
-        .as_ref()
-        .map(codex_exec_server::FileSystemEnvironmentAccessor::unrestricted);
+    let access =
+        fs.map(|environment| environment.fs_accessor(/*additional_permissions*/ None));
     skills_service
-        .snapshot_for_config(
+        .snapshot_for_config_on_executor(
             &skills_input,
-            access
-                .as_ref()
-                .map(|access| access as &dyn codex_file_system::EnvironmentAccess),
+            fs.zip(access.as_ref()).map(|(environment, access)| {
+                (
+                    environment.environment().filesystem_ref(),
+                    access as &dyn codex_file_system::EnvironmentAccess,
+                )
+            }),
         )
         .await
         .outcome()

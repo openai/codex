@@ -38,6 +38,7 @@ pub(super) struct SkillDiscovery {
     pub plugin_roots: HashSet<PathUri>,
     pub namespace_roots: HashSet<PathUri>,
     pub warnings: Vec<String>,
+    pub error: Option<String>,
 }
 
 pub(super) struct DiscoveredSkill {
@@ -61,6 +62,7 @@ pub(super) async fn discover_skills(
         plugin_roots: HashSet::new(),
         namespace_roots: HashSet::new(),
         warnings: Vec::new(),
+        error: None,
     };
     let walk = match file_system
         .walk(
@@ -88,6 +90,9 @@ pub(super) async fn discover_skills(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return empty_discovery(),
         Err(error) => {
             let mut discovery = empty_discovery();
+            if error.kind() == io::ErrorKind::Unsupported {
+                discovery.error = Some(error.to_string());
+            }
             discovery
                 .warnings
                 .push(format!("failed to walk skills root {root}: {error:#}"));
@@ -173,6 +178,7 @@ pub(super) async fn discover_skills(
         plugin_roots,
         namespace_roots: HashSet::from([root.clone()]),
         warnings,
+        error: None,
     }
 }
 

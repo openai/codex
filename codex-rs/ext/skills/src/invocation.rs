@@ -48,7 +48,7 @@ pub fn detect_implicit_skill_invocation(
 ) -> Option<SkillInvocation> {
     if environment_id == LOCAL_ENVIRONMENT_ID
         && let Some(native_workdir) = native_workdir
-        && let Some(host_snapshot) = turn_store.get::<HostSkillsSnapshot>()
+        && let Some(host_snapshot) = HostSkillsSnapshot::for_step(step_store, turn_store)
         && let Some(skill) = detect_implicit_skill_invocation_for_command(
             host_snapshot.outcome(),
             command,

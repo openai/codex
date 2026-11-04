@@ -7,6 +7,9 @@
 #![cfg(target_os = "windows")]
 #![allow(clippy::expect_used)]
 
+#[path = "windows_sandbox/repository_skills_tests.rs"]
+mod repository_skills_tests;
+
 use anyhow::Context;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::TurnInputRequest;

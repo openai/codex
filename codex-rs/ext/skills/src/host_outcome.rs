@@ -15,6 +15,10 @@ use codex_skills::SkillError;
 use codex_skills::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use futures::StreamExt;
+
+use crate::loader::MAX_CONCURRENT_SKILL_LOADS;
+use crate::loader::canonicalize_for_skill_identity;
 
 #[derive(Debug, Clone, Default)]
 pub struct SkillLoadOutcome {
@@ -63,27 +67,53 @@ impl SkillLoadOutcome {
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
 
-    pub(crate) fn with_disabled_paths(mut self, disabled_paths: HashSet<PathUri>) -> Self {
+    pub(crate) async fn with_disabled_paths(
+        mut self,
+        disabled_paths: HashSet<PathUri>,
+        accessors: &[&dyn EnvironmentAccess],
+    ) -> Self {
         self.disabled_paths = disabled_paths;
         let mut by_scripts_dir = HashMap::new();
         let mut by_doc_path = HashMap::new();
+        let mut scans = Vec::new();
         for skill in self
             .skills
             .iter()
             .filter(|skill| self.is_skill_enabled(skill))
         {
-            // Implicit command detection probes the host filesystem only.
+            let Some(source) = self.file_system_for_skill(skill) else {
+                continue;
+            };
+            let Some(access) = accessors
+                .iter()
+                .copied()
+                .find(|access| source == &access.cache_key())
+            else {
+                continue;
+            };
+            // Only native paths participate in implicit command detection.
             let Ok(path) = skill.path_to_skills_md.to_abs_path() else {
                 continue;
             };
-            let skill_doc_path = canonicalize_if_exists(&path);
-            by_doc_path.insert(PathUri::from_abs_path(&skill_doc_path), skill.clone());
-
-            if let Some(skill_dir) = path.parent() {
-                let scripts_dir = canonicalize_if_exists(&skill_dir.join("scripts"));
+            scans.push(async move {
+                let skill_doc_path = canonicalize_for_skill_identity(access, &path).await;
+                let scripts_dir = match path.parent() {
+                    Some(skill_dir) => Some(
+                        canonicalize_for_skill_identity(access, &skill_dir.join("scripts")).await,
+                    ),
+                    None => None,
+                };
+                (skill, skill_doc_path, scripts_dir)
+            });
+        }
+        let mut scans = futures::stream::iter(scans).buffered(MAX_CONCURRENT_SKILL_LOADS);
+        while let Some((skill, doc_path, scripts_dir)) = scans.next().await {
+            by_doc_path.insert(PathUri::from_abs_path(&doc_path), skill.clone());
+            if let Some(scripts_dir) = scripts_dir {
                 by_scripts_dir.insert(PathUri::from_abs_path(&scripts_dir), skill.clone());
             }
         }
+        drop(scans);
         self.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
         self.implicit_skills_by_doc_path = Arc::new(by_doc_path);
         self
@@ -200,8 +230,4 @@ impl fmt::Debug for SkillFileSystemsByPath {
             .field("len", &self.values.len())
             .finish()
     }
-}
-
-fn canonicalize_if_exists(path: &AbsolutePathBuf) -> AbsolutePathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.clone())
 }

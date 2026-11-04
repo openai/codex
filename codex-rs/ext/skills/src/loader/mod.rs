@@ -17,6 +17,7 @@ pub(crate) use host_merge::load_and_merge_host_skill_roots;
 pub(crate) use host_merge::load_and_merge_host_skill_roots_with_request_snapshots;
 
 pub(crate) const MAX_CONCURRENT_ROOT_SCANS: usize = 8;
+pub(crate) use discovery::MAX_CONCURRENT_SKILL_LOADS;
 pub(super) const SKILLS_FILENAME: &str = "SKILL.md";
 pub(super) const SKILLS_METADATA_DIR: &str = "agents";
 pub(super) const SKILLS_METADATA_FILENAME: &str = "openai.yaml";

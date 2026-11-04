@@ -816,15 +816,40 @@ async fn skills_for_cwd_loads_repo_and_user_roots_with_local_fs() {
     assert!(loaded_names.contains("repo-skill"));
     let other_file_system: Arc<dyn codex_exec_server::ExecutorFileSystem> =
         Arc::new(codex_exec_server::LocalFileSystem::unsandboxed());
+    let other_access = FileSystemEnvironmentAccessor::unrestricted(&other_file_system);
     let other_snapshot = skills_service
-        .snapshot_for_config(
-            &skills_input,
-            Some(
-                &codex_exec_server::FileSystemEnvironmentAccessor::unrestricted(&other_file_system),
-            ),
-        )
+        .snapshot_for_config(&skills_input, Some(&other_access))
         .await;
     assert!(!std::ptr::eq(snapshot.outcome(), other_snapshot.outcome()));
+    let outcome = other_snapshot.outcome();
+    let repo_skill = outcome
+        .skills
+        .iter()
+        .find(|skill| skill.name == "repo-skill")
+        .unwrap();
+    let repo_skill_path = repo_skill.path_to_skills_md.to_abs_path().unwrap();
+    assert_eq!(
+        outcome.implicit_skill_for_doc_path(&repo_skill_path),
+        Some(repo_skill)
+    );
+    assert_eq!(
+        outcome.implicit_skill_for_scripts_dir(&repo_skill_path.parent().unwrap().join("scripts")),
+        Some(repo_skill)
+    );
+    let remote_snapshot = skills_service
+        .snapshot_for_config(
+            &skills_input.with_environment_id("remote"),
+            Some(&other_access),
+        )
+        .await;
+    let remote_outcome = remote_snapshot.outcome();
+    for skill in &remote_outcome.skills {
+        assert_eq!(
+            remote_outcome
+                .implicit_skill_for_doc_path(&skill.path_to_skills_md.to_abs_path().unwrap()),
+            (skill.scope != SkillScope::Repo).then_some(skill)
+        );
+    }
 }
 
 #[tokio::test]

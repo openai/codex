@@ -63,6 +63,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
@@ -583,13 +584,33 @@ async fn rendered_catalogs_for_turns(
     Ok((developer_texts, client_warning_messages))
 }
 
+#[derive(Clone, Copy)]
+enum RepositoryReadAccess {
+    Full,
+    Repository,
+    OuterMarkerOnly,
+    NoMarkers,
+}
+
+#[test_case(RepositoryReadAccess::Full; "full read access")]
+#[test_case(RepositoryReadAccess::Repository; "repository-only read access")]
+#[test_case(RepositoryReadAccess::OuterMarkerOnly; "inner repository marker hidden")]
+#[test_case(RepositoryReadAccess::NoMarkers; "all repository markers hidden")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() -> Result<()> {
+async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills(
+    repository_read_access: RepositoryReadAccess,
+) -> Result<()> {
     skip_if_wine_exec!(
         Ok(()),
         "executor-backed repo skills require matching host and executor path conventions"
     );
     skip_if_no_network!(Ok(()));
+    if !matches!(repository_read_access, RepositoryReadAccess::Full) {
+        skip_if_target_windows!(
+            Ok(()),
+            "restricted reads require the elevated Windows sandbox backend"
+        );
+    }
 
     const HOST_SKILL_BODY: &str = "Use the host skill instructions.";
     const REPO_SKILL_BODY: &str = "Use the repository skill instructions.";
@@ -652,22 +673,38 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
         .with_extensions(Arc::new(extensions.build()))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_workspace_setup(|cwd, fs| async move {
-            let skill_dir = cwd.join(".agents/skills/repo-search");
             fs.create_directory(
-                &PathUri::from_host_native_path(&skill_dir)?,
+                &PathUri::from_abs_path(&cwd),
                 CreateDirectoryOptions { recursive: true, follow_symlinks: true },
                 /*sandbox*/ None,
             )
             .await?;
-            fs.write_file(
-                &PathUri::from_host_native_path(skill_dir.join("SKILL.md"))?,
-                format!(
-                    "---\nname: repo-search\ndescription: inspect repo data\n---\n\n{REPO_SKILL_BODY}\n"
+            let repository = cwd.parent().expect("inner repository");
+            let outer = repository.parent().expect("outer repository");
+            for (root, name) in [(&repository, "repo-search"), (&outer, "outer-search")] {
+                fs.write_file(
+                    &PathUri::from_abs_path(&root.join(".git")),
+                    b"gitdir: fixture\n".to_vec(),
+                    Default::default(), /*sandbox*/ None,
                 )
-                .into_bytes(),
-                Default::default(), /*sandbox*/ None,
-            )
-            .await?;
+                .await?;
+                let skill_dir = PathUri::from_abs_path(&root.join(".agents/skills").join(name));
+                fs.create_directory(
+                    &skill_dir,
+                    CreateDirectoryOptions { recursive: true, follow_symlinks: true },
+                    /*sandbox*/ None,
+                )
+                .await?;
+                fs.write_file(
+                    &skill_dir.join("SKILL.md")?,
+                    format!(
+                        "---\nname: {name}\ndescription: inspect repo data\n---\n\n{REPO_SKILL_BODY}\n"
+                    )
+                    .into_bytes(),
+                    Default::default(), /*sandbox*/ None,
+                )
+                .await?;
+            }
             Ok(())
         })
         .with_config(move |config| {
@@ -676,12 +713,45 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
                 .enable(Feature::Apps)
                 .expect("test config should allow feature update");
             config.chatgpt_base_url = apps_server.chatgpt_base_url;
+            config.cwd = config.cwd.join("outer/inner/work");
+            let repository = config.cwd.parent().expect("inner repository");
+            let outer = repository.parent().expect("outer repository");
+            let mut readable_paths = match repository_read_access {
+                RepositoryReadAccess::Full => Vec::new(),
+                RepositoryReadAccess::Repository => vec![repository],
+                RepositoryReadAccess::OuterMarkerOnly | RepositoryReadAccess::NoMarkers => vec![
+                    config.cwd.clone(),
+                    repository.join(".agents/skills"),
+                    outer.join(".agents/skills"),
+                ],
+            };
+            if matches!(repository_read_access, RepositoryReadAccess::OuterMarkerOnly) {
+                readable_paths.push(outer.join(".git"));
+            }
+            if !readable_paths.is_empty() {
+                config.permissions.set_permission_profile(PermissionProfile::from_runtime_permissions(
+                    &FileSystemSandboxPolicy::restricted(readable_paths.into_iter().map(|path| {
+                        FileSystemSandboxEntry::new(
+                            FileSystemPath::Path { path: PathUri::from_abs_path(&path) },
+                            FileSystemAccessMode::Read,
+                        )
+                    }).collect()),
+                    NetworkSandboxPolicy::Restricted,
+                )).expect("repository read policy");
+            }
         });
     let test = builder.build_with_auto_env(&server).await?;
     let repo_skill_path = test
         .fs()
         .canonicalize(
-            &PathUri::from_abs_path(&test.config.cwd.join(".agents/skills/repo-search/SKILL.md")),
+            &PathUri::from_abs_path(
+                &test
+                    .config
+                    .cwd
+                    .parent()
+                    .expect("inner repository")
+                    .join(".agents/skills/repo-search/SKILL.md"),
+            ),
             /*sandbox*/ None,
         )
         .await?
@@ -745,6 +815,10 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
     assert!(
         developer_text.contains("repo-search: inspect repo data"),
         "expected repo skill summary in developer message: {developer_messages:?}"
+    );
+    assert!(
+        !developer_text.contains("outer-search:"),
+        "hidden project markers must not expose containing-repository skills: {developer_messages:?}"
     );
     assert!(
         developer_text.contains("host-search: inspect host data"),
@@ -1038,6 +1112,13 @@ async fn repository_skill_cache_cannot_read_inaccessible_files(
             .iter()
             .any(|text| text == first_catalog)
     );
+    let latest_catalog = second_developer_texts
+        .iter()
+        .rev()
+        .find(|text| text.contains("- repo-allowed:"))
+        .expect("allowed repository skill remains available after permissions narrow");
+    assert!(!latest_catalog.contains("- repo-revoked:"));
+    assert!(latest_catalog.contains("- repo-gated:"));
     for request in &requests[1..] {
         assert!(
             request
@@ -1054,6 +1135,201 @@ async fn repository_skill_cache_cannot_read_inaccessible_files(
     let restored = snapshot.read_skill_text(&gated_skill, &[&open]).await?;
     assert!(restored.contains(GATED_BODY));
     Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RepositoryGrant {
+    Turn,
+    Session,
+    NewNestedRepository,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repository_skill_discovery_uses_session_grants() -> Result<()> {
+    repository_skill_grant_history(RepositoryGrant::Session)
+        .await
+        .map(drop)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repository_skill_grant_excludes_a_parent_after_a_nested_repository_is_created()
+-> Result<()> {
+    repository_skill_grant_history(RepositoryGrant::NewNestedRepository)
+        .await
+        .map(drop)
+}
+
+pub(super) async fn repository_skill_grant_history(
+    case: RepositoryGrant,
+) -> Result<Option<(Vec<responses::ResponsesRequest>, PathUri)>> {
+    skip_if_no_network!(Ok(None));
+    skip_if_target_windows!(
+        Ok(None),
+        "restricted reads require the elevated Windows sandbox backend, unavailable in this fixture"
+    );
+    let scope = match case {
+        RepositoryGrant::Turn | RepositoryGrant::NewNestedRepository => PermissionGrantScope::Turn,
+        RepositoryGrant::Session => PermissionGrantScope::Session,
+    };
+    let (extensions, _events) =
+        catalog_extensions(SkillCatalog::default(), /*include_host_provider*/ true);
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_extensions(extensions)
+            .with_model_info_override("gpt-5.5", |model| {
+                model.include_skills_usage_instructions = false
+            })
+            .with_config(move |config| {
+                configure_catalog_test(config);
+                if scope == PermissionGrantScope::Turn {
+                    config
+                        .features
+                        .enable(Feature::SkillCatalogDeltas)
+                        .expect("catalog deltas");
+                }
+                config
+                    .features
+                    .enable(Feature::RequestPermissionsTool)
+                    .expect("permission tool");
+                config.permissions.approval_policy =
+                    Constrained::allow_any(AskForApproval::OnRequest);
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                        &FileSystemSandboxPolicy::restricted(Vec::new()),
+                        NetworkSandboxPolicy::Restricted,
+                    ))
+                    .expect("no initial filesystem access");
+            }),
+    )
+    .await?;
+    harness.write_file(
+        ".agents/skills/approved-skill/SKILL.md",
+        "---\nname: approved-skill\ndescription: Approved repository instructions.\n---\n\nApproved skill body.",
+    ).await?;
+    let test = harness.test();
+    let nested = case == RepositoryGrant::NewNestedRepository;
+    let mut workspace = test.executor_environment().request();
+    if nested {
+        // The parent initially owns the skill. Add the inner marker while approval is pending.
+        harness.write_file(".git", "").await?;
+        harness.write_file("nested/README.md", "").await?;
+        workspace.cwd = workspace.cwd.join("nested")?;
+    }
+    let skill_root = test
+        .fs()
+        .canonicalize(
+            &test
+                .executor_environment()
+                .selection()
+                .cwd
+                .join(".agents/skills")?,
+            /*sandbox*/ None,
+        )
+        .await?;
+    let permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: skill_root.clone(),
+                },
+                FileSystemAccessMode::Read,
+            )],
+            glob_scan_max_depth: None,
+        }),
+        ..Default::default()
+    };
+    let grant = |id| {
+        sse(vec![
+            ev_response_created(id),
+            responses::ev_function_call(
+                id,
+                "request_permissions",
+                &json!({"reason": "Read repository skills", "permissions": permissions})
+                    .to_string(),
+            ),
+            ev_completed(id),
+        ])
+    };
+    let complete = |id| sse(vec![ev_response_created(id), ev_completed(id)]);
+    let reapprove = case == RepositoryGrant::Turn;
+    let mut steps = vec![grant("grant-skills"), complete("granted")];
+    if reapprove {
+        steps.push(grant("reapprove-skills"));
+    }
+    steps.push(complete("next-turn"));
+    let responses = responses::mount_sse_sequence(harness.server(), steps).await;
+    for (text, needs_approval) in [
+        ("Request access to the repository skills.", true),
+        ("Use $approved-skill.", reapprove),
+    ] {
+        let mut turn = TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }]);
+        if nested {
+            turn.thread_settings.environments = Some(TurnEnvironmentRequests::new(
+                test.config.cwd.clone(),
+                vec![workspace.clone()],
+            ));
+        }
+        test.codex.start_or_steer_turn(turn).await?;
+        if needs_approval {
+            let event = wait_for_event(&test.codex, |event| {
+                matches!(
+                    event,
+                    EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+                )
+            })
+            .await;
+            let EventMsg::RequestPermissions(request) = event else {
+                panic!("expected permission request: {event:?}");
+            };
+            assert_eq!(request.permissions, permissions);
+            if nested {
+                harness.write_file("nested/.git", "").await?;
+            }
+            test.codex
+                .submit(Op::RequestPermissionsResponse {
+                    id: request.call_id,
+                    response: RequestPermissionsResponse {
+                        permissions: permissions.clone(),
+                        scope,
+                        strict_auto_review: false,
+                    },
+                })
+                .await?;
+        }
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    let requests = responses.requests();
+    let advertised = requests
+        .iter()
+        .map(|request| {
+            request
+                .message_input_texts("developer")
+                .join("\n")
+                .contains("- approved-skill:")
+        })
+        .collect::<Vec<_>>();
+    // Earlier catalog entries remain in the request history after access expires.
+    let expected: &[bool] = match case {
+        RepositoryGrant::Turn => &[false, true, true, true],
+        RepositoryGrant::Session => &[false, true, true],
+        RepositoryGrant::NewNestedRepository => &[false, false, false],
+    };
+    assert_eq!(advertised, expected);
+    assert_eq!(
+        requests[2]
+            .message_input_texts("user")
+            .join("\n")
+            .contains("Approved skill body."),
+        scope == PermissionGrantScope::Session,
+    );
+    Ok(Some((requests, skill_root)))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
