@@ -1559,6 +1559,8 @@ impl App {
         if should_buffer_initial_replay {
             self.app_event_tx
                 .send(AppEvent::EndInitialHistoryReplayBuffer);
+            self.app_event_tx
+                .send(AppEvent::RestoreBackgroundTerminals(thread_id));
         }
         self.restore_realtime_replay_state_after_replay(
             &replayed_final_items,

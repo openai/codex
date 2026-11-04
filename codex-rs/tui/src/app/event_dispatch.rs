@@ -1974,6 +1974,20 @@ impl App {
                     self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::Periodic);
                 }
             }
+            AppEvent::RestoreBackgroundTerminals(thread_id) => {
+                if self.chat_widget.thread_id() == Some(thread_id) {
+                    let request_id = self.chat_widget.begin_background_terminal_restore();
+                    let mut server = app_server.request_view();
+                    let tx = self.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        let terminals = server.list_background_terminals(thread_id).await.unwrap_or_default();
+                        tx.send(AppEvent::BackgroundTerminalsLoaded { request_id, terminals });
+                    });
+                }
+            }
+            AppEvent::BackgroundTerminalsLoaded { request_id, terminals } => {
+                self.chat_widget.restore_background_terminals(request_id, terminals);
+            }
             AppEvent::RefreshThreadUsage {
                 thread_id,
                 request_id,

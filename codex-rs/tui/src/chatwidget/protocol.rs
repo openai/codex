@@ -632,7 +632,8 @@ impl ChatWidget {
                 self.on_context_compaction_started(id, elapsed);
             }
             item @ ThreadItemPayload::CommandExecution { .. } => {
-                self.on_command_execution_started(item)
+                // Buffered notifications were received from this thread's live subscription.
+                self.on_command_execution_started(item, ThreadItemRenderSource::Live)
             }
             ThreadItemPayload::FileChange { id: _, changes, .. } => {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));

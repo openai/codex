@@ -48,6 +48,50 @@ async fn external_writer_snapshot_freezes_active_command_and_mcp_rows() {
 }
 
 #[tokio::test]
+async fn replayed_background_terminals_belong_to_the_displayed_thread() {
+    let (mut parent, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let inherited = begin_unified_exec_startup(&mut parent, "parent-call", "42", "sleep 100");
+    let (mut fork, mut events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    fork.replay_thread_item(
+        inherited,
+        "turn-1".into(),
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    // A resumed fork can have terminals of its own alongside the inherited command history.
+    let request_id = fork.begin_background_terminal_restore();
+    let live = codex_app_server_protocol::ThreadBackgroundTerminal {
+        item_id: "child-call".into(),
+        process_id: "43".into(),
+        command: "sleep 200".into(),
+        cwd: fork.config.cwd.clone().into(),
+        os_pid: None,
+        cpu_percent: None,
+        rss_kb: None,
+    };
+    let exited = codex_app_server_protocol::ThreadBackgroundTerminal {
+        item_id: "exited-call".into(),
+        process_id: "44".into(),
+        command: "sleep 300".into(),
+        ..live.clone()
+    };
+    fork.track_unified_exec_process_end(&exited.item_id, Some(&exited.process_id));
+    fork.restore_background_terminals(request_id, vec![live, exited]);
+    fork.add_ps_output();
+    let history = drain_insert_history(&mut events)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    insta::assert_snapshot!(history, @r"
+    /ps
+
+    Background terminals
+
+      • sleep 200
+    ");
+}
+
+#[tokio::test]
 async fn replayed_command_completion_preserves_tracking_without_duplicate_starts() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();

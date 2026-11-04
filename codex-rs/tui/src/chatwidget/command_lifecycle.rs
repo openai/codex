@@ -18,7 +18,11 @@ impl ChatWidget {
         self.restore_reasoning_status_header();
     }
 
-    pub(super) fn on_command_execution_started(&mut self, item: ThreadItemPayload) {
+    pub(super) fn on_command_execution_started(
+        &mut self,
+        item: ThreadItemPayload,
+        render_source: ThreadItemRenderSource,
+    ) {
         let ThreadItemPayload::CommandExecution {
             id,
             command,
@@ -33,7 +37,7 @@ impl ChatWidget {
         let (_command, parsed_cmd) = command_execution_command_and_parsed(command, command_actions);
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(*source) {
-            if *source == ExecCommandSource::UnifiedExecStartup {
+            if *source == ExecCommandSource::UnifiedExecStartup && !render_source.is_replay() {
                 self.track_unified_exec_process_begin(id, process_id.as_deref(), command);
             }
             if !self.bottom_pane.is_task_running() {
@@ -191,11 +195,55 @@ impl ChatWidget {
         self.sync_unified_exec_footer();
     }
 
+    pub(super) fn clear_background_terminals(&mut self) {
+        self.pending_terminal_restore = None;
+        self.unified_exec_processes.clear();
+        self.sync_unified_exec_footer();
+    }
+
+    pub(crate) fn begin_background_terminal_restore(&mut self) -> uuid::Uuid {
+        let request_id = uuid::Uuid::new_v4();
+        self.pending_terminal_restore = Some((request_id, HashSet::new()));
+        request_id
+    }
+
+    pub(crate) fn restore_background_terminals(
+        &mut self,
+        request_id: uuid::Uuid,
+        terminals: Vec<codex_app_server_protocol::ThreadBackgroundTerminal>,
+    ) {
+        let Some((_, exited)) = self
+            .pending_terminal_restore
+            .take_if(|(id, _)| *id == request_id)
+        else {
+            return;
+        };
+        for terminal in terminals {
+            if !exited.contains(&terminal.item_id)
+                && !self
+                    .unified_exec_processes
+                    .iter()
+                    .any(|process| process.key == terminal.process_id)
+            {
+                self.unified_exec_processes.push(UnifiedExecProcessSummary {
+                    key: terminal.process_id,
+                    call_id: terminal.item_id,
+                    command_display: terminal.command,
+                    recent_chunks: Vec::new(),
+                });
+            }
+        }
+        self.sync_unified_exec_footer();
+    }
+
     pub(super) fn track_unified_exec_process_end(
         &mut self,
         call_id: &str,
         process_id: Option<&str>,
     ) {
+        if let Some((_, exited)) = &mut self.pending_terminal_restore {
+            exited.insert(call_id.to_owned());
+        }
         let key = process_id.unwrap_or(call_id);
         let before = self.unified_exec_processes.len();
         self.unified_exec_processes

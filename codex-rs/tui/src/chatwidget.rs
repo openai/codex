@@ -629,6 +629,8 @@ pub(crate) struct ChatWidget {
     safety_buffering: SafetyBufferingState,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    /// Exits observed during the pending list request take precedence over its response.
+    pending_terminal_restore: Option<(uuid::Uuid, HashSet<String>)>,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first startup status update until the
@@ -1524,8 +1526,7 @@ impl ChatWidget {
 
     fn clean_background_terminals(&mut self) {
         self.submit_op(AppCommand::clean_background_terminals());
-        self.unified_exec_processes.clear();
-        self.sync_unified_exec_footer();
+        self.clear_background_terminals();
         self.add_info_message(
             "Stopping all background terminals.".to_string(),
             /*hint*/ None,

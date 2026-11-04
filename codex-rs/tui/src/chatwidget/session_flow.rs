@@ -343,6 +343,7 @@ impl ChatWidget {
         retained_turns: &[Turn],
     ) {
         self.current_rollout_path = rollout_path;
+        self.clear_background_terminals();
         self.input_queue.clear();
         self.reset_realtime_conversation();
         // Finish any output not yet drained from the old runtime without live completion actions.
