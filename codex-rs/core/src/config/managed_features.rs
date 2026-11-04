@@ -23,9 +23,9 @@ pub(super) fn project_overrides_legacy_subagent_opt_out(layers: &ConfigLayerStac
     let mut project_enabled = false;
     for layer in layers.layers_high_to_low() {
         if let Some(features) = layer.config.get("features").and_then(toml::Value::as_table)
-            && features
-                .keys()
-                .any(|key| feature_for_key(key) == Some(Feature::Collab))
+            && features.iter().any(|(key, enabled)| {
+                enabled.as_bool() == Some(false) && feature_for_key(key) == Some(Feature::Collab)
+            })
         {
             return project_enabled;
         }

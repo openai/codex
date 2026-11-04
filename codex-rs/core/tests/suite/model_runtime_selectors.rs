@@ -448,6 +448,36 @@ async fn migrating_only_the_project_agent_setting_preserves_v1_tools() -> Result
         ),
         (migrated, config(), None, Some("multi_agent_v1")),
         (
+            "[features]\nmulti_agent = true",
+            config().cli_overrides(vec![("features.collab".to_string(), true.into())]),
+            None,
+            Some("multi_agent_v1"),
+        ),
+        (
+            migrated,
+            config().cli_overrides(vec![("features.collab".to_string(), true.into())]),
+            None,
+            Some("multi_agent_v1"),
+        ),
+        (
+            "[agents]\nenabled = true\n[features]\ncollab = true",
+            config(),
+            None,
+            Some("multi_agent_v1"),
+        ),
+        (
+            "[agents]\nenabled = true\n[features]\ncollab = false",
+            config(),
+            None,
+            None,
+        ),
+        (
+            migrated,
+            config().cli_overrides(vec![("features.collab".to_string(), false.into())]),
+            None,
+            None,
+        ),
+        (
             migrated,
             config(),
             Some(MultiAgentVersion::V2),
