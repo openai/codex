@@ -356,6 +356,7 @@ fn user_input_metadata(request: &TurnInputRequest) -> UserInputMetadata {
     UserInputMetadata {
         origin: UserInputOrigin::from_turn_trigger(request.start.turn_trigger.as_deref()),
         response_item_uuid: request.user_item_uuid,
+        extension_data: request.user_input_extension_data.clone(),
         ..Default::default()
     }
 }
@@ -419,7 +420,7 @@ async fn start_or_steer(
             /*expected_turn_id*/ None,
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata.clone(),
-            input_metadata,
+            input_metadata.clone(),
         )
         .await
     {

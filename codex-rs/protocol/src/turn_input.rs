@@ -62,6 +62,9 @@ pub struct TurnInputRequest {
     /// Optional host-assigned UUID for the Responses message created from [`TurnInput::UserInput`].
     /// Ignored for all other inputs, including raw user-role Responses items.
     pub user_item_uuid: Option<uuid::Uuid>,
+    /// Host-supplied, extension-keyed data for this user input's completion.
+    /// Travels with the individual input and is never included in model input.
+    pub user_input_extension_data: BTreeMap<String, Value>,
     pub thread_settings: ThreadSettingsOverrides,
     pub start: TurnStartOptions,
     pub additional_context: BTreeMap<String, AdditionalContextEntry>,
@@ -120,6 +123,7 @@ impl TurnInputRequest {
         Self {
             input,
             user_item_uuid: None,
+            user_input_extension_data: BTreeMap::new(),
             thread_settings: ThreadSettingsOverrides::default(),
             start: TurnStartOptions::default(),
             additional_context: BTreeMap::new(),

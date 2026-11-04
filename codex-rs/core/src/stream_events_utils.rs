@@ -415,10 +415,11 @@ pub(crate) async fn handle_output_item_done(
                 }
 
                 ctx.sess
-                    .emit_turn_item_completed_with_token_count(
+                    .emit_turn_item_completed_with_metadata(
                         &ctx.step_context.turn,
                         finalized_turn_item.turn_item,
                         finalized_turn_item.content_token_count,
+                        /*user_input_extension_data*/ None,
                     )
                     .await;
             }

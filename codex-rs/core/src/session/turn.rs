@@ -2691,10 +2691,11 @@ async fn emit_agent_message_in_plan_mode(
             .insert(agent_message_id.clone());
     }
 
-    sess.emit_turn_item_completed_with_token_count(
+    sess.emit_turn_item_completed_with_metadata(
         turn_context,
         TurnItem::AgentMessage(agent_message),
         content_token_count,
+        /*user_input_extension_data*/ None,
     )
     .await;
     state.started_agent_message_items.remove(&agent_message_id);

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -253,6 +254,18 @@ pub trait TurnLifecycleContributor: Send + Sync {
         _item: &'a TurnItem,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(std::future::ready(()))
+    }
+
+    /// Observes the same completion with host-supplied data for a recorded user input.
+    /// The default forwards to [`Self::on_item_completed`].
+    fn on_item_completed_with_metadata<'a>(
+        &'a self,
+        thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a TurnItem,
+        _user_input_extension_data: Option<&'a BTreeMap<String, serde_json::Value>>,
+    ) -> ExtensionFuture<'a, ()> {
+        self.on_item_completed(thread_store, turn_store, item)
     }
 
     /// Called before the host drops the completed turn runtime and turn store.

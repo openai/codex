@@ -11,6 +11,7 @@ use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -19,8 +20,11 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 /// Host capture metadata belonging to one input, including steers within another turn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserInputMetadata {
+    /// Private extension data carried with this queued input through completion.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extension_data: BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acceptance_order: Option<u64>,
     /// Optional host-assigned UUID for this particular Responses user item.
@@ -526,6 +530,18 @@ mod tests {
     use codex_protocol::protocol::InterAgentCommunication;
     use codex_protocol::user_input::UserInput;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn user_input_extension_data_round_trips_without_changing_legacy_input() {
+        let legacy = serde_json::json!({"UserInput": {"content": [], "client_id": "m"}});
+        let input: TurnInput = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(input).unwrap(), legacy);
+
+        let mut annotated = legacy;
+        annotated["UserInput"]["extension_data"] = serde_json::json!({"example": ["private"]});
+        let input: TurnInput = serde_json::from_value(annotated.clone()).unwrap();
+        assert_eq!(serde_json::to_value(input).unwrap(), annotated);
+    }
 
     #[test_case::test_case("ResponseItem", TurnInput::ResponseItem)]
     #[test_case::test_case("FunctionCallOutput", TurnInput::FunctionCallOutput)]
