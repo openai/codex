@@ -32,13 +32,13 @@ pub(crate) const MAX_INSTRUCTION_TOKENS: usize = 900;
 const MAX_APPROVAL_REASON_TOKENS: usize = 512;
 const MAX_DESCRIPTION_TOKENS: usize = 400;
 
-/// Request selection policy; persistent capture and storage bounds are independent.
+/// Evidence budgeting policy; persistent byte bounds remain independent of request allocation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ContextBudgeting {
     /// Preserve existing per-section request selection.
     #[default]
     Fixed,
-    /// Keep captured candidates complete until configured entry capping and allocation.
+    /// Store transcript entries by bytes only; defer request selection to configured allocation.
     Elastic,
 }
 

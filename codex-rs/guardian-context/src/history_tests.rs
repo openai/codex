@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use codex_protocol::models::ExecutedToolCall;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ReasoningItemContent;
@@ -240,4 +242,42 @@ fn rollback_discards_assistant_sources_without_ordering_in_old_backups() {
     history.reset([&original, &assistant, &boundary]);
     history.truncate_before(&boundary);
     assert_eq!(history.items().collect::<Vec<_>>(), vec![&original.item]);
+}
+
+#[test]
+fn elastic_storage_keeps_full_entries_past_the_fixed_count_bound_and_on_replay() {
+    const ENTRY_COUNT: usize = MAX_ITEMS_PER_KIND + 1;
+    let entries: Vec<ResponseItemEnvelope> = (0..ENTRY_COUNT)
+        .flat_map(|index| {
+            let text = index.to_string();
+            [message(&text).into(), tool(&text).into()]
+        })
+        .collect();
+    let mut history = TranscriptHistory::new(/*generation*/ 0, ContextBudgeting::Elastic);
+    history.reset(entries.iter());
+    let expected = GuardianHistoryCheckpoint(entries);
+    assert_eq!(history.checkpoint(), expected);
+
+    let mut restored = TranscriptHistory::new(history.generation(), ContextBudgeting::Elastic);
+    restored.reset(expected.0.iter());
+    assert_eq!(restored.checkpoint(), expected);
+}
+
+#[test]
+fn elastic_byte_overflow_evicts_whole_non_user_entries_to_the_low_watermark() {
+    const SMALL_TOOL_BYTES: usize = MAX_BYTES_PER_KIND / 4;
+    const LARGE_TOOL_BYTES: usize = SMALL_TOOL_BYTES + SMALL_TOOL_BYTES / 2;
+    const EXISTING_TOOL_COUNT: usize = 3;
+    let user = message("Keep the original user instruction complete.");
+    let older = tool(&"x".repeat(SMALL_TOOL_BYTES));
+    let newest = tool(&"y".repeat(LARGE_TOOL_BYTES));
+    let mut history = TranscriptHistory::new(/*generation*/ 0, ContextBudgeting::Elastic);
+    history.record(&user.clone().into());
+    for _ in 0..EXISTING_TOOL_COUNT {
+        history.record(&older.clone().into());
+    }
+    let generation = history.generation();
+    history.record(&newest.clone().into());
+    assert_eq!(history.items().collect::<Vec<_>>(), vec![&user, &newest]);
+    assert!(history.generation() > generation);
 }

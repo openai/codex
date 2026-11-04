@@ -253,7 +253,7 @@ impl ComposedContext {
     /// Omit complete source revisions in admitted history or required pending transcript entries.
     /// Missing host metadata, changed revisions and incomplete copies require redelivery.
     pub fn retain_new_instructions(&mut self, reviewer_history: &[ResponseItemEnvelope]) {
-        let transcript_sources = self.required_transcript_sources();
+        let transcript_sources = self.required_transcript_sources(|_, _| true);
         self.remove_delivered_instructions(
             reviewer_history
                 .iter()
@@ -273,7 +273,7 @@ impl ComposedContext {
         &mut self,
         previous: Option<GuardianRetainedOmissions>,
     ) {
-        let transcript_sources = self.required_transcript_sources();
+        let transcript_sources = self.required_transcript_sources(|_, _| true);
         self.remove_delivered_instructions(
             transcript_sources.iter(),
             crate::ContextBudgeting::Elastic,
@@ -281,7 +281,7 @@ impl ComposedContext {
         self.prune_omission_notices(previous);
     }
 
-    fn prune_omission_notices(&mut self, previous: Option<GuardianRetainedOmissions>) {
+    pub(crate) fn prune_omission_notices(&mut self, previous: Option<GuardianRetainedOmissions>) {
         let Some(previous) = previous else {
             return;
         };
@@ -300,7 +300,11 @@ impl ComposedContext {
                     if items.is_empty() {
                         items.extend([START, END].map(|text| Budgeted::protected(ContentItem::InputText { text: format!("{text}\n") }.into())));
                     }
-                    items.insert(/*index*/ 1.min(items.len()), Budgeted::protected(ContentItem::InputText { text: format!("{AVAILABILITY_CHANGED}\n") }.into()));
+                    if !items.iter().any(|item| matches!(&item.content,
+                        SectionContent::Other(ContentItem::InputText { text })
+                        if text.strip_suffix('\n') == Some(AVAILABILITY_CHANGED))) {
+                        items.insert(/*index*/ 1.min(items.len()), Budgeted::protected(ContentItem::InputText { text: format!("{AVAILABILITY_CHANGED}\n") }.into()));
+                    }
                 }
                 return true;
             }
@@ -312,19 +316,32 @@ impl ComposedContext {
         });
     }
 
-    fn required_transcript_sources(&self) -> Vec<codex_history::RetainedSource> {
-        self.sections
-            .iter()
-            .filter(|section| section.id == "conversation_transcript")
-            .flat_map(|section| match &section.delivery {
-                SectionDelivery::UserContent(items) => items.as_slice(),
-                SectionDelivery::Message(_) => &[],
-            })
-            .filter(|item| item.retention == crate::Retention::Required)
-            .filter_map(|item| item.source.as_ref())
-            .filter(|source| source.complete)
-            .cloned()
-            .collect()
+    pub(crate) fn required_transcript_sources(
+        &self,
+        selected: impl Fn(usize, usize) -> bool,
+    ) -> Vec<codex_history::RetainedSource> {
+        let mut sources = Vec::new();
+        for (section_index, section) in self.sections.iter().enumerate() {
+            if section.id != "conversation_transcript" {
+                continue;
+            }
+            let SectionDelivery::UserContent(items) = &section.delivery else {
+                continue;
+            };
+            sources.extend(
+                items
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, item)| {
+                        item.retention == crate::Retention::Required
+                            && selected(section_index, *index)
+                    })
+                    .filter_map(|(_, item)| item.source.as_ref())
+                    .filter(|source| source.complete)
+                    .cloned(),
+            );
+        }
+        sources
     }
 
     /// Sources must come from current reviewer history or required entries that survived selection.
@@ -332,7 +349,8 @@ impl ComposedContext {
         &mut self,
         delivered_sources: impl Iterator<Item = &'a codex_history::RetainedSource> + Clone,
         budgeting: crate::ContextBudgeting,
-    ) {
+    ) -> bool {
+        let mut removed = false;
         let truncations = &mut self.truncations;
         for section in self
             .sections
@@ -358,6 +376,7 @@ impl ComposedContext {
                             }
                     })
                 });
+                removed |= !keep;
                 if !keep && budgeting == crate::ContextBudgeting::Elastic {
                     truncations.retain(|observation| {
                         observation.component != "retained_user_instructions"
@@ -367,6 +386,7 @@ impl ComposedContext {
                 keep
             });
         }
+        removed
     }
 }
 

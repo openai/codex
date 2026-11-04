@@ -40,6 +40,7 @@ use codex_attachment_store::AttachmentStore;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ConversationHistorySnapshot;
+use codex_guardian_context::ContextBudgeting;
 use codex_guardian_context::SectionHistory;
 use codex_guardian_context::TranscriptHistory;
 use codex_history::CodexHarnessMetadata;
@@ -500,7 +501,7 @@ impl ContextManager {
             .as_ref()
             .map_or(self.history_version, TranscriptHistory::generation)
             .saturating_add(1);
-        let mut history = TranscriptHistory::new(generation);
+        let mut history = TranscriptHistory::new(generation, ContextBudgeting::Fixed);
         if let Some(checkpoint) = checkpoint {
             history.reset(checkpoint.0.iter());
         } else {
@@ -903,7 +904,10 @@ impl ContextManager {
         }
         if self.guardian_review_mode == GuardianContextMode::Legacy && self.review_history.is_none()
         {
-            let mut retained = TranscriptHistory::new(self.history_version.saturating_add(1));
+            let mut retained = TranscriptHistory::new(
+                self.history_version.saturating_add(1),
+                ContextBudgeting::Fixed,
+            );
             for item in self
                 .annotated_items()
                 .iter()

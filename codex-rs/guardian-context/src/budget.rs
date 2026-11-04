@@ -185,7 +185,7 @@ impl ElasticBudgetConfig {
             .sum()
     }
 
-    /// Required reservations use exactly the nominal Guardian input budget.
+    /// Section reservations use exactly the nominal Guardian input budget.
     pub fn validate(&self) -> Result<(), crate::SectionError> {
         let total = self.total_minimum_tokens();
         if total != DEFAULT_MAX_INPUT_TOKENS as u128 {
@@ -214,16 +214,17 @@ impl ElasticBudgetConfig {
 }
 
 /// Section reservation, allocation ceiling and per-entry text allowance.
-/// The minimum funds Required supporting records; Optional candidates can grow the
-/// section up to its maximum.
+/// The minimum funds either priority, choosing Required records first. Unused
+/// capacity is shared between sections up to each maximum, with both priorities eligible.
 /// Preparation must cap text entries once, including framing and omission markers,
 /// before measuring demand. Entries that fit keep their original representation.
 /// Entry caps cannot exceed the existing text-part delivery allowance.
 /// Exact actions use protected global space. Opaque native payloads and images stay
 /// whole and use section/global space rather than the text entry cap.
-/// Required supporting records use only the minimum. Effective section minimums
-/// must sum to DEFAULT_MAX_INPUT_TOKENS. Unused Required reservations fund Optional
-/// evidence up to each section maximum; Optional items have no separate minimum.
+/// Effective section minimums stay fixed and must sum to DEFAULT_MAX_INPUT_TOKENS.
+/// Admission fails if their demand-capped reservations cannot fit after crediting
+/// complete selected duplicates. Only the headroom between each minimum and
+/// maximum is scaled to the remaining budget.
 /// Actual request admission still accounts for history, framing and exact actions.
 /// These settings do not change storage bounds or activate elastic allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]

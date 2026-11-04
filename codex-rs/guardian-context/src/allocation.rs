@@ -1,4 +1,6 @@
-//! Allocates whole optional entries with shared section framing, preserving content and order.
+//! Funds fixed section minimums and scales only the headroom up to section maxima.
+//! Required records precede Optional records within each section.
+//! Protected framing and exact actions use global space. Selection preserves prepared bytes and order.
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -20,6 +22,10 @@ use crate::composition::SectionDelivery;
 use crate::composition::SectionOutput;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ContentItem;
+
+const REQUEST_BUDGET_EXCEEDED: SectionError = SectionError::EvidenceLimitExceeded {
+    section: "request_budget",
+};
 
 #[derive(Clone, Copy)]
 struct Candidate {
@@ -45,12 +51,80 @@ impl Candidate {
     }
 }
 
+// Quota counts start after the global wrapper, reserving ceil(parts / 4)
+// separator tokens independently of selections in other allocation groups.
+fn quota_counts(counts: &[Option<usize>]) -> Vec<Option<usize>> {
+    counts.iter().map(|count| count.map(|_| 1)).collect()
+}
+
 #[derive(Default)]
-struct GroupDemand {
-    pending_items: Vec<Candidate>,
+struct SectionDemand {
+    required_items: Vec<Candidate>,
+    optional_items: Vec<Candidate>,
+    selected_items: Vec<Candidate>,
     total_cost: usize,
+    maximum: usize,
     quota: usize,
     used: usize,
+}
+
+impl SectionDemand {
+    fn allocate(
+        &mut self,
+        quota: usize,
+        remaining: &mut usize,
+        counts: &mut [Option<usize>],
+        selected: &mut HashSet<(usize, usize)>,
+        pinned: &HashSet<(usize, usize)>,
+    ) -> Result<(), SectionError> {
+        // Reconsider Optional picks when a larger grant can hold Required evidence.
+        for item in self.selected_items.drain(..) {
+            selected.remove(&(item.section_index, item.item_index));
+            *remaining += item.cost;
+            if let Some(count) = &mut counts[item.section_index] {
+                *remaining += content_framing_tokens(*count) - content_framing_tokens(*count - 1);
+                *count -= 1;
+            }
+        }
+        self.used = 0;
+        // Reserve separator rounding per group and delivery so other groups cannot
+        // reprice pinned evidence. The global budget pays shared framing exactly once.
+        let mut quota_counts = quota_counts(counts);
+        let mut keep = |item: Candidate| {
+            if item.cost(&quota_counts) > quota - self.used || item.cost(counts) > *remaining {
+                return false;
+            }
+            let cost = item.select(counts);
+            self.used += item.select(&mut quota_counts);
+            *remaining -= cost;
+            selected.insert((item.section_index, item.item_index));
+            self.selected_items.push(item);
+            true
+        };
+        for item in self
+            .required_items
+            .iter()
+            .filter(|item| pinned.contains(&(item.section_index, item.item_index)))
+        {
+            if !keep(*item) {
+                return Err(REQUEST_BUDGET_EXCEEDED);
+            }
+        }
+        for item in self
+            .required_items
+            .iter()
+            .rev()
+            .filter(|item| !pinned.contains(&(item.section_index, item.item_index)))
+        {
+            if !keep(*item) {
+                break;
+            }
+        }
+        for item in self.optional_items.iter().rev() {
+            keep(*item);
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn allocation_section(
@@ -87,7 +161,7 @@ pub struct PreparedElasticContext<'a> {
 
 impl PreparedElasticContext<'_> {
     /// Removes history-delivered instructions and deduplicates native deliveries.
-    /// Pending instruction proof is reconciled when the budget is enforced.
+    /// Pending instruction proof waits for Required selection.
     pub fn prepare_sync_delivery(
         mut self,
         history: &[ResponseItemEnvelope],
@@ -107,17 +181,19 @@ impl PreparedElasticContext<'_> {
         Ok(self)
     }
 
-    /// Includes capped evidence and section framing before optional selection.
+    /// Includes all capped evidence and framing before section selection.
     pub fn estimated_tokens(&self) -> usize {
         self.context.estimated_tokens()
     }
 
-    /// Reserves required evidence and history, then selects whole optional entries.
+    /// Funds every section's minimum, then grows allocations up to section maxima.
+    /// Required records have priority in both phases; complete transcript proof stays selected.
     pub fn enforce_budget(
         self,
         budget: RequestBudget,
         omission_notice: String,
     ) -> Result<ComposedContext, SectionError> {
+        self.config.validate()?;
         let mut context = self.context;
         context
             .sections
@@ -125,207 +201,276 @@ impl PreparedElasticContext<'_> {
         let remaining = budget
             .max_input_tokens
             .checked_sub(budget.existing_context_tokens)
-            .ok_or(SectionError::EvidenceLimitExceeded {
-                section: "request_budget",
-            })?;
-        context.retain_selected_instructions(self.delivered_omissions);
-        let demand = collect_demand(&context)?;
-        let context_tokens = context.estimated_tokens();
-        if context_tokens <= remaining && context.truncations.is_empty() {
-            return Ok(context);
-        }
+            .ok_or(REQUEST_BUDGET_EXCEEDED)?;
         let notice = SectionOutput {
             id: "budget_omission",
-            delivery: SectionDelivery::user_content(vec![Budgeted::required(
+            delivery: SectionDelivery::user_content(vec![Budgeted::protected(
                 ContentItem::InputText {
                     text: omission_notice,
                 },
             )]),
         };
-        let notice_tokens = section_tokens(&notice);
-        if context_tokens.saturating_add(notice_tokens) <= remaining {
-            context.sections.push(notice);
-            return Ok(context);
-        }
-        let allowance = remaining
-            .checked_sub(demand.required_tokens.saturating_add(notice_tokens))
-            .ok_or(SectionError::EvidenceLimitExceeded {
-                section: "request_budget",
-            })?;
-        let selected = allocate_items(demand, self.config, allowance);
-        retain_selected(&mut context, &selected);
-        context.sections.push(notice);
-        if context.estimated_tokens() > remaining {
-            return Err(SectionError::EvidenceLimitExceeded {
-                section: "request_budget",
+        context.prune_omission_notices(self.delivered_omissions);
+        let mut pinned = HashSet::new();
+        let mut minimums_funded = false;
+        let (selected, needs_notice) = loop {
+            let mut demand = collect_demand(&context)?;
+            let exceeds_maximum = demand.sections.iter().any(|(section, demand)| {
+                self.config
+                    .section_limits(*section)
+                    .max_total_section_tokens()
+                    .is_some_and(|maximum| demand.total_cost > maximum)
             });
+            let needs_notice = !context.truncations.is_empty()
+                || exceeds_maximum
+                || context.estimated_tokens() > remaining;
+            let notice_tokens = if needs_notice {
+                section_tokens(&notice)
+            } else {
+                0
+            };
+            let allowance = remaining
+                .checked_sub(demand.protected_tokens.saturating_add(notice_tokens))
+                .ok_or(REQUEST_BUDGET_EXCEEDED)?;
+            let selected = allocate_items(&mut demand, self.config, allowance, &pinned)?;
+            minimums_funded |= demand.minimums_fit;
+            let sources = context
+                .required_transcript_sources(|section, item| selected.contains(&(section, item)));
+            if !context
+                .remove_delivered_instructions(sources.iter(), crate::ContextBudgeting::Elastic)
+            {
+                if !minimums_funded {
+                    return Err(REQUEST_BUDGET_EXCEEDED);
+                }
+                break (selected, needs_notice);
+            }
+            // Duplicate credit can fund more evidence in every section. Keep transcript
+            // proof already used above selected during that refill. Only originals are
+            // removed here, so the loop is bounded by the number of retained originals.
+            for (section, entries) in &demand.sections {
+                if matches!(
+                    section,
+                    ElasticSection::TranscriptMessages | ElasticSection::TranscriptTools
+                ) {
+                    pinned.extend(
+                        entries
+                            .required_items
+                            .iter()
+                            .filter(|item| {
+                                selected.contains(&(item.section_index, item.item_index))
+                            })
+                            .map(|item| (item.section_index, item.item_index)),
+                    );
+                }
+            }
+        };
+        retain_selected(&mut context, &selected);
+        context.retain_selected_instructions(self.delivered_omissions);
+        if needs_notice || !context.truncations.is_empty() {
+            context.sections.push(notice);
+        }
+        if context.estimated_tokens() > remaining {
+            return Err(REQUEST_BUDGET_EXCEEDED);
         }
         Ok(context)
     }
 }
 
-/// Required reservation and optional group demand for one pending request.
+/// Protected global cost and priority-ordered demand for each section.
 struct ContextDemand {
-    required_tokens: usize,
-    groups: BTreeMap<ElasticSection, GroupDemand>,
+    protected_tokens: usize,
+    sections: BTreeMap<ElasticSection, SectionDemand>,
     /// User-content counts for shared framing; native messages have no wrapper.
     content_counts: Vec<Option<usize>>,
+    /// Whether reservations fit before packing gaps are redistributed.
+    minimums_fit: bool,
 }
 
 fn collect_demand(context: &ComposedContext) -> Result<ContextDemand, SectionError> {
-    let mut required_tokens = 0usize;
-    let mut demands = BTreeMap::<ElasticSection, GroupDemand>::new();
+    let mut protected_tokens = 0usize;
+    let mut sections = BTreeMap::<ElasticSection, SectionDemand>::new();
     let mut content_counts = Vec::with_capacity(context.sections.len());
     for (section_index, section) in context.sections.iter().enumerate() {
-        let required_count = match &section.delivery {
-            SectionDelivery::UserContent(items) => Some(
-                items
-                    .iter()
-                    .filter(|item| !matches!(item.retention, Retention::Optional(_)))
-                    .count(),
-            ),
+        let protected = |item: &Budgeted<crate::composition::SectionContent>| {
+            section.id == "intro" || item.protected
+        };
+        let protected_count = match &section.delivery {
+            SectionDelivery::UserContent(items) => {
+                Some(items.iter().filter(|item| protected(item)).count())
+            }
             SectionDelivery::Message(_) => None,
         };
-        content_counts.push(required_count);
-        required_tokens =
-            required_tokens.saturating_add(required_count.map_or(0, content_framing_tokens));
-        let mut count = required_count.unwrap_or(0);
-        let mut add = |item_index, priority, cost: usize| {
-            let group = allocation_section(section.id, Retention::Optional(priority))?;
-            let framing = required_count.map_or(0, |_| {
-                content_framing_tokens(count + 1).saturating_sub(content_framing_tokens(count))
-            });
-            count += 1;
-            let demand = demands.entry(group).or_default();
-            demand.total_cost = demand
-                .total_cost
-                .saturating_add(cost.saturating_add(framing));
-            demand.pending_items.push(Candidate {
+        content_counts.push(protected_count);
+        protected_tokens =
+            protected_tokens.saturating_add(protected_count.map_or(0, content_framing_tokens));
+        let mut add = |item_index, retention, cost: usize| -> Result<(), SectionError> {
+            let demand = sections
+                .entry(allocation_section(section.id, retention)?)
+                .or_default();
+            let candidate = Candidate {
                 section_index,
                 item_index,
                 cost,
-            });
+            };
+            match retention {
+                Retention::Optional(_) => demand.optional_items.push(candidate),
+                Retention::Required | Retention::Historical => {
+                    demand.required_items.push(candidate)
+                }
+            }
             Ok(())
         };
         match &section.delivery {
             SectionDelivery::Message(message) => {
                 let cost = section_tokens(section);
-                if let Retention::Optional(priority) = message.retention {
-                    add(/*item_index*/ 0, priority, cost)?;
+                if message.protected || section.id == "intro" {
+                    protected_tokens = protected_tokens.saturating_add(cost);
                 } else {
-                    required_tokens = required_tokens.saturating_add(cost);
+                    add(/*item_index*/ 0, message.retention, cost)?;
                 }
             }
             SectionDelivery::UserContent(items) => {
                 for (index, item) in items.iter().enumerate() {
                     let cost = section_content_tokens(&item.content);
-                    if let Retention::Optional(priority) = item.retention {
-                        add(index, priority, cost)?;
+                    if protected(item) {
+                        protected_tokens = protected_tokens.saturating_add(cost);
                     } else {
-                        required_tokens = required_tokens.saturating_add(cost);
+                        add(index, item.retention, cost)?;
                     }
                 }
             }
         }
     }
+    for section in sections.values_mut() {
+        let mut counts = quota_counts(&content_counts);
+        section.total_cost = section
+            .required_items
+            .iter()
+            .chain(&section.optional_items)
+            .map(|item| item.select(&mut counts))
+            .sum();
+    }
     Ok(ContextDemand {
-        required_tokens,
-        groups: demands,
+        protected_tokens,
+        sections,
         content_counts,
+        minimums_fit: false,
     })
 }
 
 fn allocate_items(
-    demand: ContextDemand,
+    demand: &mut ContextDemand,
     config: &ElasticBudgetConfig,
     allowance: usize,
-) -> HashSet<(usize, usize)> {
-    let mut demands = demand.groups;
-    let mut content_counts = demand.content_counts;
-    for (group, demand) in demands.iter_mut() {
-        let limits = config.section_limits(*group);
-        // Prefer one whole entry per group when the remaining space permits it.
-        let smallest = demand
-            .pending_items
-            .iter()
-            .map(|item| item.cost(&content_counts))
-            .min()
-            .unwrap_or(0);
-        demand.quota = limits
-            .min_total_section_tokens()
-            .max(smallest)
-            .min(demand.total_cost);
-    }
-    let minimum: u128 = demands.values().map(|demand| demand.quota as u128).sum();
-    if minimum > allowance as u128 {
-        for demand in demands.values_mut() {
-            demand.quota = (demand.quota as u128 * allowance as u128 / minimum) as usize;
-        }
-    }
-    let mut available = allowance - demands.values().map(|demand| demand.quota).sum::<usize>();
-    loop {
-        let active = demands
-            .values()
-            .filter(|demand| demand.total_cost > demand.quota)
-            .count();
-        if active == 0 || available / active == 0 {
-            break;
-        }
-        let share = available / active;
-        for demand in demands.values_mut() {
-            let granted = share.min(demand.total_cost - demand.quota);
-            demand.quota += granted;
-            available -= granted;
-        }
-    }
+    pinned: &HashSet<(usize, usize)>,
+) -> Result<HashSet<(usize, usize)>, SectionError> {
+    let demands = &mut demand.sections;
+    let mut counts = demand.content_counts.clone();
     let mut selected = HashSet::new();
     let mut remaining = allowance;
-    for demand in demands.values_mut() {
-        let mut deferred = Vec::new();
-        for candidate in demand.pending_items.drain(..).rev() {
-            if candidate.cost(&content_counts) <= demand.quota - demand.used {
-                let cost = candidate.select(&mut content_counts);
-                selected.insert((candidate.section_index, candidate.item_index));
-                demand.used += cost;
-                remaining -= cost;
-            } else {
-                deferred.push(candidate);
+    for (group, demand) in demands.iter_mut() {
+        let limits = config.section_limits(*group);
+        demand.maximum = limits.max_total_section_tokens().unwrap_or(usize::MAX);
+        let mut quota_counts = quota_counts(&counts);
+        for item in &demand.required_items {
+            if pinned.contains(&(item.section_index, item.item_index)) {
+                let cost = item.select(&mut counts);
+                remaining = remaining.checked_sub(cost).ok_or(REQUEST_BUDGET_EXCEEDED)?;
+                demand.used += item.select(&mut quota_counts);
+                demand.selected_items.push(*item);
+                selected.insert((item.section_index, item.item_index));
             }
         }
-        deferred.reverse();
-        demand.pending_items = deferred;
-    }
-    // Return packing gaps to the least-served group that can still use them.
-    while remaining > 0 {
-        let Some(demand) = demands
-            .values_mut()
-            .filter(|demand| !demand.pending_items.is_empty())
-            .min_by_key(|demand| demand.used)
-        else {
-            break;
-        };
-        let Some(candidate) = demand.pending_items.pop() else {
-            continue;
-        };
-        if candidate.cost(&content_counts) <= remaining {
-            let cost = candidate.select(&mut content_counts);
-            selected.insert((candidate.section_index, candidate.item_index));
-            demand.used += cost;
-            remaining -= cost;
+        if demand.used > demand.maximum {
+            return Err(REQUEST_BUDGET_EXCEEDED);
         }
+        demand.quota = limits
+            .min_total_section_tokens()
+            .min(demand.total_cost)
+            .max(demand.used);
     }
-    selected
+    let reserved: u128 = demands
+        .values()
+        .map(|demand| (demand.quota - demand.used) as u128)
+        .sum();
+    // Selection may provisionally establish duplicate proof before minimums fit.
+    // Admission requires funded reservations; later refills can reuse packing gaps.
+    demand.minimums_fit = reserved <= remaining as u128;
+    let growth_budget = (remaining as u128).saturating_sub(reserved);
+    let headroom: u128 = demands
+        .values()
+        .map(|demand| {
+            demand
+                .total_cost
+                .min(demand.maximum)
+                .saturating_sub(demand.quota) as u128
+        })
+        .sum();
+    // Scale only the headroom above the fixed minimum, then select once.
+    for demand in demands.values_mut() {
+        let growth = demand
+            .total_cost
+            .min(demand.maximum)
+            .saturating_sub(demand.quota);
+        demand.quota += (growth as u128 * growth_budget.min(headroom))
+            .checked_div(headroom)
+            .unwrap_or(0) as usize;
+    }
+    for demand in demands.values_mut() {
+        demand.allocate(
+            demand.quota,
+            &mut remaining,
+            &mut counts,
+            &mut selected,
+            pinned,
+        )?;
+    }
+    // Local quotas can round up by one more token per delivery than shared framing.
+    // Allow that quota headroom while selection still checks actual global space.
+    let rounding_headroom = counts.iter().filter(|count| count.is_some()).count();
+    // Revisit priority selection as packing gaps enlarge a section's final grant.
+    while let Some(demand) = demands
+        .values_mut()
+        .filter(|demand| {
+            demand.quota
+                < demand
+                    .used
+                    .saturating_add(remaining)
+                    .saturating_add(rounding_headroom)
+                    .min(demand.maximum)
+                    .min(demand.total_cost)
+        })
+        .min_by_key(|demand| demand.used)
+    {
+        demand.quota = demand
+            .used
+            .saturating_add(remaining)
+            .saturating_add(rounding_headroom)
+            .min(demand.maximum)
+            .min(demand.total_cost);
+        demand.allocate(
+            demand.quota,
+            &mut remaining,
+            &mut counts,
+            &mut selected,
+            pinned,
+        )?;
+    }
+
+    Ok(selected)
 }
 
 fn retain_selected(context: &mut ComposedContext, selected: &HashSet<(usize, usize)>) {
     for (section_index, section) in context.sections.iter_mut().enumerate() {
+        if section.id == "intro" {
+            continue;
+        }
         match &section.delivery {
             SectionDelivery::Message(message)
-                if matches!(message.retention, Retention::Optional(_))
-                    && !selected.contains(&(section_index, 0)) =>
+                if !message.protected && !selected.contains(&(section_index, 0)) =>
             {
                 context.truncations.push(TruncationObservation {
-                    source: None,
+                    source: message.source.clone(),
                     component: section.id,
                     original_bytes: ByteCount::item(&message.content.item),
                     retained_bytes: 0,
@@ -337,8 +482,7 @@ fn retain_selected(context: &mut ComposedContext, selected: &HashSet<(usize, usi
                     .iter()
                     .enumerate()
                     .map(|(index, item)| {
-                        !matches!(item.retention, Retention::Optional(_))
-                            || selected.contains(&(section_index, index))
+                        item.protected || selected.contains(&(section_index, index))
                     })
                     .collect::<Vec<_>>();
                 crate::enforcement::retain_content(

@@ -508,6 +508,11 @@ fn transcript_context(
 
 #[test]
 fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
+    const EARLIER_SOURCE_ORDER: u64 = 5;
+    const NEWEST_SOURCE_ORDER: u64 = 8;
+    const NEWEST_INSTRUCTION_REPEATS: usize = 48;
+    const ENTRY_TOKENS: usize = 256;
+    const NOTICE: &str = "Evidence omitted.";
     let text = format!(
         "Draft only.\n{}Do not send.",
         "Keep this private. ".repeat(/*n*/ 32)
@@ -612,6 +617,184 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
             );
         }
         history.messages[0].metadata = original_metadata;
+    }
+    let profile = crate::ContextProfile::synchronous();
+    // One complete transcript copy fits, but reserving both copies does not.
+    let mut expected = transcript_context(&history, &profile);
+    expected.retain_new_instructions(&[]);
+    let notice_tokens = crate::estimate_input_tokens(&crate::composition::user_message(vec![
+        ContentItem::InputText {
+            text: NOTICE.to_owned(),
+        },
+    ]));
+    let expected_tokens = expected.estimated_tokens();
+    let mut budget = crate::RequestBudget {
+        max_input_tokens: expected_tokens + notice_tokens,
+        existing_context_tokens: 0,
+    };
+    let limits = crate::ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS).unwrap();
+    let config = crate::budget::tests::complete_minimum_budget(crate::ElasticBudgetConfig {
+        sections: [
+            (crate::ElasticSection::TranscriptMessages, limits),
+            (crate::ElasticSection::RetainedUserInstructions, limits),
+        ]
+        .into(),
+    });
+    let prepared = transcript_context(&history, &profile)
+        .prepare_elastic_entries(&config)
+        .unwrap()
+        .prepare_sync_delivery(&[])
+        .unwrap();
+    let admitted = prepared
+        .clone()
+        .enforce_budget(budget, NOTICE.to_owned())
+        .unwrap();
+    assert_eq!(admitted.into_messages(), expected.into_messages());
+    // Duplicate credit does not waive the remaining minimum reservations.
+    budget.max_input_tokens = expected_tokens - 1;
+    assert!(matches!(
+        prepared.enforce_budget(budget, NOTICE.to_owned()),
+        Err(crate::SectionError::EvidenceLimitExceeded {
+            section: "request_budget"
+        })
+    ));
+
+    // A complete pending source can still be omitted by its section maximum.
+    // It cannot establish delivery proof until Required selection has kept it.
+    let grant = RetainedUserMessage {
+        turn_id: String::new(),
+        message_id: Some("earlier-grant".to_owned()),
+        text: "Proceed.".to_owned(),
+        complete: true,
+        origin: codex_history::UserInputOrigin::User,
+        phase: None,
+    };
+    let source = history
+        .retained
+        .record_user_message(
+            grant.clone(),
+            RetainedInputSource::Local(Some(EARLIER_SOURCE_ORDER)),
+        )
+        .unwrap();
+    let mut item =
+        crate::composition::user_message(vec![ContentItem::InputText { text: grant.text }]);
+    item.set_id(Some(codex_protocol::ResponseItemId::from_server(
+        "earlier-grant".to_owned(),
+    )));
+    history.messages.insert(
+        /*index*/ 0,
+        ResponseItemEnvelope {
+            item,
+            metadata: Some(codex_history::CodexHarnessMetadata {
+                retained_source: Some(source),
+                ..Default::default()
+            }),
+        },
+    );
+    let expected = transcript_context(&history, &profile)
+        .retained_instructions()
+        .into_messages();
+    let newer = RetainedUserMessage {
+        turn_id: String::new(),
+        message_id: Some("newer".to_owned()),
+        text: "Do not publish. ".repeat(NEWEST_INSTRUCTION_REPEATS),
+        complete: true,
+        origin: codex_history::UserInputOrigin::User,
+        phase: None,
+    };
+    let source = history
+        .retained
+        .record_user_message(
+            newer.clone(),
+            RetainedInputSource::Local(Some(NEWEST_SOURCE_ORDER)),
+        )
+        .unwrap();
+    let newest_id = source.id.clone();
+    let mut item =
+        crate::composition::user_message(vec![ContentItem::InputText { text: newer.text }]);
+    item.set_id(Some(codex_protocol::ResponseItemId::from_server(
+        "newer".to_owned(),
+    )));
+    history.messages.push(ResponseItemEnvelope {
+        item,
+        metadata: Some(codex_history::CodexHarnessMetadata {
+            retained_source: Some(source),
+            ..Default::default()
+        }),
+    });
+    const MINIMUM_TOKENS: usize = 320;
+    let mut full_proof = transcript_context(&history, &profile);
+    full_proof.retain_new_instructions(&[]);
+    let deduplicated_expected = full_proof.retained_instructions().into_messages();
+    for maximum in [Some(MINIMUM_TOKENS), None] {
+        let mut limits = crate::ElasticSectionLimits::new(MINIMUM_TOKENS, ENTRY_TOKENS).unwrap();
+        if let Some(maximum) = maximum {
+            limits = limits.with_max_total_section_tokens(maximum).unwrap();
+        }
+        let config = crate::budget::tests::complete_minimum_budget(crate::ElasticBudgetConfig {
+            sections: [
+                (crate::ElasticSection::TranscriptMessages, limits),
+                (
+                    crate::ElasticSection::RetainedUserInstructions,
+                    crate::ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS).unwrap(),
+                ),
+            ]
+            .into(),
+        });
+        let prepared = transcript_context(&history, &profile)
+            .prepare_elastic_entries(&config)
+            .unwrap();
+        assert!(prepared.context.truncations.is_empty());
+        if maximum.is_none() {
+            assert!(prepared.estimated_tokens() > full_proof.estimated_tokens() + MINIMUM_TOKENS);
+        }
+        let admitted = prepared
+            .prepare_sync_delivery(&[])
+            .unwrap()
+            .enforce_budget(
+                crate::RequestBudget {
+                    // The smaller budget requires duplicate credit to admit older proof.
+                    max_input_tokens: if maximum.is_some() {
+                        crate::DEFAULT_MAX_INPUT_TOKENS
+                    } else {
+                        full_proof.estimated_tokens() + MINIMUM_TOKENS
+                    },
+                    existing_context_tokens: 0,
+                },
+                NOTICE.to_owned(),
+            )
+            .unwrap();
+        let sources = admitted
+            .sections
+            .iter()
+            .filter(|section| section.id == "conversation_transcript")
+            .flat_map(|section| match &section.delivery {
+                SectionDelivery::UserContent(items) => items.as_slice(),
+                SectionDelivery::Message(_) => &[],
+            })
+            .filter_map(|item| item.source.as_ref().map(|source| &source.id))
+            .collect::<Vec<_>>();
+        if maximum.is_some() {
+            assert_eq!(sources, vec![&newest_id]);
+            assert_eq!(admitted.retained_instructions().into_messages(), expected);
+        } else {
+            let expected_sources = history
+                .messages
+                .iter()
+                .filter_map(|item| {
+                    item.metadata
+                        .as_ref()?
+                        .retained_source
+                        .as_ref()
+                        .map(|source| &source.id)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(sources, expected_sources);
+            assert_eq!(
+                admitted.retained_instructions().into_messages(),
+                deduplicated_expected
+            );
+        }
     }
 }
 

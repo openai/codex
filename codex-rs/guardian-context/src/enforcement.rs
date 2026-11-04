@@ -38,7 +38,7 @@ pub(crate) enum BudgetPriority {
 }
 
 /// Content and its selection policy move together through rendering and admission.
-/// Required support uses the section minimum in Elastic mode. Protected host framing
+/// Required support has priority within Elastic section allocations. Protected host framing
 /// and exact actions stay complete; Fixed retention remains unchanged.
 #[derive(Clone, PartialEq)]
 pub struct Budgeted<T> {

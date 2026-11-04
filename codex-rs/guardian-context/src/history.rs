@@ -5,7 +5,8 @@
 //! Compaction output is excluded, and acceptance order survives parent compaction and resume.
 //! Clones share immutable payloads; eviction changes the generation so readers cannot
 //! reuse an offset into a different retained prefix. Prompt selection remains caller-owned.
-//! Non-user overflow drops the oldest half, leaving room for appends without more evictions.
+//! Fixed storage bounds entry counts; elastic storage uses byte limits only.
+//! Non-user overflow evicts whole entries in chunks to leave room for appends.
 //! User messages retain as much history as their separate limits allow.
 
 use std::collections::VecDeque;
@@ -19,21 +20,25 @@ use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::executed_tool_call_metadata_bytes;
 
+use crate::ContextBudgeting;
 use crate::SectionHistory;
 use codex_history::GuardianHistoryCheckpoint;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedInputSource;
 
 const MAX_ITEMS_PER_KIND: usize = 128;
+const NON_USER_RETENTION_DIVISOR: usize = 2;
 // Encoded payloads (including omitted reasoning) plus the fixed ResponseItem size.
 // Each kind gets half the storage budget; tool traffic cannot evict user messages.
 const MAX_BYTES_PER_KIND: usize = 4 * 1024 * 1024;
+const NON_USER_LOW_WATERMARK_BYTES: usize = MAX_BYTES_PER_KIND / NON_USER_RETENTION_DIVISOR;
 
 /// Thread-owned review history with shared payloads and bounded storage.
 #[derive(Clone, Default)]
 pub struct TranscriptHistory {
     items: VecDeque<(Arc<ResponseItemEnvelope>, usize)>,
     generation: u64,
+    budgeting: ContextBudgeting,
 }
 
 impl std::fmt::Debug for TranscriptHistory {
@@ -47,16 +52,18 @@ impl std::fmt::Debug for TranscriptHistory {
 }
 
 impl TranscriptHistory {
-    /// Starts retention in a generation newer than the host's previous review snapshot.
-    pub fn new(generation: u64) -> Self {
+    /// Selects storage policy before capture; clones and reset keep the selected policy.
+    pub fn new(generation: u64, budgeting: ContextBudgeting) -> Self {
         Self {
             generation,
+            budgeting,
             ..Self::default()
         }
     }
 
     /// Appends one original item, evicting only older entries of the same kind.
-    /// Non-user overflow removes at least half the existing entries; byte limits may need more.
+    /// Fixed non-user overflow removes at least half the existing entries.
+    /// Elastic overflow evicts whole non-user entries toward half the byte allowance.
     /// Oversized user images fall back to bounded text; other oversized items are skipped.
     pub fn record(&mut self, envelope: &ResponseItemEnvelope) {
         let item = &envelope.item;
@@ -163,15 +170,22 @@ impl TranscriptHistory {
             .fold((0, size.bytes), |(count, bytes), (_, size)| {
                 (count + 1, bytes + size)
             });
-        if count >= MAX_ITEMS_PER_KIND || bytes > MAX_BYTES_PER_KIND {
-            let retained_count = if is_user {
-                MAX_ITEMS_PER_KIND - 1
+        if (self.budgeting == ContextBudgeting::Fixed && count >= MAX_ITEMS_PER_KIND)
+            || bytes > MAX_BYTES_PER_KIND
+        {
+            let retained_count = match (self.budgeting, is_user) {
+                (ContextBudgeting::Elastic, _) => count,
+                (ContextBudgeting::Fixed, true) => MAX_ITEMS_PER_KIND - 1,
+                (ContextBudgeting::Fixed, false) => count / NON_USER_RETENTION_DIVISOR,
+            };
+            let retained_bytes = if self.budgeting == ContextBudgeting::Elastic && !is_user {
+                NON_USER_LOW_WATERMARK_BYTES.max(size.bytes)
             } else {
-                count / 2
+                MAX_BYTES_PER_KIND
             };
             self.items.retain(|(item, size)| {
                 if item.is_user_message() == is_user
-                    && (count > retained_count || bytes > MAX_BYTES_PER_KIND)
+                    && (count > retained_count || bytes > retained_bytes)
                 {
                     count -= 1;
                     bytes -= size;
