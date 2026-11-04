@@ -54,11 +54,12 @@ pub struct SkillReadRequest<'a> {
     pub context: SkillReadContext<'a>,
 }
 
-/// Executor reads require callback access; other providers carry their own source context.
+/// Repository and executor reads require callback access; other sources retain provider context.
 #[derive(Clone)]
 pub enum SkillReadContext<'a> {
     Host {
         host_snapshot: Option<Arc<HostSkillsSnapshot>>,
+        accessors: Vec<&'a dyn EnvironmentAccess>,
     },
     Executor {
         fs: &'a dyn EnvironmentAccess,

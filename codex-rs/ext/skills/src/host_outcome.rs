@@ -4,9 +4,13 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
-use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::EnvironmentAccess;
+use codex_exec_server::EnvironmentAccessExt;
+use codex_exec_server::EnvironmentAccessKey;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadFileOptions;
+use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillError;
 use codex_skills::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -35,7 +39,7 @@ impl SkillLoadOutcome {
         skill_root_by_path: HashMap<PathUri, AbsolutePathBuf>,
         skill_discovery_path_by_path: HashMap<PathUri, PathUri>,
         agent_plugin_skill_paths: HashSet<PathUri>,
-        file_systems_by_skill_path: HashMap<PathUri, Arc<dyn ExecutorFileSystem>>,
+        file_systems_by_skill_path: HashMap<PathUri, EnvironmentAccessKey>,
     ) -> Self {
         Self {
             skills,
@@ -108,22 +112,38 @@ impl SkillLoadOutcome {
     pub(crate) fn file_system_for_skill(
         &self,
         skill: &SkillMetadata,
-    ) -> Option<Arc<dyn ExecutorFileSystem>> {
+    ) -> Option<&EnvironmentAccessKey> {
         self.file_systems_by_skill_path
             .get(&skill.path_to_skills_md)
     }
 
-    /// Reads one loaded skill through the filesystem that discovered it.
-    pub(crate) async fn read_skill_text(&self, skill: &SkillMetadata) -> io::Result<String> {
-        let fs = self
-            .file_system_for_skill(skill)
-            .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        fs.read_file_text(
-            &skill.path_to_skills_md,
-            ReadFileOptions::default(),
-            /*sandbox*/ None,
-        )
-        .await
+    /// Reads through current access to the original filesystem; cached metadata grants no access.
+    pub(crate) async fn read_skill_text(
+        &self,
+        skill: &SkillMetadata,
+        accessors: &[&dyn EnvironmentAccess],
+    ) -> io::Result<String> {
+        let host = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
+        let access: &dyn EnvironmentAccess = match skill.scope {
+            SkillScope::Repo => self
+                .file_system_for_skill(skill)
+                .and_then(|source| {
+                    accessors
+                        .iter()
+                        .copied()
+                        .find(|access| source.same_file_system(&access.cache_key()))
+                })
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "skill discovery filesystem is unavailable for this callback",
+                    )
+                })?,
+            SkillScope::User | SkillScope::System | SkillScope::Admin => &host,
+        };
+        access
+            .read_file_text(&skill.path_to_skills_md, ReadFileOptions::default())
+            .await
     }
 }
 
@@ -159,18 +179,18 @@ impl codex_skills::ExplicitSkillLookup for SkillLoadOutcome {
 
 #[derive(Clone, Default)]
 pub(crate) struct SkillFileSystemsByPath {
-    values: Arc<HashMap<PathUri, Arc<dyn ExecutorFileSystem>>>,
+    values: Arc<HashMap<PathUri, EnvironmentAccessKey>>,
 }
 
 impl SkillFileSystemsByPath {
-    pub(crate) fn new(values: HashMap<PathUri, Arc<dyn ExecutorFileSystem>>) -> Self {
+    pub(crate) fn new(values: HashMap<PathUri, EnvironmentAccessKey>) -> Self {
         Self {
             values: Arc::new(values),
         }
     }
 
-    fn get(&self, path: &PathUri) -> Option<Arc<dyn ExecutorFileSystem>> {
-        self.values.get(path).map(Arc::clone)
+    fn get(&self, path: &PathUri) -> Option<&EnvironmentAccessKey> {
+        self.values.get(path)
     }
 }
 

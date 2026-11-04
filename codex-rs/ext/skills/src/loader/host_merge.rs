@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::EnvironmentAccess;
+use codex_exec_server::EnvironmentAccessKey;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::LoadedSkillRoot;
@@ -88,7 +90,8 @@ pub(crate) async fn load_and_merge_host_skill_roots_with_request_snapshots(
                         skills: snapshot.skills,
                         skill_discovery_path_by_path: snapshot.skill_discovery_path_by_path,
                         errors: snapshot.errors,
-                        file_system: Arc::clone(&file_system),
+                        file_system: FileSystemEnvironmentAccessor::unrestricted(&file_system)
+                            .cache_key(),
                         is_agent_plugin: snapshot.is_agent_plugin,
                     },
                     None => {
@@ -202,7 +205,7 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
     let mut skill_root_by_path = HashMap::new();
     let mut skill_discovery_path_by_path = HashMap::new();
     let mut agent_plugin_skill_paths = HashSet::new();
-    let mut file_systems_by_skill_path = HashMap::<PathUri, Arc<dyn ExecutorFileSystem>>::new();
+    let mut file_systems_by_skill_path = HashMap::<PathUri, EnvironmentAccessKey>::new();
 
     for snapshot in snapshots {
         if !snapshot.skills.is_empty() && !skill_roots.contains(&snapshot.root) {
@@ -215,7 +218,7 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
                 if let Some(discovery_path) = snapshot.skill_discovery_path_by_path.get(&path) {
                     skill_discovery_path_by_path.insert(path.clone(), discovery_path.clone());
                 }
-                file_systems_by_skill_path.insert(path.clone(), Arc::clone(&snapshot.file_system));
+                file_systems_by_skill_path.insert(path.clone(), snapshot.file_system.clone());
                 if snapshot.is_agent_plugin {
                     agent_plugin_skill_paths.insert(path);
                 }

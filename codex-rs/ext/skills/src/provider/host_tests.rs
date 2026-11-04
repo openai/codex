@@ -110,6 +110,7 @@ async fn host_catalog_resource_spellings_read_the_discovered_skill()
                 package: entry.id.clone(),
                 resource: resource.clone(),
                 context: SkillReadContext::Host {
+                    accessors: Vec::new(),
                     host_snapshot: Some(Arc::clone(&snapshot)),
                 },
             })

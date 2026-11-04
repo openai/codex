@@ -2,6 +2,7 @@ use std::io;
 use std::sync::Arc;
 
 use crate::SkillLoadOutcome;
+use codex_exec_server::EnvironmentAccess;
 use codex_skills::SkillMetadata;
 
 /// Immutable snapshot of host-owned skills and their source filesystems.
@@ -19,7 +20,11 @@ impl HostSkillsSnapshot {
         self.outcome.as_ref()
     }
 
-    pub async fn read_skill_text(&self, skill: &SkillMetadata) -> io::Result<String> {
-        self.outcome.read_skill_text(skill).await
+    pub async fn read_skill_text(
+        &self,
+        skill: &SkillMetadata,
+        accessors: &[&dyn EnvironmentAccess],
+    ) -> io::Result<String> {
+        self.outcome.read_skill_text(skill, accessors).await
     }
 }

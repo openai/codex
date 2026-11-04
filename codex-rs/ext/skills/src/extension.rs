@@ -541,7 +541,14 @@ impl<C> SkillsExtension<C> {
         let context = match entry.authority.kind {
             SkillSourceKind::Cloud => SkillReadContext::Cloud { mcp_resources },
             SkillSourceKind::Custom(_) => SkillReadContext::Custom { mcp_resources },
-            SkillSourceKind::Host => SkillReadContext::Host { host_snapshot },
+            SkillSourceKind::Host => SkillReadContext::Host {
+                host_snapshot,
+                accessors: input
+                    .environments
+                    .iter()
+                    .map(|environment| environment.fs)
+                    .collect(),
+            },
             SkillSourceKind::Executor => {
                 let fs = entry
                     .main_prompt

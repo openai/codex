@@ -287,14 +287,16 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
         /*bundled_skills_enabled*/ false,
         /*restriction_product*/ None,
     );
+    let file_system: Arc<dyn ExecutorFileSystem> = Arc::new(SyntheticFileSystem {
+        alias_root: PathUri::from_abs_path(&alias_root),
+        canonical_root: PathUri::from_abs_path(&canonical_root),
+        has_plugin_manifest: false,
+    });
+    let access = FileSystemEnvironmentAccessor::unrestricted(&file_system);
     let snapshot = service
         .snapshot_for_config(
             &HostSkillsLoadInput::new(cwd, Vec::new(), config_layer_stack),
-            Some(Arc::new(SyntheticFileSystem {
-                alias_root: PathUri::from_abs_path(&alias_root),
-                canonical_root: PathUri::from_abs_path(&canonical_root),
-                has_plugin_manifest: false,
-            })),
+            Some(Arc::clone(&file_system)),
         )
         .await;
     let outcome = snapshot.outcome();
@@ -308,8 +310,40 @@ async fn skill_loading_and_reads_use_the_supplied_executor_file_system() {
         PathUri::from_abs_path(&canonical_root.join("skill/SKILL.md"))
     );
     assert_eq!(
-        snapshot.read_skill_text(&skill).await.expect("skill body"),
+        snapshot
+            .read_skill_text(&skill, &[&access])
+            .await
+            .expect("skill body"),
         SKILL_CONTENTS
+    );
+    assert_eq!(
+        snapshot
+            .read_skill_text(&skill, &[])
+            .await
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied,
+    );
+    let replacement: Arc<dyn ExecutorFileSystem> = Arc::new(SyntheticFileSystem {
+        alias_root: PathUri::from_abs_path(&alias_root),
+        canonical_root: PathUri::from_abs_path(&canonical_root),
+        has_plugin_manifest: false,
+    });
+    let replacement = FileSystemEnvironmentAccessor::unrestricted(&replacement);
+    assert_eq!(
+        snapshot
+            .read_skill_text(&skill, &[&replacement])
+            .await
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied,
+    );
+    assert_eq!(
+        snapshot
+            .read_skill_text(&skill, &[&replacement, &access])
+            .await
+            .expect("select the original filesystem regardless of accessor order"),
+        SKILL_CONTENTS,
     );
 }
 

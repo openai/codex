@@ -130,6 +130,13 @@ pub struct EnvironmentAccessKey {
     sandbox: Option<Arc<FileSystemSandboxContext>>,
 }
 
+impl EnvironmentAccessKey {
+    /// Compares filesystem identity without comparing captured permissions.
+    pub fn same_file_system(&self, other: &Self) -> bool {
+        self.file_system.ptr_eq(&other.file_system)
+    }
+}
+
 impl fmt::Debug for EnvironmentAccessKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("EnvironmentAccessKey(..)")

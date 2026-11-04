@@ -1,3 +1,7 @@
+use codex_exec_server::FileSystemEnvironmentAccessor;
+use codex_exec_server::FileSystemSandboxContext;
+use codex_skills_extension::HostSkillsLoadInput;
+use core_test_support::test_codex::TestCodexHarness;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -771,6 +775,284 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
         );
     }
 
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum CachedRepositorySkillChange {
+    ReplaceFileWithSymlink,
+    ReplaceDirectoryWithSymlink,
+}
+
+/// Cached metadata never authorizes a live read after permissions or a skill's target changes.
+#[test_case(CachedRepositorySkillChange::ReplaceFileWithSymlink; "file becomes a symlink")]
+#[test_case(CachedRepositorySkillChange::ReplaceDirectoryWithSymlink; "parent becomes a symlink")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repository_skill_cache_cannot_read_inaccessible_files(
+    change: CachedRepositorySkillChange,
+) -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "executor-backed repo skills require matching host and executor path conventions"
+    );
+    skip_if_target_windows!(
+        Ok(()),
+        "restricted reads require the elevated Windows sandbox backend, unavailable in this fixture"
+    );
+    skip_if_no_network!(Ok(()));
+
+    const GATED_BODY: &str = "The gated skill's private instructions.";
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install(&mut extensions, |config: &Config| SkillsExtensionConfig {
+        include_instructions: config.include_skill_instructions,
+        max_context_tokens: config.skill_max_context_tokens,
+        catalog_deltas_enabled: config.features.enabled(Feature::SkillCatalogDeltas),
+        omit_descriptions: false,
+        bundled_skills_enabled: false,
+        cloud_skill_enabled: false,
+        shadow_selection_enabled: false,
+    });
+    let builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(configure_catalog_test)
+        .with_workspace_setup(|cwd, file_system| async move {
+            for (name, body) in [
+                ("repo-allowed", "The allowed skill's instructions."),
+                ("repo-gated", GATED_BODY),
+                ("repo-revoked", GATED_BODY),
+            ] {
+                let directory =
+                    PathUri::from_host_native_path(cwd.join(".agents/skills").join(name))?;
+                file_system
+                    .create_directory(
+                        &directory,
+                        CreateDirectoryOptions {
+                            recursive: true,
+                            follow_symlinks: true,
+                        },
+                        /*sandbox*/ None,
+                    )
+                    .await?;
+                file_system
+                    .write_file(
+                        &directory.join("SKILL.md")?,
+                        format!(
+                            "---\nname: {name}\ndescription: Repository skill.\n---\n\n{body}\n"
+                        )
+                        .into_bytes(),
+                        Default::default(),
+                        /*sandbox*/ None,
+                    )
+                    .await?;
+            }
+            Ok(())
+        });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+    let test = harness.test();
+    let responses = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+            sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+            sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
+        ],
+    )
+    .await;
+    let gated_path = test
+        .fs()
+        .canonicalize(
+            &PathUri::from_abs_path(&test.config.cwd.join(".agents/skills/repo-gated/SKILL.md")),
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let selection = test.executor_environment().selection();
+    let environment = test
+        .thread_manager
+        .environment_manager()
+        .get_environment(&selection.environment_id)
+        .expect("configured executor environment");
+    let file_system = environment.get_filesystem();
+    let executor_cwd = selection.cwd.clone();
+    let denied_directory = executor_cwd.join("denied")?;
+    harness.write_file("denied/SKILL.md", GATED_BODY).await?;
+    let denied_directory = file_system
+        .canonicalize(&denied_directory, /*sandbox*/ None)
+        .await?;
+    let initial_permissions = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: denied_directory.clone(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let revoked_path = file_system
+        .canonicalize(
+            &executor_cwd.join(".agents/skills/repo-revoked/SKILL.md")?,
+            /*sandbox*/ None,
+        )
+        .await?;
+    let (mut narrowed_policy, network_policy) = initial_permissions.to_runtime_permissions();
+    narrowed_policy.entries.push(FileSystemSandboxEntry::new(
+        FileSystemPath::Path { path: revoked_path },
+        FileSystemAccessMode::Deny,
+    ));
+    let narrowed_permissions =
+        PermissionProfile::from_runtime_permissions(&narrowed_policy, network_policy);
+    test.submit_turn_with_permission_profile("Inspect the repository skills.", initial_permissions)
+        .await?;
+
+    let open = FileSystemEnvironmentAccessor::unrestricted(&file_system);
+    let snapshot = test
+        .thread_manager
+        .skills_service()
+        .snapshot_for_config(
+            &HostSkillsLoadInput::new(
+                test.config.cwd.clone(),
+                Vec::new(),
+                test.config.config_layer_stack.clone(),
+            ),
+            Some(Arc::clone(&file_system)),
+        )
+        .await;
+    let [revoked_skill, gated_skill] = ["repo-revoked", "repo-gated"].map(|name| {
+        snapshot
+            .outcome()
+            .skills
+            .iter()
+            .find(|skill| skill.name == name)
+            .expect("first turn discovered the repository skill")
+            .clone()
+    });
+
+    // Revoking access hides the skill and prevents cached metadata from reopening it.
+    let restricted = FileSystemEnvironmentAccessor::new(
+        &file_system,
+        FileSystemSandboxContext::from_permission_profile(
+            narrowed_permissions.clone(),
+            executor_cwd.clone(),
+        ),
+    );
+    test.submit_turn_with_permission_profile(
+        "Use $repo-revoked if it is still available.",
+        narrowed_permissions.clone(),
+    )
+    .await?;
+    snapshot
+        .read_skill_text(&revoked_skill, &[&restricted])
+        .await
+        .expect_err("old metadata cannot reopen a now-denied skill");
+    assert!(
+        snapshot
+            .read_skill_text(&revoked_skill, &[&open])
+            .await?
+            .contains(GATED_BODY)
+    );
+
+    // An allowed skill path must not bypass the denial of its new symlink target.
+    let (link, target) = match change {
+        CachedRepositorySkillChange::ReplaceFileWithSymlink => {
+            (gated_path, denied_directory.join("SKILL.md")?)
+        }
+        CachedRepositorySkillChange::ReplaceDirectoryWithSymlink => (
+            gated_path.parent().expect("skill directory"),
+            denied_directory,
+        ),
+    };
+    file_system
+        .remove(
+            &link,
+            RemoveOptions {
+                recursive: true,
+                force: false,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    let process = test
+        .executor_environment()
+        .environment()
+        .get_exec_backend()
+        .start(ExecParams {
+            process_id: ProcessId::from("replace-cached-skill"),
+            metadata: None,
+            argv: vec![
+                "/bin/ln".to_string(),
+                "-s".to_string(),
+                target.inferred_native_path_string(),
+                link.inferred_native_path_string(),
+            ],
+            cwd: executor_cwd.clone(),
+            env_policy: None,
+            shell_snapshot: None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
+            managed_network: None,
+            network_proxy: None,
+        })
+        .await?
+        .process;
+    let mut events = process.subscribe_events();
+    loop {
+        match events.recv().await? {
+            ExecProcessEvent::Exited { exit_code, .. } => {
+                assert_eq!(exit_code, 0, "replace the cached skill on its executor");
+                break;
+            }
+            ExecProcessEvent::Output(_) => {}
+            event @ (ExecProcessEvent::Closed { .. } | ExecProcessEvent::Failed(_)) => {
+                panic!("skill symlink process did not exit: {event:?}")
+            }
+        }
+    }
+    test.submit_turn_with_permission_profile(
+        "Use $repo-gated if it is still available.",
+        narrowed_permissions,
+    )
+    .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    let first_developer_texts = requests[0].message_input_texts("developer");
+    let first_catalog = catalog_text(&first_developer_texts, "repo");
+    assert!(first_catalog.contains("- repo-revoked:"));
+
+    let second_developer_texts = requests[1].message_input_texts("developer");
+    assert!(
+        second_developer_texts
+            .iter()
+            .any(|text| text == first_catalog)
+    );
+    for request in &requests[1..] {
+        assert!(
+            request
+                .message_input_texts("user")
+                .iter()
+                .all(|text| !text.contains(GATED_BODY))
+        );
+    }
+
+    snapshot
+        .read_skill_text(&gated_skill, &[&restricted])
+        .await
+        .expect_err("old metadata cannot reopen a now-denied skill");
+    let restored = snapshot.read_skill_text(&gated_skill, &[&open]).await?;
+    assert!(restored.contains(GATED_BODY));
     Ok(())
 }
 

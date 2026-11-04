@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use codex_exec_server::EnvironmentAccess;
+use codex_exec_server::EnvironmentAccessKey;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::GetMetadataOptions;
@@ -117,7 +119,7 @@ pub(crate) struct HostSkillRootSnapshot {
     pub(crate) skills: Vec<SkillMetadata>,
     pub(crate) skill_discovery_path_by_path: Arc<HashMap<PathUri, PathUri>>,
     pub(crate) errors: Vec<SkillError>,
-    pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
+    pub(crate) file_system: EnvironmentAccessKey,
     pub(crate) is_agent_plugin: bool,
 }
 
@@ -138,7 +140,7 @@ pub(crate) async fn load_host_skill_root(root: HostSkillRoot) -> HostSkillRootSn
         skills,
         skill_discovery_path_by_path,
         errors,
-        file_system: root.file_system,
+        file_system: FileSystemEnvironmentAccessor::unrestricted(&root.file_system).cache_key(),
         is_agent_plugin,
     }
 }

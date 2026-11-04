@@ -84,6 +84,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
+use codex_file_system::EnvironmentAccess;
 use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_hooks::ModelRequestHookEvent::PostModelRequest;
@@ -1270,11 +1271,18 @@ async fn build_skills_and_plugins(
     let injected_host_skill_prompts = turn_context
         .extension_data
         .get::<InjectedHostSkillPrompts>();
+    let environments = step_context.environments();
+    let accessors = environments
+        .iter()
+        .map(|(_, access)| access as &dyn EnvironmentAccess)
+        .collect::<Vec<_>>();
     let HostSkillPrompts {
         fragments,
         injected: injected_host_skills,
         warnings: host_skill_warnings,
-    } = skills_snapshot.load_skill_prompts(&mentioned_skills).await;
+    } = skills_snapshot
+        .load_skill_prompts(&mentioned_skills, &accessors)
+        .await;
     emit_explicit_skill_invocations(
         sess,
         turn_context,

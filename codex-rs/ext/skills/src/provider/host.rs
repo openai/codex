@@ -55,6 +55,7 @@ impl SkillProvider for HostSkillProvider {
         Box::pin(async move {
             let SkillReadContext::Host {
                 host_snapshot: Some(host_snapshot),
+                accessors,
             } = request.context
             else {
                 return Err(SkillProviderError::new(
@@ -78,12 +79,15 @@ impl SkillProvider for HostSkillProvider {
                 )));
             };
 
-            let contents = host_snapshot.read_skill_text(skill).await.map_err(|err| {
-                SkillProviderError::new(format!(
-                    "failed to read host skill resource {}: {err}",
-                    request.resource.as_str()
-                ))
-            })?;
+            let contents = host_snapshot
+                .read_skill_text(skill, &accessors)
+                .await
+                .map_err(|err| {
+                    SkillProviderError::new(format!(
+                        "failed to read host skill resource {}: {err}",
+                        request.resource.as_str()
+                    ))
+                })?;
 
             Ok(SkillReadResult {
                 resource: request.resource,
