@@ -4,7 +4,8 @@ use crate::compact_retained_tool_outputs::is_retained_tool_output;
 use crate::context::ContextualUserFragment;
 use crate::context::ImageResizeNotice;
 use crate::context_manager::ContextManager;
-use crate::context_manager::estimate_item_token_count;
+use crate::context_manager::estimate_item_token_count_with_audio;
+use crate::session::FileAudioDurations;
 use crate::session::turn_context::TurnContext;
 use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
@@ -29,10 +30,16 @@ impl<T: Borrow<ResponseItem>> HistoryItemGroup<T> {
         std::iter::once(self.source).chain(self.attached_notice)
     }
 
-    pub(crate) fn estimated_token_count(&self) -> i128 {
-        let source_tokens = i128::from(estimate_item_token_count(self.source.borrow()));
+    pub(crate) fn estimated_token_count(&self, audio_durations: &FileAudioDurations) -> i128 {
+        let source_tokens = i128::from(estimate_item_token_count_with_audio(
+            self.source.borrow(),
+            audio_durations,
+        ));
         let notice_tokens = self.attached_notice.as_ref().map_or(0, |notice| {
-            i128::from(estimate_item_token_count(notice.borrow()))
+            i128::from(estimate_item_token_count_with_audio(
+                notice.borrow(),
+                audio_durations,
+            ))
         });
         source_tokens.saturating_add(notice_tokens)
     }
@@ -80,9 +87,10 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     // saturation in the normal history estimator.
     let base_tokens =
         i128::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i128::MAX);
+    let audio_durations = &history.file_audio_durations;
     let original_items = history.annotated_items();
     let mut estimated_tokens = history_item_groups(original_items.iter().map(|item| &item.item))
-        .map(|group| group.estimated_token_count())
+        .map(|group| group.estimated_token_count(audio_durations))
         .fold(base_tokens, i128::saturating_add);
     let initial_estimated_tokens = i64::try_from(estimated_tokens).unwrap_or(i64::MAX);
     let mut rewritten_items = Vec::new();
@@ -116,8 +124,11 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
             break;
         };
         estimated_tokens = estimated_tokens
-            .saturating_sub(group.estimated_token_count())
-            .saturating_add(i128::from(estimate_item_token_count(&rewritten_item.item)));
+            .saturating_sub(group.estimated_token_count(audio_durations))
+            .saturating_add(i128::from(estimate_item_token_count_with_audio(
+                &rewritten_item.item,
+                audio_durations,
+            )));
         consumed_items += group_item_count;
         rewritten_items.push(rewritten_item);
     }

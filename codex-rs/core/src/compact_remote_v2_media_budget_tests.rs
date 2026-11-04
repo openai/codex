@@ -60,6 +60,7 @@ fn trim(items: Vec<ResponseItem>, max_tokens: usize) -> Vec<ResponseItem> {
         items.into_iter().map(ResponseItemEnvelope::new).collect(),
         max_tokens,
         RetainedImageBudget::Enabled,
+        &FileAudioDurations::default(),
     )
     .into_iter()
     .map(ResponseItemEnvelope::into_item)
@@ -75,7 +76,11 @@ fn image_only_boundary_is_atomic_and_does_not_backfill_older_messages() {
             message(vec![image.clone()]),
             newest.clone(),
         ];
-        let image_tokens = media::content_item_token_count(&image, RetainedImageBudget::Enabled);
+        let image_tokens = media::content_item_token_count(
+            &image,
+            RetainedImageBudget::Enabled,
+            &FileAudioDurations::default(),
+        );
         for (max_tokens, expected) in [
             (
                 image_tokens + 1,
@@ -92,7 +97,11 @@ fn image_only_boundary_is_atomic_and_does_not_backfill_older_messages() {
 #[test]
 fn file_audio_is_charged_and_atomic_in_both_image_budget_modes() {
     let audio = file_audio();
-    let audio_tokens = media::content_item_token_count(&audio, RetainedImageBudget::Enabled);
+    let audio_tokens = media::content_item_token_count(
+        &audio,
+        RetainedImageBudget::Enabled,
+        &FileAudioDurations::default(),
+    );
     let newest = message(vec![text("new")]);
     let parts = [text("before"), audio, text("after")];
     let kinds = ["before", "audio", "after"];
@@ -118,13 +127,25 @@ fn file_audio_is_charged_and_atomic_in_both_image_budget_modes() {
         item
     };
     let boundary = annotated_boundary(0);
-    let newest_tokens = retained_message_token_count(&newest, RetainedImageBudget::Disabled).max(1);
-    let after_tokens =
-        media::content_item_token_count(&text("after"), RetainedImageBudget::Enabled);
+    let newest_tokens = retained_message_token_count(
+        &newest,
+        RetainedImageBudget::Disabled,
+        &FileAudioDurations::default(),
+    )
+    .max(1);
+    let after_tokens = media::content_item_token_count(
+        &text("after"),
+        RetainedImageBudget::Enabled,
+        &FileAudioDurations::default(),
+    );
     for image_budget in [RetainedImageBudget::Disabled, RetainedImageBudget::Enabled] {
         for (budget, expected) in [
             (
-                retained_message_token_count(&boundary, image_budget) + newest_tokens,
+                retained_message_token_count(
+                    &boundary,
+                    image_budget,
+                    &FileAudioDurations::default(),
+                ) + newest_tokens,
                 vec![boundary.clone(), newest.clone()],
             ),
             (
@@ -147,6 +168,7 @@ fn file_audio_is_charged_and_atomic_in_both_image_budget_modes() {
                 .collect(),
                 budget,
                 image_budget,
+                &FileAudioDurations::default(),
             )
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
@@ -177,15 +199,22 @@ fn file_audio_cutoff_does_not_backfill_older_uncharged_media() {
         file_audio(),
         trailing_text.clone(),
     ]);
-    let max_tokens = media::content_item_token_count(&file_audio(), RetainedImageBudget::Enabled)
-        + media::content_item_token_count(&trailing_text, RetainedImageBudget::Enabled)
-        - 1;
+    let max_tokens = media::content_item_token_count(
+        &file_audio(),
+        RetainedImageBudget::Enabled,
+        &FileAudioDurations::default(),
+    ) + media::content_item_token_count(
+        &trailing_text,
+        RetainedImageBudget::Enabled,
+        &FileAudioDurations::default(),
+    ) - 1;
 
     for image_budget in [RetainedImageBudget::Disabled, RetainedImageBudget::Enabled] {
         let actual = truncate_retained_messages(
             vec![ResponseItemEnvelope::new(boundary.clone())],
             max_tokens,
             image_budget,
+            &FileAudioDurations::default(),
         )
         .into_iter()
         .map(ResponseItemEnvelope::into_item)
@@ -200,7 +229,11 @@ fn file_audio_cutoff_does_not_backfill_older_uncharged_media() {
 #[test]
 fn older_media_keeps_both_labels_or_is_dropped_after_file_audio_fits() {
     let file = file_audio();
-    let file_tokens = media::content_item_token_count(&file, RetainedImageBudget::Enabled);
+    let file_tokens = media::content_item_token_count(
+        &file,
+        RetainedImageBudget::Enabled,
+        &FileAudioDurations::default(),
+    );
     for (open, media, close) in [
         (
             local_image_open_tag_text_with_path(
@@ -224,7 +257,8 @@ fn older_media_keeps_both_labels_or_is_dropped_after_file_audio_fits() {
         let whole = message(parts.clone());
         let source = message([vec![text("older text")], parts.clone()].concat());
         for image_budget in [RetainedImageBudget::Disabled, RetainedImageBudget::Enabled] {
-            let whole_tokens = retained_message_token_count(&whole, image_budget);
+            let whole_tokens =
+                retained_message_token_count(&whole, image_budget, &FileAudioDurations::default());
             for (budget, expected) in [
                 (file_tokens, vec![file.clone()]),
                 (whole_tokens - 1, vec![file.clone()]),
@@ -234,6 +268,7 @@ fn older_media_keeps_both_labels_or_is_dropped_after_file_audio_fits() {
                     vec![ResponseItemEnvelope::new(source.clone())],
                     budget,
                     image_budget,
+                    &FileAudioDurations::default(),
                 );
                 let [
                     ResponseItemEnvelope {
@@ -285,7 +320,13 @@ fn later_image_parts_preserve_labels_audio_and_annotations() {
     });
     let image_tokens = parts[1..4]
         .iter()
-        .map(|item| media::content_item_token_count(item, RetainedImageBudget::Enabled))
+        .map(|item| {
+            media::content_item_token_count(
+                item,
+                RetainedImageBudget::Enabled,
+                &FileAudioDurations::default(),
+            )
+        })
         .sum::<usize>();
     for (max_tokens, start) in [(image_tokens, 4), (image_tokens + 1, 1)] {
         let mut expected = source.clone();
@@ -324,8 +365,13 @@ fn image_treatment_preserves_text_only_boundary_behavior() {
                 vec![source.clone()],
                 max_tokens,
                 RetainedImageBudget::Enabled,
+                &FileAudioDurations::default()
             ),
-            truncate_retained_messages_for_remote_compaction(vec![source.clone()], max_tokens),
+            truncate_retained_messages_for_remote_compaction(
+                vec![source.clone()],
+                max_tokens,
+                &FileAudioDurations::default()
+            ),
         );
     }
 }
@@ -349,9 +395,14 @@ fn image_treatment_preserves_client_developer_boundary_behavior() {
             truncate_retained_messages(
                 vec![source.clone()],
                 max_tokens,
-                RetainedImageBudget::Enabled
+                RetainedImageBudget::Enabled,
+                &FileAudioDurations::default()
             ),
-            truncate_retained_messages_for_remote_compaction(vec![source.clone()], max_tokens),
+            truncate_retained_messages_for_remote_compaction(
+                vec![source.clone()],
+                max_tokens,
+                &FileAudioDurations::default()
+            ),
         );
     }
 }

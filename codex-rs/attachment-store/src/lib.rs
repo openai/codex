@@ -135,6 +135,8 @@ impl fmt::Debug for AttachmentMetadata {
 pub enum FormatSpecificMetadata {
     /// Metadata for an image attachment.
     Image(ImageMetadata),
+    /// Metadata for an audio attachment.
+    Audio(AudioMetadata),
 }
 
 /// Metadata specific to an image attachment.
@@ -146,6 +148,14 @@ pub struct ImageMetadata {
     /// Image height in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
+}
+
+/// Metadata specific to an audio attachment.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AudioMetadata {
+    /// Measured audio duration in milliseconds, when known by the store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 /// Representation callers should retain after uploading an attachment.

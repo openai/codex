@@ -201,6 +201,7 @@ async fn build_and_install_compaction(
         } else {
             RetainedImageBudget::Disabled
         },
+        crate::session::file_audio::snapshot(sess).await.as_ref(),
     );
     let reviewer_compaction_hash = reviewer_compaction_hash(sess, turn_context).await;
     let installed = if let Some((prefix, model_info, cutoff_world_state)) = prefix {

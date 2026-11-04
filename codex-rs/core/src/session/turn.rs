@@ -1024,6 +1024,12 @@ pub(crate) async fn run_hooks_and_record_inputs(
             .await;
         }
     }
+    // The batch has left the input queue. Persist every accepted item before the
+    // optional lookup can suspend this task long enough for an interrupt to abort it.
+    if !input.is_empty() {
+        let ids = std::mem::take(&mut sess.state.lock().await.pending_audio_duration_ids);
+        super::file_audio::resolve(sess, ids).await;
+    }
     Ok(blocked_input && !accepted_user_input)
 }
 

@@ -194,3 +194,19 @@ fn preparation_errors_map_to_expected_placeholders() {
         assert_eq!(error.placeholder(), expected);
     }
 }
+
+#[test]
+fn file_audio_uses_the_measured_length_or_the_full_file_budget() {
+    use std::time::Duration;
+    for (duration, expected) in [
+        (None, 12_000),
+        (Some(Duration::ZERO), 12_000),
+        (Some(Duration::from_nanos(1)), 1),
+        (Some(Duration::from_secs(2)), 20),
+        (Some(Duration::from_millis(2_001)), 21),
+        (Some(Duration::from_secs(20 * 60)), 12_000),
+        (Some(Duration::MAX), 12_000),
+    ] {
+        assert_eq!(super::estimate_file_audio_tokens(duration), expected);
+    }
+}

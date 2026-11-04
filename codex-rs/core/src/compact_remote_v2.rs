@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use crate::compact_retained_tool_outputs::is_retained_tool_output;
+use crate::session::FileAudioDurations;
 
 use crate::Prompt;
 use crate::ResponseStream;
@@ -18,6 +19,7 @@ use crate::compact_remote_history::HistoryItemGroup;
 use crate::compact_remote_history::history_item_groups;
 use crate::context::world_state::WorldState;
 use crate::context_manager::estimate_item_token_count;
+use crate::context_manager::estimate_item_token_count_with_audio;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -493,6 +495,7 @@ fn build_v2_compacted_history(
     compaction_output: ResponseItem,
     features: &Features,
     image_budget: RetainedImageBudget,
+    audio_durations: &FileAudioDurations,
 ) -> (Vec<ResponseItemEnvelope>, usize) {
     debug_assert_eq!(prompt_input.len(), prompt_input_metadata.len());
     let prompt_input = prompt_input
@@ -508,8 +511,12 @@ fn build_v2_compacted_history(
         .filter(|group| is_retained_for_remote_compaction_v2(&group.source, features))
         .flat_map(HistoryItemGroup::into_items)
         .collect::<Vec<_>>();
-    let mut retained =
-        truncate_retained_messages(retained, RETAINED_MESSAGE_TOKEN_BUDGET, image_budget);
+    let mut retained = truncate_retained_messages(
+        retained,
+        RETAINED_MESSAGE_TOKEN_BUDGET,
+        image_budget,
+        audio_durations,
+    );
     let retained_image_count = retained
         .iter()
         .map(|envelope| retained_input_image_count(&envelope.item))
@@ -620,14 +627,21 @@ fn retained_input_image_count(item: &ResponseItem) -> usize {
 pub(crate) fn truncate_retained_messages_for_remote_compaction(
     items: Vec<ResponseItemEnvelope>,
     max_tokens: usize,
+    audio_durations: &FileAudioDurations,
 ) -> Vec<ResponseItemEnvelope> {
-    truncate_retained_messages(items, max_tokens, RetainedImageBudget::Disabled)
+    truncate_retained_messages(
+        items,
+        max_tokens,
+        RetainedImageBudget::Disabled,
+        audio_durations,
+    )
 }
 
 fn truncate_retained_messages(
     items: Vec<ResponseItemEnvelope>,
     max_tokens: usize,
     image_budget: RetainedImageBudget,
+    audio_durations: &FileAudioDurations,
 ) -> Vec<ResponseItemEnvelope> {
     let mut remaining = max_tokens;
     let mut truncated_reversed = Vec::with_capacity(items.len());
@@ -656,13 +670,23 @@ fn truncate_retained_messages(
         // modality still defines its own grouping and token cost in `media`.
         let requires_media_boundary_truncation = has_budgeted_image || has_file_audio;
         let notice_tokens = group.attached_notice.as_ref().map_or(0, |notice| {
-            retained_message_token_count(&notice.item, RetainedImageBudget::Disabled).max(1)
+            retained_message_token_count(
+                &notice.item,
+                RetainedImageBudget::Disabled,
+                audio_durations,
+            )
+            .max(1)
         });
         // Client-authored developer messages already charge non-text content via
         // the serialized estimate. Preserve their text-only boundary correction.
-        let content_tokens = retained_message_token_count(&group.source.item, image_budget);
+        let content_tokens =
+            retained_message_token_count(&group.source.item, image_budget, audio_durations);
         let source_tokens = if client_developer {
-            usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX)
+            usize::try_from(estimate_item_token_count_with_audio(
+                &group.source.item,
+                audio_durations,
+            ))
+            .unwrap_or(usize::MAX)
         } else {
             content_tokens.max(1)
         };
@@ -689,7 +713,12 @@ fn truncate_retained_messages(
                 remaining = 0;
             }
             let truncated_item = if requires_media_boundary_truncation {
-                media::truncate_message_to_token_budget(group.source, content_budget, image_budget)
+                media::truncate_message_to_token_budget(
+                    group.source,
+                    content_budget,
+                    image_budget,
+                    audio_durations,
+                )
             } else {
                 truncate_message_text_to_token_budget(group.source, content_budget)
             };
@@ -697,8 +726,11 @@ fn truncate_retained_messages(
                 continue;
             };
             if client_developer {
-                let item_tokens = usize::try_from(estimate_item_token_count(&truncated_item.item))
-                    .unwrap_or(usize::MAX);
+                let item_tokens = usize::try_from(estimate_item_token_count_with_audio(
+                    &truncated_item.item,
+                    audio_durations,
+                ))
+                .unwrap_or(usize::MAX);
                 if item_tokens > available_tokens {
                     let adjusted_budget = content_budget
                         .saturating_sub(item_tokens - available_tokens)
@@ -708,6 +740,7 @@ fn truncate_retained_messages(
                             truncated_item,
                             adjusted_budget,
                             image_budget,
+                            audio_durations,
                         )
                     } else {
                         truncate_message_text_to_token_budget(truncated_item, adjusted_budget)
@@ -715,8 +748,11 @@ fn truncate_retained_messages(
                     let Some(adjusted) = adjusted else {
                         continue;
                     };
-                    if usize::try_from(estimate_item_token_count(&adjusted.item))
-                        .unwrap_or(usize::MAX)
+                    if usize::try_from(estimate_item_token_count_with_audio(
+                        &adjusted.item,
+                        audio_durations,
+                    ))
+                    .unwrap_or(usize::MAX)
                         > available_tokens
                     {
                         continue;
@@ -737,14 +773,19 @@ fn truncate_retained_messages(
     truncated_reversed
 }
 
-fn retained_message_token_count(item: &ResponseItem, image_budget: RetainedImageBudget) -> usize {
+fn retained_message_token_count(
+    item: &ResponseItem,
+    image_budget: RetainedImageBudget,
+    audio_durations: &FileAudioDurations,
+) -> usize {
     let ResponseItem::Message { content, .. } = item else {
-        return usize::try_from(estimate_item_token_count(item)).unwrap_or(usize::MAX);
+        return usize::try_from(estimate_item_token_count_with_audio(item, audio_durations))
+            .unwrap_or(usize::MAX);
     };
 
     content
         .iter()
-        .map(|part| media::content_item_token_count(part, image_budget))
+        .map(|part| media::content_item_token_count(part, image_budget, audio_durations))
         .fold(0, usize::saturating_add)
 }
 
@@ -867,6 +908,7 @@ mod tests {
             output,
             &Features::with_defaults(),
             RetainedImageBudget::Disabled,
+            &FileAudioDurations::default(),
         )
     }
 
@@ -885,6 +927,7 @@ mod tests {
         raw(truncate_retained_messages_for_remote_compaction(
             annotated(items),
             max_tokens,
+            &FileAudioDurations::default(),
         ))
     }
 
@@ -992,6 +1035,7 @@ mod tests {
                 output.clone(),
                 &features,
                 RetainedImageBudget::Disabled,
+                &FileAudioDurations::default(),
             );
             let mut expected = vec![
                 ResponseItemEnvelope {
@@ -1030,8 +1074,11 @@ mod tests {
             metadata: Some(CodexHarnessMetadata::default()),
         };
 
-        let truncated =
-            truncate_retained_messages_for_remote_compaction(vec![item], /*max_tokens*/ 4);
+        let truncated = truncate_retained_messages_for_remote_compaction(
+            vec![item],
+            /*max_tokens*/ 4,
+            &FileAudioDurations::default(),
+        );
 
         assert_eq!(truncated.len(), 1);
         assert_eq!(truncated[0].metadata, Some(CodexHarnessMetadata::default()));

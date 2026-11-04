@@ -31,6 +31,7 @@ use crate::event_mapping::is_contextual_user_message_content;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS;
 use crate::guardian::guardian_truncate_text;
+use crate::session::FileAudioDurations;
 use crate::session::turn_context::TurnContext;
 use crate::utils::json::serialized_json_bytes;
 use base64::Engine;
@@ -91,11 +92,6 @@ use codex_features::Feature;
 
 static GUARDIAN_REVIEW_CONTEXT_REVISION: AtomicU64 = AtomicU64::new(/*v*/ 1);
 
-// Responses validates uploaded audio against its 20-minute duration limit.
-// File durations are unavailable locally, so budget that maximum at the existing
-// inline estimate of 10 audio tokens per second.
-pub(crate) const FILE_AUDIO_TOKENS_ESTIMATE: usize = 20 * 60 * 10;
-
 fn next_guardian_review_context_revision() -> u64 {
     GUARDIAN_REVIEW_CONTEXT_REVISION.fetch_add(/*val*/ 1, Ordering::Relaxed)
 }
@@ -113,6 +109,7 @@ pub(crate) struct ContextManager {
     /// File IDs rejected by Responses. Retained history stays append-only; only
     /// request projections omit these references.
     rejected_audio_file_ids: Arc<BTreeSet<String>>,
+    pub(crate) file_audio_durations: Arc<FileAudioDurations>,
     /// Reviewer policy travels with the history snapshot, independently of capture.
     guardian_review_mode: GuardianContextMode,
     guardian_include_additional_context: bool,
@@ -277,6 +274,7 @@ impl ContextManager {
             review_history: None,
             retained_context: Arc::default(),
             rejected_audio_file_ids: Arc::default(),
+            file_audio_durations: Arc::default(),
             guardian_review_mode: GuardianContextMode::ThreadOwned,
             guardian_include_additional_context: Feature::GuardianIncludeAdditionalContext
                 .default_enabled(),
@@ -795,7 +793,9 @@ impl ContextManager {
         let items_tokens = self
             .items
             .iter()
-            .map(|envelope| estimate_item_token_count(&envelope.item))
+            .map(|envelope| {
+                estimate_item_token_count_with_audio(&envelope.item, &self.file_audio_durations)
+            })
             .fold(0i64, i64::saturating_add);
 
         Some(base_tokens.saturating_add(items_tokens))
@@ -1068,7 +1068,9 @@ impl ContextManager {
                     }
                 )
             })
-            .map(|envelope| estimate_item_token_count(&envelope.item))
+            .map(|envelope| {
+                estimate_item_token_count_with_audio(&envelope.item, &self.file_audio_durations)
+            })
             .fold(0i64, i64::saturating_add)
     }
 
@@ -1103,7 +1105,7 @@ impl ContextManager {
 
     pub(crate) fn estimated_tokens_since_last_usage(&self) -> i64 {
         self.items_since_last_usage()
-            .map(estimate_item_token_count)
+            .map(|item| estimate_item_token_count_with_audio(item, &self.file_audio_durations))
             .fold(0i64, i64::saturating_add)
     }
 
@@ -1236,8 +1238,17 @@ fn estimate_encrypted_function_output_length(encoded_len: usize) -> usize {
 /// Counts content directly, excluding transport IDs, metadata, and outer JSON escaping.
 /// Original-detail file images use the maximum patch count.
 pub(crate) fn estimate_item_token_count(item: &ResponseItem) -> i64 {
-    let model_visible_bytes = estimate_response_item_model_visible_bytes(item);
-    approx_tokens_from_byte_count_i64(model_visible_bytes)
+    estimate_item_token_count_with_audio(item, &FileAudioDurations::default())
+}
+
+pub(crate) fn estimate_item_token_count_with_audio(
+    item: &ResponseItem,
+    audio_durations: &FileAudioDurations,
+) -> i64 {
+    approx_tokens_from_byte_count_i64(estimate_response_item_model_visible_bytes(
+        item,
+        audio_durations,
+    ))
 }
 
 /// Approximate model-visible byte cost for one image input.
@@ -1263,7 +1274,10 @@ static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<OriginalImageEstimateCache> = Laz
     )
 });
 
-fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
+fn estimate_response_item_model_visible_bytes(
+    item: &ResponseItem,
+    audio_durations: &FileAudioDurations,
+) -> i64 {
     match item {
         ResponseItem::Message { content, .. } => content
             .iter()
@@ -1274,7 +1288,9 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
                 ContentItem::InputImage { image, detail } => {
                     estimate_image_reference_bytes(image, *detail)
                 }
-                ContentItem::InputAudio { audio } => estimate_audio_reference_bytes(audio),
+                ContentItem::InputAudio { audio } => {
+                    estimate_audio_reference_bytes(audio, audio_durations)
+                }
             })
             .fold(0i64, i64::saturating_add),
         ResponseItem::AgentMessage {
@@ -1487,13 +1503,15 @@ fn estimate_audio_bytes(audio_url: &str) -> i64 {
     .unwrap_or(i64::MAX)
 }
 
-/// Audio estimate for callers that only have the reference. Uploaded file durations are not
-/// available locally, so file references use the maximum duration accepted by Responses.
-fn estimate_audio_reference_bytes(audio: &AudioReference) -> i64 {
+fn estimate_audio_reference_bytes(
+    audio: &AudioReference,
+    audio_durations: &FileAudioDurations,
+) -> i64 {
     match audio {
         AudioReference::Inline { audio_url } => estimate_audio_bytes(audio_url),
-        AudioReference::File { .. } => {
-            i64::try_from(approx_bytes_for_tokens(FILE_AUDIO_TOKENS_ESTIMATE)).unwrap_or(i64::MAX)
+        AudioReference::File { file_id } => {
+            i64::try_from(approx_bytes_for_tokens(audio_durations.tokens(file_id)))
+                .unwrap_or(i64::MAX)
         }
     }
 }

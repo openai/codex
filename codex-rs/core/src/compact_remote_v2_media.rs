@@ -1,8 +1,8 @@
 //! Counts retained media tokens and truncates each media part together with its labels.
 
 use super::RetainedImageBudget;
-use crate::context_manager::FILE_AUDIO_TOKENS_ESTIMATE;
 use crate::context_manager::estimate_image_reference_bytes;
+use crate::session::FileAudioDurations;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
@@ -19,6 +19,7 @@ use codex_utils_output_truncation::truncate_text;
 pub(super) fn content_item_token_count(
     item: &ContentItem,
     image_budget: RetainedImageBudget,
+    audio_durations: &FileAudioDurations,
 ) -> usize {
     match item {
         ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
@@ -30,8 +31,8 @@ pub(super) fn content_item_token_count(
         )
         .unwrap_or(usize::MAX),
         ContentItem::InputAudio {
-            audio: AudioReference::File { .. },
-        } => FILE_AUDIO_TOKENS_ESTIMATE,
+            audio: AudioReference::File { file_id },
+        } => audio_durations.tokens(file_id),
         ContentItem::InputAudio {
             audio: AudioReference::Inline { .. },
         } => 0,
@@ -61,6 +62,7 @@ pub(super) fn truncate_message_to_token_budget(
     mut envelope: ResponseItemEnvelope,
     max_tokens: usize,
     image_budget: RetainedImageBudget,
+    audio_durations: &FileAudioDurations,
 ) -> Option<ResponseItemEnvelope> {
     let mut content = to_annotated_content(&mut envelope.item)?;
     let mut remaining = max_tokens;
@@ -69,7 +71,7 @@ pub(super) fn truncate_message_to_token_budget(
         if let Some(start) = trailing_media_start(&content) {
             let tokens = content[start..]
                 .iter()
-                .map(|part| content_item_token_count(part.content(), image_budget))
+                .map(|part| content_item_token_count(part.content(), image_budget, audio_durations))
                 .fold(0, usize::saturating_add);
             if tokens > remaining {
                 break;

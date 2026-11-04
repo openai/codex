@@ -1,5 +1,6 @@
 //! Exercises streamed remote compaction, including the retained checkpoint and continuing history.
 
+use super::audio_duration_store::TestAudioDurationStore;
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
@@ -861,32 +862,41 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
     Ok(())
 }
 
-#[test_case(false; "audio_only")]
-#[test_case(true; "mixed_media_boundary")]
+#[test_case(None, 3, false; "audio_only")]
+#[test_case(None, 3, true; "mixed_media_boundary")]
+#[test_case(Some(false), 3, false; "metadata_unavailable")]
+#[test_case(Some(true), 1, false; "with_partial_metadata")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_budgets_persisted_file_audio_atomically(
+    measure_short_clips: Option<bool>,
+    first_retained: u32,
     older_image: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
-
-    let harness = TestCodexHarness::with_builder(
-        test_codex()
-            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-            .with_config(|config| {
-                config
-                    .features
-                    .set_enabled(Feature::CompactionImageBudget, /*enabled*/ false)
-                    .expect("disable image budgeting for this test");
-            })
-            .with_model_info_override("gpt-5.5", |model| {
-                model.input_modalities.push(InputModality::Audio);
-            }),
-    )
-    .await?;
-    // Seven maximum-cost audio items exceed the 64k retained-message budget. The
-    // newest five fit whole at 12,000 tokens each.
+    let builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config
+                .features
+                .set_enabled(Feature::CompactionImageBudget, /*enabled*/ false)
+                .expect("disable image budgeting for this test");
+        })
+        .with_model_info_override("gpt-5.5", |model| {
+            model.input_modalities.push(InputModality::Audio);
+        });
+    let builder = if let Some(measure_short_clips) = measure_short_clips {
+        builder.with_image_store(Arc::new(TestAudioDurationStore {
+            measure_short_clips,
+            ..Default::default()
+        }))
+    } else {
+        builder
+    };
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    // A 64k budget fits five unknown files. Measuring the other two clips at
+    // 30 seconds each leaves room to retain all seven.
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
-    let initial_history = (1..=7)
+    let initial_history = (1..=6)
         .map(|number| {
             let mut content = Vec::new();
             if older_image && number == 3 {
@@ -938,6 +948,10 @@ async fn remote_compact_v2_budgets_persisted_file_audio_atomically(
         harness.server(),
         vec![
             sse(vec![
+                responses::ev_assistant_message("first", "heard it"),
+                responses::ev_completed("first"),
+            ]),
+            sse(vec![
                 json!({
                     "type": "response.output_item.done",
                     "item": {
@@ -955,6 +969,14 @@ async fn remote_compact_v2_budgets_persisted_file_audio_atomically(
     )
     .await;
 
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Audio {
+            audio: AudioReference::File {
+                file_id: "file_audio_7".into(),
+            },
+        }]))
+        .await?;
+    wait_for_turn_complete(&codex).await;
     codex.submit(Op::Compact).await?;
     wait_for_turn_complete(&codex).await;
     codex
@@ -966,10 +988,10 @@ async fn remote_compact_v2_budgets_persisted_file_audio_atomically(
     wait_for_turn_complete(&codex).await;
 
     let requests = responses.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     if older_image {
         assert_eq!(requests[0].message_input_image_urls("user").len(), 1);
-        assert!(requests[1].message_input_image_urls("user").is_empty());
+        assert!(requests[2].message_input_image_urls("user").is_empty());
     }
     assert_eq!(
         requests[0].message_input_audio_file_ids("user"),
@@ -977,14 +999,20 @@ async fn remote_compact_v2_budgets_persisted_file_audio_atomically(
             .map(|number| format!("file_audio_{number}"))
             .collect::<Vec<_>>()
     );
+    let retained: Vec<_> = requests[2]
+        .input()
+        .into_iter()
+        .flat_map(|item| item["content"].as_array().cloned().unwrap_or_default())
+        .filter(|part| part["type"] == "input_audio")
+        .collect();
     assert_eq!(
-        requests[1].message_input_audio_file_ids("user"),
-        (3..=7)
-            .map(|number| format!("file_audio_{number}"))
+        retained,
+        (first_retained..=7)
+            .map(|number| json!({"type":"input_audio", "file_id": format!("file_audio_{number}")}))
             .collect::<Vec<_>>()
     );
     assert_eq!(
-        requests[1].inputs_of_type("compaction")[0]["encrypted_content"],
+        requests[2].inputs_of_type("compaction")[0]["encrypted_content"],
         "AUDIO_BUDGET_SUMMARY"
     );
     Ok(())

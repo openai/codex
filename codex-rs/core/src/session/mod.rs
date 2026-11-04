@@ -245,6 +245,9 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::exec_output::StreamOutput;
 
 pub(crate) mod async_compaction;
+pub(crate) mod file_audio;
+pub(crate) use file_audio::FileAudioDurations;
+
 mod code_mode_warning;
 mod config_refresh;
 pub(crate) mod context_window;
@@ -1956,7 +1959,8 @@ impl Session {
             .zip(metadata)
             .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
             .collect();
-        // Ordinary replay needs no reviewer or network refresh. Only an opaque
+        file_audio::resolve(self, file_audio::file_ids(&history).cloned().collect()).await;
+        // Ordinary replay needs no reviewer refresh. Only an opaque
         // checkpoint can make reconstruction depend on reviewer compatibility.
         let reviewer_compaction_hash = if codex_history::CompactionCheckpoint::latest(&history)
             .is_some_and(codex_history::CompactionCheckpoint::is_usable)
@@ -4054,6 +4058,9 @@ impl Session {
                 }
             }
             state
+                .pending_audio_duration_ids
+                .extend(file_audio::file_ids(&items).cloned());
+            state
                 .history
                 .record_annotated_items(&mut items, model_info.truncation_policy.into());
         }
@@ -5283,6 +5290,7 @@ impl Session {
                     .cloned()
                     .collect(),
                 crate::compact_remote_v2::RETAINED_MESSAGE_TOKEN_BUDGET,
+                &history.file_audio_durations,
             );
         let window = {
             let mut state = self.state.lock().await;

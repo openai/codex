@@ -53,6 +53,7 @@ mod apply_patch_serialization;
 mod apply_patch_system_aliases;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
+mod audio_duration_store;
 mod audio_truncation;
 mod auth_recovery_policy;
 mod auto_review;

@@ -1,8 +1,10 @@
 //! Uploaded audio references remain intact across model requests and user-message history.
 
+use super::super::audio_duration_store::TestAudioDurationStore;
 use super::*;
 use codex_protocol::models::AudioReference;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::turn_input::TurnInputSubmission;
 use core_test_support::responses;
 use core_test_support::responses::mount_response_sequence;
 use pretty_assertions::assert_eq;
@@ -83,11 +85,13 @@ async fn uploaded_audio_survives_follow_up_and_resume() -> Result<()> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AudioAtCompaction {
     Available,
+    Measured,
     MissingAtStore,
     MissingAtResponses,
 }
 
 #[test_case(AudioAtCompaction::Available, &[true, true, true]; "available")]
+#[test_case(AudioAtCompaction::Measured, &[true, true, true]; "measured duration")]
 #[test_case(AudioAtCompaction::MissingAtStore, &[true, false, false]; "expired before compaction")]
 #[test_case(AudioAtCompaction::MissingAtResponses, &[true, true, false, false]; "expired during compaction")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -118,24 +122,36 @@ async fn uploaded_audio_survives_compaction_and_cold_resume(
     ]);
     let responses = mount_response_sequence(&server, replies).await;
     let store = Arc::new(RecordingFileAttachmentStore::default());
+    let measured = availability == AudioAtCompaction::Measured;
     let builder = || {
-        test_codex()
-            .with_image_store(store.clone())
+        let builder = test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_model_info_override("gpt-5.5", |model| {
                 model.input_modalities.push(InputModality::Audio);
-            })
+            });
+        if measured {
+            builder.with_image_store(Arc::new(TestAudioDurationStore {
+                measure_short_clips: true,
+                ..Default::default()
+            }))
+        } else {
+            builder.with_image_store(store.clone())
+        }
     };
     let test = builder().build_with_auto_env(&server).await?;
+    let ids: Vec<String> = if measured {
+        (1..=7).map(|n| format!("file_audio_{n}")).collect()
+    } else {
+        vec!["file_audio_compacted".into()]
+    };
+    let mut input = vec![text("Retain this recording through compaction.")];
+    input.extend(ids.iter().map(|id| UserInput::Audio {
+        audio: AudioReference::File {
+            file_id: id.clone(),
+        },
+    }));
     test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![
-            text("Retain this recording through compaction."),
-            UserInput::Audio {
-                audio: AudioReference::File {
-                    file_id: "file_audio_compacted".to_string(),
-                },
-            },
-        ]))
+        .start_or_steer_turn(TurnInputRequest::user_input(input))
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -159,7 +175,10 @@ async fn uploaded_audio_survives_compaction_and_cold_resume(
 
     let resumed = builder().restart_with_auto_env(&server, &test).await?;
     let mut input = vec![text("Use the retained recording after cold resume.")];
-    if availability != AudioAtCompaction::Available {
+    if matches!(
+        availability,
+        AudioAtCompaction::MissingAtStore | AudioAtCompaction::MissingAtResponses
+    ) {
         // Reintroduce the ID to exercise the checkpoint's rejection record.
         input.push(UserInput::Audio {
             audio: AudioReference::File {
@@ -178,15 +197,24 @@ async fn uploaded_audio_survives_compaction_and_cold_resume(
 
     let requests = responses.requests();
     assert_eq!(requests.len(), expected_audio.len());
+    let expected: Vec<_> = ids
+        .iter()
+        .map(|id| json!({"type":"input_audio","file_id":id}))
+        .collect();
     for (request, expect_audio) in requests.iter().zip(expected_audio) {
-        let audio = request
+        let audio: Vec<_> = request
             .input()
             .into_iter()
             .flat_map(|item| item["content"].as_array().cloned().unwrap_or_default())
-            .find(|part| part["type"] == "input_audio");
+            .filter(|part| part["type"] == "input_audio")
+            .collect();
         assert_eq!(
-            audio,
-            expect_audio.then(|| json!({"type": "input_audio", "file_id": "file_audio_compacted"})),
+            audio.as_slice(),
+            if *expect_audio {
+                expected.as_slice()
+            } else {
+                &[]
+            }
         );
         assert!(
             request
@@ -202,16 +230,25 @@ async fn uploaded_audio_survives_compaction_and_cold_resume(
             .inputs_of_type("compaction")[0]["encrypted_content"],
         "UPLOADED_AUDIO_COMPACTION_CHECKPOINT"
     );
-    if availability == AudioAtCompaction::Available {
-        insta::assert_snapshot!(
+    let (snapshot, description) = match availability {
+        AudioAtCompaction::Available => (
             "uploaded_audio_compaction_and_cold_resume",
-            context_snapshot::format_request_history_snapshot(
-                "The uploaded audio file ID survives remote compaction and a cold resume in canonical message content.",
-                &requests,
-                &ContextSnapshotOptions::default().rewrite_known_segments(),
-            )
-        );
-    }
+            "The uploaded audio file ID survives remote compaction and a cold resume in canonical message content.",
+        ),
+        AudioAtCompaction::Measured => (
+            "measured_audio_compaction_and_cold_resume",
+            "Two measured clips and five unmeasured files fit in the retained budget. All seven audio file IDs survive compaction and cold resume.",
+        ),
+        AudioAtCompaction::MissingAtStore | AudioAtCompaction::MissingAtResponses => return Ok(()),
+    };
+    insta::assert_snapshot!(
+        snapshot,
+        context_snapshot::format_request_history_snapshot(
+            description,
+            &requests,
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
     Ok(())
 }
 
@@ -650,7 +687,12 @@ async fn unknown_file_after_two_recordings_were_accepted(
         .await;
         assert!(done.error.is_none(), "{done:?}");
     }
-    assert!(store.resolves.lock().expect("probes").is_empty());
+    // Each new recording gets one duration lookup. Recovery probes start after the 404.
+    {
+        let resolves = store.resolves.lock().expect("store lookups");
+        assert_eq!(resolves.get("file_a"), Some(&1));
+        assert_eq!(resolves.get("file_b"), Some(&1));
+    }
     store
         .resolve_errors
         .lock()
@@ -667,6 +709,14 @@ async fn unknown_file_after_two_recordings_were_accepted(
         _ => None,
     })
     .await;
+    {
+        let resolves = store
+            .resolves
+            .lock()
+            .expect("store lookups after rejection");
+        assert_eq!(resolves.get("file_a"), Some(&2));
+        assert_eq!(resolves.get("file_b"), Some(&2));
+    }
     assert_eq!(
         error.rejected_audio_file_ids,
         if confirmed {
@@ -703,8 +753,6 @@ async fn unknown_file_after_two_recordings_were_accepted(
         assert!(input.contains("file_a"));
         assert_eq!(input.contains("file_b"), !confirmed);
     }
-    let probes = store.resolves.lock().expect("probes");
-    assert!(probes.contains_key("file_a") && probes.contains_key("file_b"));
     Ok(())
 }
 
@@ -1345,5 +1393,114 @@ async fn unsupported_uploaded_audio_fails_before_inference_without_poisoning_fol
             .contains("Listen to this recording."),
         "rejecting the attachment must preserve surrounding text"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_during_audio_lookup_preserves_steered_batch_on_follow_up_and_resume()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let store = Arc::new(TestAudioDurationStore::default());
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let (streaming, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: Some(gate),
+            body: sse(vec![ev_completed("active")]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![ev_completed("follow_up")]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![ev_completed("resumed")]),
+        }],
+    ])
+    .await;
+    let config_server = start_mock_server().await;
+    let builder = || {
+        let base_url = format!("{}/v1", streaming.uri());
+        test_codex()
+            .with_image_store(store.clone())
+            .with_model_info_override("gpt-5.5", |model| {
+                model.input_modalities.push(InputModality::Audio)
+            })
+            .with_config(move |config| {
+                config.model_provider.base_url = Some(base_url);
+                config.model_provider.supports_websockets = false;
+                config
+                    .features
+                    .disable(Feature::InstantInterrupt)
+                    .expect("queue steering");
+                config
+                    .features
+                    .disable(Feature::EnableRequestCompression)
+                    .expect("inspect request bodies");
+            })
+    };
+    let test = builder().build_with_auto_env(&config_server).await?;
+    let TurnInputSubmission::Started { turn_id, .. } = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text("Start working.")]))
+        .await?
+    else {
+        anyhow::bail!("expected an active turn");
+    };
+    let timeout = Duration::from_secs(10);
+    tokio::time::timeout(timeout, streaming.wait_for_request_count(/*count*/ 1)).await?;
+    test.codex
+        .steer_turn(
+            TurnInputRequest::user_input(vec![
+                text("Keep this recording."),
+                UserInput::Audio {
+                    audio: AudioReference::File {
+                        file_id: "file_audio_5".into(),
+                    },
+                },
+            ]),
+            turn_id.clone(),
+        )
+        .await?;
+    test.codex
+        .steer_turn(
+            TurnInputRequest::user_input(vec![text("Keep the rest of the batch.")]),
+            turn_id,
+        )
+        .await?;
+    release.send(()).expect("release active response");
+    tokio::time::timeout(timeout, store.slow_lookup_started.notified()).await?;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+
+    test.submit_text_turn("Follow up.").await?;
+    let resumed = builder()
+        .restart_with_auto_env(&config_server, &test)
+        .await?;
+    resumed.submit_text_turn("Continue after restart.").await?;
+    let requests = streaming.requests().await;
+    assert_eq!(requests.len(), 3);
+    for body in &requests[1..] {
+        let request: serde_json::Value = serde_json::from_slice(body)?;
+        let parts = request["input"]
+            .as_array()
+            .expect("request input")
+            .iter()
+            .filter(|item| item["role"] == "user")
+            .flat_map(|item| item["content"].as_array().into_iter().flatten())
+            .collect::<Vec<_>>();
+        for expected in [
+            json!({"type":"input_text", "text":"Keep this recording."}),
+            json!({"type":"input_audio", "file_id":"file_audio_5"}),
+            json!({"type":"input_text", "text":"Keep the rest of the batch."}),
+        ] {
+            assert!(
+                parts.contains(&&expected),
+                "missing {expected} on follow-up or resume"
+            );
+        }
+    }
     Ok(())
 }

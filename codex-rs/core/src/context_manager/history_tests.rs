@@ -150,6 +150,10 @@ fn raw_items(history: &ContextManager) -> Vec<ResponseItem> {
     history.raw_items().cloned().collect()
 }
 
+fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
+    super::estimate_response_item_model_visible_bytes(item, &FileAudioDurations::default())
+}
+
 #[test]
 fn delivered_assistant_context_invalidates_reviews_without_changing_authorization() {
     let revisions = |history: &ContextManager| {
