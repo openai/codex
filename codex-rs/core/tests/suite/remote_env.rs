@@ -51,6 +51,8 @@ use codex_history::RolloutItem;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_protocol::approvals::GuardianAssessmentStatus;
+use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
@@ -64,6 +66,8 @@ use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::models::input_text;
+use codex_protocol::openai_models::GuardianModelPolicy;
+use codex_protocol::openai_models::GuardianReviewMode;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -3232,11 +3236,22 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
                     &json!({ "environment_id": REMOTE_ENVIRONMENT_ID }).to_string(),
                 ),
             ),
-            completed_response(
-                "resp-guardian-command",
-                if tool == "mcp_elicitation" {
-                    ev_function_call_with_namespace(EXEC_CALL_ID, "mcp__cua_repl", "js", "{}")
-                } else {
+            if tool == "mcp_elicitation" {
+                let mut call =
+                    ev_function_call_with_namespace(EXEC_CALL_ID, "mcp__cua_repl", "js", "{}");
+                call["item"]["id"] = json!("cua-item");
+                sse(vec![
+                    ev_response_created("resp-guardian-command"),
+                    json!({
+                        "type": "response.metadata", "response_id": "resp-guardian-command",
+                        "metadata": {"guardian": {"item_id": "cua-item", "requires_review": false}}
+                    }),
+                    call,
+                    ev_completed("resp-guardian-command"),
+                ])
+            } else {
+                completed_response(
+                    "resp-guardian-command",
                     ev_function_call(
                         EXEC_CALL_ID,
                         "exec_command",
@@ -3247,9 +3262,9 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
                             "justification": "Review the newly ready remote environment.",
                         })
                         .to_string(),
-                    )
-                },
-            ),
+                    ),
+                )
+            },
             completed_response(
                 "resp-guardian-review",
                 ev_assistant_message(
@@ -3272,16 +3287,28 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
             if tool == "mcp_elicitation" {
+                config
+                    .features
+                    .enable(Feature::GuardianV2)
+                    .expect("enable Guardian v2");
                 config.mcp_servers.set(serde_json::from_value(json!({
                     "cua_repl": {
                         "command": if cfg!(windows) { "python" } else { "python3" },
                         "args": ["-u", "-c", super::guardian_mcp_elicitation::ELICITATION_SERVER,
-                            json!([{"codex_sensitive_action": true}]).to_string(), "forward"],
+                            "[{}]", "forward"],
                         "default_tools_approval_mode": "approve",
                     }
                 })).expect("MCP server config")).expect("set MCP fixture");
             }
         });
+    if tool == "mcp_elicitation" {
+        builder = builder.with_model_info_override("gpt-5.5", |model| {
+            model.guardian = Some(GuardianModelPolicy {
+                computer_use: Some(GuardianReviewMode::Adaptive),
+                ..Default::default()
+            });
+        });
+    }
     let (attach_tx, attach_rx) = tokio::sync::oneshot::channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let exec_server = tokio::spawn(serve_environment_with_agents_md(
@@ -3349,7 +3376,14 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
         .await?;
     wait_for_response_request_count(&responses, /*expected_count*/ 1).await;
     attach_tx.send(()).expect("attach remote environment");
+    let mut denial_reason = None;
     wait_for_event(&test.codex, |event| {
+        if let EventMsg::GuardianAssessment(assessment) = event
+            && assessment.status == GuardianAssessmentStatus::Denied
+            && assessment.target_item_id.as_deref() == Some(EXEC_CALL_ID)
+        {
+            denial_reason = assessment.review_reason;
+        }
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
@@ -3368,10 +3402,18 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
         })
         .context("expected Guardian review request")?;
     let guardian_context = guardian_request.message_input_texts("user").join("\n");
+    // Both actions start in the remote-primary step, but the MCP server runs locally.
+    let (owner_denied_path, other_denied_path) = if tool == "mcp_elicitation" {
+        // The low score is labeled local, but the model saw the remote primary's rules.
+        assert_eq!(denial_reason, Some(GuardianReviewReason::FreshRequired));
+        (&local_denied_path, &remote_denied_path)
+    } else {
+        (&remote_denied_path, &local_denied_path)
+    };
     for expected in [
         "<environment id=\"remote\" primary=\"true\">".to_string(),
         format!("<cwd>{}</cwd>", remote_cwd.display()),
-        format!("- path `{}`", remote_denied_path.display()),
+        format!("- path `{}`", owner_denied_path.display()),
     ] {
         assert!(
             guardian_context.contains(&expected),
@@ -3379,8 +3421,8 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment(
         );
     }
     assert!(
-        !guardian_context.contains(&format!("- path `{}`", local_denied_path.display())),
-        "Guardian used the stale local environment's denied-read policy: {guardian_context}"
+        !guardian_context.contains(&format!("- path `{}`", other_denied_path.display())),
+        "Guardian used the other environment's denied-read policy: {guardian_context}"
     );
     let rejection = requests
         .last()

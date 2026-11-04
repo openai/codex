@@ -3723,6 +3723,7 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
             &invocation,
             metadata.clone(),
             review_context.clone(),
+            /*environment_permissions*/ None,
         );
         std::future::pending::<()>().await;
     });
@@ -3732,6 +3733,7 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
         &invocation,
         metadata.clone(),
         review_context.clone(),
+        /*environment_permissions*/ None,
     );
     assert_eq!(
         session
@@ -3755,6 +3757,7 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
         &invocation,
         metadata,
         review_context,
+        /*environment_permissions*/ None,
     );
     let registry = session.mcp_tool_approval_metadata.lock().unwrap();
     let mut keys = registry.keys().cloned().collect::<Vec<_>>();

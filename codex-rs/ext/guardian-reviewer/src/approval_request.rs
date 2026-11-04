@@ -75,8 +75,8 @@ pub enum GuardianApprovalRequest {
         tool_title: Option<String>,
         tool_description: Option<String>,
         annotations: Option<GuardianMcpAnnotations>,
-        /// Only direct calls to environment-owned servers supply their prepared rules.
-        /// Thread-owned calls and server-initiated approvals use the issuing context.
+        /// Rules captured for an environment-owned call. Used for direct approval and
+        /// for a server's follow-up when its call ID matches that still-running call.
         prompt_permissions: Option<(String, Arc<codex_file_system::FileSystemSandboxContext>)>,
     },
     RequestPermissions {

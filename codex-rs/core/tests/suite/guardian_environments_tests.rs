@@ -142,6 +142,7 @@ async fn direct_mcp_approval_uses_the_server_owners_denied_paths() -> Result<()>
 #[test_case("exec_command")]
 #[test_case("apply_patch")]
 #[test_case("request_permissions")]
+#[test_case("mcp_tool_call"; "mcp_owner_does_not_reuse_primary_score")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -155,7 +156,7 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
     attach.send(()).expect("attach secondary executor");
 
     let server = start_mock_server().await;
-    let test = test_codex()
+    let mut builder = test_codex()
         .with_pre_build_hook(|home| {
             std::fs::write(
                 home.join("config.toml"),
@@ -183,9 +184,23 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
                 .features
                 .disable(Feature::DeferredExecutor)
                 .expect("disable deferred executor");
-        })
-        .build_with_auto_env(&server)
-        .await?;
+        });
+    let test = if tool == "mcp_tool_call" {
+        // The MCP server runs on the host, not on the mock executor.
+        let servers = serde_json::from_value(json!({
+            "files": {
+                "command": cargo_bin("test_stdio_server")?,
+                "environment_id": LOCAL_ENVIRONMENT_ID,
+                "default_tools_approval_mode": "prompt",
+            }
+        }))?;
+        builder
+            .with_config(move |config| config.mcp_servers.set(servers).expect("set MCP server"))
+            .build(&server)
+            .await?
+    } else {
+        builder.build_with_auto_env(&server).await?
+    };
     let manager = test.thread_manager.environment_manager();
     let secondary_id = "guardian-secondary";
     manager.upsert_environment(
@@ -220,8 +235,13 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
     secondary.config = EnvironmentConfigState::Ready(secondary_config);
 
     let targets = [secondary_id, primary.environment_id.as_str()];
+    let tools = if tool == "mcp_tool_call" {
+        ["exec_command", tool]
+    } else {
+        [tool; 2]
+    };
     let mut events = Vec::new();
-    for (index, environment_id) in targets.iter().enumerate() {
+    for (index, (environment_id, tool)) in targets.iter().zip(tools).enumerate() {
         let call_id = format!("action-{index}");
         let action = match tool {
             "exec_command" => ev_function_call(
@@ -250,6 +270,12 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
                     "reason": "Review the target environment.",
                 })
                 .to_string(),
+            ),
+            "mcp_tool_call" => ev_function_call_with_namespace(
+                &call_id,
+                "mcp__files",
+                "echo",
+                r#"{"message":"hi"}"#,
             ),
             _ => unreachable!(),
         };
@@ -318,6 +344,11 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
     }
     let responses =
         mount_sse_sequence(&server, events.into_iter().skip(1).step_by(2).collect()).await;
+    let mut environments = vec![primary.clone().into_request(), secondary.into_request()];
+    if tool == "mcp_tool_call" {
+        // The primary produced the low score; the MCP server belongs to the other computer.
+        environments.reverse();
+    }
     test.codex.ensure_rollout_materialized().await;
     test.codex
         .start_or_steer_turn(
@@ -328,7 +359,7 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
             .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![primary.clone().into_request(), secondary.into_request()],
+                    environments,
                 )),
                 ..Default::default()
             }),
@@ -350,7 +381,7 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
     .await??;
     advance
         .send(())
-        .expect("start action on the primary computer");
+        .expect("start action on the other computer");
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -362,7 +393,7 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
         .filter(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
         .collect::<Vec<_>>();
     assert_eq!(reviews.len(), targets.len());
-    for (review, environment_id) in reviews.iter().zip(targets) {
+    for ((review, environment_id), tool) in reviews.iter().zip(targets).zip(tools) {
         let groups = review.message_input_text_groups("user");
         let latest = groups.last().context("current review input")?;
         assert_eq!(
@@ -389,10 +420,12 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
             .iter()
             .find_map(|text| serde_json::from_str::<Value>(text).ok())
             .context("planned action JSON")?;
-        assert_eq!(
-            (&action["tool"], &action["environment_id"]),
-            (&json!(tool), &json!(environment_id))
-        );
+        assert_eq!(action["tool"], json!(tool));
+        if tool == "mcp_tool_call" {
+            assert_eq!(action["server"], json!("files"));
+        } else {
+            assert_eq!(action["environment_id"], json!(environment_id));
+        }
     }
     assert_eq!(
         reviews[0].body_json()["client_metadata"]["thread_id"],

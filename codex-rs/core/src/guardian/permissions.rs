@@ -1,5 +1,5 @@
-//! Fresh reviews of environment-owned MCP calls use the prepared environment's rules.
-//! Other reviews and early scoring use the issuing context.
+//! Guardian reviews and score reuse use the prepared MCP owner's rules when available.
+//! Early scoring uses the issuing context, before the MCP call is prepared.
 
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
 use codex_file_system::FileSystemSandboxContext;
@@ -7,6 +7,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
 use crate::context::GuardianPermissionContext;
 use crate::session::turn_context::TurnEnvironment;
@@ -23,6 +24,21 @@ pub(super) fn check_environment_id(id: Option<&str>) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+pub(super) fn for_request(
+    request: &GuardianApprovalRequest,
+    context: Option<&GuardianReviewContext>,
+) -> anyhow::Result<Option<GuardianPermissionContext>> {
+    match request {
+        GuardianApprovalRequest::McpToolCall {
+            prompt_permissions: Some((environment_id, sandbox)),
+            ..
+        } => for_mcp_environment(environment_id, sandbox).map(Some),
+        _ => context
+            .map(|context| for_environment(context, request.target_environment_id()))
+            .transpose(),
+    }
 }
 
 pub(super) fn for_mcp_environment(

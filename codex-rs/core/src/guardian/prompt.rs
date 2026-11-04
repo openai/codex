@@ -122,20 +122,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
         &request,
         reasons.retry.or(reasons.approval),
     )?;
-    let permissions = match request {
-        GuardianApprovalRequest::McpToolCall {
-            prompt_permissions: Some((environment_id, sandbox)),
-            ..
-        } => Some(super::permissions::for_mcp_environment(
-            &environment_id,
-            &sandbox,
-        )?),
-        _ => parent_context
-            .map(|context| {
-                super::permissions::for_environment(context, request.target_environment_id())
-            })
-            .transpose()?,
-    };
+    let permissions = super::permissions::for_request(&request, parent_context)?;
     let node_repl_snapshot = if node_repl_transcripts_enabled {
         session
             .services

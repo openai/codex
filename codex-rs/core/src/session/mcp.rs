@@ -1187,6 +1187,15 @@ async fn review_guardian_mcp_elicitation(
         }
     };
     guardian_request.category = guardian_scope;
+    // Keep the action the server asked about, but use its owner's rules from the original call.
+    if let Ok(crate::guardian::GuardianApprovalRequest::McpToolCall {
+        prompt_permissions, ..
+    }) = &mut guardian_request.request
+        && let Some(permissions) =
+            approval_context.and_then(|context| context.environment_permissions)
+    {
+        *prompt_permissions = Some(permissions);
+    }
     let declined_reason = guardian_request.request.as_ref().err().cloned();
     let decision = crate::guardian::decide_approval(
         session,

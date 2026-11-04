@@ -100,11 +100,9 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
 
     fn permissions(&self) -> Option<codex_guardian_context::PermissionContext> {
         let request = self.request.request.as_ref().ok()?;
-        crate::guardian::permissions::for_environment(
-            &self.context,
-            request.target_environment_id(),
-        )
-        .ok()
+        crate::guardian::permissions::for_request(request, Some(&self.context))
+            .ok()
+            .flatten()
     }
 
     async fn servicing_turn(

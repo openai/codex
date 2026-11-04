@@ -37,6 +37,7 @@ use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
 use codex_extension_api::McpToolContext;
 use codex_features::Feature;
+use codex_file_system::FileSystemSandboxContext;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
@@ -257,6 +258,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &invocation,
         metadata.clone(),
         GuardianReviewContext::from(step_context),
+        capture_environment_permissions(prepared_call.permission_source()),
     );
     notify_mcp_tool_call_started(
         sess.as_ref(),
@@ -1312,6 +1314,20 @@ pub(crate) struct McpToolApprovalContext {
     pub(crate) invocation: Option<McpInvocation>,
     pub(crate) metadata: McpToolApprovalMetadata,
     pub(crate) review_context: GuardianReviewContext,
+    /// Rules captured when MCP prepared this call, if the server belongs to an environment.
+    pub(crate) environment_permissions: Option<(String, Arc<FileSystemSandboxContext>)>,
+}
+
+fn capture_environment_permissions(
+    source: McpPermissionSource<'_>,
+) -> Option<(String, Arc<FileSystemSandboxContext>)> {
+    match source {
+        McpPermissionSource::Environment {
+            environment_id,
+            sandbox,
+        } => Some((environment_id.to_owned(), Arc::clone(sandbox))),
+        McpPermissionSource::Thread { .. } => None,
+    }
 }
 
 impl Session {
@@ -1321,6 +1337,7 @@ impl Session {
         invocation: &McpInvocation,
         metadata: McpToolApprovalMetadata,
         review_context: GuardianReviewContext,
+        environment_permissions: Option<(String, Arc<FileSystemSandboxContext>)>,
     ) -> Arc<McpToolApprovalContext> {
         let key = (invocation.server.clone(), call_id.to_string());
         let metadata = Arc::new(McpToolApprovalContext {
@@ -1329,6 +1346,7 @@ impl Session {
             .then(|| invocation.clone()),
             metadata,
             review_context,
+            environment_permissions,
         });
         let mut registry = self
             .mcp_tool_approval_metadata
@@ -1695,13 +1713,7 @@ async fn prepare_mcp_tool_approval(
         approval_mode: policy.mode,
         allow_session_remember: session_approval_key.is_some(),
         allow_persistent_approval: persistent_approval_key.is_some(),
-        prompt_permissions: match permission_source {
-            McpPermissionSource::Environment {
-                environment_id,
-                sandbox,
-            } => Some((environment_id.to_owned(), Arc::clone(sandbox))),
-            McpPermissionSource::Thread { .. } => None,
-        },
+        prompt_permissions: capture_environment_permissions(permission_source),
     };
     McpToolApprovalRequirement::Required {
         action: Box::new(action),

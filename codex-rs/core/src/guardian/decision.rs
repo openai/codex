@@ -129,6 +129,19 @@ pub(crate) fn decide_approval(
                         &assessment.authorization.permissions,
                     )
                     .await;
+            // MCP prepares the call after the response is scored. The score must
+            // also match the rules of the server that will handle the call.
+            if !require_synchronous_review
+                && let Ok(GuardianApprovalRequest::McpToolCall {
+                    prompt_permissions: Some((environment_id, sandbox)),
+                    ..
+                }) = &request.request
+            {
+                let owner_permissions =
+                    super::permissions::for_mcp_environment(environment_id, sandbox).ok();
+                require_synchronous_review =
+                    owner_permissions.as_ref() != Some(&assessment.authorization.permissions);
+            }
         }
         let retried = reasons.retry.is_some();
         let decision = codex_guardian_reviewer::ReviewRequest {
