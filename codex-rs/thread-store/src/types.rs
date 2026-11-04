@@ -244,13 +244,17 @@ pub struct PreparedFork {
     pub history_base: Option<HistoryPosition>,
     /// Bounded model context selected by the requested fork boundary.
     pub model_context: Arc<Vec<RolloutItem>>,
-    /// Blocks source deletion until the child's history reference is durable.
-    _source_reservation: Box<dyn std::fmt::Debug + Send>,
+    /// Prevents the source thread from being deleted until the child's history reference is
+    /// finalized.
+    ///
+    /// If absent, the backend must revalidate the prepared fork as part of finalizing that
+    /// reference.
+    _source_reservation: Option<Box<dyn std::fmt::Debug + Send>>,
 }
 
 impl PreparedFork {
     /// Creates a frozen fork snapshot while retaining a backend-owned source reservation.
-    pub fn new(
+    pub fn with_source_reservation(
         source_thread_id: ThreadId,
         history_base: Option<HistoryPosition>,
         model_context: Arc<Vec<RolloutItem>>,
@@ -260,7 +264,22 @@ impl PreparedFork {
             source_thread_id,
             history_base,
             model_context,
-            _source_reservation: Box::new(source_reservation),
+            _source_reservation: Some(Box::new(source_reservation)),
+        }
+    }
+
+    /// Creates a frozen fork snapshot for a backend that revalidates the source while making the
+    /// child's history reference durable.
+    pub fn with_source_revalidation(
+        source_thread_id: ThreadId,
+        history_base: Option<HistoryPosition>,
+        model_context: Arc<Vec<RolloutItem>>,
+    ) -> Self {
+        Self {
+            source_thread_id,
+            history_base,
+            model_context,
+            _source_reservation: None,
         }
     }
 }
