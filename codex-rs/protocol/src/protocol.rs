@@ -2483,6 +2483,11 @@ pub struct ThreadSettingsSnapshot {
     pub service_tier: Option<String>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
+    /// Original selection before managed policy resolved the effective reviewer.
+    /// Older histories contain only `approvals_reviewer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub requested_approvals_reviewer: Option<ApprovalsReviewer>,
     pub permission_profile: PermissionProfile,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

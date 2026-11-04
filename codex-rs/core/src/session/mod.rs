@@ -798,6 +798,9 @@ impl Session {
                 "No models are available. Set `model` explicitly or check your model catalog configuration.".to_string(),
             ));
         }
+        let requested_approvals_reviewer = config
+            .requested_approvals_reviewer
+            .unwrap_or(config.approvals_reviewer);
         let trusted_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source)
             && !matches!(conversation_history, InitialHistory::Resumed(_));
         if config
@@ -824,13 +827,17 @@ impl Session {
                     );
                 }
             }
-            config
-                .config_layer_stack
-                .requirements()
-                .approvals_reviewer
-                .can_set(&ApprovalsReviewer::AutoReview)
-                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        }
+        let reviewer = crate::config::resolve_guardian_reviewer(
+            requested_approvals_reviewer,
+            (!trusted_guardian_reviewer).then_some(model.as_str()),
+            config.config_layer_stack.requirements(),
+        )
+        .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        {
+            let config = Arc::make_mut(&mut config);
+            config.requested_approvals_reviewer = Some(requested_approvals_reviewer);
+            config.approvals_reviewer = reviewer;
         }
         if allow_provider_model_fallback
             && let Some(requested_model) = config.model.as_ref()

@@ -171,7 +171,6 @@ impl App {
             params.runtime_workspace_roots =
                 Some(config.permissions.user_visible_workspace_roots().to_vec());
             params.approval_policy = Some(config.permissions.approval_policy.value().into());
-            params.approvals_reviewer = Some(config.approvals_reviewer.into());
             params.sandbox_policy = sandbox_policy;
             params.permissions = permissions;
         }

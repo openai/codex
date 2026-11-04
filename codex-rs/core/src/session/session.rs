@@ -336,6 +336,9 @@ impl SessionConfiguration {
             service_tier: self.step_settings.service_tier.clone(),
             approval_policy: self.step_settings.approval_policy.value(),
             approvals_reviewer: self.step_settings.approvals_reviewer,
+            requested_approvals_reviewer: self
+                .original_config_do_not_use
+                .requested_approvals_reviewer,
             permission_profile: self.materialized_permission_profile(environment_selections),
             active_permission_profile: self.active_permission_profile(),
             cwd: self.legacy_fallback_cwd.clone(),
@@ -369,6 +372,9 @@ impl SessionConfiguration {
             ),
             approval_policy: Some(self.step_settings.approval_policy.value()),
             approvals_reviewer: Some(self.step_settings.approvals_reviewer),
+            requested_approvals_reviewer: self
+                .original_config_do_not_use
+                .requested_approvals_reviewer,
             permission_profile: Some(self.permission_profile()),
             active_permission_profile: self.active_permission_profile(),
             windows_sandbox_level: Some(self.windows_sandbox_level),
@@ -575,6 +581,17 @@ impl SessionConfiguration {
             &updates.step_settings,
             &next_configuration.step_settings_constraints(next_environments),
         )?);
+        if let Some(reviewer) = updates
+            .requested_approvals_reviewer
+            .or(updates.step_settings.approvals_reviewer)
+            && next_configuration
+                .original_config_do_not_use
+                .requested_approvals_reviewer
+                != Some(reviewer)
+        {
+            Arc::make_mut(&mut next_configuration.original_config_do_not_use)
+                .requested_approvals_reviewer = Some(reviewer);
+        }
         Ok(next_configuration)
     }
 
@@ -624,6 +641,7 @@ pub(crate) struct SessionSettingsCommit {
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) step_settings: StepSettingsUpdate,
+    pub(crate) requested_approvals_reviewer: Option<ApprovalsReviewer>,
     /// Omission preserves the current data; an empty initializer clears it.
     pub(crate) turn_extension_init: Option<ExtensionDataInit>,
     pub(crate) environments: Option<TurnEnvironmentSelections>,

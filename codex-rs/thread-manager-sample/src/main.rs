@@ -265,6 +265,7 @@ async fn new_config(
         explicit_permission_profile_mode: false,
         custom_permission_profiles: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
+        requested_approvals_reviewer: None,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,

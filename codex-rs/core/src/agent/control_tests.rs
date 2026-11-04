@@ -1172,10 +1172,13 @@ async fn cancelled_v2_send_finishes_reload_registration() {
             .is_some()
     );
 
+    let mut sender_config = harness.config.clone();
+    sender_config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    sender_config.requested_approvals_reviewer = Some(ApprovalsReviewer::AutoReview);
     let followup_request = |message: &str| SendRequest {
         caller: parent_id,
         target: AgentTarget::Id(child_id),
-        resume_config: harness.config.clone(),
+        resume_config: sender_config.clone(),
         input: AgentInput::Message {
             message: AgentMessage::Plaintext(message.to_string()),
             mode: MessageDeliveryMode::TriggerTurn,
@@ -1222,6 +1225,11 @@ async fn cancelled_v2_send_finishes_reload_registration() {
             .registry
             .evicted_environments(child_id)
             .is_none()
+    );
+    assert_eq!(
+        reloaded.config_snapshot().await.approvals_reviewer,
+        ApprovalsReviewer::User,
+        "reload must preserve the worker's reviewer instead of inheriting its sender's request",
     );
     // Evict and reload again with the single child slot. This also catches a leaked
     // pin or pending residency reservation left behind by the cancelled sender.
@@ -2459,6 +2467,7 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix(
                         service_tier: None,
                         approval_policy: AskForApproval::Never,
                         approvals_reviewer: ApprovalsReviewer::User,
+                        requested_approvals_reviewer: None,
                         permission_profile: PermissionProfile::workspace_write(),
                         active_permission_profile: None,
                         cwd: harness.config.cwd.clone(),

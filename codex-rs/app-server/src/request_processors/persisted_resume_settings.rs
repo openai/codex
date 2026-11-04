@@ -43,7 +43,11 @@ impl From<&ThreadSettingsSnapshot> for PersistedResumeSettings {
     fn from(settings: &ThreadSettingsSnapshot) -> Self {
         Self {
             approval_policy: settings.approval_policy,
-            approvals_reviewer: Some(settings.approvals_reviewer),
+            approvals_reviewer: Some(
+                settings
+                    .requested_approvals_reviewer
+                    .unwrap_or(settings.approvals_reviewer),
+            ),
             active_permission_profile: settings.active_permission_profile.clone(),
             unnamed_permission_profile: settings
                 .active_permission_profile
@@ -78,9 +82,12 @@ fn latest_persisted_resume_settings(history: &[RolloutItem]) -> Option<Persisted
                 approvals_reviewer: turn_context.approvals_reviewer.or_else(|| {
                     history[..index].iter().rev().find_map(|item| match item {
                         RolloutItem::TurnContext(turn_context) => turn_context.approvals_reviewer,
-                        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => {
-                            Some(event.thread_settings.approvals_reviewer)
-                        }
+                        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => Some(
+                            event
+                                .thread_settings
+                                .requested_approvals_reviewer
+                                .unwrap_or(event.thread_settings.approvals_reviewer),
+                        ),
                         _ => None,
                     })
                 }),
@@ -93,7 +100,11 @@ fn latest_persisted_resume_settings(history: &[RolloutItem]) -> Option<Persisted
                 let settings = &event.thread_settings;
                 Some(PersistedResumeSettings {
                     approval_policy: settings.approval_policy,
-                    approvals_reviewer: Some(settings.approvals_reviewer),
+                    approvals_reviewer: Some(
+                        settings
+                            .requested_approvals_reviewer
+                            .unwrap_or(settings.approvals_reviewer),
+                    ),
                     active_permission_profile: settings.active_permission_profile.clone(),
                     unnamed_permission_profile: None,
                 })

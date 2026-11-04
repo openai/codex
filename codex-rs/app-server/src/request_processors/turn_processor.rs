@@ -937,6 +937,7 @@ impl TurnRequestProcessor {
                     runtime_workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
                     approvals_reviewer,
+                    requested_approvals_reviewer: None,
                     sandbox_policy: sandbox_policy.clone(),
                     permission_profile: permission_profile.clone(),
                     active_permission_profile: active_permission_profile.clone(),

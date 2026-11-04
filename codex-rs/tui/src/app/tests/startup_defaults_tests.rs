@@ -517,8 +517,20 @@ requires_openai_auth = false
                 serde_json::json!({"cwd": server_config.cwd.display().to_string(), "includeLayers": true})
             ],
         );
-        if choice == "saved" {
-            assert_eq!(started.session.approvals_reviewer, ApprovalsReviewer::User);
+        if matches!(choice, "saved" | "embedded_saved") {
+            let expected_turn_policy = if choice == "saved" {
+                AskForApproval::OnRequest
+            } else {
+                AskForApproval::Never
+            };
+            assert_eq!(
+                started.session.approvals_reviewer,
+                if choice == "saved" {
+                    ApprovalsReviewer::User
+                } else {
+                    ApprovalsReviewer::AutoReview
+                }
+            );
             let (mut app, _events, mut ops) = make_test_app_with_channels().await;
             app.app_server_target = target;
             app.config.permissions.approval_policy =
@@ -530,7 +542,7 @@ requires_openai_auth = false
                 .await?;
             assert_eq!(
                 app.config.permissions.approval_policy.value(),
-                AskForApproval::OnRequest.to_core()
+                expected_turn_policy.to_core()
             );
             app.chat_widget.insert_str("first turn");
             app.chat_widget
@@ -538,8 +550,11 @@ requires_openai_auth = false
             app.submit_thread_op(&mut server, thread_id, next_user_turn_op(&mut ops))
                 .await?;
             let turn = &recorded_params(&requests, "turn/start")[0];
-            assert_eq!(turn["approvalsReviewer"], "user");
-            assert_eq!(turn["approvalPolicy"], "on-request");
+            assert!(turn["approvalsReviewer"].is_null());
+            assert_eq!(
+                turn["approvalPolicy"],
+                serde_json::json!(expected_turn_policy)
+            );
         }
         server.shutdown().await?;
         proxy.await??;

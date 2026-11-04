@@ -62,7 +62,6 @@ impl App {
             cwd,
             active_permission_profile,
             approval_policy,
-            approvals_reviewer,
             model: turn_model,
             effort,
             collaboration_mode,
@@ -217,7 +216,6 @@ impl App {
         };
         let retry_thread_id = started.session.thread_id;
         *approval_policy = started.session.approval_policy;
-        *approvals_reviewer = Some(started.session.approvals_reviewer);
         *active_permission_profile = started.session.active_permission_profile.clone();
 
         self.detach_current_thread_for_navigation(app_server, Some(retry_thread_id))

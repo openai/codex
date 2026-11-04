@@ -1198,11 +1198,24 @@ async fn cold_resume_workspace_roots_validate_foreign_startup_paths() -> Result<
     Ok(())
 }
 
+#[test_case(ApprovalsReviewer::AutoReview, "", ApprovalsReviewer::AutoReview; "explicit auto review")]
+#[test_case(ApprovalsReviewer::User, "", ApprovalsReviewer::User; "requirement removed")]
+#[test_case(ApprovalsReviewer::User, "allowed_approvals_reviewers = [\"auto_review\"]", ApprovalsReviewer::AutoReview; "allowlist tightened")]
 #[tokio::test]
-async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
+async fn thread_resume_preserves_persisted_approvals_reviewer(
+    requested_reviewer: ApprovalsReviewer,
+    resumed_requirements: &str,
+    expected_reviewer: ApprovalsReviewer,
+) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri()).write(codex_home.path())?;
+
+    let requirements_path = codex_home.path().join("requirements.toml");
+    std::fs::write(
+        &requirements_path,
+        "[auto_review]\nrequired_on_models = [\"gpt-5.4\"]\n",
+    )?;
 
     let thread_id = {
         let mut mcp = TestAppServer::builder()
@@ -1214,12 +1227,16 @@ async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
         let start_id = mcp
             .send_thread_start_request(ThreadStartParams {
                 model: Some("gpt-5.4".to_string()),
-                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                approvals_reviewer: Some(requested_reviewer),
                 ..Default::default()
             })
             .await?;
-        let ThreadStartResponse { thread, .. } =
-            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+        let ThreadStartResponse {
+            thread,
+            approvals_reviewer,
+            ..
+        } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(start_id)).await??;
+        assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
 
         let turn_id = mcp
             .send_turn_start_request(TurnStartParams {
@@ -1246,6 +1263,7 @@ async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
         thread.id
     };
 
+    std::fs::write(requirements_path, resumed_requirements)?;
     let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
@@ -1271,7 +1289,7 @@ async fn thread_resume_preserves_persisted_approvals_reviewer() -> Result<()> {
         approvals_reviewer, ..
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
 
-    assert_eq!(approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(approvals_reviewer, expected_reviewer);
 
     Ok(())
 }

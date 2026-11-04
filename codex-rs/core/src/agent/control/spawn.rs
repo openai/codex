@@ -281,6 +281,7 @@ impl LocalAgentControl {
             // Preserve the worker's permissions while keeping the current wake configuration.
             config.permissions = evicted.config.permissions.clone();
             config.approvals_reviewer = evicted.config.approvals_reviewer;
+            config.requested_approvals_reviewer = evicted.config.requested_approvals_reviewer;
         }
         let mut environment_selections = evicted_environments
             .as_ref()

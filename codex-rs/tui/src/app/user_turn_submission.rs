@@ -120,6 +120,7 @@ pub(super) async fn try_submit_user_turn(
     });
     let selected_active =
         selected_profile.map(|profile| ActivePermissionProfile::new(profile.profile_id.clone()));
+    // Ordinary turns inherit the server reviewer; echoing its effective value loses the request.
     let (turn_approval_policy, turn_approvals_reviewer) = if let Some(profile) = selected_profile {
         (
             profile.approval_policy,
@@ -130,17 +131,10 @@ pub(super) async fn try_submit_user_turn(
     {
         (
             Some(config.permissions.approval_policy.value().into()),
-            Some(config.approvals_reviewer.into()),
+            approvals_reviewer.map(Into::into),
         )
     } else {
-        (
-            Some(*approval_policy),
-            Some(
-                approvals_reviewer
-                    .unwrap_or(config.approvals_reviewer)
-                    .into(),
-            ),
-        )
+        (Some(*approval_policy), approvals_reviewer.map(Into::into))
     };
     // Only explicit choices may override the saved server profile.
     let explicit_profile = app

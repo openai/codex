@@ -745,6 +745,7 @@ mod tests {
                     service_tier: None,
                     approval_policy: AskForApproval::Never,
                     approvals_reviewer: ApprovalsReviewer::User,
+                    requested_approvals_reviewer: None,
                     permission_profile: permission_profile.clone(),
                     active_permission_profile: None,
                     cwd: cwd.clone().try_into().expect("absolute settings cwd"),
