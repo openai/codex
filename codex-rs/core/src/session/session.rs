@@ -1057,7 +1057,10 @@ impl Session {
                     SessionId::from(thread_id)
                 }
             });
-        let initial_auto_compact_window_ids = AutoCompactWindowIds::new_initial();
+        let context_window_id_generator =
+            Arc::clone(&agent_control.runtime().context_window_id_generator);
+        let initial_auto_compact_window_ids =
+            AutoCompactWindowIds::new_initial(context_window_id_generator());
         let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
             && session_configuration.session_source.is_non_root_agent()
             && config.features.enabled(Feature::TokenBudget);
@@ -1633,6 +1636,7 @@ impl Session {
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids.clone(),
+                context_window_id_generator,
                 ContextManager::for_session(
                     session_configuration.root_capabilities_restricted,
                     &config.features,

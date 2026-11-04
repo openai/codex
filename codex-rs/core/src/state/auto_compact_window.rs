@@ -1,5 +1,9 @@
 use codex_protocol::ContextWindowId;
 use codex_protocol::protocol::TokenUsage;
+use std::sync::Arc;
+
+/// Allocates context window IDs. Clones share the same allocator.
+pub(crate) type ContextWindowIdGenerator = Arc<dyn Fn() -> ContextWindowId + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AutoCompactWindowIds {
@@ -9,8 +13,7 @@ pub(crate) struct AutoCompactWindowIds {
 }
 
 impl AutoCompactWindowIds {
-    pub(crate) fn new_initial() -> Self {
-        let window_id = ContextWindowId::new_uuid_v7();
+    pub(crate) fn new_initial(window_id: ContextWindowId) -> Self {
         Self {
             first_window_id: window_id.clone(),
             previous_window_id: None,
@@ -74,12 +77,9 @@ impl AutoCompactWindow {
         self.ids = ids;
     }
 
-    pub(super) fn advance(&mut self) -> (u64, AutoCompactWindowIds) {
+    pub(super) fn advance(&mut self, window_id: ContextWindowId) -> (u64, AutoCompactWindowIds) {
         self.window_number = self.window_number.saturating_add(1);
-        self.ids.previous_window_id = Some(std::mem::replace(
-            &mut self.ids.window_id,
-            ContextWindowId::new_uuid_v7(),
-        ));
+        self.ids.previous_window_id = Some(std::mem::replace(&mut self.ids.window_id, window_id));
         self.new_context_window_requested = false;
         self.token_budget_reminder_delivered = false;
         self.auto_compact_fallback_delivered = false;
@@ -150,7 +150,9 @@ mod tests {
 
     #[test]
     fn tracks_prefill_and_window_boundaries() {
-        let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial());
+        let mut window = AutoCompactWindow::new_with_ids(AutoCompactWindowIds::new_initial(
+            ContextWindowId::new_uuid_v7(),
+        ));
 
         assert_eq!(window.window_number(), 0);
         let initial_window_id = window.ids().window_id.clone();
@@ -189,18 +191,14 @@ mod tests {
         assert!(window.take_new_context_window_request());
         assert!(!window.take_new_context_window_request());
         window.request_new_context_window();
-        let (window_number, ids) = window.advance();
+        let next_window_id = ContextWindowId::new_uuid_v7();
+        let (window_number, ids) = window.advance(next_window_id.clone());
         assert_eq!(window_number, 4);
         assert_eq!(window.window_number(), 4);
         assert_eq!(window.ids(), &ids);
         assert_eq!(ids.first_window_id, first_window_id);
-        assert_eq!(ids.previous_window_id, Some(restored_window_id.clone()));
-        assert_eq!(
-            uuid::Uuid::parse_str(&ids.window_id.to_string())
-                .unwrap()
-                .get_version_num(),
-            7
-        );
+        assert_eq!(ids.previous_window_id.as_ref(), Some(&restored_window_id));
+        assert_eq!(ids.window_id, next_window_id);
         assert_ne!(ids.window_id, restored_window_id);
         assert!(!window.take_new_context_window_request());
         assert!(window.claim_token_budget_reminder());
