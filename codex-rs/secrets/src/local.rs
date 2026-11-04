@@ -258,7 +258,17 @@ impl LocalSecretsBackend {
             .decrypted_cache()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if cache.as_ref().is_some_and(|cached| cached.path == path) {
+        // Publish only committed contents. Reads still verify the ciphertext and
+        // keyring, so a racing replacement cannot make this snapshot authoritative.
+        if file.version == SECRETS_VERSION {
+            *cache = Some(CachedSecrets {
+                path,
+                ciphertext_hash: Sha256::digest(&ciphertext).into(),
+                passphrase_hash: Sha256::digest(passphrase.expose_secret().as_bytes()).into(),
+                file: Arc::new(file.clone()),
+            });
+        } else if cache.as_ref().is_some_and(|cached| cached.path == path) {
+            // Leave schema normalization and rejection to the normal read path.
             *cache = None;
         }
         Ok(())
@@ -658,6 +668,11 @@ mod tests {
 
             first.set(&scope, &name, "one")?;
             let original_ciphertext = fs::read(first.secrets_path())?;
+            // Exercise concurrent cold reads even though saves populate the cache.
+            *first
+                .decrypted_cache()
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = None;
             let (first_cached, second_cached) = std::thread::scope(|threads| {
                 let first_reader = threads.spawn(|| {
                     assert_eq!(first.get(&scope, &name)?, Some("one".to_string()));
@@ -678,31 +693,19 @@ mod tests {
             assert!(Arc::ptr_eq(&first_cached, &cached_file()));
 
             first.set(&scope, &name, "two")?;
-            assert!(
-                first
-                    .decrypted_cache()
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .as_ref()
-                    .is_none_or(|cached| cached.path != first.secrets_path())
-            );
+            let updated_cached = cached_file();
+            assert!(!Arc::ptr_eq(&first_cached, &updated_cached));
             assert_eq!(second.get(&scope, &name)?, Some("two".to_string()));
-            assert!(!Arc::ptr_eq(&first_cached, &cached_file()));
+            assert!(Arc::ptr_eq(&updated_cached, &cached_file()));
 
             // Another process can replace the file without invalidating this cache.
             fs::write(first.secrets_path(), &original_ciphertext)?;
             assert_eq!(second.get(&scope, &name)?, Some("one".to_string()));
 
             assert!(first.delete(&scope, &name)?);
-            assert!(
-                first
-                    .decrypted_cache()
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .as_ref()
-                    .is_none_or(|cached| cached.path != first.secrets_path())
-            );
+            let deleted_cached = cached_file();
             assert_eq!(second.get(&scope, &name)?, None);
+            assert!(Arc::ptr_eq(&deleted_cached, &cached_file()));
         }
         Ok(())
     }
