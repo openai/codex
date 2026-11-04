@@ -1771,7 +1771,10 @@ async fn workspace_policy_change_rejects_pending_transient_auth_fallback() {
         .expect("external auth should install");
 
     let generation = manager.auth_change_state_receiver().borrow().generation;
-    let fallback = manager.load_auth().await;
+    let fallback = manager
+        .load_auth(/*cached_auth*/ None)
+        .await
+        .expect("external auth fallback should load");
     assert_eq!(
         fallback
             .as_ref()
