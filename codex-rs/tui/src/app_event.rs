@@ -1252,6 +1252,9 @@ pub(crate) enum AppEvent {
         control: VoiceControl,
     },
     RealtimeConversationStateChanged,
+    RealtimeSessionLockStopped {
+        thread_id: ThreadId,
+    },
     BackgroundVoiceError {
         thread_id: ThreadId,
         message: String,

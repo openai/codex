@@ -204,6 +204,7 @@ mod resume_picker;
 mod screen_reader;
 mod service_tier_resolution;
 mod session_archive_commands;
+mod session_lock;
 mod session_log;
 mod session_queue_commands;
 mod session_resume;

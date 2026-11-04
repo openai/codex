@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/realtime_tests/lifecycle.rs
+expression: rendered
+---
+■ Voice stopped because your session locked.
+• Voice conversation ended: requested

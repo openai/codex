@@ -1,5 +1,6 @@
 //! Voice startup, shutdown, and retry maintain one active owned session.
 
+use super::super::session_lock::SessionLock;
 use super::*;
 use crate::app_event::RealtimeWebrtcStartupFailure;
 use pretty_assertions::assert_eq;
@@ -406,6 +407,120 @@ async fn startup_retry_is_cancelled_while_waiting_for_backend_close() {
         ),
         (RealtimeConversationPhase::Inactive, 0)
     );
+}
+
+fn watch_session_lock(
+    chat: &ChatWidget,
+    thread_id: ThreadId,
+) -> (SessionLock, tokio::sync::oneshot::Sender<()>) {
+    let (activate, activated) = tokio::sync::oneshot::channel();
+    let observer = SessionLock::observe(thread_id, chat.app_event_tx.clone(), async {
+        Ok(Box::pin(async { Ok(activated.await?) }) as crate::session_lock::Activation)
+    });
+    (observer, activate)
+}
+
+#[tokio::test]
+async fn already_locked_session_prevents_microphone_startup() {
+    let (chat, _, _events, _ops) = make_chatwidget_manual_with_sender().await;
+    let observer = SessionLock::observe(ThreadId::new(), chat.app_event_tx.clone(), async {
+        Ok(Box::pin(async { Ok(()) }) as crate::session_lock::Activation)
+    });
+    let (opened, microphone) = tokio::sync::oneshot::channel();
+    let abort = observer.start_media(move |_| {
+        let _ = opened.send(());
+    });
+    assert!(microphone.await.is_err());
+    assert!(abort.is_aborted());
+}
+
+#[tokio::test]
+async fn session_lock_stops_a_parked_call_and_ignores_its_late_notice_after_restart() {
+    let (mut chat, _, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+    let thread_id = activate_voice(&mut chat);
+    let (observer, activate) = watch_session_lock(&chat, thread_id);
+    let (opened, microphone) = tokio::sync::oneshot::channel();
+    observer.start_media(move |registration| {
+        let _ = opened.send(registration);
+    });
+    chat.realtime_conversation.session_lock = Some(observer);
+    let microphone =
+        futures::future::Abortable::new(std::future::pending::<()>(), microphone.await.unwrap());
+    chat.park_voice();
+    activate.send(()).unwrap();
+    // Media shuts down even before the UI dispatches the notice to the parked widget.
+    assert!(microphone.await.is_err());
+    let event = events.recv().await.unwrap();
+    assert!(
+        matches!(event, AppEvent::RealtimeSessionLockStopped { thread_id: owner } if owner == thread_id)
+    );
+    chat.stop_if_session_locked();
+    assert_eq!(
+        (chat.realtime_conversation.phase, ops.try_recv().ok()),
+        (
+            RealtimeConversationPhase::Inactive,
+            Some(AppCommand::RealtimeConversationStop { thread_id })
+        )
+    );
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+            event, AppEvent::BackgroundVoiceError { thread_id: owner, message: reason }
+            if owner == thread_id && reason.contains("session locked")
+        ))
+    );
+
+    chat.start_realtime_conversation(thread_id);
+    chat.stop_if_session_locked();
+    assert_eq!(
+        chat.realtime_conversation.phase,
+        RealtimeConversationPhase::Starting
+    );
+    chat.reset_realtime_conversation();
+}
+
+#[tokio::test]
+async fn session_lock_during_retry_cleanup_keeps_the_microphone_off() {
+    let (mut chat, _, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+    let thread_id = activate_voice(&mut chat);
+    let first_attempt = chat.realtime_conversation.attempt_id;
+    let (observer, activate) = watch_session_lock(&chat, thread_id);
+    chat.realtime_conversation.session_lock = Some(observer);
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Starting;
+    chat.on_realtime_webrtc_connected(
+        first_attempt,
+        Err(codex_realtime_webrtc::ConnectionError::NegotiationTimedOut),
+    );
+    assert_eq!(
+        ops.try_recv().unwrap(),
+        AppCommand::RealtimeConversationStop { thread_id }
+    );
+    activate.send(()).unwrap();
+    while !matches!(
+        events.recv().await.unwrap(),
+        AppEvent::RealtimeSessionLockStopped { .. }
+    ) {}
+    // The close response can overtake dispatch of the queued session-lock event.
+    chat.on_realtime_conversation_closed(Some("requested".into()));
+    chat.stop_if_session_locked();
+    assert_eq!(
+        (
+            chat.realtime_conversation.phase,
+            chat.realtime_conversation.attempt_id
+        ),
+        (RealtimeConversationPhase::Inactive, first_attempt)
+    );
+    assert!(ops.try_recv().is_err());
+    commit_realtime_history_events(&mut chat, &mut events);
+    let rendered = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell.display_lines(/*width*/ 80)),
+            _ => None,
+        })
+        .flatten()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("voice_session_lock_stop", rendered);
 }
 
 #[tokio::test]

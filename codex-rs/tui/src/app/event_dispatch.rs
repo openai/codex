@@ -2367,6 +2367,11 @@ impl App {
                     self.control_voice(control);
                 }
             }
+            AppEvent::RealtimeSessionLockStopped { thread_id } => {
+                if let Some(owner) = self.voice_widget_for_thread(thread_id) {
+                    owner.stop_if_session_locked();
+                }
+            }
             AppEvent::RealtimeWebrtcOfferCreated {
                 thread_id,
                 attempt_id,
