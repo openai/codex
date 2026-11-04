@@ -1060,7 +1060,7 @@ async fn codex_instances_share_board_with_fixed_access() -> anyhow::Result<()> {
     let guardian_board =
         LocalBoard::new(SqliteConfig::new_for_testing(alias.try_into()?), board_id);
     let mut extensions = ExtensionRegistryBuilder::new();
-    codex_app_server::install_agent_message_board(
+    codex_agent_message_board_host::install_agent_message_board(
         &mut extensions,
         Arc::downgrade(&test.thread_manager),
     );

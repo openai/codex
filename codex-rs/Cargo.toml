@@ -4,6 +4,7 @@ members = [
     "analytics",
     "agent-graph-store",
     "agent-message-board-client",
+    "agent-message-board-host",
     "agent-identity",
     "agent-roles",
     "backend-client",
@@ -220,6 +221,7 @@ codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-agent-message-board-client = { path = "agent-message-board-client" }
 codex-agent-message-board-extension = { path = "ext/agent-message-board" }
+codex-agent-message-board-host = { path = "agent-message-board-host" }
 codex-message-board = { path = "message-board" }
 codex-message-board-mcp = { path = "message-board-mcp" }
 codex-connectors-extension = { path = "ext/connectors" }

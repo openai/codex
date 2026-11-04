@@ -5,6 +5,8 @@
 //! recipients during lookup. Notifications use ordinary agent-message scheduling.
 //! Permanent board deletion uses the thread store's existing host cleanup callback.
 
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 use chrono::DateTime;
 use chrono::Utc;
 use codex_agent_message_board_client::RemoteAgentMessageBoard;

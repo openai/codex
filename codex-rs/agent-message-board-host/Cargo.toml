@@ -1,0 +1,25 @@
+[package]
+name = "codex-agent-message-board-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+codex-agent-message-board-client = { workspace = true }
+codex-agent-message-board-extension = { workspace = true }
+codex-core = { workspace = true }
+codex-extension-api = { workspace = true }
+codex-features = { workspace = true }
+codex-message-board = { workspace = true }
+codex-protocol = { workspace = true }
+codex-state = { workspace = true }
+codex-thread-store = { workspace = true }
+futures = { workspace = true }

@@ -25,9 +25,7 @@ doctest = false
 workspace = true
 
 [dependencies]
-codex-agent-message-board-client = { workspace = true }
-codex-agent-message-board-extension = { workspace = true }
-codex-message-board = { workspace = true }
+codex-agent-message-board-host = { workspace = true }
 codex-utils-process = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
@@ -135,6 +133,7 @@ libc = { workspace = true }
 codex-windows-sandbox = { workspace = true }
 
 [dev-dependencies]
+codex-message-board = { workspace = true }
 zip = { workspace = true }
 codex-uds = { workspace = true }
 app_test_support = { workspace = true }

@@ -1976,6 +1976,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-message-board-host"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "codex-agent-message-board-client",
+ "codex-agent-message-board-extension",
+ "codex-core",
+ "codex-extension-api",
+ "codex-features",
+ "codex-message-board",
+ "codex-protocol",
+ "codex-state",
+ "codex-thread-store",
+ "futures",
+]
+
+[[package]]
 name = "codex-agent-roles"
 version = "0.0.0"
 dependencies = [
@@ -2070,8 +2087,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
- "codex-agent-message-board-client",
- "codex-agent-message-board-extension",
+ "codex-agent-message-board-host",
  "codex-analytics",
  "codex-app-server-daemon",
  "codex-app-server-protocol",
@@ -2961,10 +2977,10 @@ dependencies = [
  "bm25",
  "chrono",
  "codex-agent-graph-store",
+ "codex-agent-message-board-host",
  "codex-agent-roles",
  "codex-analytics",
  "codex-api",
- "codex-app-server",
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-async-utils",
@@ -5962,8 +5978,8 @@ dependencies = [
  "assert_cmd",
  "base64 0.22.1",
  "codex-agent-graph-store",
+ "codex-agent-message-board-host",
  "codex-analytics",
- "codex-app-server",
  "codex-arg0",
  "codex-attachment-store",
  "codex-config",
