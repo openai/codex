@@ -159,6 +159,7 @@ fn root_history() -> ContextManager {
     ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &ManagedFeatures::from(codex_features::Features::with_defaults()),
+        codex_guardian_context::ContextBudgeting::Fixed,
         codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     )
 }
@@ -579,6 +580,7 @@ fn guardian_checkpoint_applies_additional_context_policy_after_resume(include: b
     let mut history = ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &features,
+        codex_guardian_context::ContextBudgeting::Fixed,
         codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     let additional_context: ResponseItem = crate::context::AdditionalContextToolOutput::new(
@@ -621,6 +623,7 @@ fn guardian_checkpoint_applies_additional_context_policy_after_resume(include: b
     let mut resumed = ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &features,
+        codex_guardian_context::ContextBudgeting::Fixed,
         codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
     );
     resumed.replace_annotated(compacted);

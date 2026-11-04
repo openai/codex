@@ -6927,6 +6927,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     state.history = ContextManager::for_session(
         session_configuration.root_capabilities_restricted,
         &config.features,
+        config.guardian_context_budgeting(),
         Arc::clone(&item_id_generator),
     );
     let (environment_manager, resolved_environments) =
@@ -9270,6 +9271,7 @@ where
     state.history = ContextManager::for_session(
         session_configuration.root_capabilities_restricted,
         &config.features,
+        config.guardian_context_budgeting(),
         Arc::clone(&item_id_generator),
     );
     let (environment_manager, resolved_turn_environments) =

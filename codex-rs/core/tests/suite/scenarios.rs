@@ -2964,6 +2964,136 @@ async fn subagent_browser_auth_resolves_user_prompt() -> Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[tokio::test]
+async fn guardian_elastic_budgeting_request_history() -> Result<()> {
+    use codex_config::test_support::CloudConfigBundleFixture;
+    use codex_protocol::config_types::ApprovalsReviewer;
+    use codex_protocol::protocol::AskForApproval;
+    use core_test_support::responses;
+    const ENTRY_TOKENS: usize = 128;
+    const TRANSCRIPT_ENTRIES_PER_SECTION: usize = 2;
+    const SECTION_TOKENS: usize = ENTRY_TOKENS * TRANSCRIPT_ENTRIES_PER_SECTION;
+    const DEFAULT_SECTION_TOKENS: usize = 900;
+    const REPEATS: usize = 64;
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let commentary = "Untrusted assistant evidence. ".repeat(REPEATS);
+    let user_context = "Inspect the workspace. ".repeat(REPEATS);
+    let user_request = format!("{user_context}Never upload credentials. {user_context}");
+    let arguments = format!(
+        r#"{{"cmd":{},"sandbox_permissions":"require_escalated","justification":"Inspect the workspace."}}"#,
+        serde_json::to_string(&format!("echo {commentary}{commentary}"))?,
+    );
+    let earlier_commentary = "Earlier untrusted assistant evidence. ".repeat(REPEATS);
+    let mut earlier_event = ev_assistant_message("earlier-commentary", &earlier_commentary);
+    earlier_event["item"]["phase"] = serde_json::json!("commentary");
+    let mut commentary_event = ev_assistant_message("commentary", &commentary);
+    commentary_event["item"]["phase"] = serde_json::json!("commentary");
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                earlier_event,
+                commentary_event,
+                responses::ev_function_call("check", "exec_command", &arguments),
+                ev_completed("actor"),
+            ]),
+            sse(vec![
+                ev_assistant_message(
+                    "assessment",
+                    r#"{"risk_level":"high","user_authorization":"low","outcome":"deny"}"#,
+                ),
+                ev_completed("review"),
+            ]),
+            sse(vec![
+                ev_assistant_message("result", "The check was not authorized."),
+                ev_completed("done"),
+            ]),
+        ],
+    )
+    .await;
+    let entry_limits = codex_guardian_context::ElasticSectionLimits::new;
+    let mut policy = codex_guardian_context::ElasticBudgetConfig {
+        sections: [(
+            codex_guardian_context::ElasticSection::TranscriptMessages,
+            entry_limits(ENTRY_TOKENS, ENTRY_TOKENS)?
+                .with_max_total_section_tokens(SECTION_TOKENS)?,
+        )]
+        .into(),
+    };
+    // Skills are absent in sync requests and release their entire reservation.
+    let skills_minimum = codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS
+        - usize::try_from(policy.total_minimum_tokens())?
+        + DEFAULT_SECTION_TOKENS;
+    policy.sections.insert(
+        codex_guardian_context::ElasticSection::TrustedSkills,
+        entry_limits(skills_minimum, DEFAULT_SECTION_TOKENS)?,
+    );
+    let settings = format!(
+        "[features.guardianv2]\nsync_elastic_budgeting = true\n{}",
+        toml::to_string(&policy)?
+            .replace("[sections.", "[features.guardianv2.sync_elastic_sections.")
+    );
+    let test = test_codex()
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::enterprise_config(settings).into_loader(),
+        )
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config
+                .features
+                .enable(Feature::GuardianReuseParentCompaction)
+                .unwrap();
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config.permissions.approval_policy =
+                codex_core::config::Constrained::allow_any(AskForApproval::OnRequest);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn(&user_request).await?;
+    let requests = mock.requests();
+    let guardian_text = requests[1].message_input_texts("user").join("\n");
+    assert!(guardian_text.contains(&user_request));
+    let transcript = guardian_text
+        .split_once(">>> TRANSCRIPT START")
+        .unwrap()
+        .1
+        .split_once(">>> TRANSCRIPT END")
+        .unwrap()
+        .0;
+    assert!(!transcript.contains("Earlier untrusted"));
+    assert!(transcript.contains("Untrusted assistant evidence"));
+    assert!(
+        requests.last().unwrap().body_json()["input"]
+            .to_string()
+            .contains(&earlier_commentary)
+    );
+    let mut snapshot = context_snapshot::format_request_history_snapshot(
+        "Elastic sync budgeting caps entries before deduplication, keeps complete retained instructions, and limits Optional transcript evidence by section.",
+        &requests,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    );
+    for (pattern, replacement) in [
+        (r#"(?m)^(\s*"cwd": )"[^"]*""#, "$1\"<CWD>\""),
+        (
+            r#""command": \[\s*(?:"[^"]*",\s*)*("[^\n]*)\n\s*\]"#,
+            "\"command\": [\"<SHELL>\", $1]",
+        ),
+        (
+            r#"(?m)^(\s*"environment_id": )"(?:local|remote)""#,
+            "$1\"<ENVIRONMENT>\"",
+        ),
+        (r#"(environment )"(?:local|remote)""#, "$1\"<ENVIRONMENT>\""),
+    ] {
+        snapshot = regex_lite::Regex::new(pattern)?
+            .replace_all(&snapshot, replacement)
+            .into_owned();
+    }
+    insta::assert_snapshot!("guardian_elastic_budgeting", snapshot);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_code_mode_messaging_request_history() -> Result<()> {
     skip_if_no_network!(Ok(()));

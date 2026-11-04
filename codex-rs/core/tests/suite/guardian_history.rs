@@ -746,3 +746,73 @@ async fn guardian_answers_survive_compaction_and_eviction() -> Result<()> {
     );
     Ok(())
 }
+
+#[test_case(codex_guardian_context::ContextBudgeting::Fixed; "fixed_capture")]
+#[test_case(codex_guardian_context::ContextBudgeting::Elastic; "elastic_capture")]
+#[tokio::test]
+async fn guardian_storage_policy_applies_before_capture_and_resume(
+    budgeting: codex_guardian_context::ContextBudgeting,
+) -> Result<()> {
+    use codex_guardian_context as guardian_context;
+    const HISTORY_ENTRIES: usize = 140;
+    const FIXED_ENTRY_LIMIT: usize = 128;
+    const ENTRY_TOKENS: usize = 900;
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mut policy = guardian_context::ElasticBudgetConfig::default();
+    let skills_minimum = guardian_context::DEFAULT_MAX_INPUT_TOKENS
+        - usize::try_from(policy.total_minimum_tokens())?
+        + ENTRY_TOKENS;
+    policy.sections.insert(
+        guardian_context::ElasticSection::TrustedSkills,
+        guardian_context::ElasticSectionLimits::new(skills_minimum, ENTRY_TOKENS)?,
+    );
+    let mut test = test_codex()
+        .with_config(move |config| {
+            config
+                .features
+                .disable(Feature::GuardianReuseParentCompaction)
+                .expect("unconstrained feature");
+            config.guardian_sync_elastic_budget =
+                (budgeting == guardian_context::ContextBudgeting::Elastic).then_some(policy);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let originals = (0..HISTORY_ENTRIES).map(|index| serde_json::from_value(json!({
+        "type": "message", "id": format!("storage-{index}"), "role": "assistant",
+        "content": [{"type": "output_text", "text": format!("Complete captured evidence {index}.")}]
+    }))).collect::<Result<Vec<_>, _>>()?;
+    test.codex.inject_response_items(originals).await?;
+    let captured = test.codex.conversation_history_snapshot().await;
+    // Capture must preserve the recorded originals, including host-assigned annotations.
+    let originals = captured
+        .items()
+        .filter(|item| item.id().is_some_and(|id| id.starts_with("storage-")))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(originals.len(), HISTORY_ENTRIES);
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let history = test.codex.load_history(/*include_archived*/ false).await?;
+    test.codex =
+        super::guardian_checkpoint_migration::resume(&test, &test.codex, history.items).await?;
+    let restored = test.codex.conversation_history_snapshot().await;
+    for history in [captured, restored] {
+        let retained = history
+            .review_items()
+            .filter(|item| item.id().is_some_and(|id| id.starts_with("storage-")))
+            .cloned()
+            .collect::<Vec<_>>();
+        let expected = match budgeting {
+            guardian_context::ContextBudgeting::Fixed => {
+                // Startup entries share the pool, so compare the bounded complete suffix.
+                assert!((1..=FIXED_ENTRY_LIMIT).contains(&retained.len()));
+                &originals[originals.len() - retained.len()..]
+            }
+            guardian_context::ContextBudgeting::Elastic => originals.as_slice(),
+        };
+        assert_eq!(retained, expected);
+    }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}

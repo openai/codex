@@ -569,7 +569,7 @@ async fn run_review_on_session(
         .thread_extension_data
         .insert(super::input_budget::PendingReviewContext {
             context: prompt_items.context,
-            elastic: None,
+            elastic: params.spawn_config.guardian_sync_elastic_budget.clone(),
         });
     review_session
         .session

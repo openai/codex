@@ -1640,6 +1640,7 @@ impl Session {
                 ContextManager::for_session(
                     session_configuration.root_capabilities_restricted,
                     &config.features,
+                    config.guardian_context_budgeting(),
                     Arc::clone(&item_id_generator),
                 ),
             );

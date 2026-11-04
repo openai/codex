@@ -329,6 +329,8 @@ max_recent_non_user_entries = 12
     assert_eq!(
         features.guardianv2,
         Some(FeatureToml::Config(crate::GuardianV2ConfigToml {
+            sync_elastic_budgeting: None,
+            sync_elastic_sections: None,
             transcript_mode: None,
             async_classifier_mode: None,
             async_classifier_conversation_token_limit: Some(120_000),

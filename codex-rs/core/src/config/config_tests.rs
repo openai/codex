@@ -8998,6 +8998,54 @@ async fn load_config_rejects_oversized_guardian_reconsideration_prompt() -> std:
 }
 
 #[tokio::test]
+async fn sync_elastic_budget_is_opt_in_and_validated() {
+    let excessive_minimum = codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS + 1;
+    let minimum_mismatch = format!(
+        r#"[features.guardianv2.sync_elastic_sections.root_conversation_messages]
+min_total_section_tokens = {excessive_minimum}
+max_section_entry_tokens = 1
+"#
+    );
+    let maximum_below_minimum = r#"[features.guardianv2.sync_elastic_sections.root_conversation_messages]
+min_total_section_tokens = 1
+max_section_entry_tokens = 1
+max_total_section_tokens = 0
+"#;
+    let home = TempDir::new().unwrap();
+    for sections in [
+        r#"[features.guardianv2.sync_elastic_sections.transcript_tools]
+min_total_section_tokens = 1
+max_section_entry_tokens = 0
+"#,
+        maximum_below_minimum,
+        minimum_mismatch.as_str(),
+        r#"[features.guardianv2.sync_elastic_sections.root_messages]
+min_total_section_tokens = 1
+max_section_entry_tokens = 1
+[features.guardianv2.sync_elastic_sections.root_conversation_messages]
+min_total_section_tokens = 1
+max_section_entry_tokens = 1
+"#,
+    ] {
+        for enabled in [false, true] {
+            let result = Config::load_from_base_config_with_overrides(
+                toml::from_str(&format!(
+                    "[features.guardianv2]\nenabled = false\nsync_elastic_budgeting = {enabled}\n{sections}"
+                ))
+                .unwrap(),
+                ConfigOverrides {
+                    cwd: Some(home.path().to_path_buf()),
+                    ..Default::default()
+                },
+                home.abs(),
+            )
+            .await;
+            assert_eq!(result.is_err(), enabled);
+        }
+    }
+}
+
+#[tokio::test]
 async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     for (managed_extra, expected_extra) in [

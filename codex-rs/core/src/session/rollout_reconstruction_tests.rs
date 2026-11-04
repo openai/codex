@@ -129,6 +129,7 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
     let mut live = ContextManager::for_session(
         /*root_capabilities_restricted*/ false,
         &crate::config::ManagedFeatures::from(codex_features::Features::with_defaults()),
+        codex_guardian_context::ContextBudgeting::Fixed,
         uuid_v7_item_id_generator_for_test(),
     );
     let mut items = Vec::new();

@@ -78,7 +78,7 @@ pub(super) async fn build_guardian_prompt_items(
         &collected.session_id,
         collected.node_repl_evidence_sequence,
         codex_guardian_context::SyncPreparation {
-            budgeting: codex_guardian_context::ContextBudgeting::Fixed,
+            budgeting: params.spawn_config.guardian_context_budgeting(),
             reviewer_history: reviewer_history.annotated_items(),
             context_window,
             history_tokens,

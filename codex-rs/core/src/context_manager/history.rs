@@ -108,6 +108,8 @@ pub(crate) struct ContextManager {
     items: Arc<Vec<ResponseItemEnvelope>>,
     /// Compatibility history for legacy review and missing root instructions.
     review_history: Option<TranscriptHistory>,
+    /// Captured before recording; replay and legacy backups keep the same storage policy.
+    review_budgeting: ContextBudgeting,
     /// Host facts independent of the model window; snapshots share immutable state.
     retained_context: Arc<RetainedContext>,
     /// File IDs rejected by Responses. Retained history stays append-only; only
@@ -317,6 +319,7 @@ impl ContextManager {
             sampling: Default::default(),
             items: Arc::new(Vec::new()),
             review_history: None,
+            review_budgeting: ContextBudgeting::Fixed,
             retained_context: Arc::default(),
             rejected_audio_file_ids: Arc::default(),
             file_audio_durations: Arc::default(),
@@ -356,6 +359,7 @@ impl ContextManager {
     pub(crate) fn for_session(
         root_capabilities_restricted: bool,
         features: &ManagedFeatures,
+        budgeting: ContextBudgeting,
         item_id_generator: ItemIdGenerator,
     ) -> Self {
         let independent = !features.enabled(Feature::GuardianReuseParentCompaction);
@@ -368,7 +372,9 @@ impl ContextManager {
             } else {
                 GuardianContextMode::ThreadOwned
             },
-            review_history: independent.then(TranscriptHistory::default),
+            review_budgeting: budgeting,
+            review_history: independent
+                .then(|| TranscriptHistory::new(/*generation*/ 0, budgeting)),
             ..Self::new(item_id_generator)
         }
     }
@@ -503,7 +509,7 @@ impl ContextManager {
             .as_ref()
             .map_or(self.history_version, TranscriptHistory::generation)
             .saturating_add(1);
-        let mut history = TranscriptHistory::new(generation, ContextBudgeting::Fixed);
+        let mut history = TranscriptHistory::new(generation, self.review_budgeting);
         if let Some(checkpoint) = checkpoint {
             history.reset(checkpoint.0.iter());
         } else {
@@ -919,7 +925,7 @@ impl ContextManager {
         {
             let mut retained = TranscriptHistory::new(
                 self.history_version.saturating_add(1),
-                ContextBudgeting::Fixed,
+                self.review_budgeting,
             );
             for item in self
                 .annotated_items()

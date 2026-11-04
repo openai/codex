@@ -146,6 +146,7 @@ use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::IntoDeserializer;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -738,6 +739,8 @@ pub struct Config {
     pub guardian_policy_template: Option<String>,
     /// Transcript encoding shared by Guardian review and scoring.
     pub guardian_transcript_mode: codex_protocol::TranscriptFormat,
+    /// Frozen section policy for sync Guardian; absence keeps fixed budgeting.
+    pub guardian_sync_elastic_budget: Option<codex_guardian_context::ElasticBudgetConfig>,
 
     /// Optional replacement for the gated history-retrieval instructions.
     /// Blank config values are treated as unset, like other Guardian policy overrides.
@@ -1666,6 +1669,15 @@ async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<C
 }
 
 impl Config {
+    /// Capture storage and sync preparation use one session-static rollout choice.
+    pub(crate) fn guardian_context_budgeting(&self) -> codex_guardian_context::ContextBudgeting {
+        if self.guardian_sync_elastic_budget.is_some() {
+            codex_guardian_context::ContextBudgeting::Elastic
+        } else {
+            codex_guardian_context::ContextBudgeting::Fixed
+        }
+    }
+
     pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
         &self.sqlite
     }
@@ -4306,6 +4318,37 @@ impl Config {
                 FeatureToml::Enabled(_) => None,
             })
             .unwrap_or_default();
+        let guardian_sync_elastic_budget = cfg.features.as_ref()
+            .and_then(|features| features.guardianv2.as_ref())
+            .and_then(|feature| match feature {
+                FeatureToml::Config(guardian) if guardian.sync_elastic_budgeting == Some(true) => Some(guardian),
+                FeatureToml::Config(_) | FeatureToml::Enabled(_) => None,
+            })
+            .map(|guardian| {
+                let sections = guardian.sync_elastic_sections.as_ref().filter(|sections| !sections.is_empty())
+                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData,
+                        "sync_elastic_sections is required when sync_elastic_budgeting is enabled"))?;
+                let mut decoded_sections = BTreeMap::new();
+                for (name, limits) in sections {
+                    let section = codex_guardian_context::ElasticSection::deserialize(name.as_str().into_deserializer())
+                        .map_err(|error: serde::de::value::Error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+                    let mut section_limits = codex_guardian_context::ElasticSectionLimits::new(
+                        limits.min_total_section_tokens,
+                        limits.max_section_entry_tokens,
+                    ).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+                    if let Some(maximum) = limits.max_total_section_tokens {
+                        section_limits = section_limits.with_max_total_section_tokens(maximum)
+                            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+                    }
+                    if decoded_sections.insert(section, section_limits).is_some() {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+                            format!("duplicate sync_elastic_sections section: {name}")));
+                    }
+                }
+                let policy = codex_guardian_context::ElasticBudgetConfig { sections: decoded_sections };
+                policy.validate().map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+                Ok::<_, std::io::Error>(policy)
+            }).transpose()?;
         let guardian_policy_template = cfg
             .auto_review
             .as_ref()
@@ -4705,6 +4748,7 @@ impl Config {
             guardian_extra_policy,
             guardian_policy_template,
             guardian_transcript_mode,
+            guardian_sync_elastic_budget,
             guardian_conversation_history_prompt,
             guardian_denial_reconsideration_prompt,
             guardian_conversation_history_max_output_tokens,

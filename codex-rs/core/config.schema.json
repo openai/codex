@@ -2179,6 +2179,32 @@
       ],
       "type": "object"
     },
+    "GuardianElasticSectionConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "max_section_entry_tokens": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_total_section_tokens": {
+          "description": "Upper bound for the section's allocation. Omit to use the global request budget as the upper bound.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_total_section_tokens": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_section_entry_tokens",
+        "min_total_section_tokens"
+      ],
+      "type": "object"
+    },
     "GuardianV2ConfigToml": {
       "additionalProperties": false,
       "description": "User-configurable prompt, approval, and context settings for Guardian v2.",
@@ -2248,6 +2274,17 @@
           "maximum": 1.0,
           "minimum": 0.0,
           "type": "number"
+        },
+        "sync_elastic_budgeting": {
+          "description": "Enable elastic allocation for synchronous Guardian requests. Defaults to false.",
+          "type": "boolean"
+        },
+        "sync_elastic_sections": {
+          "additionalProperties": {
+            "$ref": "#/definitions/GuardianElasticSectionConfigToml"
+          },
+          "description": "Named section limits, decoded and validated by Guardian when the switch is enabled.",
+          "type": "object"
         },
         "thread_context": {
           "description": "Deprecated and ignored; thread-owned Guardian context is always enabled.",

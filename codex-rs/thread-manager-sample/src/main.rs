@@ -276,6 +276,7 @@ async fn new_config(
         guardian_extra_policy: None,
         guardian_policy_template: None,
         guardian_transcript_mode: Default::default(),
+        guardian_sync_elastic_budget: None,
         guardian_conversation_history_prompt: None,
         guardian_denial_reconsideration_prompt: None,
         guardian_conversation_history_max_output_tokens: None,

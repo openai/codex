@@ -145,10 +145,27 @@ pub struct GuardianV2ReviewScopeConfigToml {
     pub sandboxed_exec_commands: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuardianElasticSectionConfigToml {
+    pub min_total_section_tokens: usize,
+    pub max_section_entry_tokens: usize,
+    /// Upper bound for the section's allocation.
+    /// Omit to use the global request budget as the upper bound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_total_section_tokens: Option<usize>,
+}
+
 /// User-configurable prompt, approval, and context settings for Guardian v2.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuardianV2ConfigToml {
+    /// Enable elastic allocation for synchronous Guardian requests. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_elastic_budgeting: Option<bool>,
+    /// Named section limits, decoded and validated by Guardian when the switch is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_elastic_sections: Option<BTreeMap<String, GuardianElasticSectionConfigToml>>,
     /// Transcript encoding for synchronous Guardian review and asynchronous scoring. Defaults to line.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_mode: Option<codex_protocol::TranscriptFormat>,
