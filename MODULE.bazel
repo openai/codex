@@ -877,10 +877,10 @@ use_repo(
 http_archive(
     name = "v8_crate_152_2_0",
     build_file = "//third_party/v8:v8_crate.BUILD.bazel",
-    sha256 = "e2e7f9961af59dbb749a60ac0a3c34c9680f6b86dd04277f2715356b5a52feab",
-    strip_prefix = "rusty_v8-350c5a859a9b3c84ab8701b3ad51e3b7699b30c0",
+    sha256 = "b0b188d1f1d851abd78337818a28a15e84f143b082ce966976e9206617684373",
+    strip_prefix = "rusty_v8-90a65f887a0c0f048f3784afbcb320b373c8a2e0",
     type = "tar.gz",
-    urls = ["https://github.com/seanh-oai/rusty_v8/archive/350c5a859a9b3c84ab8701b3ad51e3b7699b30c0.tar.gz"],
+    urls = ["https://github.com/openai-oss-forks/rusty_v8/archive/90a65f887a0c0f048f3784afbcb320b373c8a2e0.tar.gz"],
 )
 
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
