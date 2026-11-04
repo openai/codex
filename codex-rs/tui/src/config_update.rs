@@ -427,12 +427,11 @@ pub(crate) struct EffectiveConfig {
     pub layers: Option<Vec<JsonValue>>,
 }
 
-/// Read effective server settings, retaining compatibility with servers without config/read.
-pub(crate) async fn read_effective_config_if_supported(
+pub(crate) async fn read_effective_config_with_layers(
     request_handle: AppServerRequestHandle,
     cwd: &Path,
-) -> Result<Option<EffectiveConfig>> {
-    match request_handle
+) -> Result<EffectiveConfig> {
+    request_handle
         .request_typed(ClientRequest::ConfigRead {
             request_id: RequestId::String(format!("tui-config-read-{}", Uuid::new_v4())),
             params: ConfigReadParams {
@@ -442,7 +441,14 @@ pub(crate) async fn read_effective_config_if_supported(
         })
         .await
         .wrap_err("config/read failed in TUI")
-    {
+}
+
+/// Read effective server settings, retaining compatibility with servers without config/read.
+pub(crate) async fn read_effective_config_if_supported(
+    request_handle: AppServerRequestHandle,
+    cwd: &Path,
+) -> Result<Option<EffectiveConfig>> {
+    match read_effective_config_with_layers(request_handle, cwd).await {
         Ok(response) => Ok(Some(response)),
         Err(err)
             if matches!(

@@ -1,38 +1,26 @@
-//! Server-owned model selection for connected fresh starts.
-//!
-//! Embedded and explicit-profile starts retain legacy behavior. Unsupported `config/read` never
-//! restores an implicit local model, while managed new-thread defaults may satisfy an empty catalog.
+//! Fresh threads use the destination server's model defaults on every connection.
+//! Explicit profile launches carry the profile's resolved settings into the first request.
 
 use super::*;
 use crate::app_server_session::StartupLaunchChoices;
 
 pub(crate) fn uses_server_owned_fresh_bootstrap(
-    target: &AppServerTarget,
     selection: &SessionSelection,
     loader_overrides: &LoaderOverrides,
 ) -> bool {
-    !matches!(target, AppServerTarget::Embedded)
-        && matches!(
-            selection,
-            SessionSelection::StartFresh | SessionSelection::Exit
-        )
-        && loader_overrides.user_config_profile.is_none()
+    matches!(
+        selection,
+        SessionSelection::StartFresh | SessionSelection::Exit
+    ) && loader_overrides.user_config_profile.is_none()
 }
 
 pub(super) async fn bootstrap_server_owned_start(
     app_server: &mut AppServerSession,
     config: &mut Config,
     launch_choices: &mut StartupLaunchChoices,
-    server_defaults_read: bool,
     cli_kv_overrides: &[(String, TomlValue)],
     harness_overrides: &ConfigOverrides,
 ) -> Result<AppServerBootstrap> {
-    if !server_defaults_read {
-        config.model = launch_choices.model.clone();
-        if launch_choices.effort.is_none() {
-            config.model_reasoning_effort = None;
-        }
-    }
     let bootstrap = if launch_choices.model.is_none() && launch_choices.effort.is_none() {
         app_server.bootstrap_for_new_thread(config).await
     } else {

@@ -306,7 +306,19 @@ async fn fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
             None,
         ),
         ("managed", true, Some("managed-model"), Some("medium"), None),
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        ["managed_embedded", "managed_daemon", "managed_remote"].map(|choice| {
+            (
+                choice,
+                true,
+                Some("managed-model"),
+                Some("medium"),
+                Some("openai"),
+            )
+        }),
+    ) {
         let client_home = tempdir()?;
         let server_home = tempdir()?;
         std::fs::write(
@@ -354,7 +366,9 @@ requires_openai_auth = false
             ]),
             "migration" => harness_overrides.model = Some("old-model".into()),
             "cli_provider" => harness_overrides.model_provider = Some("openai".into()),
-            "kv_provider" => cli_kv_overrides.push(("model_provider".into(), "openai".into())),
+            "kv_provider" | "managed_embedded" | "managed_daemon" | "managed_remote" => {
+                cli_kv_overrides.push(("model_provider".into(), "openai".into()))
+            }
             "cli_effort" => cli_kv_overrides.push((
                 "model_reasoning_effort".to_string(),
                 TomlValue::String("low".to_string()),
@@ -390,14 +404,25 @@ requires_openai_auth = false
             }
             _ => {}
         }
-        let (target, server_home) = if choice == "embedded_saved" {
-            (AppServerTarget::Embedded, &client_home)
-        } else {
-            (remote_target(), &server_home)
+        let (target, server_home) = match choice {
+            "embedded_saved" => (AppServerTarget::Embedded, &client_home),
+            "managed_embedded" => (AppServerTarget::Embedded, &server_home),
+            "managed_daemon" => (
+                AppServerTarget::LocalDaemon {
+                    endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
+                    allow_embedded_fallback: true,
+                },
+                &server_home,
+            ),
+            _ => (remote_target(), &server_home),
         };
         let mut launch_choices = crate::app_server_session::StartupLaunchChoices::from_launch(
             &cli_kv_overrides,
             &harness_overrides,
+            &loader_overrides,
+        );
+        let server_owned = crate::app::startup_bootstrap::uses_server_owned_fresh_bootstrap(
+            &SessionSelection::StartFresh,
             &loader_overrides,
         );
         let mut config = ConfigBuilder::default()
@@ -425,27 +450,28 @@ requires_openai_auth = false
         )
         .await?;
         server = server.with_remote_cwd_override(Some(server_config.cwd.to_path_buf()));
-        assert!(
-            prepare_fresh_startup_config(
-                &mut config,
-                &server,
-                &target,
-                &cli_kv_overrides,
-                &harness_overrides,
-                &EnvironmentManager::default_for_tests(),
-            )
-            .await?
-            .server_defaults_read
-        );
-        bootstrap_server_owned_start(
-            &mut server,
+        if !server_owned {
+            server.bootstrap(&config).await?;
+        }
+        prepare_fresh_startup_config(
             &mut config,
-            &mut launch_choices,
-            /*server_defaults_read*/ true,
+            &server,
+            &target,
             &cli_kv_overrides,
             &harness_overrides,
+            &EnvironmentManager::default_for_tests(),
         )
         .await?;
+        if server_owned {
+            bootstrap_server_owned_start(
+                &mut server,
+                &mut config,
+                &mut launch_choices,
+                &cli_kv_overrides,
+                &harness_overrides,
+            )
+            .await?;
+        }
         if choice == "migration" {
             let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
             apply_accepted_model_migration(
@@ -467,6 +493,13 @@ requires_openai_auth = false
             launch_choices,
         )
         .await?;
+        if choice.starts_with("managed_") {
+            assert_eq!(started.session.model, "managed-model");
+            assert_eq!(
+                started.session.reasoning_effort,
+                Some(ReasoningEffortConfig::Medium)
+            );
+        }
         let starts = recorded_params(&requests, "thread/start");
         assert_eq!(starts.len(), 1, "{choice}");
         let expected_reviewer = match choice {
@@ -642,10 +675,9 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
             &EnvironmentManager::default_for_tests(),
         )
         .await?;
-        assert!(defaults_read.server_defaults_read);
         assert!(!defaults_read.prompt_windows_sandbox);
         assert_eq!(config.model, None);
-        let selected_model = startup_model(&config, &bootstrap, defaults_read.server_defaults_read);
+        let selected_model = startup_model(&config, &bootstrap, /*server_defaults_read*/ true);
         assert_ne!(selected_model, "stale-client-model");
         let started = crate::app_server_session::start_thread_with_request_handle(
             server.request_handle(),
@@ -775,47 +807,6 @@ async fn fresh_startup_observes_config_edits_after_directory_trust() -> Result<(
 }
 
 #[tokio::test]
-async fn fresh_startup_falls_back_only_for_unsupported_config_read() -> Result<()> {
-    for capabilities in [
-        HistoryCapabilities::ConfigReadUnsupported(-32601),
-        HistoryCapabilities::ConfigReadUnsupported(-32600),
-    ] {
-        let home = tempdir()?;
-        std::fs::write(
-            home.path().join("config.toml"),
-            "model = \"client-model\"\nmodel_reasoning_effort = \"low\"\n",
-        )?;
-        let config = ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
-            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
-            .build()
-            .await?;
-        let (mut server, requests, proxy) = start_recording_app_server_with_history(
-            &config,
-            capabilities,
-            /*blocked_thread_list*/ None,
-            /*failed_thread_name*/ None,
-            crate::app_server_session::ThreadParamsMode::Embedded,
-            LoaderOverrides::default(),
-        )
-        .await?;
-        let bootstrap = server.bootstrap(&config).await?;
-        run_until_thread_start(server, config, bootstrap, &requests).await?;
-        let starts = recorded_params(&requests, "thread/start");
-        assert_eq!(starts.len(), 1);
-        assert_eq!(
-            (
-                &starts[0]["model"],
-                &starts[0]["config"]["model_reasoning_effort"]
-            ),
-            (&serde_json::Value::Null, &serde_json::Value::Null)
-        );
-        stop_interrupted_startup_recorder(proxy).await?;
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn startup_reads_server_defaults_before_starting_thread() -> Result<()> {
     let client_home = tempdir()?;
     let server_home = tempdir()?;
@@ -915,7 +906,7 @@ async fn startup_read_failure_exits_before_thread_creation() -> Result<()> {
 }
 
 #[tokio::test]
-async fn bootstrap_failure_shuts_down_every_initial_backend() -> Result<()> {
+async fn startup_failure_shuts_down_every_initial_backend() -> Result<()> {
     use codex_app_server_client::AppServerClient;
     use codex_app_server_client::CloudClient;
     use codex_app_server_client::CloudOperation;
@@ -941,11 +932,11 @@ async fn bootstrap_failure_shuts_down_every_initial_backend() -> Result<()> {
             AppServerTarget::Embedded,
         ),
         async {
-            let request = first_commands.recv().await.expect("initial account read");
+            let request = first_commands.recv().await.expect("initial config read");
             assert!(matches!(
                 request.operation,
                 CloudOperation::Request(request)
-                    if matches!(*request, codex_app_server_protocol::ClientRequest::GetAccount { .. })
+                    if matches!(*request, codex_app_server_protocol::ClientRequest::ConfigRead { .. })
             ));
             request
                 .response
@@ -961,6 +952,6 @@ async fn bootstrap_failure_shuts_down_every_initial_backend() -> Result<()> {
             }
         }
     );
-    assert!(result.unwrap_err().to_string().contains("account/read"));
+    assert!(result.unwrap_err().to_string().contains("config/read"));
     Ok(())
 }

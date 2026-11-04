@@ -2148,7 +2148,6 @@ async fn run_ratatui_app(
     let hooks_request_handle = app_server.request_handle();
     let hooks_cwd = config.cwd.to_path_buf();
     let server_owned_fresh_bootstrap = app::startup_bootstrap::uses_server_owned_fresh_bootstrap(
-        &app_server_target,
         &session_selection,
         &loader_overrides,
     );
@@ -2158,6 +2157,8 @@ async fn run_ratatui_app(
             || !matches!(app_server_target, AppServerTarget::Embedded));
     let guidance_request_handle = app_server.request_handle();
     let startup_prefetch_started_at = Instant::now();
+    // Fetch the catalog alongside hooks/list. Fresh starts choose the model after config/read.
+    app_server.prefetch_model_list();
     let startup_prefetch = startup_draft
         .run_until(&mut tui, async {
             tokio::join!(

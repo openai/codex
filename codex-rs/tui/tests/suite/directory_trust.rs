@@ -68,6 +68,8 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
                     launch_thread["cwd"] = json!(cwd);
                     launch_thread["preview"] = json!("Launch-folder task");
                     launch_thread["updatedAt"] = json!(1);
+                    let mut pending_hooks = None;
+                    let mut saw_model_list = false;
                     while let Some(Ok(Message::Text(text))) = socket.next().await {
                         let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
                             continue;
@@ -134,13 +136,21 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
                                 continue;
                             }
                         };
-                        socket
-                            .send(Message::Text(
-                                json!({"id": request.id, "result": result})
-                                    .to_string()
-                                    .into(),
-                            ))
-                            .await?;
+                        let response = Message::Text(
+                            json!({"id": request.id, "result": result}).to_string().into(),
+                        );
+                        // Startup must request the catalog even while hooks/list is outstanding.
+                        if request.method == "hooks/list" && !saw_model_list {
+                            pending_hooks = Some(response);
+                            continue;
+                        }
+                        socket.send(response).await?;
+                        if request.method == "model/list" {
+                            saw_model_list = true;
+                            if let Some(hooks) = pending_hooks.take() {
+                                socket.send(hooks).await?;
+                            }
+                        }
                     }
                     Ok(())
                 });
@@ -212,6 +222,13 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
         drop(terminal);
         server.abort();
         let methods = methods.lock().unwrap();
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| *method == "model/list")
+                .count(),
+            1
+        );
         let mutations: Vec<_> = methods
             .iter()
             .map(String::as_str)

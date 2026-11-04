@@ -51,13 +51,6 @@ fn spawn_startup_thread_start(
     });
 }
 
-#[derive(Default)]
-pub(super) struct FreshStartupDefaults {
-    pub(super) server_defaults_read: bool,
-    pub(super) prompt_windows_sandbox: bool,
-    pub(super) approval_policy: Option<codex_protocol::protocol::AskForApproval>,
-}
-
 pub(super) async fn prepare_fresh_startup_config(
     config: &mut Config,
     app_server: &AppServerSession,
@@ -65,45 +58,38 @@ pub(super) async fn prepare_fresh_startup_config(
     cli_kv_overrides: &[(String, TomlValue)],
     harness_overrides: &ConfigOverrides,
     environments: &EnvironmentManager,
-) -> Result<FreshStartupDefaults> {
+) -> Result<crate::projectless::AppliedDefaults> {
     let defaults_cwd = match app_server_target {
         AppServerTarget::Embedded | AppServerTarget::LocalDaemon { .. } => config.cwd.as_path(),
         AppServerTarget::Remote { .. } => {
             app_server.remote_cwd_override().unwrap_or(Path::new("."))
         }
     };
-    let defaults = crate::config_update::read_effective_config_if_supported(
+    let defaults = crate::config_update::read_effective_config_with_layers(
         app_server.request_handle(),
         defaults_cwd,
     )
     .await?;
-    let mut projectless = crate::projectless::AppliedDefaults::default();
-    if let Some(defaults) = defaults.as_ref() {
-        super::new_session::overlay_new_session_defaults(
-            config,
-            &defaults.config,
-            cli_kv_overrides,
-            harness_overrides,
-        );
-        projectless = crate::projectless::apply_defaults(
-            config,
-            harness_overrides,
-            app_server,
-            environments,
-            defaults,
-        );
-    }
+    super::new_session::overlay_new_session_defaults(
+        config,
+        &defaults.config,
+        cli_kv_overrides,
+        harness_overrides,
+    );
+    let projectless = crate::projectless::apply_defaults(
+        config,
+        harness_overrides,
+        app_server,
+        environments,
+        &defaults,
+    );
     apply_managed_new_thread_defaults(
         config,
         app_server.managed_new_thread_defaults(),
         cli_kv_overrides,
         harness_overrides,
     );
-    Ok(FreshStartupDefaults {
-        server_defaults_read: defaults.is_some(),
-        prompt_windows_sandbox: projectless.prompt_windows_sandbox,
-        approval_policy: projectless.approval_policy,
-    })
+    Ok(projectless)
 }
 
 pub(super) fn startup_model(
@@ -358,11 +344,8 @@ impl App {
             &session_selection,
             SessionSelection::StartFresh | SessionSelection::Exit
         );
-        let server_owned_fresh_bootstrap = uses_server_owned_fresh_bootstrap(
-            &app_server_target,
-            &session_selection,
-            &loader_overrides,
-        );
+        let server_owned_fresh_bootstrap =
+            uses_server_owned_fresh_bootstrap(&session_selection, &loader_overrides);
         let mut bootstrap = startup_bootstrap;
         if bootstrap.is_none() && !server_owned_fresh_bootstrap {
             bootstrap = Some(
@@ -416,7 +399,7 @@ impl App {
                 }
             }
         } else {
-            FreshStartupDefaults::default()
+            crate::projectless::AppliedDefaults::default()
         };
         let mut launch_choices = crate::app_server_session::StartupLaunchChoices::from_launch(
             &cli_kv_overrides,
@@ -432,7 +415,6 @@ impl App {
                         &mut app_server,
                         &mut config,
                         &mut launch_choices,
-                        startup_defaults.server_defaults_read,
                         &cli_kv_overrides,
                         &harness_overrides,
                     ),
@@ -465,7 +447,7 @@ impl App {
                 &harness_overrides,
             );
         }
-        let mut model = startup_model(&config, &bootstrap, startup_defaults.server_defaults_read);
+        let mut model = startup_model(&config, &bootstrap, fresh_start);
         let available_models = bootstrap.available_models;
         let mut remote_connection =
             crate::status::remote_connection::remote_connection_status_value(
