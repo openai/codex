@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests.rs
+expression: "frame.lines().find(|row| row.contains(\"Find:\")).unwrap()"
+---
+  Find: parent-2x4                                            │   GPT-6.1-Sol default

@@ -3833,10 +3833,41 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         selected
     );
     app.transcript_view.end_select_mode();
-    // Ctrl-/ preserves interaction, so it exposes whether right actually cleaned up the parent.
-    keys!(toggle);
+    keys!(prefix, KeyCode::Left.into());
     assert_eq!(app.current_displayed_thread_id(), Some(parent_thread_id));
-    assert!(!app.transcript_view.has_active_interaction());
+    assert!(app.transcript_view.is_select_mode());
+    assert_eq!(
+        app.transcript_view.selected_text(&app.transcript_cells),
+        parent_text
+    );
+
+    keys!(prefix, main);
+    app.transcript_view.begin_search();
+    assert!(app.transcript_view.paste_search(parent_row));
+    keys!(KeyCode::Left.into());
+    let find = app.transcript_view.search_footer(size.width).unwrap();
+    keys!(prefix, KeyCode::Right.into());
+    keys!(prefix, KeyCode::Left.into());
+    assert_eq!(app.transcript_view.search_footer(size.width), Some(find));
+    keys!(KeyCode::Char('x').into());
+    let frame = side_frame(&mut app, &mut tui, size)?;
+    assert_app_snapshot!(
+        "direction_restores_parent_find",
+        frame.lines().find(|row| row.contains("Find:")).unwrap()
+    );
+
+    // Explicit composer focus ends Find. Scrolling alone keeps the composer active.
+    keys!(prefix, main);
+    read_side_history(&mut app, &mut tui, "parent")?;
+    keys!(prefix, KeyCode::Right.into());
+    keys!(prefix, KeyCode::Left.into());
+    assert!(side_frame(&mut app, &mut tui, size)?.contains(parent_row));
+    // End flushes the composer's pending paste-burst character.
+    keys!(KeyCode::Char('!').into(), KeyCode::End.into());
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "parent draft-!"
+    );
     keys!(toggle);
 
     read_side_history(&mut app, &mut tui, "child")?;

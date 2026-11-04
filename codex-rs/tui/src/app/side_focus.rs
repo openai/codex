@@ -40,12 +40,16 @@ impl App {
             && !on_child
             && (self.transcript_view.has_active_interaction()
                 || self.backtrack.overlay_preview_active);
-        let result = if main || (left && on_child) {
+        let result = if main {
             self.focus_main_composer(tui, app_server).await
-        } else if (sidebar || right)
+        } else if (left && on_child)
+            || (right && !on_child && child.is_some_and(|id| self.side_threads[&id].pane_open))
+        {
+            // Switching threads parks and restores each pane's transcript interaction.
+            self.toggle_side_conversation(tui, app_server).await
+        } else if sidebar
             && !on_child
             && let Some(child) = child
-            && (sidebar || self.side_threads[&child].pane_open)
         {
             let result = self.select_agent_thread(tui, app_server, child).await;
             if result.is_ok() && self.current_displayed_thread_id() == Some(child) {
