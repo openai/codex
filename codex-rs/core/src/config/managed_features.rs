@@ -244,10 +244,7 @@ fn parse_feature_requirements(
         if key == Feature::Personality.key() {
             continue;
         }
-        if matches!(
-            key.as_str(),
-            "daemon_auto_start" | "worktrees" | "realtime_conversation"
-        ) {
+        if key == Feature::Worktrees.key() || key == Feature::RealtimeConversation.key() {
             push_feature_requirement_warning(
                 &mut startup_warnings,
                 format!(

@@ -1,8 +1,0 @@
----
-source: tui/src/history_cell/tests.rs
-expression: "render_lines(&cell.transcript_lines(80)).join(\"\\n\")"
----
-⚠ `[features].daemon_auto_start` is deprecated and ignored.
-Remove `daemon_auto_start` from [features] in config.toml or profile
-configuration files. Use `--no-daemon` to run without the shared background
-server.

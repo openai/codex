@@ -568,6 +568,7 @@ pub(super) async fn run_main_inner(
         None
     };
     let auto_start_daemon = cfg!(any(unix, windows))
+        && (cli.agents_overview || config.features.enabled(Feature::DaemonAutoStart))
         && implicit_connection
         && !cli.no_daemon
         && !app_server_target.uses_remote_workspace();
@@ -732,7 +733,7 @@ pub(super) async fn run_main_inner(
         (_, Some(_)) => "incompatible_option",
         _ if auto_start_daemon => "auto_start",
         (AppServerTarget::LocalDaemon { .. }, _) => "existing_daemon",
-        (AppServerTarget::Embedded, None) => "unclassified",
+        (AppServerTarget::Embedded, None) => "auto_start_disabled",
     };
     let daemon_settings = if metrics.is_some() {
         codex_app_server_daemon::telemetry::settings_tags(&config.codex_home)
@@ -743,7 +744,17 @@ pub(super) async fn run_main_inner(
     };
     let mut launch_tags = daemon_settings.to_vec();
     launch_tags.extend(terminal_size_tags);
-    launch_tags.push(("daemon_selection_reason", selection_reason));
+    launch_tags.extend([
+        ("daemon_selection_reason", selection_reason),
+        (
+            "daemon_auto_start",
+            if config.features.enabled(Feature::DaemonAutoStart) {
+                "enabled"
+            } else {
+                "disabled"
+            },
+        ),
+    ]);
     let selected_local_daemon = matches!(app_server_target, AppServerTarget::LocalDaemon { .. });
     let launch_telemetry = move |app_server_mode| {
         let Some(metrics) = metrics else {
@@ -803,6 +814,9 @@ pub(super) async fn run_main_inner(
                 Some(daemon_startup::WSL_DRVFS_EXCLUSION) => "wsl_drvfs",
                 Some("this Windows launcher") => "windows_detach_restricted",
                 Some("daemon feature settings") => "daemon_compatibility",
+                None if selection_reason == "auto_start_disabled" => {
+                    "auto_start_disabled_no_daemon"
+                }
                 None if selected_local_daemon => "daemon_connection_failed",
                 None if selection_reason == "agents" => "agents_no_daemon_discovered",
                 Some(_) | None => "unclassified",

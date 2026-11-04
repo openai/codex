@@ -21,43 +21,37 @@ async fn incompatible_daemon_can_run_embedded_for_explicit_features() -> Result<
         let socket = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket.parent().unwrap())?;
         let listener = UnixListener::bind(socket.as_path())?;
-        let server_home = home.path().to_path_buf();
         let server = tokio::spawn(async move {
-            // Startup probes the running daemon, then checks its feature settings.
-            for _ in 0..2 {
-                let mut socket = loop {
-                    let (stream, _) = listener.accept().await?;
-                    if let Ok(socket) = tokio_tungstenite::accept_async(stream).await {
-                        break socket;
-                    }
+            let mut socket = loop {
+                let (stream, _) = listener.accept().await?;
+                if let Ok(socket) = tokio_tungstenite::accept_async(stream).await {
+                    break socket;
+                }
+            };
+            while let Some(Ok(Message::Text(text))) = socket.next().await {
+                let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
+                    continue;
                 };
-                while let Some(Ok(Message::Text(text))) = socket.next().await {
-                    let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
-                        continue;
-                    };
-                    let response = match request.method.as_str() {
-                        "initialize" => {
-                            json!({"id": request.id, "result": {"userAgent": "daemon-test/0.0.0", "codexHome": server_home, "platformFamily": std::env::consts::FAMILY, "platformOs": std::env::consts::OS}})
-                        }
-                        "config/read" => {
-                            json!({"id": request.id, "result": {"config": {}, "layers": []}})
-                        }
-                        "configRequirements/read" => {
-                            json!({"id": request.id, "result": {"requirements": null}})
-                        }
-                        "experimentalFeature/list" => {
-                            json!({"id": request.id, "result": {"data": [{
+                let response = match request.method.as_str() {
+                    "initialize" => {
+                        json!({"id": request.id, "result": {"userAgent": "daemon-test/0.0.0"}})
+                    }
+                    "config/read" => {
+                        json!({"id": request.id, "result": {"config": {}, "layers": []}})
+                    }
+                    "configRequirements/read" => {
+                        json!({"id": request.id, "result": {"requirements": null}})
+                    }
+                    "experimentalFeature/list" => json!({"id": request.id, "result": {"data": [{
                         "name": "api_key_model_discovery", "stage": "stable",
                         "displayName": null, "description": null, "announcement": null,
                         "enabled": scenario == "explicit disable", "defaultEnabled": true,
-                    }], "nextCursor": null}})
-                        }
-                        _ => panic!("unexpected request: {}", request.method),
-                    };
-                    socket
-                        .send(Message::Text(response.to_string().into()))
-                        .await?;
-                }
+                    }], "nextCursor": null}}),
+                    _ => panic!("unexpected request: {}", request.method),
+                };
+                socket
+                    .send(Message::Text(response.to_string().into()))
+                    .await?;
             }
             Ok::<_, anyhow::Error>(())
         });

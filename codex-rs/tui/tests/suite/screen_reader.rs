@@ -15,7 +15,7 @@ fn startup_records_screen_reader_detection() -> Result<()> {
     let path = home.path().join("config.toml");
     let contents = std::fs::read_to_string(&path)?;
     std::fs::write(&path, format!("{contents}\n[tui]\nanimations = true\n"))?;
-    let mut terminal = PtyCodex::start(&repo_root, home, &["--no-daemon"])?;
+    let mut terminal = PtyCodex::start(&repo_root, home, &[])?;
     terminal.wait_for_startup()?;
     let deadline = Instant::now() + Duration::from_secs(/*secs*/ 30);
     loop {
