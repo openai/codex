@@ -674,6 +674,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
         .record_user_message(
             grant.clone(),
             RetainedInputSource::Local(Some(EARLIER_SOURCE_ORDER)),
+            &uuid_v7_item_id_generator_for_test(),
         )
         .unwrap();
     let mut item =
@@ -707,6 +708,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
         .record_user_message(
             newer.clone(),
             RetainedInputSource::Local(Some(NEWEST_SOURCE_ORDER)),
+            &uuid_v7_item_id_generator_for_test(),
         )
         .unwrap();
     let newest_id = source.id.clone();
