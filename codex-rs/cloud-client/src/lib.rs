@@ -10,6 +10,7 @@ mod history;
 mod history_wire;
 mod item_wire;
 mod items;
+mod prewarm;
 mod transcript;
 mod transcript_wire;
 mod turns;

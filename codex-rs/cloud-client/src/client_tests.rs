@@ -214,6 +214,99 @@ async fn activation_preserves_native_settings_and_thread_metadata() {
 }
 
 #[tokio::test]
+async fn prewarm_uses_managed_defaults_and_preserves_resolved_settings() {
+    // PrewarmThread uses Thread field numbers but omits turns entirely.
+    let thread = Bytes::from_static(&[
+        0x22, 1, b'v', // cli_version (4)
+        0x28, 1, // created_at (5)
+        0x32, 1, b'/', // cwd (6)
+        0x48, 0, // ephemeral (9)
+        0x72, 1, b't', // id (14)
+        0x82, 1, 1, b'p', // model_provider (16)
+        0xaa, 1, 0, // preview (21)
+        0xda, 1, 1, b's', // session_id (27)
+        0xe2, 1, 2, 8, 1, // source (28): cli
+        0xea, 1, 2, 0x12, 0, // status (29): idle
+        0x80, 2, 2, // updated_at (32)
+        0xa0, 6, 7, // unknown field (100)
+    ]);
+    let native_thread = [b"\xfa\x01\x00".as_slice(), thread.as_ref()].concat(); // empty turns (31)
+    // The settings use different field numbers in Prewarm and UpdateConfig.
+    let fields = [
+        (1, 1, b"\x0a\x01e\x12\x01i".as_slice()), // active permission profile
+        (2, 2, b"\x08\x02".as_slice()),           // on-request approval
+        (4, 5, b"/".as_slice()),                  // cwd
+        (7, 10, b"m".as_slice()),                 // model
+        (8, 11, b"p".as_slice()),                 // provider
+        (10, 13, b"high".as_slice()),             // reasoning effort
+        (11, 14, b"\x0a\x01/".as_slice()),        // workspace roots
+        (12, 15, b"\x12\x02\x08\x01".as_slice()), // read-only sandbox
+        (13, 16, b"\x0a\x04fast".as_slice()),     // service tier
+    ];
+    let mut prewarm = vec![0x18, 1]; // approvals reviewer (3): user
+    let mut activation = prewarm.clone();
+    for (prewarm_tag, activation_tag, bytes) in fields {
+        prost::encoding::bytes::encode(prewarm_tag, &bytes.to_vec(), &mut prewarm);
+        prost::encoding::bytes::encode(activation_tag, &bytes.to_vec(), &mut activation);
+    }
+    prost::encoding::bytes::encode(/* tag */ 14, &thread, &mut prewarm);
+    prost::encoding::bytes::encode(/* tag */ 17, &native_thread, &mut activation);
+    let mut server = fixture_responses(vec![
+        response(vec![frame(&activation)], tonic::Status::ok("")),
+        response(vec![frame(&prewarm)], tonic::Status::ok("")),
+        response(vec![frame(&prewarm)], tonic::Status::ok("")),
+    ])
+    .await;
+    let expected = server.client.activate("t").await.unwrap();
+    assert_request(&mut server, "UpdateConfig", &[56, 1, 0x92, 1, 1, b't']).await;
+    for (model, model_provider, request) in [
+        (None, None, vec![0x52, 4, 0x0a, 2, 0x0a, 0]),
+        (
+            Some("m".to_owned()),
+            Some("p".to_owned()),
+            vec![0x52, 4, 0x0a, 2, 0x0a, 0, 0x7a, 1, b'm', 0x82, 1, 1, b'p'],
+        ),
+    ] {
+        let actual = server
+            .client
+            .prewarm_default_thread(model, model_provider)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&actual).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        assert_eq!(actual.thread.protobuf().as_ref(), native_thread.as_slice());
+        // Exactly one default managed selection; no custom settings or Aeon mode.
+        assert_request(&mut server, "Prewarm", &request).await;
+        assert!(server.requests.try_recv().is_err());
+    }
+
+    // Missing authoritative policy must fail rather than supplying local defaults.
+    let mut missing_sandbox = vec![0x18, 1];
+    for (tag, _, bytes) in fields {
+        if tag != 12 {
+            prost::encoding::bytes::encode(tag, &bytes.to_vec(), &mut missing_sandbox);
+        }
+    }
+    prost::encoding::bytes::encode(/* tag */ 14, &thread, &mut missing_sandbox);
+    let mut server = fixture(response(
+        vec![frame(&missing_sandbox)],
+        tonic::Status::ok(""),
+    ))
+    .await;
+    assert!(matches!(
+        server
+            .client
+            .prewarm_default_thread(/*model*/ None, /*model_provider*/ None)
+            .await,
+        Err(Error::InvalidResponse)
+    ));
+    assert_request(&mut server, "Prewarm", &[0x52, 4, 0x0a, 2, 0x0a, 0]).await;
+    assert!(server.requests.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn resume_sends_protobuf_and_preserves_admission_flags() {
     for wait in [false, true] {
         let mut fixture = fixture(response(vec![frame(&[])], tonic::Status::ok(""))).await;

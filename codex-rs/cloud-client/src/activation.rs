@@ -255,23 +255,22 @@ impl Client {
             .await?;
         let response = wire::UpdateConfigResponse::decode(bytes)
             .map_err(|_| MutationError::OutcomeUnknown(Error::InvalidResponse))?;
-        ThreadActivation::try_from_wire(response, thread_id).map_err(MutationError::OutcomeUnknown)
+        let settings =
+            ThreadActivation::from_settings(response).map_err(MutationError::OutcomeUnknown)?;
+        if settings.thread.id != thread_id {
+            return Err(MutationError::OutcomeUnknown(Error::InvalidResponse));
+        }
+        Ok(settings)
     }
 }
 
 impl ThreadActivation {
-    fn try_from_wire(
-        response: wire::UpdateConfigResponse,
-        requested_id: &str,
-    ) -> Result<Self, Error> {
+    pub(crate) fn from_settings(response: wire::UpdateConfigResponse) -> Result<Self, Error> {
         let raw_thread = required(response.thread)?;
         let thread = ThreadSnapshot::try_from_wire(
             wire::Thread::decode(raw_thread.clone()).map_err(|_| Error::InvalidResponse)?,
             raw_thread,
         )?;
-        if thread.id != requested_id {
-            return Err(Error::InvalidResponse);
-        }
         Ok(Self {
             thread,
             collaboration_mode: response

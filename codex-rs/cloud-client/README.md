@@ -85,3 +85,13 @@ one message after attaching: a persisted client message ID and the text. It uses
 ```sh
 cargo run -p codex-cloud-client --example attach -- "$CODEX_CLOUD_GRPC_ENDPOINT" "$CODEX_CLOUD_THREAD_ID" "$CODEX_CLOUD_MESSAGE_ID" 'Explain this project'
 ```
+
+`prewarm_default_thread` prepares an ordinary coding thread in the default managed
+cloud environment, with optional model/provider selection. It returns the native
+thread identity and resolved settings without a separate activation RPC. The
+service makes the thread discoverable when it admits the first user message.
+The service owns executor selection and paths; the caller supplies no local cwd,
+workspace roots, custom configuration, or Aeon mode. This API does not request an
+ephemeral thread. Prewarm is sent once; a timeout, disconnect or malformed response
+can leave a prepared thread whose identity the caller did not receive. No retry
+or cleanup is automatic.
