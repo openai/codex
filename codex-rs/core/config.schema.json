@@ -895,6 +895,9 @@
             "async_compaction": {
               "$ref": "#/definitions/FeatureToml_for_AsyncCompactionConfigToml"
             },
+            "async_compaction_root_only": {
+              "type": "boolean"
+            },
             "auth_elicitation": {
               "type": "boolean"
             },
@@ -7829,6 +7832,9 @@
         },
         "async_compaction": {
           "$ref": "#/definitions/FeatureToml_for_AsyncCompactionConfigToml"
+        },
+        "async_compaction_root_only": {
+          "type": "boolean"
         },
         "auth_elicitation": {
           "type": "boolean"
