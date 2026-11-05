@@ -1925,11 +1925,24 @@ impl Session {
                 exec_policy,
                 auth_manager: Arc::clone(&auth_manager),
                 runtime_auth,
-                openai_file_upload_client_pool: RouteAwareClientPool::new_without_request_logging(
-                    config.http_client_factory(),
-                    ClientRouteClass::Api,
-                )
-                .with_legacy_custom_ca_fallback(),
+                openai_file_upload_client_pool: if config
+                    .features
+                    .enabled(Feature::RuntimeAgentInstances)
+                    && codex_runtime_agent_instance::is_openai_api_url(&config.chatgpt_base_url)
+                {
+                    RouteAwareClientPool::new_without_request_logging(
+                        config
+                            .http_client_factory()
+                            .with_sensitive_header_protection(),
+                        ClientRouteClass::Api,
+                    )
+                } else {
+                    RouteAwareClientPool::new_without_request_logging(
+                        config.http_client_factory(),
+                        ClientRouteClass::Api,
+                    )
+                    .with_legacy_custom_ca_fallback()
+                },
                 session_telemetry,
                 models_manager: Arc::clone(&models_manager),
                 git_root_discovery,

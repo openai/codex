@@ -1,10 +1,10 @@
-use crate::PluginsConfigInput;
 use crate::remote::RemotePluginCatalogError;
+use crate::remote::RemotePluginServiceConfig;
 use codex_login::CodexAuth;
 use codex_tools::DiscoverableTool;
 
 pub async fn hydrate_selected_recommended_plugin_install_metadata(
-    config: &PluginsConfigInput,
+    config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     mut tool: DiscoverableTool,
 ) -> Result<Option<DiscoverableTool>, RemotePluginCatalogError> {
@@ -17,12 +17,9 @@ pub async fn hydrate_selected_recommended_plugin_install_metadata(
             plugin.id
         ))
     })?;
-    let Some(app_connector_ids) = crate::remote::fetch_recommended_plugin_install_metadata(
-        &config.remote_plugin_service_config(),
-        auth,
-        &remote_plugin_id,
-    )
-    .await?
+    let Some(app_connector_ids) =
+        crate::remote::fetch_recommended_plugin_install_metadata(config, auth, &remote_plugin_id)
+            .await?
     else {
         return Ok(None);
     };

@@ -13,6 +13,7 @@ use codex_api::SharedAuthProvider;
 use codex_features::RuntimeAuthMode;
 use codex_http_client::CHATGPT_ACCOUNT_ID_HEADER;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::RouteAwareClientPool;
 use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -109,6 +110,24 @@ impl ResolvedProviderAuth {
         match &self.runtime {
             Some(runtime) => runtime.bind_http_client_factory(factory),
             None => Ok(factory),
+        }
+    }
+
+    /// Preserve the caller's connection pool and bind it to the selected login.
+    pub fn bind_http_client_pool(
+        &self,
+        pool: &RouteAwareClientPool,
+    ) -> Result<RouteAwareClientPool, AuthError> {
+        match &self.runtime {
+            Some(runtime) => pool
+                .with_account_binding(runtime.http_client_factory().network_policy())
+                .ok_or_else(|| {
+                    AuthError::Build(
+                        "runtime credentials and transport must share the application network policy"
+                            .to_string(),
+                    )
+                }),
+            None => Ok(pool.clone()),
         }
     }
 

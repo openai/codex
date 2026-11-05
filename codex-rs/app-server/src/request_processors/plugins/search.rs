@@ -78,7 +78,7 @@ impl PluginRequestProcessor {
             && let Some(remote_scope) = remote_scope
         {
             let page = search_remote_plugins(
-                &remote_plugin_service_config(&config),
+                &remote_plugin_service_config(&self.thread_manager, &config)?,
                 auth.as_ref(),
                 RemotePluginSearchRequest {
                     query: search_term,

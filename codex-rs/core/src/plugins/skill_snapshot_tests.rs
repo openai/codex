@@ -57,6 +57,7 @@ enabled = false
         codex_home.path().to_path_buf(),
         Some(Product::Codex),
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        codex_runtime_agent_instance::RuntimeAuthSlot::default(),
         skills_service.clone(),
     );
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;

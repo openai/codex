@@ -87,6 +87,27 @@ async fn harness_shares_runtime_and_honors_thread_auth_config() -> Result<()> {
             .mount(&server)
             .await;
     }
+    Mock::given(path("/backend-api/files"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "file_id": "file-a", "upload_url": format!("{}/blob", server.uri()),
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(path("/backend-api/files/file-a/uploaded"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "success", "download_url": format!("{}/blob", server.uri()),
+            "file_name": "empty.txt", "file_size_bytes": 0,
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(path("/blob"))
+        .and(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(2)
+        .mount(&server)
+        .await;
     let responses = responses::mount_response_sequence(
         &server,
         (0..14)
@@ -131,11 +152,13 @@ async fn harness_shares_runtime_and_honors_thread_auth_config() -> Result<()> {
         .await;
 
     // The production destination check stays intact. A test-only CA and CONNECT proxy route
-    // the two real host names to wiremock, only inside this isolated test subprocess.
+    // the real host names to wiremock, only inside this isolated test subprocess.
     codex_utils_rustls_provider::ensure_rustls_crypto_provider();
     let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec![
         "api.openai.com".into(),
         "auth.openai.com".into(),
+        "chatgpt.com".into(),
+        "us.chatgpt.com".into(),
     ])?;
     let ca_dir = tempfile::tempdir()?;
     let ca_path = ca_dir.path().join("ca.pem");
@@ -165,6 +188,8 @@ async fn harness_shares_runtime_and_honors_thread_auth_config() -> Result<()> {
                         Some(
                             "CONNECT api.openai.com:443 HTTP/1.1"
                                 | "CONNECT auth.openai.com:443 HTTP/1.1"
+                                | "CONNECT chatgpt.com:443 HTTP/1.1"
+                                | "CONNECT us.chatgpt.com:443 HTTP/1.1"
                         )
                     ),
                     "unexpected proxy destination"
@@ -337,6 +362,29 @@ async fn harness_shares_runtime_and_honors_thread_auth_config() -> Result<()> {
         assert_eq!(payload["runtime_agent_instance"], "runtime-shared");
         assert!(proof_ids.insert(payload["id"].as_str().unwrap().to_owned()));
     }
+    let files: Vec<_> = requests
+        .iter()
+        .filter(|r| r.url.path().starts_with("/backend-api/files"))
+        .collect();
+    assert_eq!(files.len(), 4);
+    for (index, request) in files.iter().enumerate() {
+        let authorization = request.headers["authorization"].to_str()?;
+        let proof = if index < 2 {
+            assert_eq!(authorization, "Bearer key-a");
+            request.headers["x-openai-agent-assertion"].to_str()?
+        } else {
+            assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+            authorization
+                .strip_prefix("AgentAssertion ")
+                .context("assertion-only file auth")?
+        };
+        let payload: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(2).unwrap())?,
+        )?;
+        assert_eq!(payload["runtime_agent_instance"], "runtime-shared");
+        assert!(proof_ids.insert(payload["id"].as_str().unwrap().to_owned()));
+    }
     server.verify().await;
     Ok(())
 }
@@ -420,6 +468,7 @@ async fn exercise_harness(server_uri: String) -> Result<()> {
         .await?;
     turn(&parent.thread, "parent-dual").await?;
     exercise_provider_destinations(&parent.thread, &enabled).await?;
+    upload_with_harness(&test.thread_manager, &enabled).await?;
     let mut child_config = enabled.clone();
     child_config.runtime_auth_mode = RuntimeAuthMode::AssertionOnly;
     parent.thread.ensure_rollout_materialized().await;
@@ -442,13 +491,14 @@ async fn exercise_harness(server_uri: String) -> Result<()> {
                     agent_nickname: None,
                     agent_role: None,
                 })),
-                ..StartThreadOptions::new(child_config)
+                ..StartThreadOptions::new(child_config.clone())
             },
             prepared,
         )
         .await?;
     turn(&child.thread, "child-assertion").await?;
     exercise_provider_destinations(&child.thread, &enabled).await?;
+    upload_with_harness(&test.thread_manager, &child_config).await?;
     parent
         .thread
         .submit(Op::Review {
@@ -646,5 +696,35 @@ async fn turn(thread: &Arc<CodexThread>, label: &str) -> Result<()> {
         }]))
         .await?;
     wait_for_event(thread, |e| matches!(e, EventMsg::TurnComplete(_))).await;
+    Ok(())
+}
+
+async fn upload_with_harness(
+    manager: &codex_core::ThreadManager,
+    config: &codex_core::config::Config,
+) -> Result<()> {
+    let (runtime, mode) = manager
+        .runtime_auth_for_config(config)?
+        .context("enabled harness runtime")?;
+    let selected = runtime.auth().await?;
+    let clients =
+        codex_http_client::RouteAwareClientPool::new_without_redirects_or_request_logging(
+            config.http_client_factory(),
+            codex_http_client::ClientRouteClass::Api,
+        )
+        .with_account_binding(selected.http_client_factory().network_policy())
+        .context("upload auth and transport share the application policy")?;
+    let auth = selected.into_auth_provider(mode);
+    let uploaded = codex_api::upload_openai_file(
+        &config.chatgpt_base_url,
+        auth.as_ref(),
+        &clients,
+        "empty.txt".into(),
+        /*file_size_bytes*/ 0,
+        || async { Ok(futures::stream::empty()) },
+        /*hosted_upload*/ None,
+    )
+    .await?;
+    assert_eq!(uploaded.uri, "sediment://file-a");
     Ok(())
 }

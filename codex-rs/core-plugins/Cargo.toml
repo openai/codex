@@ -15,12 +15,15 @@ workspace = true
 [dependencies]
 codex-utils-process = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 codex-analytics = { workspace = true }
+codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-config = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core-plugin-common = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
 codex-http-client = { workspace = true }
@@ -30,14 +33,14 @@ codex-model-provider = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
-codex-skills = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-skills = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
-chrono = { workspace = true }
 dirs = { workspace = true }
 flate2 = { workspace = true }
 futures = { workspace = true }
@@ -59,6 +62,7 @@ uuid = { workspace = true, features = ["v4"] }
 zip = { workspace = true }
 
 [dev-dependencies]
+base64 = { workspace = true }
 codex-exec-server-test-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 libc = { workspace = true }

@@ -120,7 +120,8 @@ async fn get_account_rate_limits_returns_snapshot(
 
     let server = MockServer::start().await;
     let server_url = server.uri();
-    write_chatgpt_base_url(codex_home.path(), &server_url)?;
+    let startup_server = MockServer::start().await;
+    write_chatgpt_base_url(codex_home.path(), &startup_server.uri())?;
 
     let primary_reset_timestamp = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:02:00Z")
         .expect("parse primary reset timestamp")
@@ -246,6 +247,14 @@ async fn get_account_rate_limits_returns_snapshot(
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
 
+    // Account RPCs reload the effective config, but custom endpoints keep their original auth.
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            "chatgpt_base_url = {server_url:?}\nruntime_auth_mode = \"assertion_only\"\n[features]\nruntime_agent_instances = true\n",
+        ),
+    )?;
+
     let request_id = mcp.send_get_account_rate_limits_request().await?;
 
     let received: GetAccountRateLimitsResponse =
@@ -361,6 +370,9 @@ async fn get_account_rate_limits_returns_snapshot(
     };
     assert_eq!(received, expected);
 
+    for request in server.received_requests().await.expect("recorded requests") {
+        assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+    }
     Ok(())
 }
 

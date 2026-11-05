@@ -7,8 +7,10 @@ use crate::remote::fetch_measurement_reference_bundle;
 use crate::remote_bundle::download_remote_plugin_bundle;
 use crate::remote_bundle::install_remote_plugin_bundle;
 use crate::script_attribution::PluginMeasurementTarget;
+use codex_features::RuntimeAuthMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginId;
+use codex_runtime_agent_instance::RuntimeAuthSlot;
 use codex_utils_path_uri::PathConvention;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -84,6 +86,7 @@ impl RemotePluginMeasurementCache {
         config: &PluginsConfigInput,
         auth: &CodexAuth,
         target: &PluginMeasurementTarget,
+        runtime_auth: Option<(RuntimeAuthSlot, RuntimeAuthMode)>,
     ) -> anyhow::Result<Option<Arc<PluginMeasurementReference>>> {
         if !config.plugins_enabled || !config.remote_plugin_enabled || !auth.uses_codex_backend() {
             return Ok(None);
@@ -92,7 +95,9 @@ impl RemotePluginMeasurementCache {
         // authoritative for enabled state, including default installations.
         // GLOBAL plugins have already passed server-side admission; local
         // marketplace product policy and skill capability loading are separate.
-        let service = config.remote_plugin_service_config();
+        let service = config
+            .remote_plugin_service_config(runtime_auth)
+            .for_current_account();
         let Some((remote_id, bundle)) = fetch_measurement_reference_bundle(&service, auth, target)
             .await
             .map_err(|_| anyhow::anyhow!("plugin measurement catalog lookup failed"))?

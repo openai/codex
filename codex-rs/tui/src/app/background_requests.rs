@@ -1386,6 +1386,11 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200).set_body_string("{}"))
             .mount(&server)
             .await;
+        std::fs::write(
+            app.config.codex_home.join("config.toml"),
+            format!("chatgpt_base_url = {:?}\n", server.uri()),
+        )
+        .expect("persist endpoint for account config reloads");
         write_chatgpt_auth(
             app.config.codex_home.as_path(),
             ChatGptAuthFixture::new("chatgpt-token").account_id("account-123"),

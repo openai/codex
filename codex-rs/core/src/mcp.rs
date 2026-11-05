@@ -146,6 +146,16 @@ impl McpManager {
         }
     }
 
+    pub(crate) fn for_plugins_manager(&self, plugins_manager: Arc<PluginsManager>) -> Self {
+        let mut manager = Self::new_with_extensions(
+            plugins_manager,
+            Arc::clone(&self.extensions),
+            ConnectorRuntimeManager::default(),
+        );
+        manager.connection_pool = self.connection_pool.clone();
+        manager
+    }
+
     pub fn codex_apps_tools_cache(&self) -> ConnectorRuntimeManager<ToolInfo> {
         self.codex_apps_tools_cache.clone()
     }

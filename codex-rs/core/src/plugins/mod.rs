@@ -44,3 +44,39 @@ pub fn plugins_manager_for_config(
         skill_root_loader,
     )
 }
+
+/// Initialize a standalone command's runtime before it can make first-party plugin requests.
+/// Callers that own a ThreadManager should reuse that manager's PluginsManager instead.
+pub async fn plugins_manager_for_config_with_runtime(
+    config: &Config,
+    auth_manager: Arc<AuthManager>,
+) -> anyhow::Result<PluginsManager> {
+    if !config
+        .features
+        .enabled(codex_features::Feature::RuntimeAgentInstances)
+    {
+        return Ok(plugins_manager_for_config(config, auth_manager));
+    }
+    codex_model_provider::validate_runtime_destination(Some(&config.chatgpt_base_url))?;
+    if !codex_runtime_agent_instance::is_openai_api_url(&config.chatgpt_base_url) {
+        return Ok(plugins_manager_for_config(config, auth_manager));
+    }
+    let installation_id =
+        crate::installation_id::resolve_installation_id(&config.codex_home).await?;
+    let runtime = crate::runtime_auth::build_runtime_auth_manager(
+        config,
+        Arc::clone(&auth_manager),
+        &installation_id,
+    );
+    let slot = Arc::new(runtime.map(std::sync::OnceLock::from).unwrap_or_default());
+    Ok(PluginsManager::new_with_options(
+        config.codex_home.to_path_buf(),
+        Some(codex_protocol::protocol::Product::Codex),
+        auth_manager,
+        slot,
+        Arc::new(HostSkillsService::new(
+            config.codex_home.clone(),
+            /*bundled_skills_enabled*/ false,
+        )),
+    ))
+}

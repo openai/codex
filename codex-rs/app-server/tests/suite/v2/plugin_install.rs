@@ -77,6 +77,9 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
+#[path = "plugin_runtime_auth.rs"]
+mod runtime_auth_tests;
+
 // Plugin install tests wait on connector discovery after the install response path
 // starts, which is noticeably slower on Windows CI.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);

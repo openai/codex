@@ -1,6 +1,7 @@
 //! Unavailable policy rejects requests before a socket is opened.
 
 use super::*;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -92,4 +93,40 @@ async fn managed_redirect_failure_is_tracked_before_proxy_retry() {
     assert!(result.is_err());
     assert!(redirected.load(std::sync::atomic::Ordering::Relaxed));
     assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn credential_binding_rejects_old_operations_after_account_replacement() {
+    let (address, server) = super::tests::spawn_response_server(vec![
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+    ]);
+    let url = format!("http://{address}/account");
+    let controller = crate::NetworkPolicyController::default();
+    let policy = controller.policy();
+    assert!(controller.publish(policy.revision(), crate::DestinationPolicy::Unrestricted));
+    let pool = RouteAwareClientPool::new(
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+            .with_network_policy(policy.clone()),
+        ClientRouteClass::Api,
+    );
+    let old = pool
+        .with_account_binding(&policy.clone().for_current_account())
+        .unwrap();
+    assert_eq!(old.get(&url).send().await.unwrap().status(), StatusCode::OK);
+
+    policy.invalidate();
+    assert!(controller.publish(policy.revision(), crate::DestinationPolicy::Unrestricted));
+    assert!(matches!(
+        old.get(&url).send().await,
+        Err(RouteAwareRequestError::Policy(NetworkPolicyDenied::Revoked))
+    ));
+    let fresh = pool
+        .with_account_binding(&policy.for_current_account())
+        .unwrap();
+    assert_eq!(
+        fresh.get(&url).send().await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(server.join().unwrap().len(), 2);
 }

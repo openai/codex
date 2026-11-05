@@ -399,15 +399,23 @@ impl AccountRequestProcessor {
                 let routing = if let Some(cached) = cached {
                     cached
                 } else {
+                    let runtime = self
+                        .thread_manager
+                        .runtime_auth_for_config(&config)
+                        .map_err(|_| WorkspaceRoutingError::DiscoveryFailed)?;
                     let mut recovery = self.auth_manager.unauthorized_recovery();
                     let mut discovery_auth = auth.clone();
                     let mut discovery_generation = auth_state.generation;
                     let response = loop {
-                        let client = BackendClient::from_auth(
+                        let client = BackendClient::from_auth_with_runtime(
                             &config.chatgpt_base_url,
                             &discovery_auth,
                             config.http_client_factory(),
-                        );
+                            runtime.as_ref(),
+                            /*headers*/ &Default::default(),
+                        )
+                        .await
+                        .map_err(|_| WorkspaceRoutingError::DiscoveryFailed)?;
                         match client.get_accounts_check().await {
                             Ok(response) => break response,
                             Err(error) => {

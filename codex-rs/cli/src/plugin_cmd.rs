@@ -7,7 +7,7 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
-use codex_core::plugins_manager_for_config;
+use codex_core::plugins_manager_for_config_with_runtime;
 use codex_core_plugins::ConfiguredMarketplace;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginInstallOutcome;
@@ -773,10 +773,9 @@ async fn load_plugin_command_context(
         .context("failed to load configuration")?;
     let plugins_input = config.plugins_config_input();
     let auth_manager = load_cli_auth_manager(&config).await?;
-    let manager = Arc::new(plugins_manager_for_config(
-        &config,
-        Arc::clone(&auth_manager),
-    ));
+    let manager = Arc::new(
+        plugins_manager_for_config_with_runtime(&config, Arc::clone(&auth_manager)).await?,
+    );
     Ok(PluginCommandContext {
         codex_home: codex_home.to_path_buf(),
         plugins_input,
@@ -861,7 +860,9 @@ async fn fetch_remote_marketplaces(
         );
         return Ok(RemoteMarketplaceListing::default());
     }
-    let service = context.plugins_input.remote_plugin_service_config();
+    let service = context
+        .manager
+        .remote_plugin_service_config(&context.plugins_input);
     let result = if context.plugins_input.remote_plugin_enabled {
         remote::fetch_remote_marketplaces(
             &service,

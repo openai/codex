@@ -75,6 +75,9 @@ use wiremock::matchers::query_param;
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
 
+#[path = "request_plugin_install_runtime_auth.rs"]
+mod runtime_auth_tests;
+
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME: &str = "list_available_plugins_to_install";
 const REQUEST_PLUGIN_INSTALL_TOOL_NAME: &str = "request_plugin_install";

@@ -108,6 +108,7 @@ use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_connectors::ConnectorSnapshot;
 use codex_connectors::PluginConnectorSource;
+use codex_features::RuntimeAuthMode;
 use codex_hooks::plugin_hook_declarations;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
@@ -124,6 +125,7 @@ use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
+use codex_runtime_agent_instance::RuntimeAuthSlot;
 use codex_skills::SkillMetadata;
 use codex_skills::SkillRootLoader;
 use codex_skills::SkillRootSnapshots;
@@ -175,6 +177,8 @@ pub struct PluginsConfigInput {
     pub product_sku: Option<String>,
     http_client_factory: HttpClientFactory,
     remote_http_clients: Arc<OnceLock<Arc<dyn HttpClientSelector>>>,
+    runtime_http_clients: Arc<OnceLock<Arc<dyn HttpClientSelector>>>,
+    runtime_auth_mode: Option<RuntimeAuthMode>,
 }
 
 impl PluginsConfigInput {
@@ -200,16 +204,40 @@ impl PluginsConfigInput {
             http_client_factory,
             product_sku,
             remote_http_clients: Arc::new(OnceLock::new()),
+            runtime_http_clients: Arc::new(OnceLock::new()),
+            runtime_auth_mode: None,
         }
     }
 
-    /// Shares a lazy route-aware connection pool across this input and its clones.
-    /// Request metadata remains current; new config inputs own a new pool.
-    pub fn remote_plugin_service_config(&self) -> RemotePluginServiceConfig {
-        let http_clients = self.remote_http_clients.get_or_init(|| {
+    pub fn with_runtime_auth_mode(mut self, mode: Option<RuntimeAuthMode>) -> Self {
+        self.runtime_auth_mode = mode;
+        self
+    }
+
+    /// Shares lazy route-aware connection pools across this input and its clones.
+    /// Runtime mode strips sensitive headers on cross-origin redirects.
+    pub fn remote_plugin_service_config(
+        &self,
+        runtime_auth: Option<(RuntimeAuthSlot, RuntimeAuthMode)>,
+    ) -> RemotePluginServiceConfig {
+        let runtime_auth = runtime_auth.filter(|_| {
+            codex_http_client::classify_openai_api_url(&self.chatgpt_base_url)
+                != codex_http_client::OpenAiDestination::Other
+        });
+        let (http_clients, factory) = if runtime_auth.is_some() {
+            (
+                &self.runtime_http_clients,
+                self.http_client_factory
+                    .clone()
+                    .with_sensitive_header_protection(),
+            )
+        } else {
+            (&self.remote_http_clients, self.http_client_factory.clone())
+        };
+        let http_clients = http_clients.get_or_init(|| {
             Arc::new(
                 RouteAwareClientPool::with_chatgpt_cloudflare_cookies_without_request_logging(
-                    self.http_client_factory.clone(),
+                    factory,
                     ClientRouteClass::Api,
                 ),
             )
@@ -221,6 +249,7 @@ impl PluginsConfigInput {
                 .clone()
                 .unwrap_or_else(|| CODEX_PRODUCT_SKU.to_string()),
             http_clients: Arc::clone(http_clients),
+            runtime_auth,
         }
     }
 }
@@ -424,10 +453,6 @@ struct ConfiguredMarketplaceUpgradeState {
     in_flight: bool,
 }
 
-fn remote_plugin_service_config(config: &PluginsConfigInput) -> RemotePluginServiceConfig {
-    config.remote_plugin_service_config()
-}
-
 fn featured_plugin_ids_cache_key(
     config: &PluginsConfigInput,
     auth: Option<&CodexAuth>,
@@ -583,6 +608,7 @@ pub struct PluginsManager {
     remote_catalog_cache_refresh_state: RwLock<RemoteCatalogCacheRefreshState>,
     restriction_product: Option<Product>,
     auth_manager: Arc<AuthManager>,
+    runtime_auth: RuntimeAuthSlot,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
     plugin_install_source: PluginInstallSource,
 }
@@ -692,6 +718,34 @@ fn target_curated_marketplace(auth_mode: Option<AuthMode>) -> TargetCuratedMarke
 }
 
 impl PluginsManager {
+    /// Build remote service state from the request's effective mode and this harness's runtime.
+    pub fn remote_plugin_service_config(
+        &self,
+        config: &PluginsConfigInput,
+    ) -> RemotePluginServiceConfig {
+        config.remote_plugin_service_config(
+            config
+                .runtime_auth_mode
+                .map(|mode| (Arc::clone(&self.runtime_auth), mode)),
+        )
+    }
+
+    /// Reuse host configuration without sharing another actor's remote caches or credentials.
+    pub fn for_auth_context(
+        &self,
+        auth_manager: Arc<AuthManager>,
+        runtime_auth: RuntimeAuthSlot,
+    ) -> Self {
+        Self::new_with_options(
+            self.codex_home.clone(),
+            self.restriction_product,
+            auth_manager,
+            runtime_auth,
+            Arc::clone(&self.skill_root_loader),
+        )
+        .with_plugin_install_source(self.plugin_install_source)
+    }
+
     pub fn new(
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
@@ -701,6 +755,7 @@ impl PluginsManager {
             codex_home,
             Some(Product::Codex),
             auth_manager,
+            RuntimeAuthSlot::default(),
             skill_root_loader,
         )
     }
@@ -709,6 +764,7 @@ impl PluginsManager {
         codex_home: PathBuf,
         restriction_product: Option<Product>,
         auth_manager: Arc<AuthManager>,
+        runtime_auth: RuntimeAuthSlot,
         skill_root_loader: Arc<dyn SkillRootLoader<PluginSkillRoot>>,
     ) -> Self {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
@@ -752,6 +808,7 @@ impl PluginsManager {
             ),
             restriction_product,
             auth_manager,
+            runtime_auth,
             analytics_events_client: RwLock::new(None),
             plugin_install_source: PluginInstallSource::Manual,
         }
@@ -1333,7 +1390,7 @@ impl PluginsManager {
 
         crate::remote::cached_global_remote_discoverable_plugins(
             self.codex_home.as_path(),
-            &remote_plugin_service_config(config),
+            &self.remote_plugin_service_config(config),
             auth,
         )
     }
@@ -1368,7 +1425,7 @@ impl PluginsManager {
             .prepare_remote_installed_plugins_cache_generation(auth)
             .ok_or(RemotePluginCatalogError::AuthRequired)?;
         let plugins = crate::remote::fetch_remote_installed_plugins_with_display_assets(
-            &remote_plugin_service_config(config),
+            &self.remote_plugin_service_config(config),
             auth,
             display_assets,
         )
@@ -1659,7 +1716,7 @@ impl PluginsManager {
         self.schedule_remote_installed_plugins_cache_refresh(
             RemoteInstalledPluginsCacheRefreshRequest {
                 generation,
-                service_config: remote_plugin_service_config(config),
+                service_config: self.remote_plugin_service_config(config),
                 auth,
                 notify,
                 on_effective_plugins_changed,
@@ -1796,7 +1853,7 @@ impl PluginsManager {
             .collect::<Vec<_>>();
         let result = crate::remote::sync_remote_installed_plugin_bundles_once_with_snapshot(
             self.codex_home.clone(),
-            &remote_plugin_service_config(config),
+            &self.remote_plugin_service_config(config),
             auth,
             &previous_plugin_ids,
         )
@@ -1866,7 +1923,7 @@ impl PluginsManager {
         }
 
         self.schedule_remote_catalog_cache_refresh(RemoteCatalogCacheRefreshRequest {
-            service_config: remote_plugin_service_config(config),
+            service_config: self.remote_plugin_service_config(config),
             auth,
             scopes,
             mode,
@@ -1962,7 +2019,7 @@ impl PluginsManager {
             return Ok(featured_plugin_ids);
         }
         let featured_plugin_ids = crate::remote_legacy::fetch_remote_featured_plugin_ids(
-            &remote_plugin_service_config(config),
+            &self.remote_plugin_service_config(config),
             auth,
             self.restriction_product,
         )
@@ -2013,7 +2070,7 @@ impl PluginsManager {
         let mode = refresh
             .get_or_init(|| async {
                 match crate::remote::fetch_recommended_plugins(
-                    &remote_plugin_service_config(config),
+                    &self.remote_plugin_service_config(config),
                     auth,
                 )
                 .await
@@ -2208,7 +2265,7 @@ impl PluginsManager {
         let plugin_id = resolved.plugin_id.as_key();
         // This only forwards the backend mutation before the local install flow.
         if let Err(err) = crate::remote_legacy::enable_remote_plugin(
-            &remote_plugin_service_config(config),
+            &self.remote_plugin_service_config(config),
             auth,
             &plugin_id,
         )
@@ -2416,7 +2473,7 @@ impl PluginsManager {
         let plugin_key = plugin_id.as_key();
         // This only forwards the backend mutation before the local uninstall flow.
         crate::remote_legacy::uninstall_remote_plugin(
-            &remote_plugin_service_config(config),
+            &self.remote_plugin_service_config(config),
             auth,
             &plugin_key,
         )
@@ -3004,7 +3061,7 @@ impl PluginsManager {
                     };
                 let mut scopes = crate::remote::cached_remote_plugin_catalog_scopes(
                     manager.codex_home.as_path(),
-                    &remote_plugin_service_config(&config_for_remote_sync),
+                    &manager.remote_plugin_service_config(&config_for_remote_sync),
                     auth.as_ref(),
                     scopes_to_probe,
                 );

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 
@@ -106,6 +107,7 @@ pub enum OpenAiFileError {
 struct CreateFileResponse {
     file_id: String,
     upload_url: String,
+    upload_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pdf_c2pa_reservation: bool,
 }
@@ -237,12 +239,18 @@ where
             if remaining.is_zero() {
                 return Err(request_error(RouteAwareRequestError::Timeout));
             }
-            client_pool
+            let mut request = client_pool
                 .put(&create_payload.upload_url)
                 .timeout(remaining)
                 .header("x-ms-blob-type", "BlockBlob")
                 .header("x-ms-client-request-id", &azure_client_request_id)
-                .header(CONTENT_LENGTH, file_size_bytes)
+                .header(CONTENT_LENGTH, file_size_bytes);
+            if let Some(headers) = &create_payload.upload_headers {
+                for (name, value) in headers {
+                    request = request.header(name.as_str(), value.as_str());
+                }
+            }
+            request
                 .body_stream(contents)
                 .send()
                 .await
@@ -538,20 +546,36 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/backend-api/files"))
             .and(header("chatgpt-account-id", "account_id"))
+            .and(|request: &Request| !request.headers.contains_key("x-amz-tagging"))
             .and(body_json(serde_json::json!({
                 "file_name": "hello.txt",
                 "file_size": 5,
                 "use_case": "codex",
             })))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"file_id": "file_123", "upload_url": format!("{}/upload/file_123", server.uri())})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file_id": "file_123",
+                "upload_url": format!("{}/upload/file_123", server.uri()),
+                "upload_headers": {
+                    "Content-Type": "text/plain",
+                    "Content-Disposition": "attachment; filename=hello.txt",
+                    "x-amz-tagging": "purpose=codex",
+                },
+            })))
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
             .and(path("/upload/file_123"))
             .and(header("content-length", "5"))
+            .and(header("content-type", "text/plain"))
+            .and(header(
+                "content-disposition",
+                "attachment; filename=hello.txt",
+            ))
+            .and(header("x-amz-tagging", "purpose=codex"))
+            .and(|request: &Request| {
+                !request.headers.contains_key("authorization")
+                    && !request.headers.contains_key("chatgpt-account-id")
+            })
             .and(header_regex("x-ms-client-request-id", "^[0-9a-f-]{36}$"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
@@ -561,6 +585,7 @@ mod tests {
         let download_url = format!("{}/download/file_123", server.uri());
         Mock::given(method("POST"))
             .and(path("/backend-api/files/file_123/uploaded"))
+            .and(|request: &Request| !request.headers.contains_key("x-amz-tagging"))
             .respond_with(move |_request: &Request| {
                 if finalize_attempts_responder.fetch_add(1, Ordering::SeqCst) == 0 {
                     return ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -622,6 +647,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "file_id": "file_pdf",
                 "upload_url": format!("{}/upload/file_pdf", server.uri()),
+                "upload_headers": null,
                 "pdf_c2pa_reservation": true,
             })))
             .expect(1)

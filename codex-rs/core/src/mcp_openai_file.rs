@@ -236,11 +236,38 @@ async fn build_uploaded_argument_value(
             }
         }
     };
-    let upload_auth = codex_model_provider::auth_provider_from_auth(auth);
+    let runtime = if turn_context
+        .config
+        .features
+        .enabled(codex_features::Feature::RuntimeAgentInstances)
+        && codex_http_client::classify_openai_api_url(&turn_context.config.chatgpt_base_url)
+            != codex_http_client::OpenAiDestination::Other
+    {
+        codex_model_provider::validate_runtime_destination(Some(
+            &turn_context.config.chatgpt_base_url,
+        ))
+        .map_err(|error| contextualize_error(error.to_string()))?;
+        let manager = sess.services.runtime_auth.get().ok_or_else(|| {
+            contextualize_error("runtime authentication has not been initialized".to_string())
+        })?;
+        Some((Arc::clone(manager), turn_context.config.runtime_auth_mode))
+    } else {
+        None
+    };
+    let upload_auth = codex_model_provider::auth_provider_for_request(
+        auth,
+        runtime.as_ref(),
+        &http::HeaderMap::new(),
+    )
+    .await
+    .map_err(|error| contextualize_error(error.to_string()))?;
+    let upload_clients = upload_auth
+        .bind_http_client_pool(&sess.services.openai_file_upload_client_pool)
+        .map_err(|error| contextualize_error(error.to_string()))?;
     let uploaded = upload_openai_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
-        upload_auth.as_ref(),
-        &sess.services.openai_file_upload_client_pool,
+        upload_auth.auth.as_ref(),
+        &upload_clients,
         file_name,
         metadata.size,
         open_contents,

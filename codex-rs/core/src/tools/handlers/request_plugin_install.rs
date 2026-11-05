@@ -191,7 +191,10 @@ impl RequestPluginInstallHandler {
             let auth = session.services.auth_manager.auth().await;
             let plugins_config = turn.config.plugins_config_input();
             match codex_core_plugins::hydrate_selected_recommended_plugin_install_metadata(
-                &plugins_config,
+                &session
+                    .services
+                    .plugins_manager
+                    .remote_plugin_service_config(&plugins_config),
                 auth.as_ref(),
                 tool,
             )

@@ -22,7 +22,7 @@ use tracing::warn;
 use crate::config::Config;
 use crate::mcp::McpManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
-use crate::plugins::plugins_manager_for_config;
+use crate::plugins::plugins_manager_for_config_with_runtime;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -187,10 +187,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await?;
-    let plugins_manager = Arc::new(plugins_manager_for_config(
-        config,
-        Arc::clone(&auth_manager),
-    ));
+    let plugins_manager =
+        Arc::new(plugins_manager_for_config_with_runtime(config, Arc::clone(&auth_manager)).await?);
     let mcp_manager = Arc::new(McpManager::new(plugins_manager));
     list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         config,

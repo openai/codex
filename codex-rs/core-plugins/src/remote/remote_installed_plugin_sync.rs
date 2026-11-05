@@ -136,6 +136,7 @@ pub(crate) async fn sync_remote_installed_plugin_bundles_once_with_snapshot(
     previous_plugin_ids: &[PluginId],
 ) -> Result<RemoteInstalledPluginBundleSyncResult, RemoteInstalledPluginBundleSyncError> {
     let auth = ensure_chatgpt_auth(auth)?;
+    let config = &config.for_current_account();
     let authenticated_account_id = auth.get_account_id();
     let fetched_installed_plugins = fetch_installed_plugins(
         config,

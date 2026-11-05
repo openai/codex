@@ -18,6 +18,7 @@ use crate::ClientRouteClass;
 use crate::HttpClient;
 use crate::HttpClientBuilder;
 use crate::HttpClientFactory;
+use crate::NetworkPolicy;
 use crate::NetworkPolicyDenied;
 use crate::OutboundProxyPolicy;
 use crate::OutboundProxyRoute;
@@ -326,6 +327,19 @@ impl RouteAwareClientPool {
                 .for_current_account(),
         );
         pool
+    }
+
+    /// Bind an operation to the account that supplied its credentials while retaining the
+    /// caller's restrictions and the existing transport cache.
+    pub fn with_account_binding(&self, binding: &NetworkPolicy) -> Option<Self> {
+        let policy = self
+            .http_client_factory
+            .network_policy()
+            .clone()
+            .with_account_binding(binding)?;
+        let mut pool = self.clone();
+        pool.http_client_factory = pool.http_client_factory.with_network_policy(policy);
+        Some(pool)
     }
 
     /// Retries recognized TLS protocol-negotiation failures once using rustls.

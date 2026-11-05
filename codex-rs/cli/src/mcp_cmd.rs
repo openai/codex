@@ -19,7 +19,7 @@ use codex_core::config::LoaderOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::plugins_manager_for_config;
+use codex_core::plugins_manager_for_config_with_runtime;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::HttpClient;
 use codex_exec_server::RouteAwareHttpClient;
@@ -533,10 +533,10 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
 }
 
 async fn load_mcp_manager(config: &Config) -> Result<McpManager> {
-    let plugins_manager = Arc::new(plugins_manager_for_config(
-        config,
-        load_cli_auth_manager(config).await?,
-    ));
+    let plugins_manager = Arc::new(
+        plugins_manager_for_config_with_runtime(config, load_cli_auth_manager(config).await?)
+            .await?,
+    );
     Ok(McpManager::new(plugins_manager))
 }
 

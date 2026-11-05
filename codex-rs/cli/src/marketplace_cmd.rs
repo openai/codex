@@ -5,7 +5,7 @@ use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::LoaderOverrides;
-use codex_core::plugins_manager_for_config;
+use codex_core::plugins_manager_for_config_with_runtime;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;
@@ -211,7 +211,9 @@ impl JsonMarketplaceAddOutput {
 }
 
 async fn run_list(config: Config, args: ListMarketplaceArgs) -> Result<()> {
-    let manager = plugins_manager_for_config(&config, load_cli_auth_manager(&config).await?);
+    let manager =
+        plugins_manager_for_config_with_runtime(&config, load_cli_auth_manager(&config).await?)
+            .await?;
     let plugins_input = config.plugins_config_input();
     let marketplace_listing = manager
         .discover_marketplaces_for_config(&plugins_input, &[])
@@ -373,7 +375,9 @@ async fn run_upgrade(
         marketplace_name,
         json,
     } = args;
-    let manager = plugins_manager_for_config(&config, load_cli_auth_manager(&config).await?);
+    let manager =
+        plugins_manager_for_config_with_runtime(&config, load_cli_auth_manager(&config).await?)
+            .await?;
     let plugins_input = config.plugins_config_input();
     let runtime = tokio::runtime::Handle::current();
     let reload_config: codex_core_plugins::ConfigLayerReload = std::sync::Arc::new(move || {

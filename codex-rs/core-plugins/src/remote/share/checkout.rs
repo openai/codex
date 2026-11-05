@@ -40,6 +40,7 @@ pub async fn checkout_remote_plugin_share(
     codex_home: &Path,
     remote_plugin_id: &str,
 ) -> Result<RemotePluginShareCheckoutResult, RemotePluginCatalogError> {
+    let config = &config.for_current_account();
     let detail = super::super::fetch_remote_plugin_detail_with_download_urls(
         config,
         auth,

@@ -1861,6 +1861,11 @@ impl Config {
             self.http_client_factory(),
             self.apps_mcp_product_sku.clone(),
         )
+        .with_runtime_auth_mode(
+            (self.features.enabled(Feature::RuntimeAgentInstances)
+                && codex_runtime_agent_instance::is_openai_api_url(&self.chatgpt_base_url))
+            .then_some(self.runtime_auth_mode),
+        )
     }
 
     /// Applies managed MCP requirements to servers supplied by one plugin.
