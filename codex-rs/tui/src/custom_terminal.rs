@@ -401,7 +401,7 @@ where
         let cursor_style = frame.cursor_style;
         let mut images = std::mem::take(&mut frame.image_placements);
         let first_id = if let Some(base) = self.tmux_kitty_image_base {
-            images.truncate(256);
+            images.truncate(254); // The last two pane IDs belong to the pet and picker.
             base
         } else {
             crate::transcript_image::FIRST_IMAGE_ID
@@ -540,6 +540,18 @@ where
         // Reset the back buffer to make sure the next update will redraw everything.
         self.invalidate_viewport();
         Ok(())
+    }
+
+    // The pet draws after the text frame. Mark its placeholder cells so the next diff
+    // restores the underlying text when the sprite moves or disappears.
+    pub(crate) fn mark_pet_placeholders(&mut self, request: Option<&crate::pets::AmbientPetDraw>) {
+        if self.tmux_kitty_image_base.is_some()
+            && let Some(sprite) = request
+        {
+            for pos in sprite.area().intersection(self.viewport_area).positions() {
+                self.previous_buffer_mut()[pos].set_diff_option(CellDiffOption::AlwaysUpdate);
+            }
+        }
     }
 
     /// Force the next draw pass to repaint the entire viewport after raw terminal

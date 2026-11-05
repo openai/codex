@@ -1,13 +1,13 @@
 ---
 source: tui/src/chatwidget/tests/slash_commands.rs
-expression: "render_bottom_popup(&chat, width)"
+assertion_line: 3212
+expression: "render_bottom_popup(&chat, 40)"
 ---
   Pets unavailable
-  Pets are disabled in tmux. Terminal
-  images don’t stay pane-local in tmux
-  and can corrupt scrollback or move
-  between panes. Run Codex outside
-  tmux to use pets.
+  Pets are unavailable in this tmux
+  pane. Use fullscreen Codex with
+  allow-passthrough all, or run Codex
+  outside tmux.
 
 
 › 1. Close

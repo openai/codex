@@ -11,6 +11,7 @@ use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -697,6 +698,14 @@ impl MouseCapture {
     }
 }
 
+// Zero denotes scrollback mode or a pane without Kitty passthrough.
+static TMUX_FULLSCREEN_IMAGE_BASE: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn tmux_fullscreen_image_base() -> Option<u32> {
+    std::num::NonZeroU32::new(TMUX_FULLSCREEN_IMAGE_BASE.load(Ordering::Relaxed))
+        .map(std::num::NonZeroU32::get)
+}
+
 pub struct Tui {
     pub(crate) link_hover: link_pointer::LinkHover,
     frame_requester: FrameRequester,
@@ -815,10 +824,22 @@ impl Tui {
         self.alt_screen_enabled = enabled;
     }
 
+    fn record_owned_screen(&mut self, owned: bool) {
+        self.owned_screen = owned;
+        TMUX_FULLSCREEN_IMAGE_BASE.store(
+            if owned {
+                self.terminal.tmux_kitty_image_base.unwrap_or_default()
+            } else {
+                0
+            },
+            Ordering::Relaxed,
+        );
+    }
+
     /// Defer a fresh fullscreen launch until its first synchronized frame is ready.
     pub(crate) fn prepare_owned_screen(&mut self, owned: bool) -> Result<()> {
         if owned && self.alt_screen_enabled && !self.is_alt_screen_active() {
-            self.owned_screen = true;
+            self.record_owned_screen(/*owned*/ true);
             self.frame_requester.schedule_frame();
             Ok(())
         } else {
@@ -847,11 +868,11 @@ impl Tui {
             self.leave_alt_screen_for_handoff()
         };
         if let Err(error) = transition {
-            self.owned_screen = self.is_alt_screen_active();
+            self.record_owned_screen(self.is_alt_screen_active());
             self.terminal.invalidate_viewport();
             return Err(error);
         }
-        self.owned_screen = owned;
+        self.record_owned_screen(owned);
         self.frame_requester.schedule_frame();
         Ok(())
     }
@@ -1428,6 +1449,7 @@ impl Tui {
         }
 
         let terminal = &mut self.terminal;
+        terminal.mark_pet_placeholders(request.as_ref());
         let state = &mut self.ambient_pet_image_state;
         stdout().sync_update(|_| {
             match crate::pets::render_ambient_pet_image(terminal.backend_mut(), state, request) {
@@ -1447,6 +1469,7 @@ impl Tui {
         }
 
         let terminal = &mut self.terminal;
+        terminal.mark_pet_placeholders(request.as_ref());
         let state = &mut self.pet_picker_preview_image_state;
         stdout().sync_update(|_| {
             match crate::pets::render_pet_picker_preview_image(

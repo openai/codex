@@ -11,7 +11,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use crossterm::cursor::MoveTo;
 use crossterm::cursor::RestorePosition;
 use crossterm::cursor::SavePosition;
 use crossterm::queue;
@@ -186,21 +185,8 @@ impl TranscriptImage {
         let Ok(payload) = payload else {
             return Ok(None);
         };
-        queue!(writer, SavePosition, MoveTo(area.x, area.y))?;
-        writer.write_all(&payload)?;
-        if let KittyPlacement::Virtual(id) = placement {
-            // tmux moves these cells with the pane. Kitty inherits subsequent columns in each row.
-            let [_, r, g, b] = id.to_be_bytes();
-            write!(writer, "\x1b[38;2;{r};{g};{b}m")?;
-            let remaining_cells = "\u{10eeee}".repeat(usize::from(area.width.saturating_sub(1)));
-            for (y, mark) in (area.y..area.bottom()).zip([
-                '\u{305}', '\u{30d}', '\u{30e}', '\u{310}', '\u{312}', '\u{33d}',
-            ]) {
-                queue!(writer, MoveTo(area.x, y))?;
-                write!(writer, "\u{10eeee}{mark}{remaining_cells}")?;
-            }
-            writer.write_all(b"\x1b[39m")?;
-        }
+        queue!(writer, SavePosition)?;
+        placement.draw(writer, area, &payload)?;
         queue!(writer, RestorePosition)?;
         Ok(file)
     }

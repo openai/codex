@@ -123,6 +123,12 @@ pub(crate) struct AmbientPetDraw {
     pub(crate) sixel_dir: PathBuf,
 }
 
+impl AmbientPetDraw {
+    pub(crate) fn area(&self) -> Rect {
+        Rect::new(self.x, self.y, self.columns, self.rows)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct AmbientPet {
     pet: Pet,

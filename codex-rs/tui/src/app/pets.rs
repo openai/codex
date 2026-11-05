@@ -3,6 +3,33 @@
 use super::*;
 
 impl App {
+    pub(super) fn draw_pet_images(
+        &mut self,
+        tui: &mut tui::Tui,
+        screen_size: Size,
+        rendered_area: Rect,
+    ) -> Result<()> {
+        if self.chat_widget.ambient_pet_image_enabled() {
+            let ambient_pet_area = self.conversation_area(screen_size.into());
+            if let Err(err) = tui.draw_ambient_pet_image(
+                self.chat_widget
+                    .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
+            ) {
+                self.handle_ambient_pet_image_render_error(tui, err)?;
+            }
+        }
+        if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
+            if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
+                self.handle_pet_picker_preview_image_render_error(tui, err)?;
+            }
+        } else if self.chat_widget.should_clear_pet_picker_preview_image()
+            && let Err(err) = tui.draw_pet_picker_preview_image(/*request*/ None)
+        {
+            self.handle_pet_picker_preview_image_render_error(tui, err)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn disable_ambient_pet_before_shutdown(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.chat_widget.disable_ambient_pet_for_session();
         if let Err(clear_err) = tui.clear_ambient_pet_image() {

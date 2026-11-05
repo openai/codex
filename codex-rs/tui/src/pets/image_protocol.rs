@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -13,7 +14,10 @@ use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
+use crossterm::cursor::MoveTo;
+use crossterm::queue;
 use image::imageops::FilterType;
+use ratatui::layout::Rect;
 
 use super::sixel;
 
@@ -40,6 +44,9 @@ impl PetImageSupport {
     pub(crate) fn protocol(self) -> Option<ImageProtocol> {
         match self {
             Self::Supported(protocol) => Some(protocol),
+            Self::Unsupported(PetImageUnsupportedReason::Tmux) => {
+                crate::tui::tmux_fullscreen_image_base().map(|_| ImageProtocol::Kitty)
+            }
             Self::Unsupported(_) => None,
         }
     }
@@ -47,7 +54,7 @@ impl PetImageSupport {
     pub(crate) fn unsupported_message(self) -> Option<&'static str> {
         match self {
             Self::Supported(_) => None,
-            Self::Unsupported(reason) => Some(reason.message()),
+            Self::Unsupported(reason) => self.protocol().is_none().then(|| reason.message()),
         }
     }
 }
@@ -64,7 +71,7 @@ impl PetImageUnsupportedReason {
     fn message(self) -> &'static str {
         match self {
             Self::Tmux => {
-                "Pets are disabled in tmux. Terminal images don’t stay pane-local in tmux and can corrupt scrollback or move between panes. Run Codex outside tmux to use pets."
+                "Pets are unavailable in this tmux pane. Use fullscreen Codex with allow-passthrough all, or run Codex outside tmux."
             }
             Self::Zellij => {
                 "Pets are disabled in Zellij. Terminal images don’t stay reliably pane-local in Zellij. Run Codex outside Zellij to use pets."
@@ -224,6 +231,32 @@ pub fn kitty_delete_image(image_id: u32) -> String {
 pub(crate) enum KittyPlacement {
     Cursor(u32),
     Virtual(u32),
+}
+
+impl KittyPlacement {
+    pub(crate) fn draw(
+        self,
+        writer: &mut impl Write,
+        area: Rect,
+        payload: &[u8],
+    ) -> std::io::Result<()> {
+        queue!(writer, MoveTo(area.x, area.y))?;
+        writer.write_all(payload)?;
+        if let KittyPlacement::Virtual(id) = self {
+            // tmux moves these cells with the pane. Kitty inherits subsequent columns in each row.
+            let [_, r, g, b] = id.to_be_bytes();
+            write!(writer, "\x1b[38;2;{r};{g};{b}m")?;
+            let remaining_cells = "\u{10eeee}".repeat(usize::from(area.width.saturating_sub(1)));
+            for (y, mark) in (area.y..area.bottom()).zip([
+                '\u{305}', '\u{30d}', '\u{30e}', '\u{310}', '\u{312}', '\u{33d}',
+            ]) {
+                queue!(writer, MoveTo(area.x, y))?;
+                write!(writer, "\u{10eeee}{mark}{remaining_cells}")?;
+            }
+            writer.write_all(b"\x1b[39m")?;
+        }
+        Ok(())
+    }
 }
 
 pub fn kitty_transmit_png_with_id(

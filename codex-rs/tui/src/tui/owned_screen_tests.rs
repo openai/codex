@@ -205,4 +205,15 @@ async fn owned_screen_lifecycle_child() {
     tui.set_owned_screen(/*owned*/ false)
         .expect("release session screen");
     assert_eq!(tui.terminal.viewport_area, inline);
+
+    // A fresh fullscreen launch defers terminal entry until its first frame.
+    tui.terminal.tmux_kitty_image_base = Some(0x80_0100);
+    let support =
+        crate::pets::PetImageSupport::Unsupported(crate::pets::PetImageUnsupportedReason::Tmux);
+    tui.prepare_owned_screen(/*owned*/ true)
+        .expect("prepare fullscreen");
+    assert_eq!(support.protocol(), Some(crate::pets::ImageProtocol::Kitty));
+    tui.set_owned_screen(/*owned*/ false)
+        .expect("return to scrollback");
+    assert_eq!(support.protocol(), None);
 }

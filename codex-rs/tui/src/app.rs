@@ -1289,24 +1289,7 @@ impl App {
                     {
                         self.discard_startup_modal_input(tui)?;
                     }
-                    if self.chat_widget.ambient_pet_image_enabled() {
-                        let ambient_pet_area = self.conversation_area(screen_size.into());
-                        if let Err(err) = tui.draw_ambient_pet_image(
-                            self.chat_widget
-                                .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
-                        ) {
-                            self.handle_ambient_pet_image_render_error(tui, err)?;
-                        }
-                    }
-                    if let Some(request) = self.chat_widget.pet_picker_preview_draw() {
-                        if let Err(err) = tui.draw_pet_picker_preview_image(Some(request)) {
-                            self.handle_pet_picker_preview_image_render_error(tui, err)?;
-                        }
-                    } else if self.chat_widget.should_clear_pet_picker_preview_image()
-                        && let Err(err) = tui.draw_pet_picker_preview_image(/*request*/ None)
-                    {
-                        self.handle_pet_picker_preview_image_render_error(tui, err)?;
-                    }
+                    self.draw_pet_images(tui, screen_size, rendered_area)?;
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
                             .set_external_editor_state(ExternalEditorState::Active);
@@ -1374,14 +1357,8 @@ impl App {
         Ok(())
     }
 
-    fn prepare_frame_images(&mut self, tui: &tui::Tui) -> Option<crate::pets::ImageProtocol> {
-        let tmux_kitty = tui.is_owned_screen() && tui.terminal.tmux_kitty_image_base.is_some();
-        let protocol = self
-            .chat_widget
-            .pet_image_support()
-            .protocol()
-            .or(tmux_kitty.then_some(crate::pets::ImageProtocol::Kitty));
-        let protocol = protocol.filter(|_| {
+    fn prepare_frame_images(&mut self) -> Option<crate::pets::ImageProtocol> {
+        let protocol = self.chat_widget.pet_image_support().protocol().filter(|_| {
             !self.app_server_target.uses_remote_workspace()
                 && crate::projectless::has_only_local_environments(&self.environment_manager)
         });
@@ -1395,7 +1372,7 @@ impl App {
         if tui.is_owned_screen() {
             return self.render_owned_transcript(tui, screen_size);
         }
-        self.prepare_frame_images(tui);
+        self.prepare_frame_images();
         self.chat_widget
             .empty_state_animation
             .borrow_mut()

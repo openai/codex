@@ -201,7 +201,7 @@ impl App {
         tui: &mut tui::Tui,
         screen_size: Size,
     ) -> Result<Rect> {
-        self.transcript_view.image_protocol = self.prepare_frame_images(tui);
+        self.transcript_view.image_protocol = self.prepare_frame_images();
         let frames = tui.frame_requester();
         if self.conversation_frame.side_pane.is_some() {
             // Recompute our own inset on every frame, including the first narrow frame.
@@ -581,8 +581,8 @@ impl App {
 
     pub(super) fn refresh_owned_transcript(&mut self, tui: &mut tui::Tui) -> Result<()> {
         let size = tui.prepare_draw_size()?;
-        self.render_owned_transcript(tui, size)?;
-        Ok(())
+        let rendered_area = self.render_owned_transcript(tui, size)?;
+        self.draw_pet_images(tui, size, rendered_area)
     }
 
     /// Keep modal input ownership while allowing selection, copying, and disclosure in the visible transcript.

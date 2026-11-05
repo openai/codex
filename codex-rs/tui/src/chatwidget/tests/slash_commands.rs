@@ -3219,7 +3219,7 @@ async fn slash_pets_in_tmux_shows_notice_and_preserves_draft() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("Pets are disabled in tmux."));
+    assert!(rendered.contains("Pets are unavailable in this tmux pane."));
     assert!(rendered.contains("outside tmux"));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
@@ -3238,14 +3238,17 @@ async fn slash_pets_with_arg_on_unsupported_terminal_shows_notice_without_select
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     assert!(chat.bottom_pane.has_active_view());
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Pets are disabled in tmux."));
+    assert!(
+        render_bottom_popup(&chat, /*width*/ 80)
+            .contains("Pets are unavailable in this tmux pane.")
+    );
     let cells = drain_insert_history_transcript(&mut rx);
     let rendered = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("Pets are disabled in tmux."));
+    assert!(rendered.contains("Pets are unavailable in this tmux pane."));
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
