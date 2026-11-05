@@ -6,12 +6,15 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::AgentExecutionGuard;
+use codex_core::AgentRef;
+use codex_core::AgentSessionReader;
 use codex_core::AgentTurnAdmission;
 use codex_core::AgentTurnAdmissionRequest;
 use codex_core::CodexThread;
 use codex_core::SuspendTurnOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
+use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -23,6 +26,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -41,6 +45,7 @@ use core_test_support::wait_for_successful_turn;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -63,9 +68,30 @@ impl AgentTurnAdmission for HostAdmission {
     }
 }
 
+#[derive(Default)]
+struct PendingRosterRead(Notify);
+
+impl AgentSessionReader for PendingRosterRead {
+    fn root(&self) -> BoxFuture<'_, CodexResult<AgentRef>> {
+        unreachable!("roster rendering reads children")
+    }
+
+    fn parent(&self) -> BoxFuture<'_, CodexResult<Option<AgentRef>>> {
+        unreachable!("roster rendering reads children")
+    }
+
+    fn children(&self) -> BoxFuture<'_, CodexResult<Vec<AgentRef>>> {
+        Box::pin(async {
+            self.0.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
 async fn root_with_admission(
     server: &MockServer,
     mut builder: TestCodexBuilder,
+    session_reader: Option<Arc<dyn AgentSessionReader>>,
 ) -> Result<(TestCodex, mpsc::UnboundedReceiver<Attempt>)> {
     let mut test = builder.build_with_auto_env(server).await?;
     let mut options = test.start_thread_options().await;
@@ -75,6 +101,9 @@ async fn root_with_admission(
         .thread_extension_init
         .insert(codex_core::AgentRuntimeOwnership::Host);
     options.thread_extension_init.insert(admission);
+    if let Some(session_reader) = session_reader {
+        options.thread_extension_init.insert(session_reader);
+    }
     options.dynamic_tools = vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
         name: "hold_turn".into(),
         description: "Wait for the test to release this turn.".into(),
@@ -135,7 +164,8 @@ fn assert_denied(event: &EventMsg, turn_id: &str) {
 async fn root_denial_and_interruption_retain_input_and_grants_span_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
-    let (test, mut attempts) = root_with_admission(&server, test_codex()).await?;
+    let (test, mut attempts) =
+        root_with_admission(&server, test_codex(), /*session_reader*/ None).await?;
     let (turn_id, decision) = start(&test, &mut attempts, "Denied initial prompt.").await?;
     assert!(
         matches!(submit(&test.codex, "Steered while pending.").await?,
@@ -216,8 +246,15 @@ async fn interrupt_before_admission_skips_submit_hook_and_uninspected_prompt() -
             ]}]}});
             std::fs::write(home.join("hooks.json"), hooks.to_string()).unwrap();
         })
-        .with_config(trust_discovered_hooks);
-    let (test, mut attempts) = root_with_admission(&server, builder).await?;
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable multi-agent V2");
+        });
+    let (test, mut attempts) =
+        root_with_admission(&server, builder, /*session_reader*/ None).await?;
     let interrupted = "Interrupted before inspection.";
     let (turn_id, _pending) = start(&test, &mut attempts, interrupted).await?;
     test.codex.submit(Op::Interrupt).await?;
@@ -239,9 +276,19 @@ async fn interrupt_before_admission_skips_submit_hook_and_uninspected_prompt() -
     })
     .await;
     wait_for_successful_turn(&test.codex).await;
+    assert_eq!(
+        test.codex.multi_agent_version(),
+        Some(MultiAgentVersion::V2)
+    );
     let input = model.single_request().message_input_texts("user");
     assert!(input.iter().any(|text| text == "Continue."));
     assert!(input.iter().all(|text| text != interrupted));
+    assert!(
+        input
+            .iter()
+            .any(|text| text.contains("<environment_context>"))
+    );
+    assert!(input.iter().all(|text| !text.contains("<subagents>")));
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
@@ -250,14 +297,44 @@ async fn interrupt_before_admission_skips_submit_hook_and_uninspected_prompt() -
 async fn suspending_root_during_admission_preserves_the_recoverable_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
-    let (test, mut attempts) = root_with_admission(&server, test_codex()).await?;
+    let (test, mut attempts) =
+        root_with_admission(&server, test_codex(), /*session_reader*/ None).await?;
     let prompt = "Save this prompt across handoff.";
     let (turn_id, pending) = start(&test, &mut attempts, prompt).await?;
+    suspend_and_check_recoverable_prompt(&test, &server, turn_id, prompt).await?;
+    assert!(pending.is_closed());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn suspending_root_during_roster_read_preserves_the_recoverable_prompt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("enable multi-agent V2");
+    });
+    let roster = Arc::new(PendingRosterRead::default());
+    let (test, mut attempts) = root_with_admission(&server, builder, Some(roster.clone())).await?;
+    let prompt = "Save this admitted prompt across handoff.";
+    let (turn_id, grant) = start(&test, &mut attempts, prompt).await?;
+    assert!(grant.send(Ok(AgentExecutionGuard::new(()))).is_ok());
+    tokio::time::timeout(Duration::from_secs(10), roster.0.notified()).await?;
+    suspend_and_check_recoverable_prompt(&test, &server, turn_id, prompt).await
+}
+
+async fn suspend_and_check_recoverable_prompt(
+    test: &TestCodex,
+    server: &MockServer,
+    turn_id: String,
+    prompt: &str,
+) -> Result<()> {
     assert_eq!(
         test.codex.suspend_turn_and_shutdown().await?,
         SuspendTurnOutcome::Suspended { turn_id }
     );
-    assert!(pending.is_closed());
     let history = test
         .thread_store
         .load_latest_model_context(LoadThreadHistoryParams {
@@ -279,7 +356,7 @@ async fn suspending_root_during_admission_preserves_the_recoverable_prompt() -> 
         .count();
     assert_eq!(saved_prompts, 1);
     assert!(
-        responses::received_responses_requests(&server)
+        responses::received_responses_requests(server)
             .await
             .is_empty()
     );
@@ -290,7 +367,8 @@ async fn suspending_root_during_admission_preserves_the_recoverable_prompt() -> 
 async fn denied_review_exits_review_mode() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
-    let (test, mut attempts) = root_with_admission(&server, test_codex()).await?;
+    let (test, mut attempts) =
+        root_with_admission(&server, test_codex(), /*session_reader*/ None).await?;
     test.codex
         .submit(Op::Review {
             review_request: ReviewRequest {

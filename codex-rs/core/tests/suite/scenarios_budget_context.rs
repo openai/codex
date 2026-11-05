@@ -1,8 +1,10 @@
-//! Host budget reminders use generic World State and refresh after compaction spending.
+//! Host budgets and agent session reads use World State.
 
+use super::super::agent_control::HostSessionReader;
 use super::super::rollout_budget::HostAccounting;
 use super::super::rollout_budget::rollout_budget;
 use super::*;
+use codex_core::AgentRef;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::PreviousWorldStateSection;
@@ -10,6 +12,10 @@ use codex_extension_api::RenderedWorldStateFragment;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_extension_api::input_text;
+use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use core_test_support::responses::received_responses_requests;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::strip_metadata_from_json;
@@ -124,9 +130,23 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
             configure_scenario_catalog(config);
             config.workspace_roots = vec![config.cwd.clone()];
             config.rollout_budget = Some(rollout_budget());
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable multi-agent V2");
         })
         .build_with_auto_env(&server)
         .await?;
+    let reader = test
+        .codex
+        .thread_extension_data()
+        .get::<HostSessionReader>()
+        .expect("host agent session reader");
+    let child = AgentRef {
+        thread_id: ThreadId::new(),
+        path: AgentPath::root().join("release").expect("child path"),
+    };
+    *reader.children.lock().expect("host roster") = Some(vec![child.clone()]);
 
     mount_sse_sequence(
         &server,
@@ -139,8 +159,18 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
     .await;
     test.submit_turn("Start planning the release.").await?;
     remaining.store(900, Ordering::SeqCst);
+    // An unchanged environment does not need to read the roster.
+    let reads = reader.children_reads.load(Ordering::Relaxed);
     test.submit_turn("Continue planning.").await?;
+    assert_eq!(reader.children_reads.load(Ordering::Relaxed), reads);
     remaining.store(400, Ordering::SeqCst);
+    *reader.children.lock().expect("host roster") = Some(vec![
+        child,
+        AgentRef {
+            thread_id: ThreadId::new(),
+            path: AgentPath::root().join("testing").expect("child path"),
+        },
+    ]);
     test.submit_turn("Check the release plan.").await?;
 
     let compaction_budget = Arc::clone(&remaining);
@@ -177,6 +207,7 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
         vec![
             sse(vec![ev_completed("fresh-window")]),
             sse(vec![ev_completed("same-fresh-threshold")]),
+            sse(vec![ev_completed("roster-unavailable")]),
         ],
     )
     .await;
@@ -185,10 +216,50 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
     remaining.store(300, Ordering::SeqCst);
     test.submit_turn("Finish the release plan.").await?;
 
+    // Change the working directory to refresh the environment fragment while
+    // preserving the executor and its tools.
+    let mut environment = test.executor_environment().request();
+    environment.cwd = test.workspace_path_uri("roster-check")?;
+    test.fs()
+        .create_directory(
+            &environment.cwd,
+            CreateDirectoryOptions {
+                recursive: false,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    *reader.children.lock().expect("host roster") = None;
+    let reads = reader.children_reads.load(Ordering::Relaxed);
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Check the unavailable roster.".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentRequests::new(
+                    test.config.cwd.join("roster-check"),
+                    vec![environment],
+                )),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        assert!(!matches!(event, EventMsg::Error(_)), "{event:?}");
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(reader.children_reads.load(Ordering::Relaxed), reads + 1);
+
     let requests = received_responses_requests(&server).await;
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 7);
     for request in &requests {
         assert!(!request.has_content_kinds(&["rollout_budget.remaining_tokens"]));
+        let input = serde_json::to_string(&request.input())?;
+        assert!(input.contains("You are `/root`"));
     }
     // Compare the actual wire input without normalization: both unchanged and
     // threshold-crossing reminders must only append within a context window.
@@ -208,6 +279,7 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
             );
         }
     }
+
     let resumed_input = requests[4].input();
     // Compaction rebuilds item IDs and metadata while preserving the tool
     // declarations and base instructions ahead of the conversation.
@@ -217,13 +289,14 @@ async fn host_budget_context_refreshes_after_remote_compaction() -> Result<()> {
         strip_metadata_from_json(strip_response_item_ids_from_json(initial_prefix)),
         strip_metadata_from_json(strip_response_item_ids_from_json(resumed_prefix)),
     );
-    insta::assert_snapshot!(
-        "host_budget_context_after_compaction",
-        context_snapshot::format_request_history_snapshot(
-            "A host contributes budget reminders at thresholds. Remote compaction spends within the same threshold, so its captured reminder is omitted and the next sampling step inserts the fresh remainder once.",
-            &requests,
-            &ContextSnapshotOptions::default().rewrite_known_segments(),
-        )
+
+    let snapshot = context_snapshot::format_request_history_snapshot(
+        "Core renders the host's roster with native World State cadence. Compaction rebuilds it from current membership, and the next sampling step refreshes the budget after compaction spending.",
+        &requests,
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .preserve_environment_context(),
     );
+    insta::assert_snapshot!("host_budget_context_after_compaction", snapshot);
     Ok(())
 }

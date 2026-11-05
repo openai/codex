@@ -97,15 +97,8 @@ impl WorldStateSection for TokenBudgetContext {
     ) -> SectionTransition<Self::Snapshot> {
         let current = self.agent_path.clone();
         let fragment = matches!(previous, PreviousSectionState::Known(agent_path) if agent_path != &self.agent_path)
-            .then(|| Box::new(self.clone()) as Box<dyn ContextualUserFragment>);
-        (
-            Some(current),
-            fragment
-                .into_iter()
-                .map(WorldStateUpdate::boxed_fragment)
-                .map(WorldStateUpdate::standalone)
-                .collect(),
-        )
+            .then(|| WorldStateUpdate::fragment(self.clone()).standalone());
+        (Some(current), fragment.into_iter().collect())
     }
 }
 

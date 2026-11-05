@@ -1,20 +1,49 @@
 //! Stale prefixes are skipped or replaced with a fresh request according to caller intent.
 
 use super::*;
+use crate::AgentRef;
+use crate::AgentSessionReader;
 use crate::compact_remote_v2::RemoteCompactV2Attempt;
+use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
 use crate::session::CompactionPrefix;
 use codex_login::CodexAuth;
 use codex_protocol::models::ResponseItem;
 use core_test_support::responses;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy)]
 enum HistoryChange {
     Replacement,
     Account,
+}
+
+#[derive(Default)]
+struct FailingRosterRead {
+    started: Notify,
+    release: Notify,
+}
+
+impl AgentSessionReader for FailingRosterRead {
+    fn root(&self) -> BoxFuture<'_, CodexResult<AgentRef>> {
+        unreachable!("roster rendering reads children")
+    }
+
+    fn parent(&self) -> BoxFuture<'_, CodexResult<Option<AgentRef>>> {
+        unreachable!("roster rendering reads children")
+    }
+
+    fn children(&self) -> BoxFuture<'_, CodexResult<Vec<AgentRef>>> {
+        Box::pin(async {
+            self.started.notify_one();
+            self.release.notified().await;
+            Err(CodexErr::InvalidRequest("roster unavailable".into()))
+        })
+    }
 }
 
 #[test_case(HistoryChange::Replacement, CompactionFallback::Skip; "replacement optional")]
@@ -68,14 +97,31 @@ async fn prepared_prefix_rejection_respects_caller_intent(
         .await;
     let history = sess.clone_history().await;
     let auth = sess.services.model_client.auth_owner_generation();
-    let mut candidate = BackgroundCompactionCandidate {
-        prefix: CompactionPrefix {
-            generation: history.history_version(),
-            len: history.annotated_items().len(),
-            auth_owner_generation: auth,
+    let prefix = CompactionPrefix {
+        generation: history.history_version(),
+        len: history.annotated_items().len(),
+        auth_owner_generation: match change {
+            HistoryChange::Replacement => auth,
+            HistoryChange::Account => Some(auth.unwrap_or_default().wrapping_add(1)),
         },
+    };
+    let roster = Arc::new(FailingRosterRead::default());
+    let mut cutoff_world_state = WorldState::default();
+    if matches!(change, HistoryChange::Replacement) {
+        cutoff_world_state.add_section(
+            EnvironmentsState::from_turn_context_with_environments(
+                &step.turn,
+                &step.environments,
+                /*current_date*/ Some("2026-01-01".into()),
+            )
+            .await,
+        );
+        cutoff_world_state.host_roster_reader = Some(roster.clone());
+    }
+    let candidate = BackgroundCompactionCandidate {
+        prefix,
         model_info: Arc::clone(&step.settings.model_info),
-        cutoff_world_state: Arc::new(WorldState::default()),
+        cutoff_world_state: Arc::new(cutoff_world_state),
         attempt: RemoteCompactV2Attempt {
             rejected_audio_file_ids: Default::default(),
             input_goal_ids: Default::default(),
@@ -97,37 +143,14 @@ async fn prepared_prefix_rejection_respects_caller_intent(
             owned_client_session: None,
         },
     };
-    match change {
-        HistoryChange::Replacement => {
-            sess.replace_history(
-                vec![original.clone(), original.clone()],
-                /*reference_context_item*/ None,
-            )
-            .await;
-        }
-        HistoryChange::Account => {
-            candidate.prefix.auth_owner_generation = Some(auth.unwrap_or_default().wrapping_add(1));
-        }
-    }
-    // Rewritten histories still fit the captured length; length alone cannot reject them.
-    let history = sess.clone_history().await;
-    assert!(history.annotated_items().len() >= candidate.prefix.len);
-    if !matches!(change, HistoryChange::Account) {
-        assert_ne!(history.history_version(), candidate.prefix.generation);
-    }
-    let before = sess
-        .clone_history()
-        .await
-        .raw_items()
-        .cloned()
-        .collect::<Vec<_>>();
+    let world_state = WorldState::default();
     let mut analytics = CompactionAnalyticsDetails::default();
-    let installed = run_compaction(
+    let mut compaction = Box::pin(run_compaction(
         &sess,
         &step,
         &step,
         /*client_session*/ None,
-        &WorldState::default(),
+        &world_state,
         CompactionTurnMetadata::new(
             CompactionTrigger::Auto,
             CompactionReason::ContextLimit,
@@ -138,9 +161,29 @@ async fn prepared_prefix_rejection_respects_caller_intent(
         /*started_item*/ None,
         Some(candidate),
         fallback,
-    )
-    .await
-    .expect("reject stale result without failing compaction");
+    ));
+    if matches!(change, HistoryChange::Replacement) {
+        tokio::select! {
+            _ = roster.started.notified() => {}
+            result = &mut compaction => panic!("expected a pending roster read, got {result:?}"),
+        }
+        sess.replace_history(
+            vec![original.clone(), original],
+            /*reference_context_item*/ None,
+        )
+        .await;
+    }
+    // The replacement still fits the captured length, but changes the generation.
+    let before = sess.clone_history().await;
+    let window_before = sess.current_window().await;
+    assert!(before.annotated_items().len() >= prefix.len);
+    if matches!(change, HistoryChange::Replacement) {
+        assert_ne!(before.history_version(), prefix.generation);
+        roster.release.notify_one();
+    }
+    let installed = compaction
+        .await
+        .expect("reject stale result without failing compaction");
     // The foreground response has no usage; stale candidate statistics must not leak.
     assert_eq!(
         (
@@ -150,24 +193,24 @@ async fn prepared_prefix_rejection_respects_caller_intent(
         ),
         (None, None, None),
     );
-    let after = sess
-        .clone_history()
-        .await
-        .raw_items()
-        .cloned()
-        .collect::<Vec<_>>();
+    let after = sess.clone_history().await;
     match fallback {
         CompactionFallback::Skip => {
             assert!(!installed);
             assert_eq!(analytics.retained_image_count, None);
             assert_eq!(requests.requests().len(), 0);
-            assert_eq!(after, before);
+            assert_eq!(after.annotated_items(), before.annotated_items());
+            assert_eq!(sess.current_window().await, window_before);
+            assert_eq!(
+                after.world_state_checkpoint(),
+                before.world_state_checkpoint()
+            );
         }
         CompactionFallback::Foreground => {
             assert!(installed);
             assert_eq!(requests.requests().len(), 1);
             let summaries = after
-                .iter()
+                .raw_items()
                 .filter_map(|item| match item {
                     ResponseItem::Compaction {
                         encrypted_content, ..

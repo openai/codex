@@ -2,7 +2,6 @@
 
 use crate::context::world_state::Placement;
 use crate::context::world_state::WorldStateUpdate;
-use crate::context::world_state::WorldStateUpdateContent;
 use codex_context_fragments::RenderedFragment;
 use codex_context_fragments::message_from_parts;
 use codex_protocol::models::ResponseItem;
@@ -22,9 +21,9 @@ pub(crate) fn merge_world_state_updates(updates: Vec<WorldStateUpdate>) -> Vec<R
     let mut items = Vec::new();
     let mut pending = Vec::<RenderedFragment>::new();
     for update in updates {
-        let fragment = match update.content {
-            WorldStateUpdateContent::Fragment(fragment) => fragment,
-            WorldStateUpdateContent::Item(item) => {
+        let fragment = match update.content.into_fragment() {
+            Ok(fragment) => fragment,
+            Err(item) => {
                 items.extend(build_rendered_message(std::mem::take(&mut pending)));
                 items.push(*item);
                 continue;

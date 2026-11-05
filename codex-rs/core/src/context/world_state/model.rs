@@ -125,7 +125,7 @@ impl WorldStateSection for ModelInstructionsState {
         if instructions_hash.is_some() && !announce_model && !instructions_changed {
             return (model_changed.then(|| self.snapshot.clone()), Vec::new());
         }
-        let fragment: Option<Box<dyn ContextualUserFragment>> = if instructions_hash.is_some() {
+        let fragment: Option<super::WorldStateFragment> = if instructions_hash.is_some() {
             Some(Box::new(ModelInstructions {
                 model: announce_model.then(|| model.clone()),
                 instructions: instructions_changed.then(|| self.instructions.clone()),
@@ -133,7 +133,7 @@ impl WorldStateSection for ModelInstructionsState {
         } else {
             (model_changed && !self.instructions.is_empty()).then(|| {
                 Box::new(ModelSwitchInstructions::new(self.instructions.clone()))
-                    as Box<dyn ContextualUserFragment>
+                    as super::WorldStateFragment
             })
         };
         (

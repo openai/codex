@@ -46,7 +46,7 @@ impl WorldStateSection for MultiAgentUsageHintState {
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> SectionTransition<Self::Snapshot> {
-        let fragment: Option<Box<dyn ContextualUserFragment>> = match previous {
+        let fragment: Option<super::WorldStateFragment> = match previous {
             PreviousSectionState::Known(previous) if previous == &self.fingerprint => {
                 return (None, Vec::new());
             }

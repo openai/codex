@@ -28,7 +28,7 @@ impl WorldStateSection for TestSection {
         previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> SectionTransition<Self::Snapshot> {
         let current = self.clone();
-        let fragment: Option<Box<dyn ContextualUserFragment>> = match previous {
+        let fragment: Option<super::WorldStateFragment> = match previous {
             PreviousSectionState::Known(previous) if self.value != previous.value => {
                 Some(Box::new(TestFragment(self.value.clone())))
             }
@@ -520,9 +520,9 @@ fn mixed_output_preserves_order_and_restores_its_snapshot() {
     assert_eq!(
         context
             .into_iter()
-            .map(|update| match update.content {
-                WorldStateUpdateContent::Fragment(fragment) => fragment.into_boxed_response_item(),
-                WorldStateUpdateContent::Item(item) => *item,
+            .map(|update| match update.content.into_fragment() {
+                Ok(fragment) => fragment.into_boxed_response_item(),
+                Err(item) => *item,
             })
             .collect::<Vec<_>>(),
         vec![

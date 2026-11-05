@@ -35,14 +35,14 @@ impl RealtimeState {
         }
     }
 
-    fn render_start(&self) -> Box<dyn ContextualUserFragment> {
+    fn render_start(&self) -> super::WorldStateFragment {
         match self.start_instructions.as_deref() {
             Some(instructions) => Box::new(RealtimeStartWithInstructions::new(instructions)),
             None => Box::new(RealtimeStartInstructions),
         }
     }
 
-    fn render_transition(&self, previous_active: bool) -> Option<Box<dyn ContextualUserFragment>> {
+    fn render_transition(&self, previous_active: bool) -> Option<super::WorldStateFragment> {
         match (previous_active, self.snapshot.active) {
             (false, true) => Some(self.render_start()),
             (true, false) => Some(match self.end_instructions.as_deref() {

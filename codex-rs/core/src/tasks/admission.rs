@@ -61,7 +61,7 @@ pub(super) async fn admit(
         .filter(|_| !cancellation.is_cancelled())
         .ok_or_else(|| CodexErr::new(CodexErrorDetails::TurnAborted))?;
     task._agent_execution_guard = Some(guard);
-    task.pending_admission_input.take().ok_or_else(|| {
+    task.pending_initial_input.take().ok_or_else(|| {
         CodexErr::Fatal("initial input missing from the task awaiting host admission".into())
     })
 }
@@ -77,7 +77,7 @@ impl Session {
     }
 
     /// Interruption and suspension stop the task before it can persist its initial input.
-    pub(crate) async fn record_unadmitted_input(
+    pub(crate) async fn record_pending_initial_input(
         self: &Arc<Self>,
         context: &Arc<TurnContext>,
         turn_state: &Mutex<TurnState>,

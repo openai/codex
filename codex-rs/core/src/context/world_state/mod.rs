@@ -19,6 +19,7 @@ pub(crate) mod test_support;
 mod tools;
 mod top_level_tools;
 
+use crate::AgentSessionReader;
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::RenderedWorldStateFragment;
@@ -36,6 +37,7 @@ use sha1::Digest;
 use sha1::Sha1;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 pub(crate) use agents_md::AgentsMdState;
 pub(crate) use apps_instructions::AppsInstructionsState;
@@ -43,6 +45,8 @@ pub(crate) use collaboration_mode::CollaborationModeState;
 pub(crate) use compact_permissions::CompactPermissionsState;
 pub(crate) use context_window_guidance::ContextWindowGuidanceState;
 pub(crate) use environment::EnvironmentsState;
+use environment::RenderedEnvironments;
+pub(crate) use environment::format_agent_paths;
 pub(crate) use environments_instructions::EnvironmentsInstructionsState;
 pub(crate) use managed_developer_instructions::ManagedDeveloperInstructions;
 pub(crate) use managed_developer_instructions::ManagedDeveloperInstructionsState;
@@ -73,31 +77,42 @@ pub(crate) enum Placement {
     Mergeable,
 }
 
+pub(crate) type WorldStateFragment = Box<dyn ContextualUserFragment + Send>;
+
 pub(crate) enum WorldStateUpdateContent {
-    Fragment(Box<dyn ContextualUserFragment>),
+    Fragment(WorldStateFragment),
+    Environment(Box<RenderedEnvironments>),
     Item(Box<ResponseItem>),
 }
 
+impl WorldStateUpdateContent {
+    pub(crate) fn into_fragment(self) -> Result<WorldStateFragment, Box<ResponseItem>> {
+        match self {
+            Self::Fragment(fragment) => Ok(fragment),
+            Self::Environment(environment) => Ok(environment),
+            Self::Item(item) => Err(item),
+        }
+    }
+}
+
 impl WorldStateUpdate {
-    pub(crate) fn fragment(fragment: impl ContextualUserFragment + 'static) -> Self {
+    pub(crate) fn fragment(fragment: impl ContextualUserFragment + Send + 'static) -> Self {
         Self::boxed_fragment(Box::new(fragment))
     }
 
-    pub(crate) fn boxed_fragment(fragment: Box<dyn ContextualUserFragment>) -> Self {
+    fn boxed_fragment(fragment: WorldStateFragment) -> Self {
         Self {
             placement: Placement::Mergeable,
             content: WorldStateUpdateContent::Fragment(fragment),
         }
     }
 
-    pub(crate) fn optional_boxed_fragment(
-        fragment: Option<Box<dyn ContextualUserFragment>>,
-    ) -> Vec<Self> {
+    pub(crate) fn optional_boxed_fragment(fragment: Option<WorldStateFragment>) -> Vec<Self> {
         fragment.into_iter().map(Self::boxed_fragment).collect()
     }
 
     pub(crate) fn optional_standalone_boxed_fragment(
-        fragment: Option<Box<dyn ContextualUserFragment>>,
+        fragment: Option<WorldStateFragment>,
     ) -> Vec<Self> {
         fragment
             .into_iter()
@@ -129,9 +144,9 @@ pub(crate) fn split_prefix_updates(
     let mut context = Vec::new();
     for update in updates {
         match update.placement {
-            Placement::Prefix => prefix.push(match update.content {
-                WorldStateUpdateContent::Item(item) => *item,
-                WorldStateUpdateContent::Fragment(fragment) => fragment.into_boxed_response_item(),
+            Placement::Prefix => prefix.push(match update.content.into_fragment() {
+                Ok(fragment) => fragment.into_boxed_response_item(),
+                Err(item) => *item,
             }),
             Placement::Standalone | Placement::Mergeable => context.push(update),
         }
@@ -408,6 +423,7 @@ fn hash_component(hasher: &mut Sha1, value: &str) {
 /// Live model-visible state, keyed by the same stable section IDs used in rollouts.
 #[derive(Default)]
 pub(crate) struct WorldState {
+    pub(crate) host_roster_reader: Option<Arc<dyn AgentSessionReader>>,
     sections: IndexMap<&'static str, Box<dyn ErasedWorldStateSection>>,
 }
 
@@ -517,6 +533,30 @@ enum RenderScope {
 }
 
 impl WorldState {
+    /// Read the roster only when rendering an environment fragment. If the read fails,
+    /// keep rendering the rest of the fragment.
+    pub(crate) async fn resolve_host_roster(&self, updates: &mut [WorldStateUpdate]) {
+        if let Some(reader) = &self.host_roster_reader
+            && let Some(environment) =
+                updates
+                    .iter_mut()
+                    .find_map(|update| match &mut update.content {
+                        WorldStateUpdateContent::Environment(environment) => Some(environment),
+                        WorldStateUpdateContent::Fragment(_) | WorldStateUpdateContent::Item(_) => {
+                            None
+                        }
+                    })
+        {
+            match reader.children().await {
+                Ok(children) => {
+                    let roster = format_agent_paths(children.into_iter().map(|agent| agent.path));
+                    environment.subagents = (!roster.is_empty()).then_some(roster);
+                }
+                Err(_) => tracing::warn!("failed to read host agent roster for prompt context"),
+            }
+        }
+    }
+
     pub(crate) fn full_context_excluded_section_ids(
         &self,
     ) -> impl Iterator<Item = &'static str> + '_ {
@@ -551,6 +591,14 @@ impl WorldState {
     }
 
     /// Renders restorable sections as new, preserving update order and placement.
+    pub(crate) async fn render_full_with_host_roster(
+        &self,
+    ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
+        let (snapshot, mut updates) = self.render_full();
+        self.resolve_host_roster(&mut updates).await;
+        (snapshot, updates)
+    }
+
     pub(crate) fn render_full(&self) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
         self.render_with(RenderScope::FullContext, /*stored*/ None, |_, _| {
             PreviousSectionState::Absent

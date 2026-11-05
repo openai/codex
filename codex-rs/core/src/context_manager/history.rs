@@ -556,17 +556,6 @@ impl ContextManager {
         self.reference_context_item.clone()
     }
 
-    pub(crate) fn update_world_state(
-        &mut self,
-        world_state: &WorldState,
-    ) -> (Vec<WorldStateUpdate>, Option<WorldStateItem>) {
-        let (snapshot, fragments) =
-            world_state.render_history_diff(self.world_state_baseline.as_ref(), self.raw_items());
-        let rollout_item = self.world_state_item(&snapshot);
-        self.world_state_baseline = Some(snapshot);
-        (fragments, rollout_item)
-    }
-
     pub(crate) fn render_step_world_state(
         &self,
         world_state: &WorldState,

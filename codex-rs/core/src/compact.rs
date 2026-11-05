@@ -444,15 +444,14 @@ async fn run_compact_task_inner_impl(
         new_history =
             crate::compact_pending_input::insert_summary(new_history, summary, pending_sequence);
     }
+    let rendered = world_state.render_full_with_host_roster().await;
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
-
-    let (new_history, world_state_baseline) = build_compaction_replacement_history(
-        sess.as_ref(),
-        &replacement_step_context,
-        &world_state,
-        new_history,
-    )
-    .await;
+    let (updates, world_state_baseline) = sess
+        .assemble_initial_context(&replacement_step_context, rendered)
+        .await;
+    let (prefix, context) = split_prefix_updates(updates);
+    let new_history =
+        assemble_compaction_history(new_history, prefix, merge_world_state_updates(context));
     sess.replace_compacted_history(
         new_history,
         replacement_step_context.to_turn_context_item(),

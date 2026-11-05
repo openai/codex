@@ -86,8 +86,8 @@ pub(crate) struct RunningTask {
     pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,
-    /// Initial input still owned by Core while the host decides whether the task may run.
-    pub(crate) pending_admission_input: Option<Vec<TurnInput>>,
+    /// Unrecorded input retained during host admission or preparation that can wait on the roster.
+    pub(crate) pending_initial_input: Option<Vec<TurnInput>>,
     pub(crate) _diagnostics_guard: GaugeGuard,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,

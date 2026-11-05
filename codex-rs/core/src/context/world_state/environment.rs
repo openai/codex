@@ -1,7 +1,9 @@
+use super::Placement;
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
 use super::WorldStateUpdate;
+use super::WorldStateUpdateContent;
 use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
 use crate::context::environment_context::NetworkContext;
@@ -11,6 +13,7 @@ use crate::environment_selection::TurnEnvironmentState;
 use crate::session::turn_context::TurnContext;
 use crate::shell::ShellType;
 use codex_features::Feature;
+use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
@@ -179,7 +182,7 @@ impl WorldStateSection for EnvironmentsState {
                 .values()
                 .all(|update| matches!(update, EnvironmentUpdate::Current(_)));
         let fragment = (!updates.is_empty() || turn_context_values_changed).then(|| {
-            Box::new(RenderedEnvironments {
+            let environment = Box::new(RenderedEnvironments {
                 updates,
                 legacy_single,
                 include_primary: multiple_environments || previous_multiple_environments,
@@ -193,12 +196,13 @@ impl WorldStateSection for EnvironmentsState {
                 network: self.network.clone(),
                 filesystem: self.filesystem.clone(),
                 subagents: self.subagents.clone(),
-            }) as Box<dyn ContextualUserFragment>
+            });
+            WorldStateUpdate {
+                placement: Placement::Mergeable,
+                content: WorldStateUpdateContent::Environment(environment),
+            }
         });
-        (
-            Some(current),
-            WorldStateUpdate::optional_boxed_fragment(fragment),
-        )
+        (Some(current), fragment.into_iter().collect())
     }
 }
 
@@ -224,7 +228,7 @@ impl ContextualUserFragment for EnvironmentsState {
     }
 }
 
-struct RenderedEnvironments {
+pub(crate) struct RenderedEnvironments {
     updates: BTreeMap<String, EnvironmentUpdate>,
     legacy_single: bool,
     include_primary: bool,
@@ -235,7 +239,7 @@ struct RenderedEnvironments {
     timezone: Option<String>,
     network: Option<NetworkContext>,
     filesystem: Option<FileSystemContext>,
-    subagents: Option<String>,
+    pub(crate) subagents: Option<String>,
 }
 
 enum EnvironmentUpdate {
@@ -565,3 +569,22 @@ mod tests;
 #[cfg(test)]
 #[path = "environment_render_tests.rs"]
 mod render_tests;
+
+pub(crate) fn format_agent_paths(paths: impl Iterator<Item = AgentPath>) -> String {
+    const MAX_AGENTS: usize = 8;
+    const MAX_BYTES: usize = 1_024;
+    let mut lines = Vec::new();
+    let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
+    for path in paths {
+        if lines.len() == MAX_AGENTS {
+            break;
+        }
+        let line = format!(r#"<agent name="{path}" />"#);
+        let line_bytes = "    \n".len() + line.len();
+        if rendered_bytes + line_bytes <= MAX_BYTES {
+            rendered_bytes += line_bytes;
+            lines.push(line);
+        }
+    }
+    lines.join("\n")
+}

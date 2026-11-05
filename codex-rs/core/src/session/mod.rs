@@ -4127,12 +4127,13 @@ impl Session {
         let world_state = self
             .build_world_state_for_step(step_context, /*new_window*/ false)
             .await?;
-        let (world_state_snapshot, fragments, world_state_item) = self
+        let (world_state_snapshot, mut fragments, world_state_item) = self
             .state
             .lock()
             .await
             .history
             .render_step_world_state(&world_state);
+        world_state.resolve_host_roster(&mut fragments).await;
         let items = crate::context_manager::updates::merge_world_state_updates(fragments);
         if !items.is_empty() {
             self.record_conversation_items(turn_context, &step_context.settings.model_info, &items)
@@ -4968,6 +4969,15 @@ impl Session {
         step_context: &StepContext,
         world_state: &WorldState,
     ) -> (Vec<WorldStateUpdate>, WorldStateSnapshot) {
+        let rendered = world_state.render_full_with_host_roster().await;
+        self.assemble_initial_context(step_context, rendered).await
+    }
+
+    pub(crate) async fn assemble_initial_context(
+        &self,
+        step_context: &StepContext,
+        (snapshot, updates): (WorldStateSnapshot, Vec<WorldStateUpdate>),
+    ) -> (Vec<WorldStateUpdate>, WorldStateSnapshot) {
         let turn_context = step_context.turn.as_ref();
         let mut developer_sections = Vec::<RenderedFragment>::with_capacity(8);
         let mut contextual_user_sections = Vec::<RenderedFragment>::with_capacity(2);
@@ -5114,7 +5124,6 @@ impl Session {
                 .render_with_hints(context_window_hints),
             );
         }
-        let (snapshot, updates) = world_state.render_full();
         let (mut prefix, context) = split_prefix_updates(updates);
         let mut items = Vec::with_capacity(4);
         let mut context = context.into_iter();
@@ -5125,9 +5134,9 @@ impl Session {
             let mut initial_multi_agent_mode = None;
             let mut managed_developer_instructions = None;
             for update in context.by_ref() {
-                let fragment = match update.content {
-                    WorldStateUpdateContent::Fragment(fragment) => fragment,
-                    WorldStateUpdateContent::Item(item) => {
+                let fragment = match update.content.into_fragment() {
+                    Ok(fragment) => fragment,
+                    Err(item) => {
                         next_item = Some(*item);
                         break;
                     }
@@ -5339,14 +5348,11 @@ impl Session {
                 crate::compact_remote_v2::RETAINED_MESSAGE_TOKEN_BUDGET,
                 &history.file_audio_durations,
             );
-        let window = {
-            let mut state = self.state.lock().await;
-            state.start_new_context_window()
-        };
-        let (window_number, window_ids) = window;
-        let (context_updates, world_state_snapshot) = self
-            .build_initial_context_with_world_state(step_context, world_state.as_ref())
-            .await;
+        // Resolve the roster before allocating a new context window.
+        let rendered = world_state.render_full_with_host_roster().await;
+        let (window_number, window_ids) = self.state.lock().await.start_new_context_window();
+        let (context_updates, world_state_snapshot) =
+            self.assemble_initial_context(step_context, rendered).await;
         let context_items =
             crate::context_manager::updates::merge_world_state_updates(context_updates)
                 .into_iter()
@@ -5424,15 +5430,20 @@ impl Session {
                 Some(WorldStateItem::full(snapshot.into_object())),
             )
         } else {
-            let (world_state_items, world_state_item) = {
-                let mut state = self.state.lock().await;
-                let (fragments, rollout_item) = state.history.update_world_state(&world_state);
-                (
-                    crate::context_manager::updates::merge_world_state_updates(fragments),
-                    rollout_item,
-                )
-            };
-            (world_state_items, world_state_item)
+            let (snapshot, mut fragments, world_state_item) = self
+                .state
+                .lock()
+                .await
+                .history
+                .render_step_world_state(&world_state);
+            world_state.resolve_host_roster(&mut fragments).await;
+            let items = crate::context_manager::updates::merge_world_state_updates(fragments);
+            self.state
+                .lock()
+                .await
+                .history
+                .set_world_state_baseline(snapshot);
+            (items, world_state_item)
         };
         if !should_inject_full_context && turn_context_changed {
             context_items.extend(

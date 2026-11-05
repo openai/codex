@@ -3,11 +3,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use codex_core::AgentConfigUpdate;
 use codex_core::AgentControl;
 use codex_core::AgentExecutionGuard;
 use codex_core::AgentInfo;
+use codex_core::AgentRef;
 use codex_core::AgentTarget;
 use codex_core::AgentTurnOutcome;
 use codex_core::DeliveryReceipt;
@@ -71,8 +74,46 @@ impl codex_core::AgentTurnAdmission for HostRuntime {
     }
 }
 
+pub(super) struct HostSessionReader {
+    root: ThreadId,
+    pub(super) children: Mutex<Option<Vec<AgentRef>>>,
+    pub(super) children_reads: AtomicUsize,
+}
+
+impl codex_core::AgentSessionReader for HostSessionReader {
+    fn root(&self) -> BoxFuture<'_, CodexResult<AgentRef>> {
+        Box::pin(async {
+            Ok(AgentRef {
+                thread_id: self.root,
+                path: AgentPath::root(),
+            })
+        })
+    }
+
+    fn parent(&self) -> BoxFuture<'_, CodexResult<Option<AgentRef>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn children(&self) -> BoxFuture<'_, CodexResult<Vec<AgentRef>>> {
+        Box::pin(async {
+            self.children_reads.fetch_add(1, Ordering::Relaxed);
+            self.children
+                .lock()
+                .expect("host roster")
+                .clone()
+                .ok_or_else(|| CodexErr::InvalidRequest("host agent session unavailable".into()))
+        })
+    }
+}
+
 pub(super) fn install_host_runtime(data: &codex_extension_api::ExtensionData) {
     data.insert(codex_core::AgentRuntimeOwnership::Host);
+    let reader = data.get_or_init(|| HostSessionReader {
+        root: ThreadId::from_string(data.level_id()).expect("test thread identity"),
+        children: Mutex::new(Some(Vec::new())),
+        children_reads: AtomicUsize::new(0),
+    });
+    data.get_or_init(|| reader as Arc<dyn codex_core::AgentSessionReader>);
     data.get_or_init(|| Arc::new(HostRuntime) as Arc<dyn codex_core::AgentTurnAdmission>);
 }
 

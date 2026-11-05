@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/scenarios_budget_context.rs
-expression: "context_snapshot::format_request_history_snapshot(\"A host contributes budget reminders at thresholds. Remote compaction spends within the same threshold, so its captured reminder is omitted and the next sampling step inserts the fresh remainder once.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+expression: snapshot
 ---
-Scenario: A host contributes budget reminders at thresholds. Remote compaction spends within the same threshold, so its captured reminder is omitted and the next sampling step inserts the fresh remainder once.
+Scenario: Core renders the host's roster with native World State cadence. Compaction rebuilds it from current membership, and the next sampling step refreshes the budget after compaction spending.
 
 ## Window 1
 -- request 1 (turn) --
@@ -31,7 +31,16 @@ Scenario: A host contributes budget reminders at thresholds. Remote compaction s
 04:message/developer:
     <MULTI_AGENT_MODE>
 05:message/user:
-    <ENVIRONMENT_CONTEXT>
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
+      <subagents>
+        <agent name="/root/release" />
+      </subagents>
+    </environment_context>
 06:message/user:
     Start planning the release.
 07:message/developer:
@@ -83,7 +92,17 @@ Scenario: A host contributes budget reminders at thresholds. Remote compaction s
 06:message/developer:
     <MULTI_AGENT_MODE>
 07:message/user:
-    <ENVIRONMENT_CONTEXT>
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
+      <subagents>
+        <agent name="/root/release" />
+        <agent name="/root/testing" />
+      </subagents>
+    </environment_context>
 08:message/user:
     Check the release plan.
 09:compaction:encrypted=true; chars=25; hash=455278c90f6b4d93
@@ -96,3 +115,14 @@ Scenario: A host contributes budget reminders at thresholds. Remote compaction s
 -- request 6 (turn) --
 12:message/user:
     Finish the release plan.
+-- request 7 (turn) --
+13:message/user:
+    <environment_context>
+      <cwd><CWD>/roster-check</cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="disabled"><...e="unrestricted" /></permission_profile></filesystem> [hash=d40b2f45cb028888]
+    </environment_context>
+14:message/user:
+    Check the unavailable roster.

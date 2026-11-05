@@ -26,6 +26,7 @@ const MAX_SNAPSHOT_LINE_CHARS: usize = 160;
 #[derive(Debug, Clone, Default)]
 pub struct ContextSnapshotOptions {
     rewrite_known_segments: bool,
+    preserve_environment_context: bool,
     include_request_settings: bool,
 }
 
@@ -35,6 +36,12 @@ impl ContextSnapshotOptions {
     /// dynamic values such as paths and IDs before rendering.
     pub fn rewrite_known_segments(mut self) -> Self {
         self.rewrite_known_segments = true;
+        self
+    }
+
+    /// Keep normalized environment text when rewriting other known segments.
+    pub fn preserve_environment_context(mut self) -> Self {
+        self.preserve_environment_context = true;
         self
     }
 

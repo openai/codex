@@ -180,6 +180,17 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     super::estimate_response_item_model_visible_bytes(item, &FileAudioDurations::default())
 }
 
+impl ContextManager {
+    fn update_world_state(
+        &mut self,
+        world_state: &WorldState,
+    ) -> (Vec<WorldStateUpdate>, Option<WorldStateItem>) {
+        let (snapshot, updates, item) = self.render_step_world_state(world_state);
+        self.set_world_state_baseline(snapshot);
+        (updates, item)
+    }
+}
+
 #[test]
 fn delivered_assistant_context_invalidates_reviews_without_changing_authorization() {
     let revisions = |history: &ContextManager| {
@@ -765,6 +776,7 @@ fn world_state_reconciles_matching_legacy_history_once() {
             .into_iter()
             .map(|update| match update.content {
                 WorldStateUpdateContent::Fragment(fragment) => fragment.body().expect_text(),
+                WorldStateUpdateContent::Environment(_) => panic!("unexpected environment"),
                 WorldStateUpdateContent::Item(item) =>
                     panic!("expected a text fragment, got {item:?}"),
             })

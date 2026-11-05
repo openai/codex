@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::context::ContextualUserFragment;
+use crate::context::world_state::WorldStateUpdateContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
