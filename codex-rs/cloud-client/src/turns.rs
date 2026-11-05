@@ -22,6 +22,8 @@ pub struct AddUserMessageRequest {
     pub thread_id: String,
     pub client_user_message_id: String,
     pub text: String,
+    /// Optional classification supplied by the caller for this turn.
+    pub turn_trigger: Option<String>,
     pub mode: SubmissionMode,
     pub shared_access: bool,
 }
@@ -99,6 +101,7 @@ impl Client {
                 }],
             }),
             thread_id: request.thread_id.clone(),
+            turn_trigger: request.turn_trigger.clone(),
             access: request.shared_access.then_some(1),
             mode: Some(match request.mode {
                 SubmissionMode::Steer => 1,

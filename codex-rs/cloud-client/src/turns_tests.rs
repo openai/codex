@@ -7,6 +7,7 @@ fn request() -> AddUserMessageRequest {
         thread_id: "t".into(),
         client_user_message_id: "m".into(),
         text: "hello".into(),
+        turn_trigger: None,
         mode: SubmissionMode::StartIfIdle,
         shared_access: true,
     }
@@ -36,9 +37,14 @@ async fn submission_preserves_admission_variants_and_wire_identity() {
         }
         payload.extend([0xa0, 0x06, 7]); // Unknown metadata survives.
         let mut fixture = fixture(response(vec![frame(&payload)], tonic::Status::ok(""))).await;
+        let turn_trigger = (mode_number == 3).then(|| "safety_recourse_follow_up".to_owned());
         let result = fixture
             .client
-            .add_user_message(&AddUserMessageRequest { mode, ..request() })
+            .add_user_message(&AddUserMessageRequest {
+                turn_trigger,
+                mode,
+                ..request()
+            })
             .await
             .unwrap();
         let turn = TurnSummary {
@@ -88,6 +94,11 @@ async fn submission_preserves_admission_variants_and_wire_identity() {
                 ),
             ),
             message(/*tag*/ 23, b"t"),
+            if mode_number == 3 {
+                message(/*tag*/ 25, b"safety_recourse_follow_up")
+            } else {
+                Vec::new()
+            },
             vec![0xd0, 1, 1, 0xf0, 1, mode_number],
         ]
         .concat();

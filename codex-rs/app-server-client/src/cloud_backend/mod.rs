@@ -141,6 +141,7 @@ pub fn connect(client: cloud::Client, account: protocol::GetAccountResponse) -> 
         client,
         account,
         loaded: None,
+        warned_partial_history: None,
     };
     tokio::spawn(async move {
         let mut replies = Replies::default();
@@ -211,7 +212,7 @@ async fn handle_request(
         replies.admit_turn(&params.thread_id, output)?;
     }
     match replies
-        .while_listening(requests.handle(request), output)
+        .while_listening(requests.handle(request, output), output)
         .await?
     {
         requests::Response::Value(value) => Ok(value),
@@ -222,6 +223,7 @@ async fn handle_request(
                 .replace(id, requests.client.attach(id), output)
                 .await?;
             requests.loaded = Some(settings);
+            requests.warned_partial_history = None;
             Ok(result)
         }
     }

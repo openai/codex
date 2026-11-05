@@ -9,6 +9,8 @@ pub(super) struct AddRequest {
     pub input: Option<Input>,
     #[prost(string, tag = "23")]
     pub thread_id: String,
+    #[prost(string, optional, tag = "25")]
+    pub turn_trigger: Option<String>,
     #[prost(int32, optional, tag = "26")]
     pub access: Option<i32>,
     #[prost(int32, optional, tag = "30")]

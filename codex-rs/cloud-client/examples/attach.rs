@@ -25,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
             thread_id: thread_id.clone(),
             client_user_message_id,
             text,
+            turn_trigger: None,
             mode: SubmissionMode::StartIfIdle,
             shared_access: false,
         }),
