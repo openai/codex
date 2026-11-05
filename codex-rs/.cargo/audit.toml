@@ -25,4 +25,6 @@ ignore = [
     "RUSTSEC-2026-0410", # zstd-safe 7.2.4 pulls in zstd-sys 2.0.16. Its allocator bug only affects wasm32, and Codex ships native binaries. Remove when the lockfile uses zstd-sys >=2.1.2.
     # Reviewed 2026-10-29.
     "RUSTSEC-2026-0418", # libz-sys 1.1.29 via curl-sys/curl in codex-http-client is Windows-only and skips the affected probe; cc is locked to 1.2.55 (<1.6.0). Remove when libz-sys >=1.1.31; reassess if used on Unix with cc >=1.6.0.
+    # Reviewed 2026-11-05.
+    "RUSTSEC-2026-0441", # pin-utils 0.1.0 via AWS Smithy and loom under tokio-graceful; unmaintained with no patched release; remove when these paths drop pin-utils
 ]
