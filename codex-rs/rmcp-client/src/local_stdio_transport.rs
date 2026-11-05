@@ -18,11 +18,12 @@ use rmcp::service::TxJsonRpcMessage;
 use rmcp::transport::Transport;
 use rmcp::transport::async_rw::AsyncRwTransport;
 use tokio::io::AsyncRead;
-use tokio::process::ChildStderr;
-use tokio::process::ChildStdin;
 use tokio::sync::oneshot;
 
 use crate::bounded_stdio_transport::BoundedStdioTransport;
+use crate::local_stdio_io::LocalStdio;
+use crate::local_stdio_io::Stderr;
+use crate::local_stdio_io::Stdin;
 use crate::protocol_mode::McpProtocolMode;
 use codex_utils_pty::Child;
 
@@ -138,7 +139,7 @@ impl Discovery {
 
 enum StdioTransport {
     /// Preserve rmcp's existing framing for servers using the initialize handshake.
-    Legacy(AsyncRwTransport<RoleClient, Box<dyn AsyncRead + Unpin + Send>, ChildStdin>),
+    Legacy(AsyncRwTransport<RoleClient, Box<dyn AsyncRead + Unpin + Send>, Stdin>),
     /// Bound frames and skip messages unknown to the client during 2026-07-28 discovery.
     Modern(BoundedStdioTransport),
     Closed,
@@ -146,19 +147,16 @@ enum StdioTransport {
 
 impl LocalStdioTransport {
     pub(super) fn new(
-        mut child: Child,
+        stdio: LocalStdio,
         program_name: String,
         protocol_mode: McpProtocolMode,
-    ) -> io::Result<(Self, Option<ChildStderr>)> {
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| io::Error::other("MCP server stdin was not piped"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("MCP server stdout was not piped"))?;
-        let stderr = child.stderr.take();
+    ) -> (Self, Option<Stderr>) {
+        let LocalStdio {
+            child,
+            stdin,
+            stdout,
+            stderr,
+        } = stdio;
         let transport = match protocol_mode {
             McpProtocolMode::Legacy => {
                 StdioTransport::Legacy(AsyncRwTransport::new(Box::new(stdout), stdin))
@@ -167,14 +165,14 @@ impl LocalStdioTransport {
                 StdioTransport::Modern(BoundedStdioTransport::new(stdin, stdout, program_name))
             }
         };
-        Ok((
+        (
             Self {
                 child: Some(Box::new(child)),
                 transport,
                 discovery: None,
             },
             stderr,
-        ))
+        )
     }
 
     pub(super) fn watch_discovery(

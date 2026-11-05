@@ -67,6 +67,8 @@ pub enum ChildStdin {
     Null,
     #[cfg(unix)]
     File(std::os::fd::OwnedFd),
+    #[cfg(windows)]
+    File(std::os::windows::io::OwnedHandle),
 }
 
 /// A local command whose complete launch contract is known to both backends.
@@ -186,6 +188,20 @@ impl Command {
         self
     }
 
+    /// Supply the child endpoint of a Windows output pipe.
+    #[cfg(windows)]
+    pub fn stdout_handle(&mut self, handle: std::os::windows::io::OwnedHandle) -> &mut Self {
+        self.inner.stdout(TokioStdio::from(handle));
+        self
+    }
+
+    /// Supply the child endpoint of a Windows diagnostic pipe.
+    #[cfg(windows)]
+    pub fn stderr_handle(&mut self, handle: std::os::windows::io::OwnedHandle) -> &mut Self {
+        self.inner.stderr(TokioStdio::from(handle));
+        self
+    }
+
     pub fn descriptor_policy(&mut self, policy: DescriptorPolicy) -> &mut Self {
         self.descriptor_policy = policy;
         self
@@ -289,6 +305,8 @@ impl Command {
             ChildStdin::Null => TokioStdio::null(),
             #[cfg(unix)]
             ChildStdin::File(fd) => TokioStdio::from(fd),
+            #[cfg(windows)]
+            ChildStdin::File(handle) => TokioStdio::from(handle),
         });
         #[cfg(unix)]
         {

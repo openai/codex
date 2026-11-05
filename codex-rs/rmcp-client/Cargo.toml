@@ -55,6 +55,7 @@ tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
     "io-util",
     "macros",
+    "net",
     "process",
     "signal",
     "rt-multi-thread",
@@ -90,7 +91,16 @@ keyring = { workspace = true, features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }
-windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+uuid = { workspace = true, features = ["v4"] }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+] }
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Pipes"] }
 
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }

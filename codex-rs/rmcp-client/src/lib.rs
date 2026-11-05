@@ -15,6 +15,7 @@ mod http_client_adapter;
 mod http_client_redirect;
 mod http_headers;
 mod in_process_transport;
+mod local_stdio_io;
 mod local_stdio_transport;
 mod logging_client_handler;
 mod oauth;
