@@ -12,6 +12,8 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-connectors = { workspace = true }
 codex-core = { workspace = true }
+codex-features = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-http-client = { workspace = true }
 codex-login = { workspace = true }
@@ -22,6 +24,10 @@ serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
+codex-protocol = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+wiremock = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }

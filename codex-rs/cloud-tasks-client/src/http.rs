@@ -37,6 +37,10 @@ impl HttpClient {
         Self { base_url, backend }
     }
 
+    pub fn from_backend(base_url: String, backend: backend::Client) -> Self {
+        Self { base_url, backend }
+    }
+
     pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
         self.backend = self.backend.clone().with_user_agent(ua);
         self

@@ -33,7 +33,7 @@ async fn explicit_provider_token_survives_a_workspace_switch_during_setup() {
         |_| {
             attempts += 1;
             async {
-                let (_, auth) = provider.api_provider_and_auth().await?;
+                let (_, resolved) = provider.request_provider_and_auth(/*scope*/ None).await?;
                 codex_login::auth::login_with_chatgpt_auth_tokens(
                     home.path(),
                     &token,
@@ -41,7 +41,7 @@ async fn explicit_provider_token_survives_a_workspace_switch_during_setup() {
                     /*chatgpt_plan_type*/ None,
                 )?;
                 manager.reload().await;
-                Ok(auth)
+                Ok(resolved.auth)
             }
         },
     )

@@ -5,6 +5,7 @@ use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::CodexAuth;
 use codex_login::login_with_api_key;
+use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::protocol::SessionSource;
@@ -14,6 +15,7 @@ use tempfile::TempDir;
 use test_case::test_case;
 use tokio::time::timeout;
 use tracing::instrument::WithSubscriber;
+use tracing_subscriber::layer::SubscriberExt;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -52,7 +54,7 @@ async fn worker_starts_with_otlp_metrics_exporter_without_log_exporter() {
     };
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-test"));
 
-    let worker = TurnCostWorker::spawn(Arc::new(config), auth_manager)
+    let worker = TurnCostWorker::spawn(Arc::new(config), auth_manager, /*runtime_auth*/ None)
         .expect("OTLP metrics exporter should enable turn-cost collection");
     wait_for_request_count(&server, /*expected*/ 1).await;
     worker.shutdown();
@@ -207,6 +209,7 @@ async fn custom_provider_auth_failure_retries_without_auth_changes() {
         config: Arc::new(config),
         backend,
         turns: HashMap::new(),
+        runtime_auth: None,
     };
     assert_eq!(
         runtime.probe_backend().await,
@@ -255,6 +258,7 @@ async fn custom_provider_does_not_send_chatgpt_auth_for_turn_costs() {
         config: Arc::new(config),
         backend,
         turns: HashMap::new(),
+        runtime_auth: None,
     };
 
     assert_eq!(runtime.probe_backend().await, BackendAvailability::Disabled);
@@ -406,6 +410,7 @@ async fn test_runtime(server: &MockServer, auth_manager: Arc<AuthManager>) -> Wo
         config: Arc::new(config),
         backend,
         turns: HashMap::new(),
+        runtime_auth: None,
     }
 }
 
@@ -477,6 +482,11 @@ async fn turn_cost_failures_do_not_log_response_bodies(status: u16) {
         .with_max_level(tracing::Level::DEBUG)
         .with_writer(Arc::new(capture.reopen().expect("log writer")))
         .finish();
+    // A parallel test can first register this callsite without a subscriber.
+    // Keep two dispatchers alive so it cannot globally disable our log capture.
+    let _parallel_dispatch = tracing::Dispatch::new(
+        tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::OFF),
+    );
     async {
         assert_eq!(
             runtime.probe_backend().await,
@@ -492,3 +502,6 @@ async fn turn_cost_failures_do_not_log_response_bodies(status: u16) {
     assert!(!logs.contains("private-workspace-response-marker"));
     server.verify().await;
 }
+
+#[path = "turn_cost_worker_runtime_auth_tests.rs"]
+mod runtime_auth;

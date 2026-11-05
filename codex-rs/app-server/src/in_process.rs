@@ -460,8 +460,16 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
 
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
+        let runtime_auth_slot = args
+            .config
+            .features
+            .enabled(codex_features::Feature::RuntimeAgentInstances)
+            .then(codex_runtime_agent_instance::RuntimeAuthSlot::default);
+        let analytics_events_client = analytics_events_client_from_config(
+            Arc::clone(&auth_manager),
+            args.config.as_ref(),
+            runtime_auth_slot.clone(),
+        );
         let analytics_events_flush_client = analytics_events_client.clone();
         // A client can be waiting for process/kill while nobody is polling next_event.
         let (process_reply_tx, mut process_reply_rx) = mpsc::channel(channel_capacity);
@@ -528,6 +536,7 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                     &auth_manager,
                 ))),
                 auth_manager,
+                runtime_auth_slot,
                 installation_id,
                 code_mode_session_provider: None,
                 rpc_transport: AppServerRpcTransport::InProcess,

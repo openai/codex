@@ -77,10 +77,13 @@ async fn production_http_forwards_headers_and_decodes_response() {
         .expect("environment HTTP response should write");
         String::from_utf8(request).expect("environment HTTP request should be UTF-8")
     });
-    let http = RouteAwareClientPool::new_without_request_logging(
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        ClientRouteClass::Api,
-    );
+    let http = EnvironmentClient {
+        http: RouteAwareClientPool::new_without_request_logging(
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            ClientRouteClass::Api,
+        ),
+        auth: None,
+    };
     let base_url = format!("http://{address}");
     let headers =
         HeaderMap::from_iter([(AUTHORIZATION, HeaderValue::from_static("Bearer real-token"))]);

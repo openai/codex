@@ -227,15 +227,6 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         })
     }
 
-    /// Returns the endpoint and authentication for one API client.
-    /// Providers with credential-dependent routing should resolve both from the same auth read.
-    fn api_provider_and_auth(
-        &self,
-    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<(Provider, SharedAuthProvider)>>
-    {
-        Box::pin(async move { Ok((self.api_provider().await?, self.api_auth().await?)) })
-    }
-
     /// Resolves routing for Responses HTTP, compaction, and WebSocket handshakes.
     fn responses_api_provider<'a>(
         &'a self,
@@ -616,22 +607,6 @@ impl ModelProvider for ConfiguredModelProvider {
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
         Box::pin(async move {
             Ok(self.resolve_auth(/*scope*/ None).await?.auth)
-        })
-    }
-
-    fn api_provider_and_auth(
-        &self,
-    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<(Provider, SharedAuthProvider)>>
-    {
-        Box::pin(async move {
-            let auth = self.auth().await;
-            let provider = self.api_provider_for_auth(auth.as_ref())?;
-            let primary = resolve_provider_auth(auth.as_ref(), &self.info)?;
-            let auth = self
-                .compose_auth(ResolvedProviderAuth::new(primary))
-                .await?
-                .auth;
-            Ok((provider, auth))
         })
     }
 

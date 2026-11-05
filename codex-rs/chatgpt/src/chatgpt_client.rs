@@ -1,4 +1,6 @@
 use codex_core::config::Config;
+use codex_features::Feature;
+use codex_features::RuntimeAuthMode;
 use codex_http_client::HttpClient;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -6,6 +8,8 @@ use codex_login::CodexAuth;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::create_client_with_chatgpt_cookies;
 use codex_login::default_client::default_headers;
+use codex_runtime_agent_instance::RuntimeAuthManager;
+use std::sync::Arc;
 
 use anyhow::Context;
 use serde::Serialize;
@@ -55,27 +59,43 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     config: &Config,
     path: String,
 ) -> anyhow::Result<T> {
-    chatgpt_get_request_with_timeout(config, path, /*timeout*/ None).await
-}
-
-pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
-    config: &Config,
-    path: String,
-    timeout: Option<Duration>,
-) -> anyhow::Result<T> {
-    // Bind before loading credentials: the temporary auth manager does not own account changes.
-    let policy = config
+    // This helper is used by the standalone apply command. Harness callers pass their owner below.
+    // The temporary credential manager does not own account changes.
+    let mut captured_config = config.clone();
+    captured_config.application_network_policy = config
         .application_network_policy
         .clone()
         .for_current_account();
-    let client = chatgpt_client(config.http_client_factory().with_network_policy(policy));
-    let chatgpt_base_url = &config.chatgpt_base_url;
+    let config = &captured_config;
+    if config.features.enabled(Feature::RuntimeAgentInstances) {
+        codex_model_provider::validate_runtime_destination(Some(&config.chatgpt_base_url))?;
+    }
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await?;
+    let runtime = if config.features.enabled(Feature::RuntimeAgentInstances)
+        && codex_runtime_agent_instance::is_openai_api_url(&config.chatgpt_base_url)
+    {
+        let installation_id = codex_core::resolve_installation_id(&config.codex_home).await?;
+        codex_core::build_runtime_auth_manager(config, auth_manager.clone(), &installation_id)
+            .map(|runtime| (runtime, config.runtime_auth_mode))
+    } else {
+        None
+    };
     let auth = auth_manager
         .auth()
         .await
         .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
+    chatgpt_get_request_with_timeout(config, &auth, runtime.as_ref(), path, /*timeout*/ None).await
+}
+
+pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
+    config: &Config,
+    auth: &CodexAuth,
+    runtime: Option<&(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
+    path: String,
+    timeout: Option<Duration>,
+) -> anyhow::Result<T> {
+    let chatgpt_base_url = &config.chatgpt_base_url;
     anyhow::ensure!(
         auth.uses_codex_backend(),
         "ChatGPT backend requests require Codex backend auth"
@@ -90,10 +110,16 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
         path.trim_start_matches('/')
     );
 
+    let (client, request_auth) = prepare_client_auth(config, auth, runtime, &url).await?;
     let mut request = client
         .get(&url)
         .headers(default_headers())
-        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers()?)
+        .headers(
+            request_auth
+                .auth
+                .apply_auth_headers(Default::default())
+                .await?,
+        )
         .header(OAI_PRODUCT_SKU_HEADER, CODEX_PRODUCT_SKU)
         .header("Content-Type", "application/json");
     if let Some(timeout) = timeout {
@@ -128,6 +154,7 @@ pub(crate) async fn chatgpt_post_request_with_timeout<
     body: &TRequest,
     timeout: Duration,
     product_sku: &str,
+    runtime: Option<&(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
 ) -> anyhow::Result<TResponse> {
     anyhow::ensure!(
         auth.uses_codex_backend(),
@@ -143,11 +170,16 @@ pub(crate) async fn chatgpt_post_request_with_timeout<
         config.chatgpt_base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
-    let client = chatgpt_client(config.http_client_factory());
+    let (client, request_auth) = prepare_client_auth(config, auth, runtime, &url).await?;
     let response = client
         .post(&url)
         .headers(default_headers())
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers()?)
+        .headers(
+            request_auth
+                .auth
+                .apply_auth_headers(Default::default())
+                .await?,
+        )
         .header(OAI_PRODUCT_SKU_HEADER, product_sku)
         .header("Content-Type", "application/json")
         .timeout(timeout)
@@ -167,3 +199,28 @@ pub(crate) async fn chatgpt_post_request_with_timeout<
         anyhow::bail!("Request failed with status {status}: {body}")
     }
 }
+
+/// Keep request credentials and the transport bound to the same account snapshot.
+async fn prepare_client_auth(
+    config: &Config,
+    auth: &CodexAuth,
+    runtime: Option<&(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
+    url: &str,
+) -> anyhow::Result<(HttpClient, codex_model_provider::ResolvedProviderAuth)> {
+    if runtime.is_some() {
+        codex_model_provider::validate_runtime_destination(Some(url))?;
+    }
+    let resolved = codex_model_provider::auth_provider_for_request(
+        auth,
+        runtime,
+        /*headers*/ &Default::default(),
+    )
+    .await?;
+    let factory = resolved.bind_http_client_factory(config.http_client_factory())?;
+    let client = chatgpt_client(factory);
+    Ok((client, resolved))
+}
+
+#[cfg(test)]
+#[path = "chatgpt_client_runtime_auth_tests.rs"]
+mod runtime_auth_tests;

@@ -886,6 +886,11 @@ impl ThreadManager {
         self.state.auth_manager.clone()
     }
 
+    /// Return the harness owner initialized at startup, if runtime auth was enabled.
+    pub fn runtime_auth_manager(&self) -> Option<Arc<RuntimeAuthManager>> {
+        self.state.runtime_auth.get().cloned()
+    }
+
     /// Share the harness runtime with an API client using this effective ChatGPT configuration.
     pub fn runtime_auth_for_config(
         &self,

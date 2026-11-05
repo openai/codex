@@ -1765,10 +1765,28 @@ impl Session {
                 AnalyticsEventsClient::disabled()
             } else {
                 analytics_events_client.unwrap_or_else(|| {
-                    AnalyticsEventsClient::new(
+                    let api_key_headers = if codex_model_provider::provider_uses_first_party_auth_path(
+                        &config.model_provider,
+                    ) {
+                        match config.model_provider.build_header_map() {
+                            Ok(headers) => headers,
+                            Err(error) => {
+                                tracing::warn!(%error, "failed to resolve analytics resource selectors");
+                                return AnalyticsEventsClient::disabled();
+                            }
+                        }
+                    } else {
+                        Default::default()
+                    };
+                    AnalyticsEventsClient::new_with_runtime(
                         Arc::clone(&auth_manager),
                         config.chatgpt_backend_url(),
                         config.analytics_enabled,
+                        config
+                            .features
+                            .enabled(Feature::RuntimeAgentInstances)
+                            .then(|| (Arc::clone(&runtime_auth), config.runtime_auth_mode)),
+                        api_key_headers,
                     )
                 })
             };

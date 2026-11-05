@@ -74,6 +74,7 @@ codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-image-generation-extension = { workspace = true }
 codex-memories-extension = { workspace = true }
 codex-web-search-extension = { workspace = true }

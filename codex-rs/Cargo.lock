@@ -2010,15 +2010,19 @@ name = "codex-analytics"
 version = "0.0.0"
 dependencies = [
  "codex-app-server-protocol",
+ "codex-features",
  "codex-git-utils",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
+ "codex-model-provider-info",
  "codex-plugin",
  "codex-protocol",
+ "codex-runtime-agent-instance",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
+ "http 1.4.0",
  "os_info",
  "pretty_assertions",
  "serde",
@@ -2026,6 +2030,7 @@ dependencies = [
  "sha1 0.10.6",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]
@@ -2138,6 +2143,7 @@ dependencies = [
  "codex-queue-extension",
  "codex-rmcp-client",
  "codex-rollout",
+ "codex-runtime-agent-instance",
  "codex-sandboxing",
  "codex-shell-command",
  "codex-skills",
@@ -2512,14 +2518,18 @@ name = "codex-chatgpt"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "codex-connectors",
  "codex-core",
+ "codex-features",
  "codex-git-utils",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
  "codex-plugin",
+ "codex-protocol",
+ "codex-runtime-agent-instance",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "pretty_assertions",
@@ -2527,6 +2537,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -2706,17 +2718,23 @@ name = "codex-cloud-tasks"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "clap",
+ "codex-agent-identity",
+ "codex-backend-client",
  "codex-cloud-tasks-client",
  "codex-cloud-tasks-mock-client",
  "codex-core",
+ "codex-features",
  "codex-git-utils",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
+ "codex-runtime-agent-instance",
  "codex-tui",
  "codex-utils-cli",
+ "core_test_support",
  "crossterm",
  "http 1.4.0",
  "insta",
@@ -2726,12 +2744,15 @@ dependencies = [
  "serde",
  "serde_json",
  "supports-color 3.0.2",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
  "unicode-width 0.2.1",
+ "uuid",
+ "wiremock",
 ]
 
 [[package]]

@@ -283,8 +283,36 @@ impl Client {
     ) -> Result<Self> {
         let base_url = base_url.into();
         let runtime = codex_model_provider::runtime_auth_for_url(runtime, &base_url)?;
-        Self::from_auth_with_selected_runtime(base_url, auth, http_client_factory, runtime, headers)
-            .await
+        Self::from_auth_with_selected_runtime(
+            base_url,
+            auth,
+            http_client_factory,
+            runtime,
+            headers,
+            Self::new,
+        )
+        .await
+    }
+
+    /// Build an authenticated client without following redirects.
+    pub async fn from_auth_with_runtime_without_redirects(
+        base_url: impl Into<String>,
+        auth: &CodexAuth,
+        http_client_factory: HttpClientFactory,
+        runtime: Option<&(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
+        headers: &HeaderMap,
+    ) -> Result<Self> {
+        let base_url = base_url.into();
+        let runtime = codex_model_provider::runtime_auth_for_url(runtime, &base_url)?;
+        Self::from_auth_with_selected_runtime(
+            base_url,
+            auth,
+            http_client_factory,
+            runtime,
+            headers,
+            Self::new_without_redirects,
+        )
+        .await
     }
 
     async fn from_auth_with_selected_runtime(
@@ -293,10 +321,11 @@ impl Client {
         http_client_factory: HttpClientFactory,
         runtime: Option<&(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
         headers: &HeaderMap,
+        new_client: fn(String, HttpClientFactory) -> Self,
     ) -> Result<Self> {
         let (auth, http_client_factory) =
             ClientAuth::for_auth(auth, runtime, http_client_factory, headers).await?;
-        let mut client = Self::new(base_url, http_client_factory);
+        let mut client = new_client(base_url, http_client_factory);
         client.auth = auth;
         Ok(client.with_user_agent(get_codex_user_agent()))
     }

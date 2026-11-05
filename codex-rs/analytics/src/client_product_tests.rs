@@ -90,6 +90,7 @@ async fn capture_requests(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let destination = AnalyticsEventsDestination::Http {
         base_url: format!("http://{}", listener.local_addr().unwrap()).into(),
+        api_key_headers: Default::default(),
     };
     let (paused_tx, paused_rx) = tokio::sync::oneshot::channel();
     let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
@@ -168,7 +169,13 @@ async fn product_streams_send_concurrently_and_preserve_event_order() {
     let events = (0..32).map(event).collect();
     tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        send_track_events(&manager, &destination, events, &products),
+        send_track_events(
+            &manager,
+            &destination,
+            events,
+            &products,
+            /*runtime_auth*/ None,
+        ),
     )
     .await
     .unwrap();
@@ -207,7 +214,11 @@ async fn buffered_tool_events_preserve_attribution_or_drop_it_on_queue_overflow(
             codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         );
         let client = AnalyticsEventsClient {
-            queue: Some(AnalyticsEventsQueue::new(manager, destination)),
+            queue: Some(AnalyticsEventsQueue::new(
+                manager,
+                destination,
+                /*runtime_auth*/ None,
+            )),
         };
         let thread_id = ThreadId::new();
         client.update_thread_product_sku(thread_id, ThreadProductUpdate::Set("aeon".to_string()));

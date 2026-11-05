@@ -123,6 +123,7 @@ impl AnalyticsEventsClient {
             queue: Some(AnalyticsEventsQueue::new(
                 auth_manager,
                 AnalyticsEventsDestination::CaptureFile { path },
+                /*runtime_auth*/ None,
             )),
         }
     }
@@ -358,7 +359,13 @@ fn analytics_destination_uses_http_without_capture_file() {
             base_url.clone(),
             /*capture_file*/ None,
         );
-        assert_eq!(destination, AnalyticsEventsDestination::Http { base_url });
+        assert_eq!(
+            destination,
+            AnalyticsEventsDestination::Http {
+                base_url,
+                api_key_headers: Default::default()
+            }
+        );
 
         for (api_key, expected_url) in ["sk-test", "sk-proj-fedramp-test", "sk-test"]
             .into_iter()
@@ -384,7 +391,8 @@ fn analytics_destination_ignores_capture_file_in_release() {
     assert_eq!(
         destination,
         AnalyticsEventsDestination::Http {
-            base_url: "https://chatgpt.com/backend-api/".into()
+            base_url: "https://chatgpt.com/backend-api/".into(),
+            api_key_headers: Default::default(),
         }
     );
 }
@@ -401,12 +409,15 @@ async fn capture_file_writes_exact_serialized_request() {
     let auth = codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
+    // Capture-only delivery must not initialize or depend on runtime authentication.
+    let runtime = (Default::default(), Default::default());
     send_track_events_request(
         &auth,
         &destination,
         vec![event],
         &factory,
         /*product_sku*/ None,
+        Some(&runtime),
     )
     .await;
 
@@ -442,6 +453,7 @@ async fn capture_file_writes_final_batches_as_separate_lines() {
             batch,
             &factory,
             /*product_sku*/ None,
+            /*runtime_auth*/ None,
         )
         .await;
     }
@@ -520,6 +532,7 @@ async fn api_key_auth_sends_only_plugin_events_to_codex_backend() {
             plugin_measurement("plugin-measurement", "sample@test"),
         ],
         &ThreadProducts::default(),
+        /*runtime_auth*/ None,
     )
     .await;
 
@@ -1196,6 +1209,7 @@ async fn account_switch_between_batches_does_not_send_old_credentials() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let destination = AnalyticsEventsDestination::Http {
         base_url: format!("http://{}", listener.local_addr().unwrap()).into(),
+        api_key_headers: Default::default(),
     };
     let requests = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&requests);
@@ -1246,7 +1260,14 @@ async fn account_switch_between_batches_does_not_send_old_credentials() {
         sample_accepted_line_fingerprint_event("one"),
         sample_accepted_line_fingerprint_event("two"),
     ];
-    send_track_events(&manager, &destination, events, &ThreadProducts::default()).await;
+    send_track_events(
+        &manager,
+        &destination,
+        events,
+        &ThreadProducts::default(),
+        /*runtime_auth*/ None,
+    )
+    .await;
     server.abort();
     let _ = server.await;
     let requests = requests.lock().unwrap();

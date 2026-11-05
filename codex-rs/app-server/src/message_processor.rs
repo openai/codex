@@ -98,6 +98,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_queue_extension::QueuedItemService;
 use codex_rollout::StateDbHandle;
+use codex_runtime_agent_instance::RuntimeAuthSlot;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::LocalQueueStore;
 use codex_thread_store::QueueStore;
@@ -275,6 +276,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) startup_warnings_tx: mpsc::UnboundedSender<String>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) runtime_auth_slot: Option<RuntimeAuthSlot>,
     pub(crate) user_verification: Arc<crate::user_verification::Service>,
     pub(crate) installation_id: String,
     pub(crate) code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>>,
@@ -304,6 +306,7 @@ impl MessageProcessor {
             startup_warnings_tx,
             session_source,
             auth_manager,
+            runtime_auth_slot,
             user_verification,
             installation_id,
             code_mode_session_provider,
@@ -425,6 +428,11 @@ impl MessageProcessor {
                 None => manager,
             }
         });
+        let runtime_auth = thread_manager.runtime_auth_manager();
+        if let (Some(slot), Some(runtime)) = (runtime_auth_slot, &runtime_auth) {
+            // Analytics starts before the harness. Bind its requests to the harness registration.
+            slot.get_or_init(|| Arc::clone(runtime));
+        }
         let model_catalog = Arc::new(crate::model_catalog::ModelCatalog::new(
             config_manager.clone(),
             startup_cwd,
@@ -432,8 +440,11 @@ impl MessageProcessor {
             Arc::clone(&thread_manager),
         ));
         let models_refresh_worker = crate::models_refresh_worker::spawn(&model_catalog);
-        let turn_cost_worker =
-            TurnCostWorker::spawn(Arc::clone(&config), Arc::clone(&auth_manager));
+        let turn_cost_worker = TurnCostWorker::spawn(
+            Arc::clone(&config),
+            Arc::clone(&auth_manager),
+            runtime_auth.map(|runtime| (runtime, config.runtime_auth_mode)),
+        );
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());

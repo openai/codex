@@ -4,14 +4,15 @@ use codex_backend_client::Client as BackendClient;
 use codex_backend_client::RequestError;
 use codex_config::types::OtelExporterKind;
 use codex_core::config::Config;
+use codex_features::RuntimeAuthMode;
 use codex_login::AuthManager;
 use codex_model_provider::SharedModelProvider;
-use codex_model_provider::create_model_provider;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_runtime_agent_instance::RuntimeAuthManager;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -81,6 +82,7 @@ struct WorkerRuntime {
     config: Arc<Config>,
     backend: TurnCostBackend,
     turns: HashMap<String, TurnCostEntry>,
+    runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
 }
 
 #[derive(Clone)]
@@ -98,7 +100,11 @@ enum BackendAvailability {
 }
 
 impl TurnCostWorker {
-    pub(crate) fn spawn(config: Arc<Config>, auth_manager: Arc<AuthManager>) -> Option<Self> {
+    pub(crate) fn spawn(
+        config: Arc<Config>,
+        auth_manager: Arc<AuthManager>,
+        runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
+    ) -> Option<Self> {
         let has_otel_log_exporter = matches!(
             config.otel.exporter,
             OtelExporterKind::OtlpHttp { .. } | OtelExporterKind::OtlpGrpc { .. }
@@ -116,10 +122,13 @@ impl TurnCostWorker {
         let backend = if is_openai {
             TurnCostBackend::OpenAi(Arc::clone(&auth_manager))
         } else {
-            TurnCostBackend::ModelProvider(create_model_provider(
-                config.model_provider.clone(),
-                Some(Arc::clone(&auth_manager)),
-            ))
+            TurnCostBackend::ModelProvider(
+                codex_model_provider::ProviderAuthContext {
+                    credentials: Arc::clone(&auth_manager),
+                    runtime_auth: runtime_auth.clone(),
+                }
+                .model_provider(config.model_provider.clone()),
+            )
         };
         let (sender, receiver) = mpsc::channel(OBSERVATION_CHANNEL_CAPACITY);
         let shutdown = CancellationToken::new();
@@ -127,6 +136,7 @@ impl TurnCostWorker {
             config: Arc::clone(&config),
             backend: backend.clone(),
             turns: HashMap::new(),
+            runtime_auth,
         };
         let worker_shutdown = shutdown.clone();
         let task = tokio::spawn(async move {
@@ -423,11 +433,15 @@ impl WorkerRuntime {
                     .model_provider
                     .to_api_provider(Some(AuthMode::ApiKey))
                     .map_err(|error| RequestError::Other(error.into()))?;
-                let client = BackendClient::from_auth(
+                let client = BackendClient::from_auth_with_runtime(
                     self.config.chatgpt_backend_url().resolve(&auth),
                     &auth,
                     http_client_factory,
-                );
+                    self.runtime_auth.as_ref(),
+                    &provider.headers,
+                )
+                .await
+                .map_err(RequestError::Other)?;
                 client
                     .query_api_key_turn_costs(turn_ids, &provider.headers)
                     .await
@@ -448,14 +462,20 @@ impl WorkerRuntime {
                         return Ok(None);
                     }
                 }
-                let (provider, auth) = model_provider
-                    .api_provider_and_auth()
-                    .await
-                    .map_err(|error| RequestError::Other(error.into()))?;
+                let resolved = codex_model_provider::resolve_request(
+                    model_provider.as_ref(),
+                    /*scope*/ None,
+                    /*routing*/ None,
+                    http_client_factory,
+                )
+                .await
+                .map_err(|error| RequestError::Other(error.into()))?;
+                let provider = resolved.api_provider;
                 let endpoint = provider.url_for_path("analytics/codex/turn-costs");
-                let client = BackendClient::new(provider.base_url.clone(), http_client_factory)
-                    .with_auth_provider(auth)
-                    .map_err(RequestError::Other)?;
+                let client =
+                    BackendClient::new(provider.base_url.clone(), resolved.http_client_factory)
+                        .with_auth_provider(resolved.api_auth)
+                        .map_err(RequestError::Other)?;
                 client
                     .query_api_key_turn_costs_at(&endpoint, turn_ids, &provider.headers)
                     .await

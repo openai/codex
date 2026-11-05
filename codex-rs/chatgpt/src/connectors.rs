@@ -103,8 +103,15 @@ pub async fn list_all_connectors_with_options(
     if !apps_enabled(config).await? {
         return Ok(Vec::new());
     }
+    let mut captured_config = config.clone();
+    captured_config.application_network_policy = config
+        .application_network_policy
+        .clone()
+        .for_current_account();
+    let config = &captured_config;
     let auth = connector_auth(config).await?;
     let cache_context = connector_directory_cache_context(config, &auth);
+    let auth = &auth;
     let connectors = codex_connectors::list_all_connectors_with_options(
         cache_context,
         auth.is_workspace_account(),
@@ -112,6 +119,8 @@ pub async fn list_all_connectors_with_options(
         |path| async move {
             chatgpt_get_request_with_timeout::<DirectoryListResponse>(
                 config,
+                auth,
+                /*runtime*/ None,
                 path,
                 Some(DIRECTORY_CONNECTORS_TIMEOUT),
             )
@@ -179,6 +188,7 @@ pub async fn read_connector_metadata(
             },
             CONNECTOR_METADATA_TIMEOUT,
             product_sku,
+            /*runtime*/ None,
         )
         .await?;
         let mut requested_ids = missing_ids.iter().cloned().collect::<HashSet<_>>();

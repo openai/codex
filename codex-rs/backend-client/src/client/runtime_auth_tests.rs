@@ -95,6 +95,7 @@ async fn account_runtime_auth_signs_each_request_and_strips_credentials_on_redir
             factory,
             Some(&runtime),
             &HeaderMap::new(),
+            Client::new,
         )
         .await
         .unwrap();
@@ -223,6 +224,7 @@ async fn client_registers_in_requested_organization_when_default_is_denied() {
             HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             Some(&runtime),
             &headers,
+            Client::new,
         )
         .await
         .unwrap();
@@ -243,6 +245,85 @@ async fn client_registers_in_requested_organization_when_default_is_denied() {
             RuntimeAuthMode::AssertionOnly => {
                 assert!(authorization.starts_with("AgentAssertion "));
                 assert!(!requests[1].headers.contains_key("x-openai-agent-assertion"));
+            }
+        }
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn authenticated_clients_without_redirects_return_the_redirect_response() {
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        let server = MockServer::start().await;
+        let destination = MockServer::start().await;
+        Mock::given(path("/register"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "runtime_agent_instance_id": "runtime-a", "agent_host_id": "host-a",
+                "actor": {"kind": "platform", "user_id": "user-a", "organization_id": "org-a", "project_id": null},
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(307).insert_header("location", destination.uri()))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let auth = CodexAuth::from_api_key("key-a");
+        let runtime = runtime_provider(
+            &server,
+            AuthManager::from_auth_for_testing(auth.clone()),
+            mode,
+        );
+        let custom_backend = Client::from_auth_with_runtime_without_redirects(
+            server.uri(),
+            &auth,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            Some(&runtime),
+            &HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            custom_backend
+                .get_accounts_check()
+                .await
+                .unwrap_err()
+                .status(),
+            Some(StatusCode::TEMPORARY_REDIRECT),
+        );
+        let client = Client::from_auth_with_selected_runtime(
+            server.uri(),
+            &auth,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            Some(&runtime),
+            &HeaderMap::new(),
+            Client::new_without_redirects,
+        )
+        .await
+        .unwrap();
+
+        let error = client.get_accounts_check().await.unwrap_err();
+        assert_eq!(error.status(), Some(StatusCode::TEMPORARY_REDIRECT));
+        assert!(destination.received_requests().await.unwrap().is_empty());
+        let requests = server.received_requests().await.unwrap();
+        let requests: Vec<_> = requests
+            .iter()
+            .filter(|request| request.method == Method::GET)
+            .collect();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].headers["authorization"], "Bearer key-a");
+        assert!(!requests[0].headers.contains_key("x-openai-agent-assertion"));
+        let request = requests[1];
+        let authorization = request.headers["authorization"].to_str().unwrap();
+        match mode {
+            RuntimeAuthMode::DualHeader => {
+                assert_eq!(authorization, "Bearer key-a");
+                assert!(request.headers.contains_key("x-openai-agent-assertion"));
+            }
+            RuntimeAuthMode::AssertionOnly => {
+                assert!(authorization.starts_with("AgentAssertion "));
+                assert!(!request.headers.contains_key("x-openai-agent-assertion"));
             }
         }
         server.verify().await;
@@ -372,6 +453,7 @@ async fn reusable_runtime_client_keeps_the_selected_accounts_transport_policy() 
         factory.clone(),
         Some(&runtime),
         &HeaderMap::new(),
+        Client::new,
     )
     .await
     .unwrap();
@@ -398,6 +480,7 @@ async fn reusable_runtime_client_keeps_the_selected_accounts_transport_policy() 
         factory,
         Some(&runtime),
         &HeaderMap::new(),
+        Client::new,
     )
     .await
     .unwrap();
@@ -500,6 +583,7 @@ async fn reusable_runtime_client_refreshes_credentials_without_accepting_a_new_s
             HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             Some(&runtime),
             &HeaderMap::new(),
+            Client::new,
         )
         .await
         .unwrap();

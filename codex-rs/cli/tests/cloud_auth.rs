@@ -11,7 +11,7 @@ use wiremock::matchers::header;
 use wiremock::matchers::path;
 
 #[tokio::test]
-async fn cloud_list_only_allows_trusted_credential_destinations() -> Result<()> {
+async fn cloud_list_respects_the_credential_store_and_trusted_destinations() -> Result<()> {
     let server = MockServer::start().await;
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -64,6 +64,28 @@ async fn cloud_list_only_allows_trusted_credential_destinations() -> Result<()> 
         .stderr
         .clone();
     insta::assert_snapshot!(String::from_utf8(output)?, @"Error: CODEX_CLOUD_TASKS_BASE_URL must use a trusted HTTPS origin on port 443, without user information, a query, or a fragment; custom backends cannot use saved ChatGPT credentials");
+    assert!(server.received_requests().await.unwrap().is_empty());
+
+    // An explicit ephemeral store must exclude the saved login for Cloud itself.
+    command()?
+        .env(
+            "CODEX_CLOUD_TASKS_BASE_URL",
+            "https://chatgpt-staging.com/backend-api",
+        )
+        .env("HTTPS_PROXY", server.uri())
+        .env("https_proxy", server.uri())
+        .args([
+            "-c",
+            "cli_auth_credentials_store='ephemeral'",
+            "cloud",
+            "list",
+            "--limit",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("Not signed in. Please run 'codex login'"));
     assert!(server.received_requests().await.unwrap().is_empty());
 
     // Staging must reach explicit PAT authentication. Reject the synthetic PAT locally so

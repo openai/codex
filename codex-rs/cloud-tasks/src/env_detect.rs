@@ -1,11 +1,18 @@
 use codex_git_utils::SanitizedGitUrl;
 use codex_http_client::RouteAwareClientPool;
+use codex_model_provider::ClientAuth;
 use http::StatusCode;
 use http::header::CONTENT_TYPE;
 use http::header::HeaderMap;
 use std::collections::HashMap;
 use tracing::info;
 use tracing::warn;
+
+#[derive(Clone)]
+pub(crate) struct EnvironmentClient {
+    pub(crate) http: RouteAwareClientPool,
+    pub(crate) auth: Option<ClientAuth>,
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct CodeEnvironment {
@@ -24,8 +31,8 @@ pub struct AutodetectSelection {
     pub label: Option<String>,
 }
 
-pub async fn autodetect_environment_id(
-    http: &RouteAwareClientPool,
+pub(crate) async fn autodetect_environment_id(
+    http: &EnvironmentClient,
     base_url: &str,
     headers: &HeaderMap,
     desired_label: Option<String>,
@@ -195,12 +202,19 @@ trait EnvironmentHttp: Send + Sync {
     ) -> impl std::future::Future<Output = anyhow::Result<EnvironmentResponse>> + Send + 'a;
 }
 
-impl EnvironmentHttp for RouteAwareClientPool {
+impl EnvironmentHttp for EnvironmentClient {
     async fn get(&self, url: &str, headers: &HeaderMap) -> anyhow::Result<EnvironmentResponse> {
-        let response = RouteAwareClientPool::get(self, url)
-            .headers(headers.clone())
-            .send()
-            .await?;
+        let headers = match &self.auth {
+            Some(auth) => {
+                auth.resolve(headers)
+                    .await?
+                    .auth
+                    .apply_auth_headers(headers.clone())
+                    .await?
+            }
+            None => headers.clone(),
+        };
+        let response = self.http.get(url).headers(headers).send().await?;
         Ok(EnvironmentResponse {
             status: response.status(),
             content_type: response
@@ -306,8 +320,8 @@ fn parse_owner_repo(url: &str) -> Option<(String, String)> {
 
 /// List environments for the current repo(s) with a fallback to the global list.
 /// Returns a de-duplicated, sorted set suitable for the TUI modal.
-pub async fn list_environments(
-    http: &RouteAwareClientPool,
+pub(crate) async fn list_environments(
+    http: &EnvironmentClient,
     base_url: &str,
     headers: &HeaderMap,
 ) -> anyhow::Result<Vec<crate::app::EnvironmentRow>> {
@@ -426,3 +440,7 @@ async fn list_environments_with_origins(
 #[cfg(test)]
 #[path = "env_detect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "env_detect_runtime_auth_tests.rs"]
+mod runtime_auth_tests;
