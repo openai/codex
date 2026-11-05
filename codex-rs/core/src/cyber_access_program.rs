@@ -54,7 +54,7 @@ pub fn for_auth(
     let Some(auth) = auth else {
         return Ok(None);
     };
-    if auth.is_chatgpt_auth() {
+    if auth.is_chatgpt_auth() || matches!(auth, CodexAuth::Headers(_)) {
         return Ok(Some(program.into()));
     }
     if !auth.is_api_key_auth() {
