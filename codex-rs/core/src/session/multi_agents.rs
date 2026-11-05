@@ -52,6 +52,9 @@ pub(crate) fn resolve_usage_hints(
         if base.is_empty() {
             return None;
         }
+        if config.disable_native_tools {
+            return None;
+        }
         Some(MultiAgentRoleInstructions::Composed {
             base: base.to_owned(),
             marked: message.catalog_override().is_some(),

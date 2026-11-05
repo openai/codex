@@ -2215,7 +2215,7 @@ async fn multi_agent_catalog_parameters(disable_native_tools: bool) -> Result<()
     let (name, description) = if disable_native_tools {
         (
             "multi_agent_native_tools_hidden",
-            "Native tools are unavailable while the V2 runtime and its instructions remain enabled.",
+            "Native tools and native usage guidance are unavailable.",
         )
     } else {
         (

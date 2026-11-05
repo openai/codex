@@ -300,6 +300,7 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
     ));
     let child_request = child_request.single_request();
     assert!(child_request.body_contains_text(UPDATED_RULE));
+    assert!(!child_request.body_contains_text("only as direct tool calls"));
     assert_eq!(
         child_request.body_contains_text(parent_message),
         fork_history
