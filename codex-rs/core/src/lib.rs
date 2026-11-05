@@ -93,6 +93,7 @@ pub mod context;
 mod context_manager;
 mod current_time;
 pub mod cyber_access_program;
+pub use cyber_access_program::RequiredCyberAccessPrograms;
 mod elicitation;
 mod environment_selection;
 pub mod exec;

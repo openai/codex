@@ -79,6 +79,8 @@ pub(super) async fn sampler_config(
     input: &ThreadStartInput<'_, Config>,
     manager: Option<Arc<ThreadManager>>,
 ) -> LunaSamplerConfig {
+    let inherit_parent_cyber_access_program =
+        codex_core::RequiredCyberAccessPrograms::for_thread(input.thread_store).is_none();
     let luna_model = if let Some(thread_manager) = manager {
         let mut model_config = input.config.to_models_manager_config();
         model_config.model_context_window = None;
@@ -107,6 +109,7 @@ pub(super) async fn sampler_config(
         .expect("Core installs provider auth before starting Guardian");
     LunaSamplerConfig {
         api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::from_config(input.config),
+        inherit_parent_cyber_access_program,
         workspace_routing: input
             .thread_store
             .get_or_init(|| input.config.workspace_routing_context())

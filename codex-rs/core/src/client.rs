@@ -310,6 +310,7 @@ pub struct ModelClient {
     executed_tool_calls: Option<ExecutedToolCalls>,
     // Resolved once when the session is created, like other session feature flags.
     api_key_cyber_access_programs: cyber_access_program::ApiKeyCyberAccessPrograms,
+    required_cyber_access_programs: Option<Arc<cyber_access_program::RequiredCyberAccessPrograms>>,
 }
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
@@ -656,6 +657,7 @@ impl ModelClient {
             executed_tool_calls: None,
             api_key_cyber_access_programs:
                 cyber_access_program::ApiKeyCyberAccessPrograms::UnsupportedProvider,
+            required_cyber_access_programs: None,
         }
     }
 
@@ -682,13 +684,34 @@ impl ModelClient {
         event_sender: Sender<ProtocolEvent>,
         codex_responses_headers: Option<Arc<CodexResponsesHeaders>>,
         api_key_cyber_access_programs: cyber_access_program::ApiKeyCyberAccessPrograms,
+        required_cyber_access_programs: Option<
+            Arc<cyber_access_program::RequiredCyberAccessPrograms>,
+        >,
     ) -> Self {
         self.prompt_cache_key_policy = prompt_cache_key;
         self.session_id_override = session_id_override;
         self.event_sender = Some(event_sender);
         self.codex_responses_headers = codex_responses_headers;
         self.api_key_cyber_access_programs = api_key_cyber_access_programs;
+        self.required_cyber_access_programs = required_cyber_access_programs;
         self
+    }
+
+    pub(crate) fn validate_required_cyber_access_program(
+        &self,
+        programs: Option<codex_api::AccessPrograms>,
+    ) -> Result<()> {
+        if let Some(required) = &self.required_cyber_access_programs
+            && !required
+                .allowed
+                .iter()
+                .any(|program| programs == Some((*program).into()))
+        {
+            return Err(CodexErr::InvalidRequest(
+                "this thread requires an allowed explicit access program".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn prompt_cache_key_policy(&self) -> PromptCacheKey {
@@ -863,6 +886,7 @@ impl ModelClient {
         if raw_memories.is_empty() {
             return Ok(Vec::new());
         }
+        self.validate_required_cyber_access_program(/*programs*/ None)?;
 
         let client_setup = self
             .current_client_setup(ClientRouting::ConfiguredProvider)
@@ -1200,6 +1224,7 @@ impl ModelClient {
 
     // Realtime keeps provider auth until its runtime integration lands later in the stack.
     async fn realtime_client_setup(&self) -> Result<CurrentClientSetup> {
+        self.validate_required_cyber_access_program(/*programs*/ None)?;
         let provider = if self.state.provider.runtime_auth().is_some() {
             create_model_provider(
                 self.state.provider.info().clone(),
@@ -1917,6 +1942,8 @@ impl ResponsesHttpExecutor<'_> {
                 self.client.api_key_cyber_access_programs,
             )?;
             self.client
+                .validate_required_cyber_access_program(request.access_programs)?;
+            self.client
                 .prepare_response_items_for_request(&mut request.input);
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
@@ -2076,6 +2103,8 @@ impl ModelClientSession {
                 prompt.cyber_access_program,
                 self.client.api_key_cyber_access_programs,
             )?;
+            self.client
+                .validate_required_cyber_access_program(request.access_programs)?;
             let mut websocket_metadata = responses_metadata.clone();
             websocket_metadata.routing_hint = self.client.build_routing_hint_header(
                 client_setup.auth.as_ref(),

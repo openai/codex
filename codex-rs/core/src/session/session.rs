@@ -1012,6 +1012,8 @@ impl Session {
                 ));
             }
         };
+        let required_cyber_access_programs =
+            thread_extension_init.get::<crate::cyber_access_program::RequiredCyberAccessPrograms>();
         let inherited_session_id = thread_extension_init
             .remove::<InheritedSessionId>()
             .map(|inherited| inherited.0);
@@ -1150,6 +1152,13 @@ impl Session {
             thread_id.to_string(),
             thread_extension_init,
         );
+        if let Some(required) = &required_cyber_access_programs {
+            thread_extension_data.insert(
+                crate::cyber_access_program::RequiredCyberAccessProgramsSnapshot(Arc::clone(
+                    required,
+                )),
+            );
+        }
         thread_extension_data.insert(crate::context::GuardianReviewEvidence::default());
         crate::model_search::SearchOwner::restore(&thread_extension_data, &initial_history);
         // Kick off independent async setup tasks in parallel to reduce startup latency.
@@ -1924,6 +1933,7 @@ impl Session {
                 tx_event.clone(),
                 codex_responses_headers,
                 crate::cyber_access_program::ApiKeyCyberAccessPrograms::from_config(&config),
+                required_cyber_access_programs,
             );
             // Once tracing starts, startup cleanup must own the session before the next await.
             let rollout_thread_trace = if matches!(

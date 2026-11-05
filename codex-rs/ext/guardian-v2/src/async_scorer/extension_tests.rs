@@ -264,7 +264,8 @@ async fn installed_extension_warms_connections_without_blocking_thread_start() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Result<()> {
+async fn installed_extension_keeps_parent_program_out_of_websocket_and_http_reviews() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("original"));
@@ -272,11 +273,19 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
         .set_external_auth(Arc::new(RefreshableAuth(std::sync::Mutex::new("original"))))
         .await?;
     let thread_server = responses::start_mock_server().await;
-    let test = test_codex()
+    let mut test = test_codex()
         .with_auth_manager(Arc::clone(&auth_manager))
         .with_config(|config| config.approvals_reviewer = ApprovalsReviewer::AutoReview)
         .build_with_auto_env(&thread_server)
         .await?;
+    let mut options = test.start_thread_options().await;
+    options
+        .thread_extension_init
+        .insert(codex_core::RequiredCyberAccessPrograms {
+            allowed: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakRed],
+        });
+    test.codex.shutdown_and_wait().await?;
+    test.codex = test.thread_manager.start_thread(options).await?.thread;
     let events = vec![
         ev_assistant_message("sample", "low"),
         ev_completed("response-1"),
@@ -307,6 +316,8 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    // An earlier extension cannot erase Core's captured enrollment policy.
+    thread_store.remove::<codex_core::RequiredCyberAccessPrograms>();
     let mut model = test
         .thread_manager
         .get_models_manager()
@@ -337,6 +348,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
         .expect("Guardian v2 should initialize");
     let turn_store = ExtensionData::new("turn-1");
     turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
+    turn_store.insert(codex_protocol::turn_input::CyberAccessProgram::DaybreakRed);
     let tool_name = ToolName::namespaced("mcp__node_repl__", "js");
     let payload = ToolPayload::Function {
         arguments: r#"{"path":"README.md"}"#.to_owned(),
@@ -406,6 +418,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
     assert_eq!(requests.len(), 1);
     requests.push(http_request.body_json());
     for request in &requests {
+        assert!(request.get("access_programs").is_none());
         responses::assert_parent_turn(request, Some("turn-1"))?;
         responses::assert_root_turn(request, /*expected*/ None)?;
     }

@@ -1396,6 +1396,9 @@ async fn prepare_realtime_start(
     sess: &Arc<Session>,
     params: ConversationStartParams,
 ) -> CodexResult<PreparedRealtimeConversationStart> {
+    sess.services
+        .model_client
+        .validate_required_cyber_access_program(/*programs*/ None)?;
     let provider = sess.provider().await;
     let auth_manager = sess
         .services
