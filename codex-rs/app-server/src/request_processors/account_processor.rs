@@ -322,7 +322,6 @@ impl AccountRequestProcessor {
                     .maybe_start_remote_plugin_caches_refresh(
                         &plugins_config,
                         auth,
-                        /*prefetch_recommendations*/ true,
                         Some(on_effective_plugins_changed),
                     );
             }

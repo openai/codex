@@ -736,16 +736,27 @@ impl PluginRequestProcessor {
         if include_shared_with_me && config.features.enabled(Feature::PluginSharing) {
             remote_sources.push(RemoteMarketplaceSource::SharedWithMe);
         }
+        let featured =
+            plugins_manager.featured_plugin_ids_for_config(&context.global_config, auth.as_ref());
+        tokio::pin!(featured);
+        let mut featured_result = None;
         if !remote_sources.is_empty() {
-            match codex_core_plugins::remote::fetch_remote_marketplaces(
+            let marketplaces = codex_core_plugins::remote::fetch_remote_marketplaces(
                 &remote_plugin_service_config,
                 auth.as_ref(),
                 &remote_sources,
                 /*catalog_cache_root*/ Some(config.codex_home.as_path()),
                 remote_catalog_cache_mode,
-            )
-            .await
-            {
+            );
+            tokio::pin!(marketplaces);
+            let outcome = tokio::select! {
+                outcome = &mut marketplaces => outcome,
+                ids = &mut featured, if use_remote_global_catalog => {
+                    featured_result = Some(ids);
+                    marketplaces.await
+                }
+            };
+            match outcome {
                 Ok(outcome) => {
                     remote_catalog_cache_refresh_scopes = outcome.catalog_cache_refresh_scopes;
                     for remote_marketplace in outcome
@@ -804,10 +815,11 @@ impl PluginRequestProcessor {
             marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME
                 || marketplace.name == REMOTE_GLOBAL_MARKETPLACE_NAME
         }) {
-            match plugins_manager
-                .featured_plugin_ids_for_config(&context.global_config, auth.as_ref())
-                .await
-            {
+            let result = match featured_result {
+                Some(result) => result,
+                None => featured.await,
+            };
+            match result {
                 Ok(featured_plugin_ids) => featured_plugin_ids,
                 Err(err) => {
                     warn!(

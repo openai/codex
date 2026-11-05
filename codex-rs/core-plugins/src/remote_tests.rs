@@ -480,10 +480,10 @@ fn catalog_cache_invalidation_clears_global_collections_and_preserves_other_scop
         );
     }
 
-    assert_eq!(
-        cached_remote_plugin_catalog_scopes(codex_home.path(), &config, Some(&auth), &scopes),
-        BTreeSet::from(scopes)
-    );
+    let has_cached_scope = |scope| {
+        has_fresh_cached_remote_plugin_catalog(codex_home.path(), &config, Some(&auth), scope)
+    };
+    assert!(scopes.into_iter().all(has_cached_scope));
     catalog_cache::write_cached_directory_plugins(
         codex_home.path(),
         &config,
@@ -500,10 +500,8 @@ fn catalog_cache_invalidation_clears_global_collections_and_preserves_other_scop
         &[RemotePluginScope::Global],
     );
 
-    assert_eq!(
-        cached_remote_plugin_catalog_scopes(codex_home.path(), &config, Some(&auth), &scopes),
-        BTreeSet::from([RemotePluginScope::Workspace]),
-    );
+    assert!(!has_cached_scope(RemotePluginScope::Global));
+    assert!(has_cached_scope(RemotePluginScope::Workspace));
     assert!(
         catalog_cache::load_cached_directory_plugins::<RemotePluginDirectoryItem>(
             codex_home.path(),

@@ -1272,30 +1272,6 @@ pub(crate) fn has_fresh_cached_remote_plugin_catalog(
     )
 }
 
-pub(crate) fn cached_remote_plugin_catalog_scopes(
-    codex_home: &Path,
-    config: &RemotePluginServiceConfig,
-    auth: Option<&CodexAuth>,
-    scopes: &[RemotePluginScope],
-) -> BTreeSet<RemotePluginScope> {
-    let Ok(auth) = ensure_chatgpt_auth(auth) else {
-        return BTreeSet::new();
-    };
-    scopes
-        .iter()
-        .copied()
-        .filter(|scope| {
-            catalog_cache::has_cached_directory_plugins(
-                codex_home,
-                config,
-                auth,
-                *scope,
-                RemotePluginCatalogCacheMode::PreferCache,
-            )
-        })
-        .collect()
-}
-
 pub fn cached_global_remote_discoverable_plugins(
     codex_home: &Path,
     config: &RemotePluginServiceConfig,

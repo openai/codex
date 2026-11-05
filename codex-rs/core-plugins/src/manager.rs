@@ -379,7 +379,6 @@ struct RemoteCatalogCacheRefreshRequest {
     service_config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
     scopes: BTreeSet<RemotePluginScope>,
-    mode: RemoteCatalogCacheRefreshMode,
 }
 
 impl RemoteCatalogCacheRefreshRequest {
@@ -392,12 +391,6 @@ impl RemoteCatalogCacheRefreshRequest {
             && self.auth.as_ref().map(CodexAuth::is_workspace_account)
                 == other.auth.as_ref().map(CodexAuth::is_workspace_account)
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RemoteCatalogCacheRefreshMode {
-    OnlyIfStale,
-    Force,
 }
 
 #[derive(Default)]
@@ -1666,7 +1659,6 @@ impl PluginsManager {
         self: &Arc<Self>,
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
-        prefetch_recommendations: bool,
         on_effective_plugins_changed: Option<EffectivePluginsChangedCallback>,
     ) {
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
@@ -1677,9 +1669,6 @@ impl PluginsManager {
             EffectivePluginsChange::default(),
         );
 
-        if !prefetch_recommendations {
-            return;
-        }
         let manager = Arc::clone(self);
         let config = config.clone();
         tokio::spawn(async move {
@@ -1924,7 +1913,6 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
         scopes: BTreeSet<RemotePluginScope>,
-        mode: RemoteCatalogCacheRefreshMode,
     ) {
         if !config.plugins_enabled || scopes.is_empty() {
             return;
@@ -1934,7 +1922,6 @@ impl PluginsManager {
             service_config: self.remote_plugin_service_config(config),
             auth,
             scopes,
-            mode,
         });
     }
 
@@ -1950,12 +1937,10 @@ impl PluginsManager {
             &context.global_config,
             auth.clone(),
             options.remote_catalog_cache_refresh_scopes,
-            RemoteCatalogCacheRefreshMode::OnlyIfStale,
         );
         self.maybe_start_remote_plugin_caches_refresh(
             &context.global_config,
             auth.clone(),
-            /*prefetch_recommendations*/ true,
             on_effective_plugins_changed.clone(),
         );
         self.maybe_start_remote_installed_plugin_bundle_sync(
@@ -2957,7 +2942,6 @@ impl PluginsManager {
     pub fn maybe_start_plugin_startup_tasks_for_config(
         self: &Arc<Self>,
         config: &PluginsConfigInput,
-        prefetch_discovery: bool,
         reload_config: ConfigLayerReload,
         on_effective_plugins_changed: Option<EffectivePluginsChangedCallback>,
         upgrade_warnings: mpsc::UnboundedSender<String>,
@@ -3044,53 +3028,20 @@ impl PluginsManager {
             }
             let config_for_remote_sync = config.clone();
             let manager = Arc::clone(self);
-            let on_effective_plugins_changed = on_effective_plugins_changed.clone();
             tokio::spawn(async move {
                 let auth = manager.auth_manager.auth().await;
-                manager.maybe_start_remote_plugin_caches_refresh(
+                manager.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
                     &config_for_remote_sync,
                     auth.clone(),
-                    prefetch_discovery,
+                    RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
                     on_effective_plugins_changed.clone(),
+                    EffectivePluginsChange::default(),
                 );
                 manager.maybe_start_remote_installed_plugin_bundle_sync(
                     &config_for_remote_sync,
-                    auth.clone(),
+                    auth,
                     on_effective_plugins_changed,
                 );
-                if !prefetch_discovery {
-                    return;
-                }
-                let scopes_to_probe: &[RemotePluginScope] =
-                    if config_for_remote_sync.remote_plugin_enabled {
-                        &[RemotePluginScope::User, RemotePluginScope::Workspace]
-                    } else {
-                        &[RemotePluginScope::Workspace]
-                    };
-                let mut scopes = crate::remote::cached_remote_plugin_catalog_scopes(
-                    manager.codex_home.as_path(),
-                    &manager.remote_plugin_service_config(&config_for_remote_sync),
-                    auth.as_ref(),
-                    scopes_to_probe,
-                );
-                if config_for_remote_sync.remote_plugin_enabled {
-                    scopes.insert(RemotePluginScope::Global);
-                }
-                manager.maybe_start_remote_catalog_cache_refresh(
-                    &config_for_remote_sync,
-                    auth.clone(),
-                    scopes,
-                    RemoteCatalogCacheRefreshMode::Force,
-                );
-                if let Err(err) = manager
-                    .featured_plugin_ids_for_config(&config_for_remote_sync, auth.as_ref())
-                    .await
-                {
-                    warn!(
-                        error = %err,
-                        "failed to warm featured plugin ids cache"
-                    );
-                }
             });
         }
     }
@@ -3326,16 +3277,6 @@ impl PluginsManager {
             {
                 pending.scopes.extend(request.scopes);
                 pending.auth = request.auth;
-                pending.mode = match (pending.mode, request.mode) {
-                    (RemoteCatalogCacheRefreshMode::Force, _)
-                    | (_, RemoteCatalogCacheRefreshMode::Force) => {
-                        RemoteCatalogCacheRefreshMode::Force
-                    }
-                    (
-                        RemoteCatalogCacheRefreshMode::OnlyIfStale,
-                        RemoteCatalogCacheRefreshMode::OnlyIfStale,
-                    ) => RemoteCatalogCacheRefreshMode::OnlyIfStale,
-                };
             } else {
                 state.requests.push_back(request);
             }
@@ -3596,14 +3537,12 @@ impl PluginsManager {
             };
 
             for scope in request.scopes {
-                if request.mode == RemoteCatalogCacheRefreshMode::OnlyIfStale
-                    && crate::remote::has_fresh_cached_remote_plugin_catalog(
-                        self.codex_home.as_path(),
-                        &request.service_config,
-                        request.auth.as_ref(),
-                        scope,
-                    )
-                {
+                if crate::remote::has_fresh_cached_remote_plugin_catalog(
+                    self.codex_home.as_path(),
+                    &request.service_config,
+                    request.auth.as_ref(),
+                    scope,
+                ) {
                     continue;
                 }
 

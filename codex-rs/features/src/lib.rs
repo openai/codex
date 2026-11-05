@@ -378,8 +378,7 @@ pub enum Feature {
     ComputerUse,
     /// Enable the PS-backed remote plugin catalog.
     RemotePlugin,
-    /// Prefetch the plugin directory, featured plugins, and recommendations at app-server startup.
-    /// Inventory-only hosts can disable this. Legacy suggestions read the cached directory.
+    /// Removed compatibility flag for plugin discovery prefetch.
     PluginDiscoveryPrefetch,
     /// Enable remote plugin sharing flows.
     PluginSharing,
@@ -770,7 +769,7 @@ impl Features {
                 "image_detail_original" | "resize_all_images" | "item_ids" => {
                     continue;
                 }
-                "personality" | "plugin_hooks" => {
+                "personality" | "plugin_discovery_prefetch" | "plugin_hooks" => {
                     continue;
                 }
                 "skill_env_var_dependency_prompt" => {
@@ -1952,8 +1951,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PluginDiscoveryPrefetch,
         key: "plugin_discovery_prefetch",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PluginSharing,

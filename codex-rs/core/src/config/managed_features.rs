@@ -268,7 +268,7 @@ fn parse_feature_requirements(
 ) -> BTreeMap<Feature, bool> {
     let mut pinned_features = BTreeMap::new();
     for (key, enabled) in feature_requirements.entries {
-        if key == Feature::Personality.key() {
+        if key == Feature::Personality.key() || key == Feature::PluginDiscoveryPrefetch.key() {
             continue;
         }
         if key == Feature::Worktrees.key() || key == Feature::RealtimeConversation.key() {

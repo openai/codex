@@ -6152,7 +6152,6 @@ plugins = true
     manager.maybe_start_remote_plugin_caches_refresh(
         &config,
         Some(auth.clone()),
-        /*prefetch_recommendations*/ true,
         /*on_effective_plugins_changed*/ None,
     );
 
