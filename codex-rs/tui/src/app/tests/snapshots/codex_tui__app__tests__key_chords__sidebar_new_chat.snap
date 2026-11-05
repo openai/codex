@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests/key_chords.rs
+assertion_line: 1131
+expression: "panel.join(\"\\n\")"
+---
+                                     +
+ Open in sidebar
+ › + New side chat
+     Start from this conversation
+ Enter open · Esc back · ↑/↓ move …

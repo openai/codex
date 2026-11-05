@@ -1,0 +1,16 @@
+---
+source: tui/src/app/tests.rs
+expression: "panel_text(&app, &tui)"
+---
+─ f12 · Conversation ───────────────────────────────────────────────────────────────────────────────
+
+  Panes                                            This pane
+  c       Main composer                            [       Select transcript
+  s       Sidebar content                          p       Presets ›
+                                                   z       Zoom pane
+  Move                                             =       Equal widths
+  → / l   Pane right                               r       Resize panes
+                                                   ,       Minimum width
+                                                   .       Maximum width
+
+  Esc cancel

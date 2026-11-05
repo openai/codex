@@ -3,6 +3,7 @@
 use super::App;
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 use super::side_companion::SideCompanion;
+use super::sidebar::SidebarContent;
 use crate::bottom_pane::inset_footer_hint_area;
 use crate::custom_terminal::Frame;
 use crate::legacy_core::config::edit::ConfigEdit;
@@ -79,7 +80,7 @@ pub(super) struct SidePaneLayout {
     pub(super) focused: Rect,
     pub(super) passive_thread: ThreadId,
     pub(super) passive: Rect,
-    divider: u16,
+    pub(super) divider: u16,
 }
 
 /// A wide terminal can show a pair once the outgoing conversation has been captured.
@@ -90,10 +91,25 @@ pub(super) fn layout(app: &App, tui: &crate::tui::Tui, area: Rect) -> Option<Sid
     split_layout(app, tui, area)
 }
 
-fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidePaneLayout> {
+pub(super) fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidePaneLayout> {
+    let SidebarContent::Chat(child) = app.sidebar()?.visible_content()? else {
+        return None;
+    };
     if area.width < 100
         || app.conversation_frame.has_caller_inset()
         || !app.side_retention_enabled(tui)
+    {
+        return None;
+    }
+    pair_layout(app, child, sidebar_areas(app, tui, area, /*fraction*/ 1.0)?)
+}
+
+pub(super) fn pair_layout(
+    app: &App,
+    child: ThreadId,
+    [parent, sidebar]: [Rect; 2],
+) -> Option<SidePaneLayout> {
+    if parent.is_empty()
         || app
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
@@ -102,33 +118,41 @@ fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidePaneLayout> {
         return None;
     }
     let active = app.current_displayed_thread_id()?;
-    let child = app.side_pair_key(active)?;
     let side = app.side_threads.get(&child)?;
-    if !side.pane_open {
-        return None;
-    }
-    let focused_child = active == child;
-    let passive_thread = if focused_child {
-        side.parent_thread_id
+    let (focused, passive, passive_thread) = if active == child {
+        (sidebar, parent, side.parent_thread_id)
     } else {
-        child
+        (parent, sidebar, child)
     };
     if !app.side_companions.contains_key(&passive_thread) {
         return None;
     }
+    Some(SidePaneLayout {
+        focused,
+        passive,
+        passive_thread,
+        divider: parent.right(),
+    })
+}
+
+pub(super) fn sidebar_areas(app: &App, tui: &Tui, area: Rect, fraction: f64) -> Option<[Rect; 2]> {
+    let active = app.current_displayed_thread_id();
+    let passive = app
+        .active_side_parent_thread_id()
+        .or_else(|| active.and_then(|id| app.side_thread_for_parent(id)));
     let preview = app
         .divider_drag
         .filter(|drag| {
             !drag.guide_only
                 && drag.screen == area
-                && drag.passive_thread == passive_thread
+                && Some(drag.passive_thread) == passive
                 && app.conversation_focus_available(tui)
         })
         .and_then(|drag| drag.percent());
     let saved = app.local_settings.tui.sidebar_width_percent;
     let keyboard_width = app
         .pane_resize
-        .filter(|mode| mode.focused == active && mode.companion == passive_thread)
+        .filter(|mode| Some(mode.focused) == active && Some(mode.companion) == passive)
         .and_then(|mode| mode.preview_width);
     let child_width = match (keyboard_width, preview, app.exact_sidebar_width) {
         (Some(width), _, _) => sidebar_width(i32::from(width), area.width),
@@ -139,20 +163,13 @@ fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidePaneLayout> {
         }
         _ => preferred_width(area.width, preview.or(saved)),
     };
-    let [parent, child] =
+    // A newly focused composer needs a cell even on the first opening frame.
+    let open = app.sidebar()?.visible_content().is_some();
+    let child_width = ((f64::from(child_width) * fraction).round() as u16).max(u16::from(open));
+    (child_width > 0).then(|| {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(child_width)])
             .spacing(GAP)
-            .areas(area);
-    let (focused, passive) = if focused_child {
-        (child, parent)
-    } else {
-        (parent, child)
-    };
-    Some(SidePaneLayout {
-        focused,
-        passive,
-        passive_thread,
-        divider: parent.right(),
+            .areas(area)
     })
 }
 
@@ -328,7 +345,7 @@ impl App {
         }
         match mouse.kind {
             Down(Left) => {
-                let Some(painted) = &self.conversation_frame.side_pane else {
+                let Some(painted) = self.conversation_frame.side_pane() else {
                     return Ok(false);
                 };
                 if !painted.divider_contains(*mouse) {
@@ -385,8 +402,6 @@ impl SidePaneLayout {
         &self,
         companion: &mut SideCompanion,
         frame: &mut Frame<'_>,
-        drag: Option<DividerDrag>,
-        highlight_divider: bool,
         frames: &FrameRequester,
     ) {
         companion.flush_answer();
@@ -458,33 +473,38 @@ impl SidePaneLayout {
             )
             .render(footer, frame.buffer);
         }
+    }
+}
 
-        // Draw after both panes registered their images. Clearing a guide to the left
-        // of retained pixels can erase the rest of that terminal row.
-        let guide = drag
-            .filter(|drag| drag.guide_only)
-            .map_or(self.divider, |drag| {
-                drag.screen.right()
-                    - drag.percent().map_or(drag.initial_width, |p| {
-                        preferred_width(drag.screen.width, Some(p))
-                    })
-                    - GAP
-            });
-        let style = if highlight_divider || drag.is_some() {
-            crate::style::accent_style()
+pub(super) fn paint_divider(
+    frame: &mut Frame<'_>,
+    divider: u16,
+    drag: Option<DividerDrag>,
+    highlight_divider: bool,
+) {
+    // Draw after both panes registered their images. Clearing a guide to the left
+    // of retained pixels can erase the rest of that terminal row.
+    let guide = drag.filter(|drag| drag.guide_only).map_or(divider, |drag| {
+        drag.screen.right()
+            - drag.percent().map_or(drag.initial_width, |p| {
+                preferred_width(drag.screen.width, Some(p))
+            })
+            - GAP
+    });
+    let style = if highlight_divider || drag.is_some() {
+        crate::style::accent_style()
+    } else {
+        ratatui::style::Style::default().dim()
+    };
+    for y in frame.area().y..frame.area().bottom() {
+        let x = if guide != divider
+            && frame.image_placements.iter().any(|image| {
+                (image.area.y..image.area.bottom()).contains(&y) && guide < image.area.right()
+            }) {
+            divider
         } else {
-            ratatui::style::Style::default().dim()
+            guide
         };
-        for y in area.y..area.bottom() {
-            let x = if guide != self.divider
-                && frame.image_placements.iter().any(|image| {
-                    (image.area.y..image.area.bottom()).contains(&y) && guide < image.area.right()
-                }) {
-                self.divider
-            } else {
-                guide
-            };
-            frame.buffer[(x, y)].set_symbol("│").set_style(style);
-        }
+        frame.buffer[(x, y)].set_symbol("│").set_style(style);
     }
 }

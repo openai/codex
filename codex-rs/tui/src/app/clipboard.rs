@@ -68,8 +68,7 @@ impl App {
             }
             let passive = self
                 .conversation_frame
-                .side_pane
-                .as_ref()
+                .side_pane()
                 .map(|panes| panes.passive_thread);
             for (id, companion) in &mut self.side_companions {
                 let visible = current && passive == Some(*id);

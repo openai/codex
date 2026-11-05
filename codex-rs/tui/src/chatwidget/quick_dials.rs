@@ -49,7 +49,11 @@ fn quick_dial_label(dial: &QuickDial) -> String {
 }
 
 impl ChatWidget {
-    pub(super) fn quick_dial_hud(&self) -> ShortcutHud {
+    pub(crate) fn quick_dial_menu_open(&self) -> bool {
+        self.quick_dial_menu
+    }
+
+    pub(crate) fn quick_dial_hud(&self) -> ShortcutHud {
         let mut entries: Vec<_> = (1..=9)
             .chain(std::iter::once(/*value*/ 0))
             .filter_map(|slot| {
@@ -505,8 +509,11 @@ impl ChatWidget {
             if !self.bottom_pane.no_modal_or_popup_active() {
                 return;
             }
-            self.set_footer_hint_override(Some(Vec::new()));
+            if !self.local_settings.workspace_enabled(&self.config) {
+                self.set_footer_hint_override(Some(Vec::new()));
+            }
             self.quick_dial_menu = true;
+            self.request_redraw();
         }
     }
 

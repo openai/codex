@@ -164,6 +164,10 @@ async fn older_page_updates_the_parked_parent_without_moving_focus() -> Result<(
     app.chat_widget
         .handle_side_thread_session(test_thread_session(child, app.config.cwd.to_path_buf()));
     app.active_thread_id = Some(child);
+    app.sidebar_mut().show(
+        sidebar::SidebarContent::Chat(child),
+        sidebar::PaneFocus::Sidebar,
+    );
     let size = Size::new(/*width*/ 120, /*height*/ 18);
     tui.terminal = crate::tui::Terminal::with_screen_size_and_cursor_position_for_test(
         ratatui::backend::CrosstermBackend::new(std::io::stdout()),

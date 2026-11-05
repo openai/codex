@@ -1063,6 +1063,7 @@ See the Codex keymap documentation for supported actions and examples."
             agent_navigation: AgentNavigationState::default(),
             agents_overview,
             side_threads: HashMap::new(),
+            sidebars: HashMap::new(),
             side_companions: HashMap::new(),
             zoomed_thread: None,
             exact_sidebar_width: None,

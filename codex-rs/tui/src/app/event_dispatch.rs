@@ -1025,21 +1025,24 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
-            AppEvent::SidePanePressAfterReplay { thread_id, area, mut press, draft_cursor } => {
+            AppEvent::SidePanePressAfterReplay { peer, thread_id, area, mut press, draft_cursor } => {
                 if self.pending_thread_switch_resets == 0
                     && self.current_displayed_thread_id() == Some(thread_id)
                     && self.conversation_focus_available(tui)
                 {
-                    // The native mouse handler draws at this reserved size before hit testing.
                     let size = tui.prepare_draw_size()?;
-                    if side_pane::layout(self, tui, size.into()).is_some_and(|panes| panes.focused == area) {
+                    if side_pane::layout(self, tui, size.into()).is_some_and(|panes| panes.passive_thread == peer) {
                         if let Some(cursor) = draft_cursor {
-                            // Focus can expand or scroll the editor. Replay at the same text position.
+                            // The editor can reflow during the slide. Keep the original text position.
                             self.chat_widget.set_composer_cursor(cursor);
-                            self.refresh_owned_transcript(tui)?;
+                        }
+                        self.refresh_owned_transcript(tui)?;
+                        if draft_cursor.is_some() {
                             let position = tui.terminal.last_known_cursor_pos;
                             press.column = position.x;
                             press.row = position.y;
+                        } else if !self.conversation_frame.side_pane().is_some_and(|panes| panes.focused == area) {
+                            return Ok(AppRunControl::Continue);
                         }
                         self.handle_owned_transcript_event(tui, app_server, &TuiEvent::Mouse(press))?;
                     }

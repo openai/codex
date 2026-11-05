@@ -1,0 +1,9 @@
+---
+source: tui/src/app/tests.rs
+expression: "panel_text(&app, &tui)"
+---
+─ Presets ──────────────────────────────────────────────────────────────────────────────────────────
+
+  No presets saved. Press n to create one.
+
+  n · new   s · from settings   e · edit   d · delete   esc · close

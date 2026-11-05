@@ -747,10 +747,21 @@ impl App {
             });
         }
         self.render_thread_snapshot(tui, app_server, thread_id, snapshot, !is_replay_only)?;
-        if self.side_retention_enabled(tui)
-            && let Some(side) = self.side_threads.get_mut(&thread_id)
-        {
-            side.pane_open = true;
+        if self.side_retention_enabled(tui) {
+            if self.side_threads.contains_key(&thread_id) {
+                self.sidebar_mut().show(
+                    sidebar::SidebarContent::Chat(thread_id),
+                    sidebar::PaneFocus::Sidebar,
+                );
+            } else if let Some(sidebar::SidebarContent::Chat(child)) = self
+                .sidebar()
+                .and_then(sidebar::SidebarPane::visible_content)
+            {
+                self.sidebar_mut().show(
+                    sidebar::SidebarContent::Chat(child),
+                    sidebar::PaneFocus::Main,
+                );
+            }
         }
         if is_replay_only
             && self
@@ -918,6 +929,7 @@ impl App {
                     .values()
                     .any(|side| side.parent_thread_id == *id)
         });
+        self.sidebars.remove(&None);
         self.pending_realtime_speech_replay.clear();
         self.pending_realtime_transcript_replay.clear();
         self.realtime_replay_order.clear();

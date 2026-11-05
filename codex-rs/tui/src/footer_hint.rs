@@ -28,6 +28,40 @@ pub(crate) fn shortcut(keys: &str, label: &str) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The same measured spans determine which hints fit and where each one can be clicked.
+pub(crate) struct HintLine {
+    pub(crate) line: Line<'static>,
+    pub(crate) items: Vec<std::ops::Range<u16>>,
+}
+
+impl HintLine {
+    pub(crate) fn new(hints: impl IntoIterator<Item = Line<'static>>, width: u16) -> Self {
+        let mut hints = hints.into_iter().peekable();
+        let mut line = Line::default();
+        let mut items = Vec::new();
+        let mut end = 0;
+        while let Some(hint) = hints.next() {
+            let start = end + if items.is_empty() { 0 } else { 3 };
+            let next = start + hint.width();
+            let overflow_space = if hints.peek().is_some() { 2 } else { 0 };
+            if next + overflow_space > usize::from(width) {
+                if width > 0 {
+                    let marker = if items.is_empty() { "…" } else { " …" };
+                    line.push_span(marker.set_style(secondary_text_style()));
+                }
+                break;
+            }
+            if !items.is_empty() {
+                line.push_span(" · ".set_style(secondary_text_style()));
+            }
+            line.extend(hint.spans);
+            items.push(start as u16..next as u16);
+            end = next;
+        }
+        Self { line, items }
+    }
+}
+
 /// Choose a complete hint variant so narrow surfaces never display half a shortcut.
 pub(crate) fn first_fitting_line(
     candidates: impl IntoIterator<Item = Line<'static>>,

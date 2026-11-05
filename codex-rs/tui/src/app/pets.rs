@@ -11,10 +11,15 @@ impl App {
     ) -> Result<()> {
         if self.chat_widget.ambient_pet_image_enabled() {
             let ambient_pet_area = self.conversation_area(screen_size.into());
-            if let Err(err) = tui.draw_ambient_pet_image(
-                self.chat_widget
-                    .ambient_pet_draw(ambient_pet_area, rendered_area.bottom()),
-            ) {
+            let request = self
+                .chat_widget
+                .ambient_pet_draw(ambient_pet_area, rendered_area.bottom())
+                .filter(|pet| {
+                    self.conversation_frame
+                        .leader_hud
+                        .is_none_or(|hud| !hud.intersects(pet.area()))
+                });
+            if let Err(err) = tui.draw_ambient_pet_image(request) {
                 self.handle_ambient_pet_image_render_error(tui, err)?;
             }
         }

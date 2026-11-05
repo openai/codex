@@ -1,11 +1,82 @@
 //! Composer and side-conversation focus shortcuts. Thread selection replaces the widget
 //! immediately, but Park and Finish transfer transcript views through the app event queue.
 
+use super::sidebar::PaneFocus;
+use super::sidebar::SidebarContent;
 use super::*;
 use crate::activation_key_guard::ActivationKeySuppression;
 use crate::transcript_view::TranscriptView;
 
 impl App {
+    pub(super) fn sidebar_chooser_available(&self) -> bool {
+        !self.reconnect.offline
+            && !self.conversation_frame.has_caller_inset()
+            && !self.chat_widget.has_active_modal()
+            && self.chat_widget.sidebar_chooser_available()
+    }
+
+    pub(super) fn handle_chooser_input(&mut self, tui: &tui::Tui, event: &TuiEvent) -> bool {
+        let focus = self.chooser_focus();
+        if focus.is_none()
+            || !self.conversation_focus_available(tui)
+            || !self.sidebar_chooser_available()
+        {
+            return false;
+        }
+        let open = match event {
+            TuiEvent::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                tui.frame_requester().schedule_frame();
+                let Some(area) = self
+                    .conversation_frame
+                    .chooser_area()
+                    .filter(|area| area.contains((mouse.column, mouse.row).into()))
+                else {
+                    self.sidebar_mut()
+                        .show(SidebarContent::Chooser, PaneFocus::Main);
+                    return false;
+                };
+                self.sidebar_mut()
+                    .show(SidebarContent::Chooser, PaneFocus::Sidebar);
+                if crate::sidebar_chooser::choice_contains(area, mouse.row) {
+                    true
+                } else if mouse.row == area.bottom() - 1 && mouse.column > area.x {
+                    let column = mouse.column - area.x - 1;
+                    let hints = crate::sidebar_chooser::footer(&self.keymap, area);
+                    match hints.items.iter().position(|range| range.contains(&column)) {
+                        Some(0) => true,      // Open.
+                        Some(1 | 3) => false, // Back or hide.
+                        _ => return true,
+                    }
+                } else {
+                    return true;
+                }
+            }
+            _ if focus != Some(PaneFocus::Sidebar) => return false,
+            TuiEvent::Key(key)
+                if key.kind == KeyEventKind::Press
+                    && key.modifiers.is_empty()
+                    && matches!(key.code, KeyCode::Esc | KeyCode::Enter) =>
+            {
+                self.chat_widget.suppress_current_view_key_until_release(
+                    KeyBinding::from_event(*key),
+                    Instant::now(),
+                    ActivationKeySuppression::ViewTransition,
+                );
+                tui.frame_requester().schedule_frame();
+                key.code == KeyCode::Enter
+            }
+            _ => return matches!(event, TuiEvent::Key(_) | TuiEvent::Paste(_)),
+        };
+        if open {
+            self.chat_widget
+                .dispatch_command(crate::slash_command::SlashCommand::Side);
+        }
+        if !open || self.chat_widget.thread_id().is_none() {
+            self.sidebar_mut().hide();
+        }
+        true
+    }
+
     pub(super) async fn handle_side_focus_key(
         &mut self,
         tui: &mut tui::Tui,
@@ -50,7 +121,11 @@ impl App {
             return false;
         }
         let child = self.switchable_side_child();
-        if (sidebar || hide) && child.is_none() {
+        let chooser = self.chooser_focus();
+        if child.is_none()
+            && ((hide && chooser != Some(PaneFocus::Sidebar))
+                || (sidebar && !self.sidebar_chooser_available()))
+        {
             return false;
         }
         if key.kind != KeyEventKind::Press {
@@ -77,10 +152,26 @@ impl App {
             self.zoomed_thread = (self.zoomed_thread != Some(target)).then_some(target);
             tui.frame_requester().schedule_frame();
             Ok(())
+        } else if child.is_none() && chooser.is_some() {
+            if hide || (sidebar && chooser == Some(PaneFocus::Sidebar)) {
+                self.sidebar_mut().hide();
+            } else {
+                if main {
+                    self.focus_current_parent_view(tui);
+                }
+                let focus = if main || left {
+                    PaneFocus::Main
+                } else {
+                    PaneFocus::Sidebar
+                };
+                self.sidebar_mut().show(SidebarContent::Chooser, focus);
+            }
+            tui.frame_requester().schedule_frame();
+            Ok(())
         } else if main {
             self.focus_main_composer(tui, app_server).await
         } else if (left && on_child)
-            || (right && !on_child && child.is_some_and(|id| self.side_threads[&id].pane_open))
+            || (right && !on_child && child.is_some() && self.open_pane_focus().is_some())
         {
             // Switching threads parks and restores each pane's transcript interaction.
             self.toggle_side_conversation(tui, app_server).await
@@ -94,6 +185,12 @@ impl App {
                 self.focus_current_parent_view(tui);
             }
             result
+        } else if sidebar && child.is_none() {
+            self.focus_current_parent_view(tui);
+            self.sidebar_mut()
+                .show(SidebarContent::Chooser, PaneFocus::Sidebar);
+            tui.frame_requester().schedule_frame();
+            Ok(())
         } else if hide || sidebar {
             self.hide_focused_side_pane(tui, app_server).await
         } else {

@@ -215,8 +215,6 @@ pub(super) struct SideThreadState {
     pub(super) parent_thread_id: ThreadId,
     /// Parent-thread condition that changed while this side thread is visible.
     pub(super) parent_status: Option<SideParentStatus>,
-    /// A hidden pane keeps its child and parked display for the next focus switch.
-    pub(super) pane_open: bool,
 }
 
 impl SideThreadState {
@@ -224,7 +222,6 @@ impl SideThreadState {
         Self {
             parent_thread_id,
             parent_status: None,
-            pane_open: true,
         }
     }
 }
@@ -332,7 +329,8 @@ impl App {
     pub(super) fn open_pane_focus(&self) -> Option<ThreadId> {
         let focused = self.current_displayed_thread_id()?;
         let child = self.side_pair_key(focused)?;
-        self.side_threads.get(&child)?.pane_open.then_some(focused)
+        (self.sidebar()?.visible_content() == Some(sidebar::SidebarContent::Chat(child)))
+            .then_some(focused)
     }
 
     pub(super) fn switchable_side_child(&self) -> Option<ThreadId> {
@@ -487,10 +485,8 @@ impl App {
         };
         let parent = side.parent_thread_id;
         self.select_agent_thread(tui, app_server, parent).await?;
-        if self.current_displayed_thread_id() == Some(parent)
-            && let Some(side) = self.side_threads.get_mut(&child)
-        {
-            side.pane_open = false;
+        if self.current_displayed_thread_id() == Some(parent) {
+            self.sidebar_mut().hide();
             tui.frame_requester().schedule_frame();
             self.focus_returned_parent_composer(parent).await?;
         }
@@ -607,7 +603,15 @@ impl App {
         self.thread_event_channels.remove(&thread_id);
         self.pending_server_profiles.remove(&thread_id);
         self.agents_overview.activity.remove(&thread_id);
-        self.side_threads.remove(&thread_id);
+        self.sidebars.remove(&Some(thread_id));
+        if let Some(side) = self.side_threads.remove(&thread_id)
+            && self
+                .sidebars
+                .get(&Some(side.parent_thread_id))
+                .is_some_and(|pane| pane.contains_chat(thread_id))
+        {
+            self.sidebars.remove(&Some(side.parent_thread_id));
+        }
         self.side_companions.remove(&thread_id);
         self.agent_navigation.remove(thread_id);
         if self.active_thread_id == Some(thread_id) {
@@ -786,6 +790,11 @@ impl App {
         parent_thread_id: ThreadId,
         mut user_message: Option<crate::chatwidget::UserMessage>,
     ) -> Result<AppRunControl> {
+        // The fork and selection finish in this event. On success the next frame
+        // paints the chat at the chooser's width; on failure it slides closed.
+        if self.chooser_focus().is_some() {
+            self.sidebar_mut().hide();
+        }
         if let Some(message) = self.side_start_block_message() {
             self.restore_side_user_message(user_message.take());
             self.sync_side_thread_ui();

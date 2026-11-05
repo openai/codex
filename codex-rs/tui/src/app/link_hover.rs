@@ -26,7 +26,7 @@ impl App {
         {
             return None;
         }
-        let view = if let Some(panes) = &self.conversation_frame.side_pane
+        let view = if let Some(panes) = self.conversation_frame.side_pane()
             && panes.passive.contains((mouse.column, mouse.row).into())
         {
             let passive = &self.side_companions.get(&panes.passive_thread)?.view;
@@ -104,8 +104,7 @@ impl App {
                     self.refresh_owned_transcript(tui)?;
                     if self
                         .conversation_frame
-                        .side_pane
-                        .as_ref()
+                        .side_pane()
                         .is_some_and(|panes| panes.passive_thread == id && panes.passive == area)
                     {
                         self.handle_passive_transcript_event(tui, id, event);
@@ -128,7 +127,11 @@ impl App {
     }
 
     pub(super) fn refresh_link_hover(&self, tui: &mut Tui) -> std::io::Result<()> {
-        let shape = if !tui.is_owned_screen()
+        let shape = if tui
+            .link_hover
+            .mouse
+            .is_some_and(|mouse| self.conversation_frame.hud_contains(mouse))
+            || !tui.is_owned_screen()
             || self.overlay.is_some()
             || !self.chat_widget.no_modal_or_popup_active()
         {
@@ -136,8 +139,7 @@ impl App {
         } else if self.divider_drag.is_some()
             || tui.link_hover.mouse.is_some_and(|mouse| {
                 self.conversation_frame
-                    .side_pane
-                    .as_ref()
+                    .side_pane()
                     .is_some_and(|panes| panes.divider_contains(mouse))
             })
         {

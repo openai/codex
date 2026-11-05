@@ -1196,6 +1196,73 @@ async fn pane_direction_without_neighbor_preserves_fresh_typing() -> Result<()> 
 }
 
 #[tokio::test]
+async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut server = start_config_write_test_app_server(&app).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    super::enable_side_retention(&mut app)?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let parent = ThreadId::new();
+    app.chat_widget
+        .handle_thread_session(test_thread_session(parent, app.config.cwd.to_path_buf()));
+    app.chat_widget.insert_str("parent draft");
+
+    let size = ratatui::layout::Size::new(120, 12);
+    app.local_settings.tui.animations = true;
+    tokio::time::pause();
+    let open_chooser = [ctrl('x'), KeyCode::Char('s').into()];
+    // The second opening reverses a half-finished close.
+    for (key, widths) in [(KeyCode::Esc, [1, 20, 40]), (KeyCode::Enter, [20, 30, 40])] {
+        for stroke in open_chooser {
+            Box::pin(press(&mut app, &mut tui, &mut server, stroke)).await?;
+        }
+        for (elapsed, width) in [0, 90, 90].into_iter().zip(widths) {
+            tokio::time::advance(std::time::Duration::from_millis(elapsed)).await;
+            super::side_frame(&mut app, &mut tui, size)?;
+            assert_eq!(app.conversation_frame.chooser_area().unwrap().width, width);
+        }
+        if key == KeyCode::Esc {
+            let frame = super::side_frame(&mut app, &mut tui, size)?;
+            let panel: Vec<_> = frame
+                .lines()
+                .map(|line| line.chars().skip(80).collect::<String>())
+                .filter(|line| !line.trim().is_empty())
+                .collect();
+            insta::assert_snapshot!("sidebar_new_chat", panel.join("\n"));
+            for stroke in [
+                ctrl('x'),
+                KeyCode::Char('c').into(),
+                KeyCode::Char('!').into(),
+                KeyCode::Left.into(), // Flush buffered typing before the focus change.
+            ] {
+                Box::pin(press(&mut app, &mut tui, &mut server, stroke)).await?;
+            }
+            assert!(super::side_frame(&mut app, &mut tui, size)?.contains("Open in sidebar"));
+            for stroke in open_chooser {
+                Box::pin(press(&mut app, &mut tui, &mut server, stroke)).await?;
+            }
+        }
+        Box::pin(press(&mut app, &mut tui, &mut server, key.into())).await?;
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "parent draft!"
+        );
+        let dispatched = std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::StartSide { parent_thread_id, .. } if parent_thread_id == parent));
+        assert_eq!(dispatched, key == KeyCode::Enter);
+        if key == KeyCode::Esc {
+            super::side_frame(&mut app, &mut tui, size)?;
+            tokio::time::advance(std::time::Duration::from_millis(90)).await;
+            super::side_frame(&mut app, &mut tui, size)?;
+            assert_eq!(app.conversation_frame.chooser_area().unwrap().width, 20);
+        }
+    }
+    tokio::time::resume();
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
     let (mut app, mut rx, _op_rx) = super::make_test_app_with_channels().await;
     let mut app_server = start_config_write_test_app_server(&app).await?;

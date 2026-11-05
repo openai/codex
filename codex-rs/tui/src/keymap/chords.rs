@@ -59,6 +59,7 @@ const MAIN_COMPOSER_FOCUS: u32 = 1 << 23;
 const PANE_DIRECTION: u32 = 1 << 24;
 const OPEN_PANE: u32 = 1 << 25;
 const FOCUSED_SIDE_PANE: u32 = 1 << 26;
+const SIDEBAR_CHOOSER: u32 = 1 << 27;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
@@ -177,6 +178,14 @@ impl KeymapContextSet {
         Self(self.0 | FOCUSED_SIDE_PANE)
     }
 
+    pub(crate) const fn focused_sidebar_chooser() -> Self {
+        Self(SIDE_PANE | PANE_DIRECTION | MAIN_COMPOSER_FOCUS)
+    }
+
+    pub(crate) const fn with_sidebar_chooser(self) -> Self {
+        Self(self.0 | SIDEBAR_CHOOSER)
+    }
+
     pub(crate) const fn with_side_pane(self) -> Self {
         Self(self.0 | SIDE_PANE)
     }
@@ -196,6 +205,7 @@ impl KeymapContextSet {
                 | "maximize_pane_width"
                 | "resize_panes" => OPEN_PANE,
                 "focus_main_composer" => MAIN_COMPOSER_FOCUS,
+                "focus_sidebar_content" => SIDE_PANE | SIDEBAR_CHOOSER,
                 _ => SIDE_PANE,
             };
             return self.0 & required != 0;
@@ -524,11 +534,25 @@ pub(crate) enum KeyChordMatch {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct PendingChord {
-    // Persistent leader menus have no deadline.
-    started_at: Option<Instant>,
-    prefix: KeyBinding,
+pub(crate) struct PendingChord {
+    pub(crate) started_at: Instant,
+    persistent: bool,
+    pub(crate) prefix: KeyBinding,
     contexts: KeymapContextSet,
+}
+
+impl PendingChord {
+    pub(crate) fn completions(
+        self,
+        keymap: &RuntimeChordKeymap,
+    ) -> impl Iterator<Item = &RuntimeChordBinding> {
+        keymap.bindings.iter().filter(move |binding| {
+            let (code, modifiers) = binding.chord.completion.parts();
+            keymap
+                .binding_for_completion(self.prefix, KeyEvent::new(code, modifiers), self.contexts)
+                .is_some_and(|active| std::ptr::eq(active, *binding))
+        })
+    }
 }
 
 /// Tracks one pending chord or leader menu without buffering ordinary input.
@@ -542,6 +566,12 @@ impl KeyChordMatcher {
         self.pending.is_some()
     }
 
+    /// Only workspace leaders use the passive overlay. Other chord prefixes retain their footer.
+    pub(crate) fn workspace_leader(&self) -> Option<PendingChord> {
+        self.pending
+            .filter(|p| p.persistent && p.contexts.0 & PANE_DIRECTION != 0)
+    }
+
     /// Derive one presentation for the pending chord from the matcher that owns it.
     pub(crate) fn pending_hint_items(
         &self,
@@ -550,23 +580,9 @@ impl KeyChordMatcher {
     ) -> Option<Vec<(String, String)>> {
         let pending = self.pending?;
         let mut items = vec![(pending.prefix.display_label(), "then".to_string())];
-        for binding in keymap
-            .bindings
-            .iter()
-            .filter(|binding| {
-                let (code, modifiers) = binding.chord.completion.parts();
-                keymap
-                    .binding_for_completion(
-                        pending.prefix,
-                        KeyEvent::new(code, modifiers),
-                        pending.contexts,
-                    )
-                    .is_some_and(|active| std::ptr::eq(active, *binding))
-            })
-            .take(/*n*/ 6)
-        {
+        for binding in pending.completions(keymap).take(/*n*/ 6) {
             let label = match binding.action.action {
-                "open_presets" if pending.started_at.is_none() => "presets",
+                "open_presets" if pending.persistent => "presets",
                 "change_host" => "cycle",
                 "focus_activity" => "activity",
                 "find_transcript" => "find",
@@ -610,9 +626,7 @@ impl KeyChordMatcher {
     pub(crate) fn expire(&mut self, contexts: KeymapContextSet) -> bool {
         if self.pending.is_some_and(|pending| {
             pending.contexts != contexts
-                || pending
-                    .started_at
-                    .is_some_and(|started_at| started_at.elapsed() >= KEY_CHORD_TIMEOUT)
+                || (!pending.persistent && pending.started_at.elapsed() >= KEY_CHORD_TIMEOUT)
         }) {
             self.pending = None;
             return true;
@@ -641,7 +655,7 @@ impl KeyChordMatcher {
 
         if let Some(pending) = self.pending.take() {
             if crate::key_hint::plain(KeyCode::Esc).is_press(key_event)
-                || (pending.started_at.is_none() && chord_stroke_matches(pending.prefix, key_event))
+                || (pending.persistent && chord_stroke_matches(pending.prefix, key_event))
             {
                 return KeyChordMatch::Cancelled;
             }
@@ -674,7 +688,8 @@ impl KeyChordMatcher {
                             && binding.action.context.overlaps(KeymapContext::Global)))
             });
             self.pending = Some(PendingChord {
-                started_at: (!persistent).then(Instant::now),
+                started_at: Instant::now(),
+                persistent,
                 prefix,
                 contexts,
             });

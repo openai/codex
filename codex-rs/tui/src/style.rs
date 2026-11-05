@@ -84,6 +84,20 @@ pub fn user_message_style() -> Style {
     user_message_style_for(default_bg())
 }
 
+/// Blend the floating HUD slightly away from the terminal background in either theme.
+const SHORTCUT_HUD_TINT: f32 = 0.052;
+
+pub(crate) fn shortcut_hud_style() -> Style {
+    default_bg().map_or_else(Style::default, |bg| {
+        let shade = if is_light(bg) { 0 } else { 255 };
+        Style::default().bg(best_color(blend(
+            (shade, shade, shade),
+            bg,
+            SHORTCUT_HUD_TINT,
+        )))
+    })
+}
+
 /// Submitted prompts use a lighter fill than the editable composer in either theme.
 pub(crate) fn history_prompt_style() -> Style {
     let Some(background) = default_bg() else {

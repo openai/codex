@@ -705,6 +705,7 @@ pub(crate) enum AppEvent {
 
     /// Deliver the original pointer press after the target conversation's replay finishes.
     SidePanePressAfterReplay {
+        peer: ThreadId,
         draft_cursor: Option<usize>,
         thread_id: ThreadId,
         area: ratatui::layout::Rect,
