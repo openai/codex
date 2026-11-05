@@ -31,9 +31,7 @@ mod wslg;
 #[cfg(target_os = "linux")]
 pub use bundled_bwrap::find_bundled_bwrap_for_exe;
 #[cfg(target_os = "linux")]
-pub use bwrap::GLOB_SCAN_PROGRAM;
-#[cfg(target_os = "linux")]
-pub use bwrap::expand_unreadable_globs_in_environment;
+pub use bwrap::expand_unreadable_globs;
 
 /// Exit status returned when bundled bubblewrap fails digest verification.
 #[cfg(target_os = "linux")]

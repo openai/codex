@@ -199,29 +199,7 @@ fn explicit_wslg_alias_paths_are_rejected(source: &str) {
 }
 
 #[test]
-fn glob_ancestor_mask_in_no_rg_fallback() {
-    // Isolate PATH in a child test process instead of mutating the test runner's
-    // environment. This exercises the supported missing-rg branch end to end.
-    const CHILD: &str = "CODEX_WSLG_GLOB_TEST_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let output = Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "bwrap::wslg_tests::glob_ancestor_mask_in_no_rg_fallback",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .env("PATH", "")
-            .output()
-            .expect("run isolated test");
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
-    }
+fn wslg_masks_remain_when_glob_skips_directory_symlinks() {
     let temp = tempfile::tempdir().expect("temp directory");
     // '/' is an ancestor on every test host; no WSL mount is needed. Only
     // inspect arguments: never launch this synthetic filesystem policy.
@@ -247,12 +225,14 @@ fn glob_ancestor_mask_in_no_rg_fallback() {
             ..Default::default()
         },
     )
-    .expect("expanded ancestor mask should suffice")
+    .expect("skipped glob links still need the WSLg mask")
     .args;
-    assert!(
-        args.windows(4)
-            .any(|args| args == ["--tmpfs", "/", "--remount-ro", "/"])
-    );
-    assert!(!args.iter().any(|arg| arg == WSLG_DISTRO_ROOT));
+    assert!(args.windows(4).any(|args| args
+        == [
+            "--tmpfs",
+            WSLG_DISTRO_ROOT,
+            "--remount-ro",
+            WSLG_DISTRO_ROOT
+        ]));
     assert!(args.windows(2).any(|args| args == ["--tmpfs", "/proc"]));
 }

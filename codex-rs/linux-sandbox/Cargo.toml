@@ -25,7 +25,7 @@ codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
-globset = { workspace = true }
+ignore = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
 rustix = { workspace = true }

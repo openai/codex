@@ -15,19 +15,16 @@
 //! - bubblewrap used to construct the filesystem view before exec.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::fs;
 use std::fs::File;
 use std::fs::Metadata;
 use std::io;
 use std::os::fd::AsRawFd;
-use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
+use std::sync::Mutex;
 
 use crate::linux_run_main::synthetic_mount_registry_root;
 use codex_protocol::error::CodexErr;
@@ -39,12 +36,9 @@ use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::WritableRoot;
-use codex_sandboxing::find_executable_in_search_paths;
-use codex_sandboxing::find_pre_sandbox_executable_in_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use globset::GlobBuilder;
-use globset::GlobSet;
-use globset::GlobSetBuilder;
+use ignore::WalkState;
+use ignore::overrides::OverrideBuilder;
 
 /// Linux "platform defaults" that keep common system binaries and dynamic
 /// libraries readable when a split filesystem policy requests `:minimal`.
@@ -61,9 +55,6 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/nix/store",
     "/run/current-system/sw",
 ];
-
-/// External scanner used by deny-glob expansion and its dependency inventory.
-pub const GLOB_SCAN_PROGRAM: &str = "rg";
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
 pub(crate) const WSL_INTEROP_DIR: &str = "/run/WSL";
@@ -83,7 +74,7 @@ pub(crate) struct BwrapOptions {
     /// Whether the host exposes WSLg's duplicate distro root, which must be hidden
     /// when constructing a restricted filesystem view.
     pub mask_wslg_distro: bool,
-    /// Optional maximum depth for expanding unreadable glob patterns with ripgrep.
+    /// Optional maximum depth for expanding unreadable glob patterns.
     ///
     /// Keep this uncapped by default so existing nested deny-read matches are
     /// masked before the sandboxed command starts.
@@ -480,18 +471,10 @@ fn create_filesystem_args(
     // to the existing matches we can see before constructing the mount overlay;
     // core tool helpers still evaluate the original patterns directly at read time.
     unreadable_roots.extend(
-        expand_unreadable_globs_with_ripgrep(
+        expand_unreadable_globs(
             &resolved.unreadable_globs,
             cwd,
-            || {
-                find_pre_sandbox_executable_in_path(
-                    GLOB_SCAN_PROGRAM,
-                    file_system_sandbox_policy,
-                    cwd,
-                )
-            },
             options.glob_scan_max_depth.or(resolved.glob_scan_max_depth),
-            |_| {},
         )?
         .into_iter()
         .map(AbsolutePathBuf::into_path_buf),
@@ -846,54 +829,23 @@ fn append_daemon_socket_masks(
     Ok(())
 }
 
-/// Expand deny globs with the launcher's scanner in an explicit command environment.
-/// The supplied environment replaces inheritance, including when it is empty.
-pub fn expand_unreadable_globs_in_environment(
+/// Snapshot deny-glob matches and their canonical targets for bubblewrap masks.
+/// Glob overrides are relative to each pattern's static search root.
+pub fn expand_unreadable_globs(
     patterns: &[String],
     cwd: &Path,
-    file_system_policy: &FileSystemSandboxPolicy,
     max_depth: Option<usize>,
-    env: &HashMap<String, String>,
-    command_cwd: &Path,
-) -> Result<Vec<AbsolutePathBuf>> {
-    expand_unreadable_globs_with_ripgrep(
-        patterns,
-        cwd,
-        || {
-            find_executable_in_search_paths(
-                GLOB_SCAN_PROGRAM,
-                std::env::split_paths(env.get("PATH")?),
-                command_cwd,
-                file_system_policy,
-                cwd,
-            )
-        },
-        max_depth,
-        |command| {
-            command.env_clear().envs(env).current_dir(command_cwd);
-        },
-    )
-}
-
-fn expand_unreadable_globs_with_ripgrep(
-    patterns: &[String],
-    cwd: &Path,
-    resolve_scanner: impl FnOnce() -> Option<PathBuf>,
-    max_depth: Option<usize>,
-    configure_command: impl Fn(&mut Command),
 ) -> Result<Vec<AbsolutePathBuf>> {
     if patterns.is_empty() || max_depth == Some(0) {
         return Ok(Vec::new());
     }
 
-    let rg_path = resolve_scanner();
-
     // Group each pattern by the static path prefix before its first glob
     // metacharacter. That keeps scans narrow, avoids searching from `/`, and
-    // lets one `rg --files` call handle all patterns under the same root.
+    // lets one walk handle all patterns under the same root.
     let mut patterns_by_search_root: BTreeMap<AbsolutePathBuf, Vec<String>> = BTreeMap::new();
     for pattern in patterns {
-        let Some((search_root, glob)) = split_pattern_for_ripgrep(pattern, cwd) else {
+        let Some((search_root, glob)) = split_glob_pattern(pattern, cwd) else {
             return Err(CodexErr::Fatal(format!(
                 "unreadable glob `{pattern}` cannot be safely expanded; use a pattern with a non-root directory prefix"
             )));
@@ -927,16 +879,7 @@ fn expand_unreadable_globs_with_ripgrep(
     // bypassing an unreadable glob match.
     let mut expanded_paths = BTreeSet::new();
     for (search_root, globs) in patterns_by_search_root {
-        let paths = match &rg_path {
-            Some(rg_path) => ripgrep_files(
-                rg_path,
-                search_root.as_path(),
-                &globs,
-                max_depth,
-                &configure_command,
-            )?,
-            None => glob_files(search_root.as_path(), &globs, max_depth)?,
-        };
+        let paths = glob_files(search_root.as_path(), &globs, max_depth)?;
         for path in paths {
             if let Some(target) = canonical_target_if_symlinked_path(path.as_path()) {
                 expanded_paths.insert(AbsolutePathBuf::from_absolute_path_checked(target)?);
@@ -954,10 +897,10 @@ fn expand_unreadable_globs_with_ripgrep(
     Ok(expanded_paths.into_iter().collect())
 }
 
-fn split_pattern_for_ripgrep(pattern: &str, cwd: &Path) -> Option<(AbsolutePathBuf, String)> {
+fn split_glob_pattern(pattern: &str, cwd: &Path) -> Option<(AbsolutePathBuf, String)> {
     // Resolve relative patterns once, then split at the first glob
     // metacharacter. The prefix becomes the search root and the suffix stays as
-    // the ripgrep glob. Root-level glob scans are intentionally skipped because
+    // the file glob. Root-level glob scans are intentionally skipped because
     // they are too broad for startup-time sandbox construction.
     let absolute_pattern = AbsolutePathBuf::resolve_path_against_base(pattern, cwd);
     let pattern = absolute_pattern.to_string_lossy();
@@ -979,114 +922,8 @@ fn split_pattern_for_ripgrep(pattern: &str, cwd: &Path) -> Option<(AbsolutePathB
         PathBuf::from(&pattern[..search_root_end])
     };
     let search_root = AbsolutePathBuf::from_absolute_path_checked(search_root).ok()?;
-    let glob = escape_unclosed_glob_classes(&pattern[search_root_end + 1..]);
+    let glob = pattern[search_root_end + 1..].to_string();
     (!glob.is_empty()).then_some((search_root, glob))
-}
-
-fn escape_unclosed_glob_classes(glob: &str) -> String {
-    // The filesystem policy accepts an unclosed `[` as a literal. Ripgrep treats
-    // that as invalid glob syntax, so escape only the unclosed class opener.
-    let mut escaped = String::with_capacity(glob.len());
-    let mut chars = glob.chars();
-
-    while let Some(ch) = chars.next() {
-        if ch != '[' {
-            escaped.push(ch);
-            continue;
-        }
-
-        let mut class = String::new();
-        let mut closed = false;
-        for class_ch in chars.by_ref() {
-            if class_ch == ']' {
-                closed = true;
-                break;
-            }
-            class.push(class_ch);
-        }
-
-        if closed {
-            escaped.push('[');
-            escaped.push_str(&class);
-            escaped.push(']');
-        } else {
-            escaped.push_str(r"\[");
-            escaped.push_str(&class);
-        }
-    }
-
-    escaped
-}
-
-fn ripgrep_files(
-    rg_path: &Path,
-    search_root: &Path,
-    globs: &[String],
-    max_depth: Option<usize>,
-    configure_command: &impl Fn(&mut Command),
-) -> Result<Vec<AbsolutePathBuf>> {
-    let mut command = Command::new(rg_path);
-    configure_command(&mut command);
-    // Use `rg --files` rather than shell expansion so dotfiles and ignored files
-    // are still considered. A status 1 with no stderr is ripgrep's "no matches"
-    // case, not a sandbox construction error.
-    command
-        .arg("--no-config")
-        .arg("--files")
-        .arg("--hidden")
-        .arg("--no-ignore")
-        .arg("--null");
-    if let Some(max_depth) = max_depth {
-        command.arg("--max-depth").arg(max_depth.to_string());
-    }
-    for glob in globs {
-        command.arg("--glob").arg(glob);
-    }
-    command.arg("--").arg(search_root);
-
-    /*
-     * Prefer ripgrep for unreadable glob expansion because it is fast and
-     * already implements the file-walking semantics we want here: include
-     * dotfiles, ignore ignore files, and do not recurse through symlinked
-     * directories. If the selected `rg` is unavailable at execution time, fall
-     * back to the internal globset walker so sandbox construction still masks
-     * matching paths. Other ripgrep failures stay fatal so deny-read does not
-     * silently weaken.
-     */
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return glob_files(search_root, globs, max_depth);
-        }
-        Err(err) => return Err(err.into()),
-    };
-    if !output.status.success() {
-        if output.status.code() == Some(1) && output.stderr.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CodexErr::Fatal(format!(
-            "ripgrep unreadable glob scan failed for {}: {stderr}",
-            search_root.display()
-        )));
-    }
-
-    let paths = output
-        .stdout
-        .split(|byte| *byte == b'\0')
-        .filter(|path| !path.is_empty())
-        .map(|path| {
-            let path = PathBuf::from(OsString::from_vec(path.to_vec()));
-            if path.is_absolute() {
-                path
-            } else {
-                search_root.join(path)
-            }
-        })
-        .map(AbsolutePathBuf::from_absolute_path_checked)
-        .collect::<io::Result<Vec<_>>>()?;
-    Ok(paths)
 }
 
 fn glob_files(
@@ -1094,60 +931,84 @@ fn glob_files(
     globs: &[String],
     max_depth: Option<usize>,
 ) -> Result<Vec<AbsolutePathBuf>> {
-    let mut builder = GlobSetBuilder::new();
+    let mut builder = OverrideBuilder::new(search_root);
+    builder.allow_unclosed_class(/*yes*/ true);
     for glob in globs {
-        let glob = GlobBuilder::new(glob)
-            .literal_separator(true)
-            .allow_unclosed_class(true)
-            .build()
-            .map_err(|err| {
-                CodexErr::Fatal(format!(
-                    "unreadable glob pattern is invalid for {}: {err}",
-                    search_root.display()
-                ))
-            })?;
-        builder.add(glob);
+        // Anchor to the scan root; this also keeps leading `#` and `!` literal.
+        let mut glob = format!("/{glob}");
+        if glob.ends_with(' ') && !glob.ends_with("\\ ") {
+            glob.insert(glob.len() - 1, '\\');
+        }
+        builder.add(&glob).map_err(|err| {
+            CodexErr::Fatal(format!(
+                "unreadable glob pattern is invalid for {}: {err}",
+                search_root.display()
+            ))
+        })?;
     }
-    let glob_set = builder.build().map_err(|err| {
+    let overrides = builder.build().map_err(|err| {
         CodexErr::Fatal(format!(
             "unreadable glob matcher failed for {}: {err}",
             search_root.display()
         ))
     })?;
 
-    let mut paths = Vec::new();
-    collect_glob_files(search_root, search_root, &glob_set, max_depth, &mut paths)?;
-    Ok(paths)
-}
-
-fn collect_glob_files(
-    search_root: &Path,
-    dir: &Path,
-    glob_set: &GlobSet,
-    remaining_depth: Option<usize>,
-    paths: &mut Vec<AbsolutePathBuf>,
-) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        let relative = path.strip_prefix(search_root).unwrap_or(path.as_path());
-
-        if (file_type.is_file() || file_type.is_symlink()) && glob_set.is_match(relative) {
-            paths.push(AbsolutePathBuf::from_absolute_path_checked(&path)?);
-        }
-
-        if !file_type.is_dir() {
-            continue;
-        }
-        let remaining_depth = match remaining_depth {
-            Some(0 | 1) => continue,
-            Some(depth) => Some(depth - 1),
-            None => None,
+    let paths = Mutex::new(Ok(Vec::new()));
+    let threads = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(12);
+    // Include hidden and ignored files, and follow explicit symlink roots.
+    // Skip child symlinks and only return regular files.
+    let mut walker = ignore::WalkBuilder::new(search_root);
+    walker
+        .standard_filters(/*yes*/ false)
+        .follow_links(/*yes*/ false)
+        .max_depth(max_depth)
+        .overrides(overrides)
+        .threads(threads);
+    let visit = |entry: std::result::Result<ignore::DirEntry, ignore::Error>| {
+        let path = match entry {
+            Ok(entry) => {
+                if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+                    return WalkState::Continue;
+                }
+                AbsolutePathBuf::from_absolute_path_checked(entry.into_path())
+                    .map_err(CodexErr::from)
+            }
+            Err(err) => Err(CodexErr::Fatal(format!(
+                "failed to enumerate unreadable glob paths under {}: {err}",
+                search_root.display()
+            ))),
         };
-        collect_glob_files(search_root, &path, glob_set, remaining_depth, paths)?;
+        let Ok(mut paths) = paths.lock() else {
+            return WalkState::Quit;
+        };
+        match path {
+            Ok(path) => {
+                if let Ok(paths) = &mut *paths {
+                    paths.push(path);
+                }
+            }
+            Err(err) => {
+                *paths = Err(err);
+                return WalkState::Quit;
+            }
+        }
+        WalkState::Continue
+    };
+    // Like rg, use the serial walk on one CPU: depth-boundary errors differ.
+    if threads == 1 {
+        for entry in walker.build() {
+            if visit(entry) == WalkState::Quit {
+                break;
+            }
+        }
+    } else {
+        walker.build_parallel().run(|| Box::new(&visit));
     }
-    Ok(())
+    paths
+        .into_inner()
+        .map_err(|_| CodexErr::Fatal("unreadable glob scan result mutex poisoned".to_string()))?
 }
 
 fn path_to_string(path: &Path) -> String {
