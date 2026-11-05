@@ -96,7 +96,7 @@ impl AlternateScreen {
         writer.flush()?;
         self.parent_reports_key_releases
             .store(keyboard_modes::reports_key_releases(), Ordering::Relaxed);
-        let mouse_capture = keyboard_modes::enable_keyboard_enhancement(writer);
+        let mouse_capture = keyboard_modes::enable_keyboard_enhancement(writer).mouse_capture;
         self.keyboard_active.store(
             !cfg!(windows) && !keyboard_modes::keyboard_enhancement_disabled(),
             Ordering::Relaxed,

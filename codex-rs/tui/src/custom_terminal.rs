@@ -139,6 +139,7 @@ where
 {
     /// The backend used to interface with the terminal
     backend: B,
+    pub(crate) tmux_kitty_image_base: Option<u32>,
     /// Holds the results of the current and previous draw calls. The two are compared at the end
     /// of each draw pass to output the necessary updates to the terminal
     buffers: [Buffer; 2],
@@ -224,6 +225,7 @@ where
     ) -> Self {
         Self {
             backend,
+            tmux_kitty_image_base: None,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,
@@ -397,15 +399,25 @@ where
         // Buffer. Thus, we're taking the important data out of the Frame and dropping it.
         let cursor_position = frame.cursor_position;
         let cursor_style = frame.cursor_style;
-        let images = std::mem::take(&mut frame.image_placements);
+        let mut images = std::mem::take(&mut frame.image_placements);
+        let first_id = if let Some(base) = self.tmux_kitty_image_base {
+            images.truncate(256);
+            base
+        } else {
+            crate::transcript_image::FIRST_IMAGE_ID
+        };
         let changed = *retained_images != images;
         if changed {
+            if self.tmux_kitty_image_base.is_some() && !retained_images.is_empty() {
+                // tmux retains placeholder text after Ghostty deletes the associated pixels.
+                self.invalidate_viewport();
+            }
             // Remove old graphics before text painting, including when switching to overlays.
             for (index, placement) in retained_images.iter().enumerate() {
                 match placement.image.protocol {
                     crate::pets::ImageProtocol::Kitty
                     | crate::pets::ImageProtocol::KittyLocalFile => {
-                        let id = crate::transcript_image::FIRST_IMAGE_ID + index as u32;
+                        let id = first_id + index as u32;
                         self.backend
                             .write_all(crate::pets::kitty_delete_image(id).as_bytes())?;
                     }
@@ -436,10 +448,20 @@ where
         if repaint_images {
             *retained_images = images;
             for (index, placement) in retained_images.iter_mut().enumerate() {
-                let id = crate::transcript_image::FIRST_IMAGE_ID + index as u32;
+                let id = first_id + index as u32;
+                let kitty_placement = if self.tmux_kitty_image_base.is_some() {
+                    crate::pets::KittyPlacement::Virtual(id)
+                } else {
+                    crate::pets::KittyPlacement::Cursor(id)
+                };
                 placement.file = placement
                     .image
-                    .draw(&mut self.backend, placement.area, placement.first_row, id)
+                    .draw(
+                        &mut self.backend,
+                        placement.area,
+                        placement.first_row,
+                        kitty_placement,
+                    )
                     .map_err(io::Error::other)?;
             }
         }
@@ -921,9 +943,10 @@ mod tests {
         image::RgbaImage::from_pixel(32, 32, image::Rgba([10, 110, 200, 255]))
             .save(&path)
             .unwrap();
-        for protocol in [
-            crate::pets::ImageProtocol::Kitty,
-            crate::pets::ImageProtocol::KittyLocalFile,
+        for (protocol, tmux_base) in [
+            (crate::pets::ImageProtocol::Kitty, None),
+            (crate::pets::ImageProtocol::KittyLocalFile, None),
+            (crate::pets::ImageProtocol::Kitty, Some(0x80_0100)),
         ] {
             let image = std::sync::Arc::new(
                 crate::transcript_image::TranscriptImage::load(&path, /*width*/ 40, protocol)
@@ -931,6 +954,7 @@ mod tests {
             );
             let mut terminal =
                 Terminal::with_options(CaptureBackend::new(/*width*/ 40, /*height*/ 12)).unwrap();
+            terminal.tmux_kitty_image_base = tmux_base;
             let size = terminal.last_known_screen_size;
             terminal.set_viewport_area(Rect::new(
                 /*x*/ 0,
@@ -971,6 +995,15 @@ mod tests {
             let output = terminal.backend().output();
             assert_eq!(output.matches("_Ga=T").count(), 2);
             assert_eq!(output.matches("_Ga=d").count(), 0);
+            if tmux_base.is_some() {
+                assert!(output.contains("i=8388864,U=1"));
+                let (_, grid) = output.split_once("\x1b[38;2;128;1;0m").unwrap();
+                let (grid, _) = grid.split_once("\x1b[39m").unwrap();
+                insta::assert_snapshot!(
+                    "fullscreen_tmux_image_cells",
+                    grid.replace('\x1b', "\nESC").trim()
+                );
+            }
             if protocol == crate::pets::ImageProtocol::KittyLocalFile {
                 assert!(output.contains("t=f") && output.contains("C=1"));
                 assert!(retained[0].file.as_ref().unwrap().path().exists());

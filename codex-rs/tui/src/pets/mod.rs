@@ -41,6 +41,7 @@ pub(crate) use asset_pack::builtin_spritesheet_path;
 #[cfg(test)]
 pub(crate) use asset_pack::write_test_pack;
 pub(crate) use image_protocol::ImageProtocol;
+pub(crate) use image_protocol::KittyPlacement;
 pub(crate) use image_protocol::PetImageSupport;
 #[cfg(test)]
 pub(crate) use image_protocol::PetImageUnsupportedReason;
@@ -185,7 +186,7 @@ fn render_pet_image(
                 &request.frame,
                 request.columns,
                 request.rows,
-                Some(image_id),
+                KittyPlacement::Cursor(image_id),
             )
             .map_err(PetImageRenderError::Asset)?,
         ),
@@ -194,7 +195,7 @@ fn render_pet_image(
                 &request.frame,
                 request.columns,
                 request.rows,
-                Some(image_id),
+                KittyPlacement::Cursor(image_id),
             )
             .map_err(PetImageRenderError::Asset)?,
         ),

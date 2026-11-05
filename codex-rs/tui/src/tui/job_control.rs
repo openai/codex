@@ -280,5 +280,5 @@ fn suspend_process() -> Result<()> {
         .and(restore_mask_result)
         .and(restore_result)
         .and(super::terminal_stderr::resume())
-        .and(super::set_modes())
+        .and(super::set_modes().map(drop))
 }

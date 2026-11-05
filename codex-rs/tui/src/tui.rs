@@ -249,7 +249,7 @@ mod tests {
     }
 }
 
-pub fn set_modes() -> Result<()> {
+fn set_modes() -> Result<tmux::Options> {
     ensure_virtual_terminal_processing()?;
 
     execute!(stdout(), EnableBracketedPaste)?;
@@ -263,13 +263,13 @@ pub fn set_modes() -> Result<()> {
     // Some terminals (notably legacy Windows consoles) do not support
     // keyboard enhancement flags. Attempt to enable them, but continue
     // gracefully if unsupported.
-    keyboard_modes::enable_keyboard_enhancement(&mut stdout());
+    let options = keyboard_modes::enable_keyboard_enhancement(&mut stdout());
 
     #[cfg(not(windows))]
     let _ = execute!(stdout(), EnableFocusChange);
     #[cfg(windows)]
     let _ = execute!(stdout(), DisableFocusChange);
-    Ok(())
+    Ok(options)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -504,7 +504,7 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
     let mut restore_guard = TerminalInitializationGuard { active: true };
-    set_modes()?;
+    let tmux_options = set_modes()?;
 
     set_panic_hook();
 
@@ -580,7 +580,15 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     // trust and other protected startup screens have finished accepting their security decisions.
     crate::terminal_palette::set_default_colors_from_startup_probe(/*colors*/ None);
 
-    let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
+    let mut tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
+    if std::env::var_os("TMUX").is_some()
+        && !["ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_VERSION"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some())
+        && !crossterm::style::Colored::ansi_color_disabled_memoized()
+    {
+        tui.tmux_kitty_image_base = tmux_options.kitty_image_base;
+    }
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
     let initialized_terminal = InitializedTerminal {
         terminal: tui,

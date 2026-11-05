@@ -220,11 +220,17 @@ pub fn kitty_delete_image(image_id: u32) -> String {
     wrap_for_tmux_if_needed(&format!("{ESC}_Ga=d,d=I,i={image_id},q=2;{ST}"))
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum KittyPlacement {
+    Cursor(u32),
+    Virtual(u32),
+}
+
 pub fn kitty_transmit_png_with_id(
     path: &Path,
     columns: u16,
     rows: u16,
-    image_id: Option<u32>,
+    placement: KittyPlacement,
 ) -> Result<String> {
     let png = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let payload = general_purpose::STANDARD.encode(png);
@@ -239,7 +245,7 @@ pub fn kitty_transmit_png_with_id(
         let has_more = index + 1 < chunks.len();
         let more_flag = u8::from(has_more);
         if index == 0 {
-            let image_id = kitty_image_id_arg(image_id);
+            let image_id = kitty_image_id_arg(placement);
             command.push_str(&format!(
                 "{ESC}_Ga=T,t=d,f=100,c={columns},r={rows},q=2{image_id},m={more_flag},C=1;{chunk}{ST}",
             ));
@@ -255,23 +261,24 @@ pub fn kitty_transmit_png_file_with_id(
     path: &Path,
     columns: u16,
     rows: u16,
-    image_id: Option<u32>,
+    placement: KittyPlacement,
 ) -> Result<String> {
     let path = path
         .canonicalize()
         .with_context(|| format!("canonicalize {}", path.display()))?;
     let payload = general_purpose::STANDARD.encode(path.to_string_lossy().as_bytes());
-    let image_id = kitty_image_id_arg(image_id);
+    let image_id = kitty_image_id_arg(placement);
     let command =
         format!("{ESC}_Ga=T,t=f,f=100,c={columns},r={rows},q=2{image_id},C=1;{payload}{ST}");
 
     Ok(wrap_for_tmux_if_needed(&command))
 }
 
-fn kitty_image_id_arg(image_id: Option<u32>) -> String {
-    image_id
-        .map(|image_id| format!(",i={image_id}"))
-        .unwrap_or_default()
+fn kitty_image_id_arg(placement: KittyPlacement) -> String {
+    match placement {
+        KittyPlacement::Cursor(id) => format!(",i={id}"),
+        KittyPlacement::Virtual(id) => format!(",i={id},U=1"),
+    }
 }
 
 fn wrap_for_tmux_if_needed(command: &str) -> String {
@@ -350,11 +357,14 @@ mod tests {
         fs::write(&path, b"png").unwrap();
 
         let command = kitty_transmit_png_with_id(
-            &path, /*columns*/ 4, /*rows*/ 3, /*image_id*/ None,
+            &path,
+            /*columns*/ 4,
+            /*rows*/ 3,
+            KittyPlacement::Cursor(7),
         )
         .unwrap();
 
-        assert!(command.starts_with("\x1b_Ga=T,t=d,f=100,c=4,r=3,q=2,m=0,C=1;"));
+        assert!(command.starts_with("\x1b_Ga=T,t=d,f=100,c=4,r=3,q=2,i=7,m=0,C=1;"));
         assert!(command.contains("cG5n"));
         assert!(command.ends_with("\x1b\\"));
     }
@@ -691,7 +701,7 @@ mod tests {
             &path,
             /*columns*/ 4,
             /*rows*/ 3,
-            /*image_id*/ Some(7),
+            KittyPlacement::Cursor(7),
         )
         .unwrap();
         let path = path.canonicalize().unwrap();

@@ -91,26 +91,32 @@ fn input_probe_targets_the_containing_pane_and_only_disables_confirmed_mouse_off
         let mut calls = Vec::new();
         let options = read_options(Some("%42"), |args| {
             calls.push(args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>());
-            Some(format!("csi-u\t{mouse}\n").into_bytes())
+            Some(
+                format!("csi-u\t{mouse}\tall\txterm-ghostty\tghostty 1.4.0\tRGB,title\n")
+                    .into_bytes(),
+            )
         });
         assert_eq!(
             options,
             Options {
                 extended_keys_format: Some("csi-u".to_owned()),
                 mouse_capture,
+                kitty_image_base: Some(0x80_2a00),
             }
         );
         assert_eq!(
             calls,
-            vec![vec![
-                "display-message",
-                "-p",
-                "-t",
-                "%42",
-                "#{extended-keys-format}\t#{mouse}",
-            ]]
+            vec![vec!["display-message", "-p", "-t", "%42", OPTIONS_FORMAT,]]
         );
     }
+}
+
+#[test]
+fn visible_only_passthrough_disables_kitty_previews() {
+    let options = read_options(Some("%42"), |_| {
+        Some(b"csi-u\ton\ton\txterm-ghostty\tghostty 1.4.0\tRGB,title\n".to_vec())
+    });
+    assert_eq!(options.kitty_image_base, None);
 }
 
 #[test]
@@ -135,12 +141,13 @@ fn keyboard_fallback_preserves_confirmed_mouse_policy_without_guessing_on_failur
             Options {
                 extended_keys_format: Some("xterm".to_owned()),
                 mouse_capture,
+                ..Options::default()
             }
         );
         assert_eq!(
             calls,
             vec![
-                vec!["display-message", "-p", "#{extended-keys-format}\t#{mouse}"],
+                vec!["display-message", "-p", OPTIONS_FORMAT],
                 vec!["show-options", "-gqv", "extended-keys-format"],
             ]
         );

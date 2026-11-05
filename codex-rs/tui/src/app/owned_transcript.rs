@@ -164,7 +164,6 @@ impl App {
     }
 
     pub(super) fn sync_owned_transcript(&mut self, width: u16) -> bool {
-        self.transcript_view.image_protocol = self.prepare_frame_images();
         let chat_widget = &self.chat_widget;
         let transcript_width = chat_widget.history_wrap_width(width);
         let view = &mut self.transcript_view;
@@ -202,6 +201,7 @@ impl App {
         tui: &mut tui::Tui,
         screen_size: Size,
     ) -> Result<Rect> {
+        self.transcript_view.image_protocol = self.prepare_frame_images(tui);
         let frames = tui.frame_requester();
         if self.conversation_frame.side_pane.is_some() {
             // Recompute our own inset on every frame, including the first narrow frame.

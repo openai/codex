@@ -22,6 +22,7 @@ use image::RgbaImage;
 use ratatui::layout::Rect;
 
 use crate::pets::ImageProtocol;
+use crate::pets::KittyPlacement;
 
 // Separate from the two image ids reserved for pets (0xC0DE and 0xC0DF).
 pub(crate) const FIRST_IMAGE_ID: u32 = 0xC100;
@@ -138,7 +139,7 @@ impl TranscriptImage {
         writer: &mut impl Write,
         area: Rect,
         first_row: usize,
-        id: u32,
+        placement: KittyPlacement,
     ) -> Result<Option<tempfile::NamedTempFile>> {
         let (top, bottom) = match self.protocol {
             ImageProtocol::Sixel => (
@@ -173,7 +174,7 @@ impl TranscriptImage {
                     } else {
                         crate::pets::kitty_transmit_png_with_id
                     };
-                    let command = transmit(png.path(), self.columns, area.height, Some(id))?;
+                    let command = transmit(png.path(), self.columns, area.height, placement)?;
                     file = (self.protocol == ImageProtocol::KittyLocalFile).then_some(png);
                     command.into_bytes()
                 }
@@ -187,6 +188,19 @@ impl TranscriptImage {
         };
         queue!(writer, SavePosition, MoveTo(area.x, area.y))?;
         writer.write_all(&payload)?;
+        if let KittyPlacement::Virtual(id) = placement {
+            // tmux moves these cells with the pane. Kitty inherits subsequent columns in each row.
+            let [_, r, g, b] = id.to_be_bytes();
+            write!(writer, "\x1b[38;2;{r};{g};{b}m")?;
+            let remaining_cells = "\u{10eeee}".repeat(usize::from(area.width.saturating_sub(1)));
+            for (y, mark) in (area.y..area.bottom()).zip([
+                '\u{305}', '\u{30d}', '\u{30e}', '\u{310}', '\u{312}', '\u{33d}',
+            ]) {
+                queue!(writer, MoveTo(area.x, y))?;
+                write!(writer, "\u{10eeee}{mark}{remaining_cells}")?;
+            }
+            writer.write_all(b"\x1b[39m")?;
+        }
         queue!(writer, RestorePosition)?;
         Ok(file)
     }

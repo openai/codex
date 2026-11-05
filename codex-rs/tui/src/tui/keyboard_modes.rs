@@ -209,12 +209,12 @@ fn read_windows_vscode_detection_with_timeout(
 #[path = "windows_term_program_tests.rs"]
 mod windows_term_program_tests;
 
-/// Restore keyboard reporting and return the mouse policy from the same fresh tmux probe.
-pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::MouseCapture {
+/// Restore keyboard reporting and return the settings from the same tmux probe.
+pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::Options {
     let tmux_options = super::tmux::options();
     if keyboard_enhancement_disabled() {
         set_reports_key_releases(/*reports*/ false);
-        return tmux_options.mouse_capture;
+        return tmux_options;
     }
 
     let running_in_tmux_session = running_in_tmux_session();
@@ -242,7 +242,7 @@ pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmu
     {
         let _ = execute!(writer, EnableModifyOtherKeys);
     }
-    tmux_options.mouse_capture
+    tmux_options
 }
 
 fn keyboard_enhancement_flags(

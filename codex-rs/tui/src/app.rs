@@ -1374,8 +1374,14 @@ impl App {
         Ok(())
     }
 
-    fn prepare_frame_images(&mut self) -> Option<crate::pets::ImageProtocol> {
-        let protocol = self.chat_widget.pet_image_support().protocol().filter(|_| {
+    fn prepare_frame_images(&mut self, tui: &tui::Tui) -> Option<crate::pets::ImageProtocol> {
+        let tmux_kitty = tui.is_owned_screen() && tui.terminal.tmux_kitty_image_base.is_some();
+        let protocol = self
+            .chat_widget
+            .pet_image_support()
+            .protocol()
+            .or(tmux_kitty.then_some(crate::pets::ImageProtocol::Kitty));
+        let protocol = protocol.filter(|_| {
             !self.app_server_target.uses_remote_workspace()
                 && crate::projectless::has_only_local_environments(&self.environment_manager)
         });
@@ -1389,7 +1395,7 @@ impl App {
         if tui.is_owned_screen() {
             return self.render_owned_transcript(tui, screen_size);
         }
-        self.prepare_frame_images();
+        self.prepare_frame_images(tui);
         self.chat_widget
             .empty_state_animation
             .borrow_mut()
