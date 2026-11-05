@@ -1,4 +1,4 @@
-//! Link hover owns the mouse shape only while Codex captures pointer input.
+//! Link and divider hover own the mouse shape only while Codex captures pointer input.
 //! Remember motion across repaints, but discard coordinates across focus and geometry changes.
 //! Cleanup is independent of Tui so panic, suspend, and editor handoffs also restore the shape.
 //! Kitty releases its override; Ghostty retains its existing text-cursor fallback.
@@ -14,9 +14,19 @@ use crossterm::event::MouseEventKind;
 use super::Tui;
 use super::TuiEvent;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum PointerShape {
+    #[default]
+    Default = 1,
+    Link,
+    Resize,
+}
+
 #[derive(Default)]
 pub(crate) struct LinkHover {
     pub(crate) mouse: Option<MouseEvent>,
+    pub(crate) shape: PointerShape,
 }
 
 impl LinkHover {
@@ -40,7 +50,7 @@ impl LinkHover {
     }
 }
 
-// 0: untouched/restored, 1: captured arrow, 2: link hand, 3: uncertain after a write failure.
+// Zero means untouched/restored. A failed write leaves the previous shape unknown.
 // Keep cleanup armed until flush succeeds.
 #[derive(Default)]
 pub(super) struct LinkPointer(AtomicU8);
@@ -50,22 +60,26 @@ impl LinkPointer {
         Self(AtomicU8::new(/*v*/ 0))
     }
 
-    pub(super) fn update(&self, writer: &mut impl Write, over_link: bool) -> std::io::Result<()> {
+    pub(super) fn update(
+        &self,
+        writer: &mut impl Write,
+        shape: PointerShape,
+    ) -> std::io::Result<()> {
         let previous = self.0.load(Ordering::Relaxed);
-        let next = if over_link { 2 } else { 1 };
-        if previous == next || (previous == 0 && !over_link) {
+        let next = shape as u8;
+        if previous == next || (previous == 0 && shape == PointerShape::Default) {
             return Ok(());
         }
         self.0.store(next, Ordering::Relaxed);
         let result = writer
-            .write_all(if over_link {
-                b"\x1b]22;pointer\x1b\\"
-            } else {
-                b"\x1b]22;default\x1b\\"
+            .write_all(match shape {
+                PointerShape::Default => b"\x1b]22;default\x1b\\",
+                PointerShape::Link => b"\x1b]22;pointer\x1b\\",
+                PointerShape::Resize => b"\x1b]22;ew-resize\x1b\\",
             })
             .and_then(|()| writer.flush());
         if result.is_err() {
-            self.0.store(/*val*/ 3, Ordering::Relaxed);
+            self.0.store(u8::MAX, Ordering::Relaxed);
         }
         result
     }
@@ -91,7 +105,7 @@ impl LinkPointer {
 }
 
 impl Tui {
-    pub(crate) fn set_link_pointer(&mut self, over_link: bool) -> std::io::Result<()> {
+    pub(crate) fn set_pointer_shape(&mut self, shape: PointerShape) -> std::io::Result<()> {
         // OSC 22 names differ between terminals. Restrict CSS names to known implementations;
         // multiplexers may consume OSC 22 and do not promise pointer-shape passthrough.
         let info = codex_terminal_detection::terminal_info();
@@ -99,7 +113,7 @@ impl Tui {
             && matches!(info.name, TerminalName::Ghostty | TerminalName::Kitty)
         {
             super::alternate_screen::ALTERNATE_SCREEN
-                .set_link_pointer(self.terminal.backend_mut(), over_link)?;
+                .set_pointer_shape(self.terminal.backend_mut(), shape)?;
         }
         Ok(())
     }

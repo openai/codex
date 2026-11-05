@@ -71,6 +71,7 @@ mod input_boundary;
 mod job_control;
 mod keyboard_modes;
 mod link_pointer;
+pub(crate) use link_pointer::PointerShape;
 mod notification_preview;
 #[cfg(test)]
 #[path = "tui/owned_screen_tests.rs"]

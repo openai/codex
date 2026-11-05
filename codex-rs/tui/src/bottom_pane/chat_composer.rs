@@ -4933,8 +4933,7 @@ impl ChatComposer {
             selection.register(footer_rect.intersection(buf.area), changed);
         }
         let style = user_message_style();
-        let background = composer_layout::background_rect(composer_rect, buf.area, options);
-        Block::default().style(style).render(background, buf);
+        Block::default().style(style).render(composer_rect, buf);
         if let Some(previews) = options.image_previews {
             previews.render(
                 thumbnails,

@@ -345,6 +345,8 @@ mod luna_reserve_return;
 mod security_setup;
 pub(crate) use backend_banners::AutomaticModelSwitchReason;
 mod protocol;
+pub(crate) use protocol::final_agent_message;
+pub(crate) use protocol::needs_agent_message;
 mod protocol_requests;
 mod rate_limits;
 mod usage_notice;
@@ -1454,7 +1456,7 @@ impl ChatWidget {
         self.bottom_pane.show_shutdown_in_progress();
     }
 
-    fn request_redraw(&mut self) {
+    pub(crate) fn request_redraw(&self) {
         self.frame_requester.schedule_frame();
     }
 
@@ -2085,6 +2087,12 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
+    }
+
+    pub(crate) fn new_status_indicator(
+        &self,
+    ) -> crate::status_indicator_widget::StatusIndicatorWidget {
+        self.bottom_pane.new_status_indicator()
     }
 
     pub(crate) fn status_line_text(&self) -> Option<String> {

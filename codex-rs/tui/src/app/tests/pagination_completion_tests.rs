@@ -124,7 +124,7 @@ pub(super) async fn completed_history_app(
 }
 
 #[tokio::test]
-async fn side_replay_retries_an_older_find_page_discarded_while_inactive() -> Result<()> {
+async fn older_page_updates_the_parked_parent_without_moving_focus() -> Result<()> {
     let (mut app, _codex_home, thread_id) = completed_history_app(&["Oldest", "Newest"]).await?;
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
     let started = app_server
@@ -135,8 +135,7 @@ async fn side_replay_retries_an_older_find_page_discarded_while_inactive() -> Re
             crate::app_server_session::ResumeModelSettings::RestoreFromThread,
         )
         .await?;
-    let session = started.session;
-    app.enqueue_primary_thread_session(session.clone(), started.turns)
+    app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
     let (event_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = crate::app_event_sender::AppEventSender::new(event_tx);
@@ -147,14 +146,6 @@ async fn side_replay_retries_an_older_find_page_discarded_while_inactive() -> Re
     app.scrollback_has_older_history = app_server.has_older_history(thread_id);
     app.transcript_cells = vec![plain_line_cell("Newest answer")];
     app.transcript_view.history = TranscriptHistoryState::Partial;
-    app.transcript_view.begin_search();
-    app.transcript_view.paste_search("Oldest answer");
-    while app.transcript_view.advance_search(&app.transcript_cells) {}
-    app.request_owned_history(&mut tui, &mut app_server);
-    let page = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
-        .await?
-        .expect("first page requested by Find");
-
     let child = ThreadId::new();
     app.side_threads
         .insert(child, SideThreadState::new(thread_id));
@@ -172,25 +163,32 @@ async fn side_replay_retries_an_older_find_page_discarded_while_inactive() -> Re
     .await?;
     app.chat_widget
         .handle_side_thread_session(test_thread_session(child, app.config.cwd.to_path_buf()));
+    app.active_thread_id = Some(child);
+    let size = Size::new(/*width*/ 120, /*height*/ 18);
+    tui.terminal = crate::tui::Terminal::with_screen_size_and_cursor_position_for_test(
+        ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+        size,
+        Default::default(),
+    );
+    side_frame(&mut app, &mut tui, size)?;
+    let wheel = mouse(MouseEventKind::ScrollUp, /*column*/ 4, /*row*/ 3);
+    assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &wheel)?);
+    let page = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
+        .await?
+        .expect("wheel on the parent requests its older page");
     boxed_future!(app.handle_event(&mut tui, &mut app_server, page)).await?;
 
-    app.chat_widget.handle_thread_session(session);
-    app.transcript_cells = vec![plain_line_cell("Newest answer")];
-    app.pending_thread_switch_resets = 1;
-    boxed_future!(app.handle_event(
-        &mut tui,
-        &mut app_server,
-        AppEvent::SideReplayFinished(thread_id)
-    ))
-    .await?;
-    app.request_owned_history(&mut tui, &mut app_server);
-    let retry = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
-        .await?
-        .expect("page retried by Find");
-    boxed_future!(app.handle_event(&mut tui, &mut app_server, retry)).await?;
-
-    let frame = side_frame(&mut app, &mut tui, Size::new(/*width*/ 100, /*height*/ 16))?;
-    assert!(frame.contains("Oldest answer"), "{frame}");
+    assert_eq!(app.chat_widget.thread_id(), Some(child));
+    let pane = &app.side_companions[&thread_id];
+    let text = pane
+        .cells
+        .iter()
+        .flat_map(|cell| cell.display_lines(/*width*/ 100))
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Oldest answer"), "{text}");
+    assert_eq!(pane.view.history, TranscriptHistoryState::Complete);
     app_server.shutdown().await?;
     Ok(())
 }

@@ -70,9 +70,10 @@ impl App {
             return Ok(());
         }
         // The widget can already belong to the destination while the transcript still replays.
-        if self.chat_widget.thread_id() != Some(thread_id)
-            || self.awaiting_side_replay(tui)
-            || (tui.is_owned_screen() && !self.scrollback_has_older_history)
+        let parked = self.chat_widget.thread_id() != Some(thread_id);
+        if self.awaiting_side_replay(tui)
+            || (parked && !self.side_companions.contains_key(&thread_id))
+            || (!parked && tui.is_owned_screen() && !self.scrollback_has_older_history)
         {
             app_server.cancel_older_history_page(thread_id, cursor);
             return Ok(());
@@ -115,6 +116,20 @@ impl App {
             &cwd,
             visibility,
         );
+        if let Some(pane) = self.side_companions.get_mut(&thread_id).filter(|_| parked) {
+            let index = history_prefix_len(&pane.cells);
+            let inserted = index..index + cells.len();
+            pane.splice_older_cells(index..index, cells);
+            pane.view.history_loaded(&pane.cells, inserted);
+            pane.view.history = if app_server.has_older_history(thread_id) {
+                TranscriptHistoryState::Partial
+            } else {
+                TranscriptHistoryState::Complete
+            };
+            merge_older_turns(&mut store.lock().await.turns, turns);
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
         let inserted = self.prepend_older_transcript_cells(cells);
         self.transcript_view
             .history_loaded(&self.transcript_cells, inserted.clone());
@@ -173,6 +188,17 @@ impl App {
             .zip(projected_user_cells)
             .map(|((item_id, _), cell)| (item_id, cell))
             .collect();
+        if self.chat_widget.thread_id() != Some(thread_id)
+            && let Some(pane) = self.side_companions.get_mut(&thread_id)
+        {
+            for index in
+                hidden_transcript_indices(&pane.cells, persisted_user_cells, hidden_item_ids)
+            {
+                pane.splice_older_cells(index..index + 1, Vec::new());
+                pane.view.restart_search();
+            }
+            return;
+        }
         let indices = hidden_transcript_indices(
             &self.transcript_cells,
             persisted_user_cells,
@@ -239,9 +265,20 @@ impl App {
                 ));
             }
             if let Some(turn) = completed_turn
-                && let Some(completion) = self
-                    .chat_widget
-                    .completion_cell(turn, Some(ReplayKind::ResumeInitialMessages))
+                && let Some(completion) = if let Some(pane) =
+                    self.side_companions.get_mut(&thread_id)
+                    && self.chat_widget.thread_id() != Some(thread_id)
+                {
+                    history_cell::FinalMessageSeparator::from_turn_once(
+                        turn,
+                        &mut pane.display.rendered_completion_turn_ids,
+                        /*fallback_elapsed*/ None,
+                        /*fallback_completed_at*/ None,
+                    )
+                } else {
+                    self.chat_widget
+                        .completion_cell(turn, Some(ReplayKind::ResumeInitialMessages))
+                }
             {
                 cells.push(Arc::new(completion));
             }
@@ -267,10 +304,7 @@ impl App {
         let index = if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
             overlay.prepend(cells.clone())
         } else {
-            self.transcript_cells
-                .iter()
-                .rposition(|cell| is_session_history_prefix_cell(cell.as_ref()))
-                .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1))
+            history_prefix_len(&self.transcript_cells)
         };
         let inserted = index..index + cells.len();
         self.transcript_cells.splice(index..index, cells);
@@ -386,6 +420,13 @@ fn hidden_review_item_ids(turns: &[Turn]) -> HashSet<&str> {
         }
     }
     hidden
+}
+
+fn history_prefix_len(cells: &[Arc<dyn HistoryCell>]) -> usize {
+    cells
+        .iter()
+        .rposition(|cell| is_session_history_prefix_cell(cell.as_ref()))
+        .map_or(/*default*/ 0, |index| index + 1)
 }
 
 /// Match repeated user messages from newest to oldest so identical visible prompts stay distinct.

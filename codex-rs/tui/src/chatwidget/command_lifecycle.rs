@@ -399,13 +399,6 @@ impl ChatWidget {
             .map(codex_app_server_protocol::CommandAction::into_core)
             .collect();
         let duration = Duration::from_millis(duration_ms.unwrap_or_default().max(0) as u64);
-        let exit_code = if status == codex_app_server_protocol::CommandExecutionStatus::Completed {
-            exit_code.unwrap_or_default()
-        } else {
-            exit_code.filter(|code| *code != 0).unwrap_or(1)
-        };
-        let aggregated_output = aggregated_output.unwrap_or_default();
-
         let running = self.running_commands.remove(&id);
         if self.suppressed_exec_calls.remove(&id) {
             return;
@@ -415,8 +408,6 @@ impl ChatWidget {
             None => (event_command, event_parsed, source),
         };
         let parsed = self.annotate_skill_reads_in_parsed_cmd(parsed);
-        let is_unified_exec_interaction =
-            matches!(source, ExecCommandSource::UnifiedExecInteraction);
         let is_user_shell = source == ExecCommandSource::UserShell;
         // Completion-only replay has no begin event to join adjacent exploration. Extend only
         // a finished, compatible group; an unrelated running group must retain orphan routing.
@@ -458,11 +449,7 @@ impl ChatWidget {
             None => ExecEndTarget::NewCell,
         };
 
-        let output = if is_unified_exec_interaction {
-            CommandOutput::new(exit_code, String::new())
-        } else {
-            CommandOutput::new(exit_code, aggregated_output)
-        };
+        let output = CommandOutput::from_execution(status, exit_code, source, aggregated_output);
 
         match end_target {
             ExecEndTarget::ActiveTracked => {

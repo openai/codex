@@ -66,6 +66,21 @@ impl App {
                     &mut *selection;
                 view.finish_copy(cells, completion, current);
             }
+            let passive = self
+                .conversation_frame
+                .side_pane
+                .as_ref()
+                .map(|panes| panes.passive_thread);
+            for (id, companion) in &mut self.side_companions {
+                let visible = current && passive == Some(*id);
+                if companion
+                    .view
+                    .finish_copy(&companion.cells, completion, visible)
+                    == Some(true)
+                {
+                    companion.view.jump_to_latest();
+                }
+            }
             let follow =
                 self.transcript_view
                     .finish_copy(&self.transcript_cells, completion, current);
@@ -85,6 +100,9 @@ impl App {
         }
         if !current || matches!(event, TuiEvent::FocusLost | TuiEvent::Resume) {
             self.transcript_view.cancel_primary();
+            for companion in self.side_companions.values_mut() {
+                companion.view.cancel_primary();
+            }
             self.chat_widget.cancel_composer_primary();
             self.chat_widget
                 .rendered_selection

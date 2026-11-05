@@ -72,9 +72,13 @@ impl Command for EnablePointerCapture {
 }
 
 impl AlternateScreen {
-    pub(super) fn set_link_pointer(&self, writer: &mut impl Write, over_link: bool) -> Result<()> {
+    pub(super) fn set_pointer_shape(
+        &self,
+        writer: &mut impl Write,
+        shape: super::PointerShape,
+    ) -> Result<()> {
         if self.mouse_active.load(Ordering::Relaxed) {
-            self.link_pointer.update(writer, over_link)
+            self.link_pointer.update(writer, shape)
         } else {
             self.link_pointer
                 .restore(writer, codex_terminal_detection::terminal_info().name)

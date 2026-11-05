@@ -1197,6 +1197,13 @@ impl App {
                 {
                     self.retain_inactive_realtime_transcript(thread_id, &notification);
                 }
+                if let Some(companion) = self.side_companions.get_mut(&thread_id)
+                    && companion.apply_notification(&notification, &guard, || {
+                        self.chat_widget.new_status_indicator()
+                    })
+                {
+                    self.chat_widget.request_redraw();
+                }
                 // Status traffic alone does not change the displayed transcript.
                 guard.replay_may_have_output |= !matches!(
                     &notification,

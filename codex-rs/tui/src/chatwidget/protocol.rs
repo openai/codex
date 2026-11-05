@@ -459,33 +459,16 @@ impl ChatWidget {
         self.thread_usage.replaying_turn_completion = replay_kind.is_some();
         match notification.turn.status {
             TurnStatus::Completed => {
-                let last_agent_message =
-                    notification
-                        .turn
-                        .item_payloads()
-                        .rev()
-                        .find_map(|item| match item {
-                            ThreadItemPayload::AgentMessage {
-                                id,
-                                text,
-                                phase: Some(MessagePhase::FinalAnswer) | None,
-                                ..
-                            } if !self
-                                .is_realtime_delegated_reasoning_turn(&notification.turn.id)
-                                || !realtime::is_private_realtime_agent_item(item) =>
-                            {
-                                Some((item.clone(), id.clone(), text.clone()))
-                            }
-                            _ => None,
-                        });
-                if let Some((item, id, _)) = &last_agent_message
-                    && self
-                        .transcript
-                        .last_completed_agent_message
-                        .as_ref()
-                        .is_none_or(|(turn_id, item_id)| {
-                            turn_id != &notification.turn.id || item_id != id
-                        })
+                let last_agent_message = final_agent_message(
+                    &notification.turn,
+                    self.is_realtime_delegated_reasoning_turn(&notification.turn.id),
+                );
+                if let Some((item, _)) = last_agent_message
+                    && needs_agent_message(
+                        self.transcript.last_completed_agent_message.as_ref(),
+                        &notification.turn.id,
+                        item,
+                    )
                 {
                     self.handle_thread_item(
                         item.clone(),
@@ -495,7 +478,7 @@ impl ChatWidget {
                     );
                 }
                 if replay_kind.is_none()
-                    && let Some((item, _, _)) = &last_agent_message
+                    && let Some((item, _)) = last_agent_message
                 {
                     self.speak_completed_realtime_delegation(&notification.turn.id, item);
                 }
@@ -505,7 +488,7 @@ impl ChatWidget {
                 self.last_non_retry_error = None;
                 let completion = self.completion_cell(&notification.turn, replay_kind);
                 self.on_task_complete(
-                    last_agent_message.map(|(_, _, text)| text),
+                    last_agent_message.map(|(_, text)| text.to_owned()),
                     completion,
                     replay_kind.is_some(),
                 );
@@ -718,4 +701,29 @@ impl ChatWidget {
             ),
         }
     }
+}
+
+/// Select the final reply that can be displayed when streaming events were missed.
+pub(crate) fn final_agent_message(
+    turn: &Turn,
+    realtime_delegated: bool,
+) -> Option<(&ThreadItemPayload, &str)> {
+    turn.item_payloads().rev().find_map(|item| match item {
+        ThreadItemPayload::AgentMessage {
+            text,
+            phase: Some(MessagePhase::FinalAnswer) | None,
+            ..
+        } if !realtime_delegated || !realtime::is_private_realtime_agent_item(item) => {
+            Some((item, text.as_str()))
+        }
+        _ => None,
+    })
+}
+
+pub(crate) fn needs_agent_message(
+    last: Option<&(String, String)>,
+    turn: &str,
+    item: &ThreadItemPayload,
+) -> bool {
+    last.is_none_or(|(turn_id, item_id)| turn_id != turn || item_id != item.id())
 }

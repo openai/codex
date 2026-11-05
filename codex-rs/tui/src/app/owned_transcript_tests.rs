@@ -1715,7 +1715,7 @@ async fn find_refreshes_live_details_before_searching_the_first_query() -> Resul
     Ok(())
 }
 
-fn mouse(kind: MouseEventKind, column: u16, row: u16) -> TuiEvent {
+pub(in crate::app) fn mouse(kind: MouseEventKind, column: u16, row: u16) -> TuiEvent {
     TuiEvent::Mouse(MouseEvent {
         kind,
         column,

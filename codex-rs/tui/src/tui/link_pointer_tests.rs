@@ -1,4 +1,7 @@
 use super::*;
+use PointerShape::Default as Arrow;
+use PointerShape::Link;
+use PointerShape::Resize;
 use crossterm::event::KeyModifiers;
 use crossterm::event::MouseButton;
 use pretty_assertions::assert_eq;
@@ -9,23 +12,25 @@ fn hover_transitions_are_deduplicated_and_restore_after_leaving_a_link() {
     for terminal in [TerminalName::Ghostty, TerminalName::Kitty] {
         let pointer = LinkPointer::default();
         let mut output = Vec::new();
-        for over_link in [false, true, true, false, false, true] {
-            pointer.update(&mut output, over_link).unwrap();
+        for shape in [Arrow, Link, Link, Resize, Resize, Arrow, Arrow, Link] {
+            pointer.update(&mut output, shape).unwrap();
             frames.push(String::from_utf8(std::mem::take(&mut output)).unwrap());
         }
         pointer.restore(&mut output, terminal).unwrap();
         frames.push(String::from_utf8(std::mem::take(&mut output)).unwrap());
         pointer.restore(&mut output, terminal).unwrap();
         // Re-entering capture off a link must preserve the restored terminal policy.
-        pointer.update(&mut output, /*over_link*/ false).unwrap();
+        pointer.update(&mut output, Arrow).unwrap();
         assert_eq!(output, Vec::<u8>::new());
-        pointer.update(&mut output, /*over_link*/ true).unwrap();
+        pointer.update(&mut output, Link).unwrap();
         frames.push(String::from_utf8(output).unwrap());
     }
     insta::assert_debug_snapshot!(frames, @r#"
     [
         "",
         "\u{1b}]22;pointer\u{1b}\\",
+        "",
+        "\u{1b}]22;ew-resize\u{1b}\\",
         "",
         "\u{1b}]22;default\u{1b}\\",
         "",
@@ -34,6 +39,8 @@ fn hover_transitions_are_deduplicated_and_restore_after_leaving_a_link() {
         "\u{1b}]22;pointer\u{1b}\\",
         "",
         "\u{1b}]22;pointer\u{1b}\\",
+        "",
+        "\u{1b}]22;ew-resize\u{1b}\\",
         "",
         "\u{1b}]22;default\u{1b}\\",
         "",
@@ -47,16 +54,14 @@ fn hover_transitions_are_deduplicated_and_restore_after_leaving_a_link() {
 #[test]
 #[cfg(unix)]
 fn capture_release_restores_pointer_even_after_moving_off_link() {
-    for over_link in [true, false] {
+    for shape in [Link, Resize, Arrow] {
         let screen = super::super::alternate_screen::AlternateScreen::default();
         let mut output = Vec::new();
         screen
             .configure_input(&mut output, /*capture_mouse*/ true)
             .unwrap();
-        screen
-            .set_link_pointer(&mut output, /*over_link*/ true)
-            .unwrap();
-        screen.set_link_pointer(&mut output, over_link).unwrap();
+        screen.set_pointer_shape(&mut output, Link).unwrap();
+        screen.set_pointer_shape(&mut output, shape).unwrap();
         output.clear();
         screen.release_input(&mut output).unwrap();
         let expected = if codex_terminal_detection::terminal_info().name == TerminalName::Kitty {
@@ -66,9 +71,7 @@ fn capture_release_restores_pointer_even_after_moving_off_link() {
         };
         assert!(output.starts_with(expected));
         output.clear();
-        screen
-            .set_link_pointer(&mut output, /*over_link*/ true)
-            .unwrap();
+        screen.set_pointer_shape(&mut output, Link).unwrap();
         assert_eq!(output, Vec::<u8>::new());
     }
 }
@@ -89,9 +92,9 @@ fn failed_write_is_retried_and_cleanup_remains_armed() {
         (TerminalName::Kitty, b"\x1b]22;\x1b\\".as_slice()),
     ] {
         let pointer = LinkPointer::default();
-        assert!(pointer.update(&mut Fails, /*over_link*/ true).is_err());
+        assert!(pointer.update(&mut Fails, Link).is_err());
         let mut output = Vec::new();
-        pointer.update(&mut output, /*over_link*/ true).unwrap();
+        pointer.update(&mut output, Link).unwrap();
         assert_eq!(output, b"\x1b]22;pointer\x1b\\");
         assert!(pointer.restore(&mut Fails, terminal).is_err());
         output.clear();

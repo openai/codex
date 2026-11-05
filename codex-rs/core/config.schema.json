@@ -5573,6 +5573,14 @@
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
           "type": "boolean"
         },
+        "sidebar_width_percent": {
+          "default": null,
+          "description": "Preferred docked sidebar width as a percentage of the terminal. Defaults to one third.",
+          "format": "uint8",
+          "maximum": 99.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "status_line": {
           "default": null,
           "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning`, `current-dir`, and `thread-name`.",

@@ -450,6 +450,10 @@ impl App {
                         }
                         tui.frame_requester().schedule_frame();
                     }
+                    if let Some(pane) = self.side_companions.get_mut(&thread_id) {
+                        pane.view.history = TranscriptHistoryState::Failed;
+                        tui.frame_requester().schedule_frame();
+                    }
                     tracing::warn!(%thread_id, error = %err, "failed to load older transcript history");
                 }
             }
@@ -944,11 +948,14 @@ impl App {
             AppEvent::ParkSideCompanion { pair, thread_id, stream, display } => {
                 if self.side_threads.contains_key(&pair) {
                     self.transcript_view.sync_history_tail(&self.transcript_cells);
+                    let mut answer = None;
                     if let Some(stream) = stream {
                         let cells = &mut self.transcript_cells;
                         let (start, replacement): (_, Arc<dyn HistoryCell>) = match stream {
-                            CapturedSideStream::Answer(cell) => {
-                                (trailing_run_start::<history_cell::AgentMessageCell>(cells), cell)
+                            CapturedSideStream::Answer { cell, item } => {
+                                let start = trailing_run_start::<history_cell::AgentMessageCell>(cells);
+                                answer = item.map(|item| super::side_companion::SideAnswer::new(item, start));
+                                (start, cell)
                             }
                             CapturedSideStream::Plan(cell) => {
                                 (trailing_run_start::<history_cell::ProposedPlanStreamCell>(cells), cell)
@@ -960,8 +967,10 @@ impl App {
                     }
                     self.side_companions.insert(thread_id, SideCompanion {
                         display,
+                        parked_tail: self.transcript_cells.len(),
                         cells: std::mem::take(&mut self.transcript_cells),
                         view: std::mem::take(&mut self.transcript_view),
+                        answer,
                     });
                 }
             }
@@ -1000,6 +1009,26 @@ impl App {
                         };
                     }
                     tui.frame_requester().schedule_frame();
+                }
+            }
+            AppEvent::SidePanePressAfterReplay { thread_id, area, mut press, draft_cursor } => {
+                if self.pending_thread_switch_resets == 0
+                    && self.current_displayed_thread_id() == Some(thread_id)
+                    && self.conversation_focus_available(tui)
+                {
+                    // The native mouse handler draws at this reserved size before hit testing.
+                    let size = tui.prepare_draw_size()?;
+                    if side_pane::layout(self, tui, size.into()).is_some_and(|panes| panes.focused == area) {
+                        if let Some(cursor) = draft_cursor {
+                            // Focus can expand or scroll the editor. Replay at the same text position.
+                            self.chat_widget.set_composer_cursor(cursor);
+                            self.refresh_owned_transcript(tui)?;
+                            let position = tui.terminal.last_known_cursor_pos;
+                            press.column = position.x;
+                            press.row = position.y;
+                        }
+                        self.handle_owned_transcript_event(tui, app_server, &TuiEvent::Mouse(press))?;
+                    }
                 }
             }
             AppEvent::ResetTranscriptForThreadSwitchPreservingScreen => {

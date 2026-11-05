@@ -1450,23 +1450,24 @@ impl BottomPane {
 
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
-            self.status.get_or_insert_with(|| {
-                StatusIndicatorWidget::new(
-                    self.app_event_tx.clone(),
-                    self.frame_requester.clone(),
-                    self.animations_enabled,
-                    self.effects,
-                )
-            });
-            if let Some(status) = self.status.as_mut() {
-                status.set_interrupt_binding(
-                    self.keymap
-                        .primary_hint(KeymapContext::Chat, "interrupt_turn"),
-                );
-            }
+            self.status = Some(self.new_status_indicator());
             self.sync_status_inline_message();
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn new_status_indicator(&self) -> StatusIndicatorWidget {
+        let mut status = StatusIndicatorWidget::new(
+            self.app_event_tx.clone(),
+            self.frame_requester.clone(),
+            self.animations_enabled,
+            self.effects,
+        );
+        status.set_interrupt_binding(
+            self.keymap
+                .primary_hint(KeymapContext::Chat, "interrupt_turn"),
+        );
+        status
     }
 
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {

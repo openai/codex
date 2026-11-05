@@ -6,6 +6,7 @@
 use super::*;
 use crate::app_event::CapturedSideDisplay;
 use crate::app_event::CapturedSideStream;
+use crate::app_event::CapturedSideWork;
 use crate::markdown_render::ListSpacing;
 
 fn streamed_message_matches_completed(streamed: &str, completed: &str) -> bool {
@@ -210,22 +211,23 @@ impl ChatWidget {
         width: u16,
     ) -> (Option<CapturedSideStream>, CapturedSideDisplay) {
         self.flush_completed_tool_activity();
+        let visualizations = self.thread_id.and_then(|id| {
+            crate::inline_visualization::InlineVisualizationContext::from_config(&self.config, id)
+        });
         let stream = if let Some(controller) = &self.stream_controller {
             let source = controller.source_snapshot();
             let markdown = parse_assistant_markdown(&source, self.config.cwd.as_path());
-            let context = self.thread_id.and_then(|id| {
-                crate::inline_visualization::InlineVisualizationContext::from_config(
-                    &self.config,
-                    id,
-                )
-            });
-            let cell = history_cell::AgentMarkdownCell::new_with_inline_visualizations(
+            let cell = history_cell::AgentMarkdownCell::from_parsed_message(
                 markdown.visible_markdown,
+                source,
                 &self.config.cwd,
-                context,
-            )
-            .with_copy_source(Some(source));
-            Some(CapturedSideStream::Answer(Arc::new(cell)))
+                visualizations.clone(),
+                &[],
+            );
+            Some(CapturedSideStream::Answer {
+                cell: Arc::new(cell),
+                item: self.transcript.active_streamed_agent_message.clone(),
+            })
         } else if self.plan_stream_controller.is_some() {
             Some(CapturedSideStream::Plan(Arc::new(
                 history_cell::new_proposed_plan(
@@ -240,7 +242,7 @@ impl ChatWidget {
             .transcript
             .take_active_cell()
             .filter(|cell| match &stream {
-                Some(CapturedSideStream::Answer(_)) => {
+                Some(CapturedSideStream::Answer { .. }) => {
                     !cell.as_any().is::<history_cell::StreamingAgentTailCell>()
                 }
                 Some(CapturedSideStream::Plan(_)) => {
@@ -249,22 +251,31 @@ impl ChatWidget {
                 None => true,
             });
         let display = CapturedSideDisplay {
+            rendered_completion_turn_ids: self.turn_lifecycle.rendered_completion_turn_ids.clone(),
             active,
+            last_completed_agent_message: self.transcript.last_completed_agent_message.clone(),
             auxiliary: self
                 .active_cell_transcript_hyperlink_lines(width)
                 .unwrap_or_default(),
-            draft: if self.bottom_pane.is_in_paste_burst() {
-                let draft = self.bottom_pane.composer_recovery_snapshot();
-                crate::bottom_pane::ChatComposer::expand_pending_pastes(
-                    &draft.text,
-                    draft.text_elements,
-                    &draft.pending_pastes,
-                )
-                .0
-            } else {
-                self.composer_text_with_pending()
+            draft: {
+                let snapshot = self.bottom_pane.composer_recovery_snapshot();
+                let mut draft = Box::new(crate::bottom_pane::TextArea::new());
+                draft.set_text_with_elements(&snapshot.text, &snapshot.text_elements);
+                draft
             },
             status: self.status_line_text(),
+            work: self
+                .last_turn_id()
+                .filter(|_| self.is_agent_turn_running())
+                .map(|turn_id| {
+                    CapturedSideWork::new(
+                        turn_id.to_owned(),
+                        self.new_status_indicator(),
+                        self.bottom_pane.status_elapsed().unwrap_or_default(),
+                    )
+                }),
+            cwd: self.config.cwd.clone(),
+            visualizations,
         };
         (stream, display)
     }
@@ -537,15 +548,13 @@ impl ChatWidget {
                     thread_id,
                 )
             });
-            self.add_to_history(
-                history_cell::AgentMarkdownCell::new_with_inline_visualizations(
-                    parsed.visible_markdown.clone(),
-                    self.config.cwd.as_path(),
-                    context,
-                )
-                .with_questions(questions)
-                .with_copy_source(Some(message.clone())),
-            );
+            self.add_to_history(history_cell::AgentMarkdownCell::from_parsed_message(
+                parsed.visible_markdown.clone(),
+                message.clone(),
+                self.config.cwd.as_path(),
+                context,
+                questions,
+            ));
             self.handle_stream_finished();
             self.request_redraw();
         } else {

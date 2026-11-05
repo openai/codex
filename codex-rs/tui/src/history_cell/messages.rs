@@ -574,6 +574,18 @@ pub(crate) struct AgentMarkdownCell {
 }
 
 impl AgentMarkdownCell {
+    pub(crate) fn from_parsed_message(
+        visible_markdown: String,
+        source: String,
+        cwd: &Path,
+        context: Option<crate::inline_visualization::InlineVisualizationContext>,
+        questions: &[codex_protocol::items::AsyncUserInputQuestion],
+    ) -> Self {
+        Self::new_with_inline_visualizations(visible_markdown, cwd, context)
+            .with_questions(questions)
+            .with_copy_source(Some(source))
+    }
+
     pub(crate) fn with_copy_source(mut self, source: Option<String>) -> Self {
         self.copy_source = source;
         self

@@ -209,13 +209,6 @@ impl SideParentStatusChange {
     }
 }
 
-/// Transcript state retained while the other conversation is active.
-pub(super) struct SideCompanion {
-    pub(super) display: crate::app_event::CapturedSideDisplay,
-    pub(super) cells: Vec<Arc<dyn HistoryCell>>,
-    pub(super) view: crate::transcript_view::TranscriptView,
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct SideThreadState {
     /// Thread to return to when the current side conversation is dismissed.

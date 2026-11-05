@@ -938,6 +938,11 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub fullscreen_transcript: bool,
 
+    /// Preferred docked sidebar width as a percentage of the terminal. Defaults to one third.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 99))]
+    pub sidebar_width_percent: Option<u8>,
+
     /// Mouse wheel speed multiplier for transcript scrolling, based on one row per event.
     /// Defaults to `1.0`. Positive fractional values slow scrolling; values above `1.0` speed it up.
     #[serde(default, deserialize_with = "crate::tui_mouse_scroll::deserialize")]

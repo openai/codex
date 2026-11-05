@@ -51,6 +51,10 @@ impl ChatWidget {
             .copy_composer_selection_on_release(event, selection_copy, copy)
     }
 
+    pub(crate) fn set_composer_cursor(&mut self, cursor: usize) {
+        self.bottom_pane.set_composer_cursor(cursor);
+    }
+
     pub(crate) fn handle_composer_mouse(&mut self, event: crossterm::event::MouseEvent) -> bool {
         self.bottom_pane.handle_composer_mouse(event)
     }
