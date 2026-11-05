@@ -82,21 +82,22 @@ impl ChatWidget {
             .as_ref()
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         let sparkle_thread = self.sparkle_thread_for_picker_action(&model);
+        let scoped = self.scope_model_picker_event();
         Some(SelectionSecondaryAction {
             key,
             footer_hint: hints.into(),
             action: Box::new(move |tx| {
-                tx.send(
+                tx.send(scoped(
                     AstraModelPickerAction::SelectSessionModel {
                         effort: effort.clone(),
                         service_tier: None,
                     }
                     .into_picker_event(sparkle_thread, model.clone()),
-                );
+                ));
                 if let Some(warning) = warning.clone() {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    tx.send(scoped(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_warning_event(warning),
-                    )));
+                    ))));
                 }
             }),
         })

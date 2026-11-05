@@ -35,10 +35,11 @@ impl ChatWidget {
         let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
         let name = preset.display_name.clone();
         let description = (!preset.description.is_empty()).then_some(preset.description.clone());
+        let scoped = self.scope_model_picker_event();
         let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::OpenReasoningPopup {
+            tx.send(scoped(AppEvent::OpenReasoningPopup {
                 model: preset.clone(),
-            });
+            }));
         })];
         let header = self.model_menu_header(
             "Select Model",

@@ -127,6 +127,16 @@ async fn selected_profile_provider_is_explicit() -> Result<()> {
         provider_selection::explicit_provider(&config),
         Some("openai".into())
     );
+    let mut server = crate::start_embedded_app_server_for_picker(&config).await?;
+    assert_eq!(server.client_provider_override_for_new_chats(&config), None);
+    server.thread_params_mode = ThreadParamsMode::Remote;
+    assert_eq!(
+        server.client_provider_override_for_new_chats(&config),
+        Some("openai".into())
+    );
+    server.thread_params_mode = ThreadParamsMode::Cloud;
+    assert_eq!(server.client_provider_override_for_new_chats(&config), None);
+    server.shutdown().await?;
     Ok(())
 }
 
@@ -153,6 +163,10 @@ async fn required_provider_overrides_oss_history_selection() -> Result<()> {
     let mut server = crate::start_embedded_app_server_for_picker(&config).await?;
     server.model_provider_override = Some("ollama".into());
     assert_eq!(config.model_provider_id, "openai");
+    assert_eq!(
+        server.client_provider_override_for_new_chats(&config),
+        Some("openai".into())
+    );
     assert_eq!(
         server.history_model_provider(&config).await?,
         Some("openai".into())

@@ -8,6 +8,7 @@ use crate::chatwidget::tests::render_bottom_popup;
 use crate::config_panel::ConfigEditor;
 use crate::config_panel::ConfigEditorHandoff;
 use crate::config_panel::ResumeCurrentAvailability;
+use crate::model_catalog::ModelCatalog;
 use crate::tui::TuiEvent;
 use crate::tui::test_support::make_test_tui;
 use codex_protocol::ThreadId;
@@ -109,8 +110,16 @@ async fn provider_views_show_reported_endpoints_and_ids_outside_the_catalog() ->
         default_provider_id: "lmstudio".into(),
         can_change_default: true,
     };
-    app.chat_widget
-        .show_selection_view(list(Some("ollama"), server.backend_id(), page));
+    app.chat_widget.show_selection_view(list(
+        Some("ollama"),
+        Arc::new(Catalog {
+            backend: server.backend_id(),
+            page,
+        }),
+        /*client_override*/ None,
+        &app.keymap.list,
+        /*notice*/ None,
+    ));
     insta::assert_snapshot!(
         "provider_list",
         render_bottom_popup(&app.chat_widget, /*width*/ 80)
@@ -137,6 +146,186 @@ async fn provider_views_show_reported_endpoints_and_ids_outside_the_catalog() ->
     );
     server.shutdown().await?;
     Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn space_saves_once_retries_and_preserves_the_current_chat() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut tui = make_test_tui()?;
+    std::fs::write(
+        app.config.codex_home.join("config.toml"),
+        r#"model_providers.gateway = { name = "Example Gateway", base_url = "http://127.0.0.1:9/v1" }"#,
+    )?;
+    let server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    let original = session.model_provider_id.clone();
+    app.chat_widget.handle_thread_session_quiet(session);
+    let (view, load) = loading();
+    app.chat_widget.show_selection_view(view);
+    handle(&mut app, &mut tui, &server, load);
+    handle(
+        &mut app,
+        &mut tui,
+        &server,
+        next_provider_event(&mut events).await,
+    );
+
+    // Disconnection after the picker opened must release its write guard for retry.
+    app.chat_widget.handle_key_event(KeyCode::Home.into());
+    app.reconnect.offline = true;
+    app.chat_widget.handle_key_event(KeyCode::Char(' ').into());
+    handle(
+        &mut app,
+        &mut tui,
+        &server,
+        next_provider_event(&mut events).await,
+    );
+    app.reconnect.offline = false;
+    while !app.chat_widget.active_view_is(LIST_VIEW) {
+        handle(
+            &mut app,
+            &mut tui,
+            &server,
+            next_provider_event(&mut events).await,
+        );
+    }
+    let retried = render_bottom_popup(&app.chat_widget, /*width*/ 100);
+    assert!(retried.contains("Could not save provider: Reconnect"));
+    assert!(!app.model_catalog.provider_may_have_changed());
+
+    app.chat_widget.handle_key_event(KeyCode::Home.into());
+    app.chat_widget.handle_key_event(KeyCode::Char(' ').into());
+    handle(
+        &mut app,
+        &mut tui,
+        &server,
+        next_provider_event(&mut events).await,
+    );
+    // The spawned RPC cannot run until this current-thread test yields.
+    write::start(&mut app, &server, "openai".into());
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
+        matches!(event, AppEvent::InsertHistoryCell(cell) if cell.display_lines(/*width*/ 100)[0]
+            .to_string().contains("A provider change is already saving."))
+    }));
+
+    // Wait for the RPC without dispatching its completion on the original event channel.
+    let backend = server.backend_id();
+    assert!(*app.provider_writes[&backend].lock().await);
+    let other =
+        ModelCatalog::new(Vec::new()).for_backend(BackendId::new(), &mut app.provider_writes);
+    assert!(!other.provider_may_have_changed());
+    let reconnected = ModelCatalog::new(Vec::new()).for_backend(backend, &mut app.provider_writes);
+    assert!(reconnected.provider_may_have_changed());
+    app.chat_widget.show_selection_view(SelectionViewParams {
+        view_id: Some("test_overlay"),
+        items: vec![back()],
+        ..Default::default()
+    });
+    handle(
+        &mut app,
+        &mut tui,
+        &server,
+        next_provider_event(&mut events).await,
+    );
+    assert!(app.chat_widget.model_picker_unavailable().is_some());
+    handle(
+        &mut app,
+        &mut tui,
+        &server,
+        next_provider_event(&mut events).await,
+    );
+    handle(
+        &mut app,
+        &mut tui,
+        &server,
+        next_provider_event(&mut events).await,
+    );
+    assert!(app.chat_widget.active_view_is("test_overlay"));
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.chat_widget.handle_key_event(KeyCode::Home.into());
+    assert_eq!(app.chat_widget.config_ref().model_provider_id, original);
+    insta::assert_snapshot!(
+        "saved_default_provider",
+        render_bottom_popup(&app.chat_widget, /*width*/ 100)
+    );
+
+    // Switch back, then dismiss the picker before the save result is delivered.
+    app.chat_widget.handle_key_event(KeyCode::End.into());
+    app.chat_widget.handle_key_event(KeyCode::Char(' ').into());
+    handle(
+        &mut app,
+        &mut tui,
+        &server,
+        next_provider_event(&mut events).await,
+    );
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    handle(
+        &mut app,
+        &mut tui,
+        &server,
+        next_provider_event(&mut events).await,
+    );
+    let cell = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .last()
+        .expect("restart hint in history");
+    insta::assert_snapshot!(cell.display_lines(/*width*/ 160)[0].to_string(), @"• /new now uses openai. Restart the app server and TUI to refresh /model.");
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn only_ambiguous_write_failures_invalidate_the_model_catalog() {
+    use codex_app_server_client::AppServerClient;
+    use codex_app_server_client::CloudClient;
+    use codex_app_server_protocol::JSONRPCErrorError;
+
+    let rejected = Ok(Err(JSONRPCErrorError {
+        code: -32602,
+        message: "Rejected".into(),
+        data: None,
+    }));
+    let overridden = Ok(Ok(serde_json::json!({
+        "status": "okOverridden", "version": "1", "filePath": std::env::temp_dir().join("config.toml")
+    })));
+    let disconnected = Err(std::io::Error::other("connection lost"));
+    let unreadable = Ok(Ok(serde_json::Value::Null));
+    for (reply, stale) in [
+        (rejected, false),
+        (overridden, false),
+        (disconnected, true),
+        (unreadable, true),
+    ] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        let (client, mut commands, _server_events) = CloudClient::channel(/*capacity*/ 1);
+        let backend = BackendId::new();
+        let server = AppServerSession::new(
+            backend,
+            AppServerClient::Cloud(client),
+            crate::app_server_session::ThreadParamsMode::Remote,
+        );
+        app.chat_widget.show_selection_view(SelectionViewParams {
+            view_id: Some(LIST_VIEW),
+            items: vec![back()],
+            ..Default::default()
+        });
+        write::start(&mut app, &server, "gateway".into());
+        let command = commands.recv().await.expect("config write");
+        command
+            .response
+            .send(reply)
+            .expect("write is awaiting a response");
+        assert!(matches!(
+            next_provider_event(&mut events).await,
+            Event::Written(_)
+        ));
+        let reconnected =
+            ModelCatalog::new(Vec::new()).for_backend(backend, &mut app.provider_writes);
+        assert_eq!(reconnected.provider_may_have_changed(), stale);
+    }
 }
 
 #[test]

@@ -542,6 +542,7 @@ struct InitialHistoryReplayBuffer {
 }
 
 pub(crate) struct App {
+    provider_writes: HashMap<crate::backend_id::BackendId, crate::model_catalog::ProviderWrite>,
     feature_write_lock: Arc<tokio::sync::Mutex<()>>,
     config_notification_test_generation: u64,
     config_notification_test_pending: Option<u64>,

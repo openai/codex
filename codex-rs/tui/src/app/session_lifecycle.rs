@@ -9,6 +9,7 @@ use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
 use super::app_server_event_targets::server_request_thread_id;
 use super::*;
+use crate::app_server_session::SessionAccount;
 use crate::app_server_session::is_server_shutting_down_error;
 use crate::app_server_session::source_agent_path;
 use crate::app_server_session::thread_blocks_direct_input;
@@ -537,8 +538,12 @@ impl App {
             chat_widget.windows_sandbox_elevated_setup_complete =
                 self.chat_widget.windows_sandbox_elevated_setup_complete;
         }
-        chat_widget.inherit_backend_banner_state(&mut self.chat_widget);
-        chat_widget.inherit_security_setup(&mut self.chat_widget);
+        if chat_widget.status_account_display() == self.chat_widget.status_account_display()
+            && chat_widget.has_chatgpt_account() == self.chat_widget.has_chatgpt_account()
+        {
+            chat_widget.inherit_backend_banner_state(&mut self.chat_widget);
+            chat_widget.inherit_security_setup(&mut self.chat_widget);
+        }
         chat_widget
             .mention_usage_mut()
             .inherit(self.chat_widget.mention_usage_mut());
@@ -1213,17 +1218,26 @@ impl App {
             None
         };
         let thread_id = started.session.thread_id;
+        let (account, account_error) = if self.model_catalog.provider_may_have_changed() {
+            match app_server.read_thread_account(&started.session).await {
+                Ok(account) => (Some(account), None),
+                Err(err) => (Some(SessionAccount::default()), Some(err)),
+            }
+        } else {
+            (None, None)
+        };
         if !self.config.ephemeral {
             self.agents_overview
                 .blank_sessions
                 .insert(thread_id, started.clone());
         }
         if let Err(err) = self
-            .replace_chat_widget_with_app_server_thread(
+            .replace_chat_widget_with_account(
                 tui,
                 started,
                 presentation,
                 initial_user_message,
+                account,
             )
             .await
         {
@@ -1231,8 +1245,15 @@ impl App {
             self.chat_widget.add_error_message(format!(
                 "Failed to attach to fresh app-server thread: {err}"
             ));
-        } else if let Some(err) = name_error {
-            self.chat_widget.add_error_message(err);
+        } else {
+            if let Some(err) = name_error {
+                self.chat_widget.add_error_message(err);
+            }
+            if let Some(err) = account_error {
+                self.chat_widget.add_error_message(format!(
+                    "Could not load account details for this chat: {err}"
+                ));
+            }
         }
     }
 
@@ -1242,6 +1263,24 @@ impl App {
         started: AppServerStartedThread,
         presentation: ThreadAttachPresentation,
         initial_user_message: Option<crate::chatwidget::UserMessage>,
+    ) -> Result<()> {
+        self.replace_chat_widget_with_account(
+            tui,
+            started,
+            presentation,
+            initial_user_message,
+            /*account*/ None,
+        )
+        .await
+    }
+
+    async fn replace_chat_widget_with_account(
+        &mut self,
+        tui: &mut tui::Tui,
+        started: AppServerStartedThread,
+        presentation: ThreadAttachPresentation,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+        account: Option<SessionAccount>,
     ) -> Result<()> {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
@@ -1276,11 +1315,20 @@ impl App {
             },
         );
         self.reset_thread_event_state().await;
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(
+        let mut init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
             self.config.clone(),
             initial_user_message,
         );
+        if let Some(account) = account {
+            self.account_email_request_id = None;
+            self.feedback_audience = account.feedback_audience();
+            init.has_chatgpt_account = account.has_chatgpt_account();
+            init.has_codex_backend_auth = init.has_chatgpt_account;
+            init.requires_openai_auth = account.requires_openai_auth;
+            init.status_account_display = account.display;
+            init.initial_plan_type = account.plan;
+        }
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         if matches!(
             presentation,

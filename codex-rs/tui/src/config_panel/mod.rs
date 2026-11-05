@@ -139,7 +139,7 @@ impl ConfigEditorHandoff {
 impl ConfigEditor {
     fn value(self, tui: &Tui, status: ConfigPanelStatus) -> ConfigSettingValue {
         let label = match self {
-            Self::ModelProviders => "Browse".to_string(),
+            Self::ModelProviders => "Choose".to_string(),
             Self::Theme => tui.theme.clone().unwrap_or_else(|| "Automatic".to_string()),
             Self::SessionPickerLayout => match tui.session_picker_view.unwrap_or_default() {
                 codex_config::types::SessionPickerViewMode::Comfortable => "Comfortable",
@@ -412,7 +412,7 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
         ConfigSetting {
             section: ConfigSection::Sessions,
             label: "Model providers",
-            description: "Browse providers configured on the connected app server",
+            description: "Choose the default provider for new chats on the connected server",
             keywords: "provider gateway endpoint model default",
             value: ConfigEditor::ModelProviders.value(tui, status),
         },

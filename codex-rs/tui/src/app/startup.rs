@@ -523,8 +523,10 @@ impl App {
         {
             tracing::warn!(%error, "TUI task delegation is unavailable without its MCP server");
         }
+        let mut provider_writes = HashMap::new();
         let model_catalog = Arc::new(
             ModelCatalog::new(available_models.clone())
+                .for_backend(app_server.backend_id(), &mut provider_writes)
                 .with_collaboration_modes(bootstrap.collaboration_modes),
         );
         let feedback_audience = bootstrap.feedback_audience;
@@ -977,6 +979,7 @@ See the Codex keymap documentation for supported actions and examples."
         let agents_overview =
             agents_overview::AgentsOverviewState::new(local_settings.tui.agents_overview_grouping);
         let mut app = Self {
+            provider_writes,
             feature_write_lock: Arc::default(),
             config_notification_test_generation: 0,
             config_notification_test_pending: None,

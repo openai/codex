@@ -334,6 +334,7 @@ impl App {
         self.bind_backend_workspace(destination, cwd);
         self.model_catalog = Arc::new(
             ModelCatalog::new(bootstrap.available_models)
+                .for_backend(destination.backend_id(), &mut self.provider_writes)
                 .with_collaboration_modes(bootstrap.collaboration_modes),
         );
         self.feedback_audience = bootstrap.feedback_audience;

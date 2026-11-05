@@ -12,6 +12,136 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn new_session_refreshes_account_for_the_started_provider() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let home = tempdir()?;
+    app.config.codex_home = home.path().abs();
+    app.config.sqlite = SqliteConfig::new_for_testing(home.path().abs());
+    app.config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
+    app_test_support::write_chatgpt_auth(
+        home.path(),
+        app_test_support::ChatGptAuthFixture::new("test-token")
+            .email("user@example.com")
+            .plan_type("pro"),
+        codex_login::AuthCredentialsStoreMode::File,
+    )
+    .expect("write synthetic auth");
+    let backend = wiremock::MockServer::start().await;
+    let catalog_path = home.path().join("models.json");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec(&codex_models_manager::bundled_models_response()?)?,
+    )?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "model_provider = 'amazon-bedrock'\nmodel = 'test-model'\ncli_auth_credentials_store = 'file'\nchatgpt_base_url = {:?}\nmodel_catalog_json = {catalog_path:?}\nfeatures.apps = true\n",
+            backend.uri(),
+        ),
+    )?;
+    let (mut server, _requests, proxy) = Box::pin(start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    ))
+    .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    for provider in ["amazon-bedrock", "openai", "amazon-bedrock"] {
+        crate::config_update::write_config_batch(
+            server.request_handle(),
+            vec![crate::config_update::replace_config_value(
+                "model_provider",
+                provider.into(),
+            )],
+        )
+        .await?;
+        *app.model_catalog.provider_write.lock().await = true;
+        Box::pin(app.start_fresh_session(
+            &mut tui,
+            &mut server,
+            /*session_start_source*/ None,
+            /*initial_user_message*/ None,
+            /*new_thread_name*/ None,
+        ))
+        .await;
+        let chatgpt = provider == "openai";
+        assert_eq!(
+            (
+                app.chat_widget.config_ref().model_provider_id.as_str(),
+                app.chat_widget.has_chatgpt_account(),
+                app.chat_widget.has_codex_backend_auth(),
+                app.chat_widget.requires_openai_auth,
+                app.chat_widget.current_plan_type()
+            ),
+            (
+                provider,
+                chatgpt,
+                chatgpt,
+                chatgpt,
+                chatgpt.then_some(codex_protocol::account::PlanType::Pro)
+            )
+        );
+    }
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_account_uses_only_a_matching_server_default() -> Result<()> {
+    let (client, mut commands, _events) =
+        codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+    let mut server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        codex_app_server_client::AppServerClient::Cloud(client),
+        crate::app_server_session::ThreadParamsMode::Remote,
+    );
+    for (provider, default_at_config_read) in [
+        ("openai", "openai"),
+        ("amazon-bedrock", "openai"),
+        // The server switched to Bedrock after account/read returned ChatGPT.
+        ("amazon-bedrock", "amazon-bedrock"),
+    ] {
+        let id = ThreadId::new();
+        let mut session = test_thread_session(id, test_path_buf("/project"));
+        session.model_provider_id = provider.to_string();
+        let (account, ()) = tokio::join!(server.read_thread_account(&session), async {
+            use codex_app_server_client::CloudOperation::Request;
+            let command = commands.recv().await.unwrap();
+            assert!(matches!(command.operation, Request(req) if matches!(
+                req.as_ref(),
+                ClientRequest::GetAccount { .. }
+            )));
+            command
+                .response
+                .send(Ok(Ok(serde_json::json!({
+                    "account": {"type": "chatgpt", "email": "user@example.com", "planType": "pro"},
+                    "requiresOpenaiAuth": true
+                }))))
+                .unwrap();
+            let command = commands.recv().await.unwrap();
+            assert!(matches!(command.operation, Request(req) if matches!(
+                req.as_ref(),
+                ClientRequest::ConfigRead { params, .. } if params.cwd.is_none()
+            )));
+            command
+                .response
+                .send(Ok(Ok(serde_json::json!({
+                    "config": { "model_provider": default_at_config_read },
+                    "origins": {}
+                }))))
+                .unwrap();
+        });
+        if provider == "openai" {
+            assert!(account?.has_chatgpt_account());
+        } else {
+            assert!(account.is_err());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn new_sessions_preserve_yolo_launch_and_later_permission_choices() -> Result<()> {
     let (mut app, _events, _ops) = make_test_app_with_channels().await;
     app.harness_overrides.approval_policy = Some(AskForApproval::Never.to_core());

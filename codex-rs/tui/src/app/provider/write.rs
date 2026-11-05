@@ -1,0 +1,149 @@
+//! Persist a provider choice on its originating backend, leaving running threads untouched.
+
+use super::App;
+use super::AppEvent;
+use super::AppServerSession;
+use super::BackendId;
+use super::Event;
+use super::LIST_VIEW;
+use super::LOADING_VIEW;
+use super::loading_with_notice;
+use super::progress;
+use codex_app_server_client::TypedRequestError;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::WriteStatus;
+use tokio::sync::watch;
+use uuid::Uuid;
+
+const SAVING_VIEW: &str = "model_provider_saving";
+
+#[derive(Debug)]
+pub(crate) struct Completion {
+    backend: BackendId,
+    dismissed: watch::Receiver<()>,
+    provider_id: String,
+    result: Result<ConfigWriteResponse, String>,
+}
+
+pub(super) fn start(app: &mut App, server: &AppServerSession, provider_id: String) {
+    let backend = server.backend_id();
+    let write = app
+        .provider_writes
+        .entry(backend)
+        .or_insert_with(|| app.model_catalog.provider_write.clone());
+    let Ok(mut provider_changed) = write.clone().try_lock_owned() else {
+        app.chat_widget
+            .add_error_message("A provider change is already saving.".into());
+        return;
+    };
+    let (view, dismissed) = progress(SAVING_VIEW, "Saving model provider…");
+    if !app
+        .chat_widget
+        .replace_selection_view_if_present(LIST_VIEW, view)
+    {
+        return;
+    }
+    let handle = server.request_handle();
+    let tx = app.app_event_tx.clone();
+    let offline = app.reconnect.offline;
+    tokio::spawn(async move {
+        let result: Result<ConfigWriteResponse, String> = if offline {
+            Err("Could not save provider: Reconnect to the app server and try again.".into())
+        } else {
+            handle
+                .request_typed(ClientRequest::ConfigValueWrite {
+                    request_id: RequestId::String(Uuid::new_v4().to_string()),
+                    params: ConfigValueWriteParams {
+                        key_path: "model_provider".into(),
+                        value: provider_id.clone().into(),
+                        merge_strategy: MergeStrategy::Replace,
+                        file_path: None,
+                        expected_version: None,
+                    },
+                })
+                .await
+                .map_err(|error| match error {
+                    TypedRequestError::Server { .. } => format!("Could not save provider: {error}"),
+                    TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. } => {
+                        // The server may have committed the write before its reply was lost.
+                        *provider_changed = true;
+                        format!("Could not confirm whether {provider_id} was saved: {error}")
+                    }
+                })
+        };
+        if result
+            .as_ref()
+            .is_ok_and(|response| response.status == WriteStatus::Ok)
+        {
+            *provider_changed = true;
+        }
+        drop(provider_changed);
+        tx.send(AppEvent::Provider(Event::Written(Completion {
+            backend,
+            dismissed,
+            provider_id,
+            result,
+        })));
+    });
+}
+
+impl Completion {
+    pub(super) fn finish(self, app: &mut App, backend: BackendId) {
+        if backend != self.backend {
+            return;
+        }
+        let present = matches!(self.dismissed.has_changed(), Ok(false));
+        if app.model_catalog.provider_may_have_changed() {
+            app.chat_widget.dismiss_stale_model_picker();
+        }
+        let provider_id = self.provider_id;
+        let message = match self.result {
+            Ok(response) => match response.status {
+                WriteStatus::Ok => format!(
+                    "/new now uses {provider_id}. Restart the app server and TUI to refresh /model."
+                ),
+                WriteStatus::OkOverridden => {
+                    let reason = response
+                        .overridden_metadata
+                        .map(|metadata| metadata.message)
+                        .unwrap_or_else(|| {
+                            "A higher-priority setting overrides this choice.".into()
+                        });
+                    format!("Saved {provider_id}. {reason}")
+                }
+            },
+            Err(message) => {
+                app.chat_widget.add_error_message(message.clone());
+                if present {
+                    reload(app, SAVING_VIEW, Some(message));
+                }
+                return;
+            }
+        };
+        if present {
+            reload(app, SAVING_VIEW, Some(message));
+        } else {
+            app.chat_widget.add_info_message(message, /*hint*/ None);
+            // A reopened picker may have started reading before this write committed.
+            if !reload(app, LIST_VIEW, /*notice*/ None) {
+                reload(app, LOADING_VIEW, /*notice*/ None);
+            }
+        }
+    }
+}
+
+fn reload(app: &mut App, view_id: &'static str, notice: Option<String>) -> bool {
+    let (view, load) = loading_with_notice(notice);
+    if app
+        .chat_widget
+        .replace_selection_view_if_present(view_id, view)
+    {
+        app.app_event_tx.send(AppEvent::Provider(load));
+        return true;
+    }
+    false
+}

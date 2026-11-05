@@ -1355,6 +1355,13 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// A queued action may only change the chat on the backend that displayed the picker.
+    ScopedModelPicker {
+        backend: crate::backend_id::BackendId,
+        thread_id: Option<ThreadId>,
+        event: Box<AppEvent>,
+    },
+
     /// Apply a model-picker selection to the active conversation and saved local defaults.
     ApplyModelSelection {
         model: String,

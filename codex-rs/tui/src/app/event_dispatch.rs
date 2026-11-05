@@ -160,6 +160,19 @@ impl App {
 
         // Keep the picker check and model update in one event without recursively polling this
         // large dispatcher on the TUI thread's stack.
+        let event = match event {
+            AppEvent::ScopedModelPicker { backend, thread_id, event } => {
+                if backend != app_server.backend_id()
+                    || thread_id != self.chat_widget.thread_id()
+                    || self.chat_widget.model_catalog().provider_may_have_changed()
+                {
+                    return Ok(AppRunControl::Continue);
+                }
+                *event
+            }
+            event => event,
+        };
+
         let (event, sparkle_model) = match event {
             AppEvent::AstraSelectedFromModelPicker {
                 thread_id,
@@ -2403,7 +2416,7 @@ impl App {
                         .await;
                 }
             }
-            AppEvent::AstraSelectedFromModelPicker { .. } => unreachable!("picker event unwrapped"),
+            AppEvent::ScopedModelPicker { .. } | AppEvent::AstraSelectedFromModelPicker { .. } => unreachable!("picker event unwrapped"),
             AppEvent::BackgroundVoiceError { thread_id, message } => {
                 if self.chat_widget.thread_id() == Some(thread_id) {
                     self.chat_widget.add_error_message(message);
