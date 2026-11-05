@@ -230,24 +230,11 @@ impl MessageBoardHost for LocalBoardHost {
                 Err(error) => return Err(error),
             };
             let recipient_path = self.registered_path(&recipient).await?;
-            let suffix = if post.truncated {
-                "\n[Use read_post for the rest.]"
-            } else {
-                ""
-            };
-            let content = format!(
-                "Message Type: CHANNEL_POST\nSender: {}\nChannel: {}\nMessage ID: {}\nThread ID: {}\nPayload:\n{}{suffix}",
-                post.metadata.author,
-                post.metadata.channel_name,
-                post.metadata.message_id,
-                post.metadata.thread_id,
-                post.text_preview,
-            );
             let communication = InterAgentCommunication::new(
                 post.metadata.author.clone(),
                 recipient_path,
                 Vec::new(),
-                content,
+                post.notification_text(),
                 /*trigger_turn*/ false,
             );
             // Remote metadata is untrusted. Skip an oversized notice without closing

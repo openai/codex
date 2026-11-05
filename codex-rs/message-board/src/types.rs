@@ -1,4 +1,4 @@
-//! Message-board records shared by backends and tool adapters.
+//! Message-board records and notification text shared by backends and tool adapters.
 
 use crate::BoardPermissions;
 use crate::ChannelPermissions;
@@ -27,6 +27,25 @@ pub struct PostPreview {
     pub text_preview: String,
     pub n_chars: usize,
     pub truncated: bool,
+}
+
+impl PostPreview {
+    /// Formats a channel notification from this preview, including its truncation marker.
+    pub fn notification_text(&self) -> String {
+        let suffix = if self.truncated {
+            "\n[Use read_post for the rest.]"
+        } else {
+            ""
+        };
+        format!(
+            "Message Type: CHANNEL_POST\nSender: {}\nChannel: {}\nMessage ID: {}\nThread ID: {}\nPayload:\n{}{suffix}",
+            self.metadata.author,
+            self.metadata.channel_name,
+            self.metadata.message_id,
+            self.metadata.thread_id,
+            self.text_preview,
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
