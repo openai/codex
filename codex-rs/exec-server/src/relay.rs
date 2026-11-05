@@ -495,7 +495,7 @@ where
 ///
 /// Implementations must consult an authority independent of rendezvous. The
 /// exec-server invokes this after parsing the first IK message and before
-/// completing the responder handshake.
+/// opening an application transport.
 pub(crate) trait HarnessKeyValidator: Send + Sync {
     fn validate_harness_key(
         &self,
@@ -645,7 +645,20 @@ where
                                 reason,
                                 registry_status,
                             );
-                            send_reset(&physical_outgoing_tx, validation_result.stream_id);
+                            // Authenticate the rejection so the harness can stop retrying.
+                            if registry_status == Some(401)
+                                && let Ok(response) = pending.handshake.reject_registry_authentication()
+                            {
+                                let frame = RelayMessageFrame::handshake(
+                                    validation_result.stream_id,
+                                    response,
+                                );
+                                let _ = physical_outgoing_tx.try_send(
+                                    encode_relay_message_frame(&frame),
+                                );
+                            } else {
+                                send_reset(&physical_outgoing_tx, validation_result.stream_id);
+                            }
                             record_failed_handshake(
                                 &mut failed_handshakes,
                                 &mut handshake_cooldown_until,
@@ -864,8 +877,8 @@ where
                 );
                 let validator = validator.clone();
 
-                // Failed validation leaves no transport state and sends only a
-                // generic reset.
+                // Failed validation leaves no transport state. Preserve the
+                // trusted registry status for request-scoped rejection handling.
                 validation_tasks.spawn(async move {
                     let result = match timeout(
                         HARNESS_KEY_VALIDATION_TIMEOUT,

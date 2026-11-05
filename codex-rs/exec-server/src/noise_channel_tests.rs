@@ -84,6 +84,40 @@ fn initiator_rejects_wrong_responder_key() {
 }
 
 #[test]
+fn registry_rejection_must_be_authenticated() {
+    for tamper in [false, true] {
+        let initiator = NoiseChannelIdentity::generate().expect("initiator");
+        let responder = NoiseChannelIdentity::generate().expect("responder");
+        let prologue = noise_channel_prologue("env-1", "registration-1", "stream-1");
+        let (handshake, request) = InitiatorHandshake::start(
+            &initiator,
+            &responder.public_key(),
+            &prologue,
+            b"authorization",
+        )
+        .expect("request");
+        let pending = PendingResponderHandshake::read_request(&responder, &prologue, &request)
+            .expect("read request");
+        let mut response = pending.reject_registry_authentication().expect("rejection");
+        if tamper {
+            *response.last_mut().expect("encrypted payload") ^= 1;
+        }
+        let error = handshake
+            .finish(&response)
+            .err()
+            .expect("must not open transport");
+        if tamper {
+            assert!(matches!(error, NoiseChannelError::Handshake(_)));
+        } else {
+            assert!(matches!(
+                error,
+                NoiseChannelError::RegistryAuthenticationRejected
+            ));
+        }
+    }
+}
+
+#[test]
 fn responder_rejects_mismatched_prologue() {
     let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
     let responder = NoiseChannelIdentity::generate().expect("generate responder identity");

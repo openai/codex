@@ -1,4 +1,4 @@
-//! Preserve policy denials through terminal connection state and allow later policy recovery.
+//! Preserve policy denials and registry auth errors through terminal connection state.
 
 use codex_http_client::NetworkPolicyDenied;
 use codex_http_client::RouteAwareRequestError;
@@ -11,6 +11,8 @@ pub(super) enum ConnectionFailure {
     Disconnected(String),
     #[error(transparent)]
     Policy(NetworkPolicyDenied),
+    #[error("environment registry authentication error: {0}")]
+    RegistryAuth(String),
 }
 
 impl From<ConnectionFailure> for ExecServerError {
@@ -18,6 +20,7 @@ impl From<ConnectionFailure> for ExecServerError {
         match failure {
             ConnectionFailure::Disconnected(message) => Self::Disconnected(message),
             ConnectionFailure::Policy(denial) => Self::ApplicationNetworkPolicy(denial),
+            ConnectionFailure::RegistryAuth(message) => Self::EnvironmentRegistryAuth(message),
         }
     }
 }

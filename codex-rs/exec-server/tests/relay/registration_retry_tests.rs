@@ -13,6 +13,9 @@ use tokio_tungstenite::tungstenite::handshake::server::Response;
 
 use super::*;
 
+#[path = "auth_rejection_tests.rs"]
+mod auth_rejection;
+
 type RemoteTask = AbortOnDropHandle<Result<(), ExecServerError>>;
 type RelayTask = AbortOnDropHandle<Result<()>>;
 

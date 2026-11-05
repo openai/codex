@@ -432,11 +432,8 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
         if !status.is_success() {
             // The request contains the short-lived authorization. Do not include
             // a response body that might echo it in logs or error chains.
-            if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-                return Err(ExecServerError::EnvironmentRegistryAuth(format!(
-                    "environment registry harness key validation authentication failed ({status})"
-                )));
-            }
+            // Preserve the trusted HTTP status: a 401 rejects this executor's
+            // credentials; a 403 can reject a stale harness registration/grant.
             return Err(ExecServerError::EnvironmentRegistryHttp {
                 status,
                 code: None,

@@ -456,6 +456,11 @@ impl Inner {
                     return;
                 }
                 if !is_retryable_recovery_error(&error) {
+                    if let ExecServerError::EnvironmentRegistryAuth(message) = error {
+                        self.fail(super::ConnectionFailure::RegistryAuth(message))
+                            .await;
+                        return;
+                    }
                     break error.to_string();
                 }
             }

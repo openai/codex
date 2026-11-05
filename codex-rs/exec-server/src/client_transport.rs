@@ -207,7 +207,7 @@ struct OpenNoiseRendezvousConnection {
     connection: JsonRpcConnection,
     pending_tasks: Vec<AbortOnDropHandle<()>>,
     options: ExecServerClientConnectOptions,
-    handshake_ready: tokio::sync::oneshot::Receiver<()>,
+    handshake_ready: tokio::sync::oneshot::Receiver<Result<(), ExecServerError>>,
 }
 
 struct ReadyNoiseRendezvousConnection {
@@ -749,7 +749,7 @@ impl ExecServerClient {
         initialize_span: &tracing::Span,
     ) -> Result<(), ExecServerError> {
         match timeout_at(deadline, &mut connection.handshake_ready).await {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(ExecServerError::Disconnected(
                 "Noise harness handshake failed before connection became ready".to_string(),
             )),
