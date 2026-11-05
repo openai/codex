@@ -616,7 +616,7 @@ async fn direct_permissions_review_skips_when_policy_disallows_requests(
     Ok(())
 }
 
-fn model_input(request: &ResponsesRequest, parent: ThreadId) -> Result<String> {
+pub(super) fn model_input(request: &ResponsesRequest, parent: ThreadId) -> Result<String> {
     let mut input = request.input();
     for item in &mut input {
         item.as_object_mut().expect("response item").remove("id");

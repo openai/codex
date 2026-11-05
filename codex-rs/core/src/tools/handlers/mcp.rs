@@ -137,7 +137,12 @@ impl McpHandler {
     }
 
     fn hook_tool_name(&self) -> HookToolName {
-        HookToolName::new(ensure_mcp_prefix(&join_tool_name(&self.tool_name())))
+        Self::hook_tool_name_for(self.tool_info())
+    }
+
+    pub(crate) fn hook_tool_name_for(tool_info: &ToolInfo) -> HookToolName {
+        let name = tool_info.canonical_tool_name();
+        HookToolName::new(ensure_mcp_prefix(&join_tool_name(&name)))
     }
 }
 
@@ -356,8 +361,8 @@ impl CoreToolRuntime for McpHandler {
         true
     }
 
-    fn mcp_server_name(&self) -> Option<&str> {
-        Some(&self.definition.tool_info.server_name)
+    fn mcp_tool_info(&self) -> Option<&ToolInfo> {
+        Some(self.tool_info())
     }
 
     fn on_tool_result_accepted(&self, invocation: &ToolInvocation, result: &dyn ToolOutput) {

@@ -1775,7 +1775,7 @@ pub struct ThreadGuardianReviewParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadGuardianReviewResponse {
     pub call_id: String,
-    /// Null when exec policy skips approval.
+    /// Null when current policy or a remembered approval skips review.
     pub assessment: Option<ThreadGuardianAssessment>,
 }
 

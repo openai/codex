@@ -986,7 +986,7 @@ impl CodexThread {
         Ok(())
     }
 
-    /// Review the final injected exec, patch, or permission request without executing it.
+    /// Review the final injected tool call without executing it.
     pub async fn guardian_review(
         &self,
         cancellation: &CancellationToken,
@@ -997,7 +997,7 @@ impl CodexThread {
         let history = self.session.clone_history().await;
         let tool_call = history.raw_items().next_back().cloned().ok_or_else(|| {
             CodexErr::InvalidRequest(
-                "expected a final plaintext exec_command, apply_patch, or request_permissions call"
+                "expected a final plaintext exec_command, apply_patch, request_permissions, or MCP call"
                     .into(),
             )
         })?;
