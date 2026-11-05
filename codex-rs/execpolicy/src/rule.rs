@@ -3,6 +3,7 @@ use crate::error::Error;
 use crate::error::Result;
 use crate::policy::MatchOptions;
 use crate::policy::Policy;
+use caseless::Caseless;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,6 +11,12 @@ use shlex::try_join;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+use unicode_normalization::UnicodeNormalization;
+
+/// Unicode canonical caseless comparison key: NFD, full case folding, then NFD.
+pub(crate) fn canonical_key(token: &str) -> impl Iterator<Item = char> + '_ {
+    token.nfd().default_case_fold().nfd()
+}
 
 /// Matches a single command token, either a fixed string or one of several allowed alternatives.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -19,13 +26,6 @@ pub enum PatternToken {
 }
 
 impl PatternToken {
-    fn matches(&self, token: &str) -> bool {
-        match self {
-            Self::Single(expected) => expected == token,
-            Self::Alts(alternatives) => alternatives.iter().any(|alt| alt == token),
-        }
-    }
-
     pub fn alternatives(&self) -> &[String] {
         match self {
             Self::Single(expected) => std::slice::from_ref(expected),
@@ -38,19 +38,32 @@ impl PatternToken {
 /// First token is fixed since we key by the first token in policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrefixPattern {
+    pub canonical_matching: bool,
     pub first: Arc<str>,
     pub rest: Arc<[PatternToken]>,
 }
 
 impl PrefixPattern {
+    pub(crate) fn tokens_equal(&self, a: &str, b: &str) -> bool {
+        if self.canonical_matching {
+            canonical_key(a).eq(canonical_key(b))
+        } else {
+            a == b
+        }
+    }
+
     pub fn matches_prefix(&self, cmd: &[String]) -> Option<Vec<String>> {
         let pattern_length = self.rest.len() + 1;
-        if cmd.len() < pattern_length || cmd[0] != self.first.as_ref() {
+        if cmd.len() < pattern_length || !self.tokens_equal(&cmd[0], &self.first) {
             return None;
         }
 
         for (pattern_token, cmd_token) in self.rest.iter().zip(&cmd[1..pattern_length]) {
-            if !pattern_token.matches(cmd_token) {
+            if !pattern_token
+                .alternatives()
+                .iter()
+                .any(|alt| self.tokens_equal(alt, cmd_token))
+            {
                 return None;
             }
         }
