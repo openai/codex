@@ -55,20 +55,6 @@ pub(super) fn critical_dependencies(
         // The launcher probes this executable even if it later uses its bundled copy.
         dependencies.push(("system_bwrap_candidate", Ok(bwrap)));
     }
-    if !policy
-        .get_unreadable_globs_with_cwd(cwd.as_path())
-        .is_empty()
-        && let Some(path) = &path
-        && let Some(scanner) = codex_sandboxing::find_executable_in_search_paths(
-            codex_linux_sandbox::GLOB_SCAN_PROGRAM,
-            std::env::split_paths(path),
-            command_cwd.as_path(),
-            policy,
-            cwd.as_path(),
-        )
-    {
-        dependencies.push(("glob_scanner", Ok(scanner)));
-    }
     Ok(dependencies)
 }
 
@@ -107,13 +93,10 @@ pub(super) fn prepare_policy(
         });
         let patterns = policy.get_unreadable_globs_with_cwd(cwd.as_path());
         if !patterns.is_empty() {
-            let paths = codex_linux_sandbox::expand_unreadable_globs_in_environment(
+            let paths = codex_linux_sandbox::expand_unreadable_globs(
                 &patterns,
                 cwd.as_path(),
-                &policy,
                 policy.glob_scan_max_depth,
-                &request.env,
-                command_cwd.as_path(),
             )
             .map_err(io::Error::other)?;
             policy = policy.with_expanded_deny_globs(paths);
