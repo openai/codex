@@ -171,6 +171,29 @@ impl Session {
             String::new()
         };
         let mut world_state = WorldState::default();
+        if turn_context
+            .config
+            .features
+            .enabled(Feature::CommandSessionsWorldState)
+        {
+            let mut sessions =
+                crate::unified_exec::command_sessions_state(&self.services.unified_exec_manager)
+                    .await;
+            if step_context
+                .tool_router
+                .exposes_tool(&ToolName::plain("write_stdin"))
+            {
+                world_state.add_section(sessions);
+            } else {
+                sessions.polling_unavailable = true;
+                world_state.add_section(crate::context::world_state::DisabledCommandSessionsState(
+                    sessions,
+                ));
+            }
+        } else {
+            world_state
+                .add_section(crate::context::world_state::DisabledCommandSessionsState::default());
+        }
         let extension_metrics = super::extension_metrics::from_session_telemetry(
             step_context.session_telemetry.clone(),
         );

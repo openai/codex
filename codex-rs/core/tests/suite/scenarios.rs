@@ -148,6 +148,9 @@ mod context_management_tools;
 #[path = "scenarios_code_mode_settled_helpers_tests.rs"]
 mod code_mode_settled_helpers;
 
+#[path = "scenarios_command_sessions_tests.rs"]
+mod command_sessions;
+
 #[path = "scenarios_strict_3p_cache.rs"]
 mod strict_3p_cache;
 

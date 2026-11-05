@@ -976,6 +976,9 @@
             "collaboration_modes": {
               "type": "boolean"
             },
+            "command_sessions_world_state": {
+              "type": "boolean"
+            },
             "compaction_image_budget": {
               "type": "boolean"
             },
@@ -7912,6 +7915,9 @@
           "type": "boolean"
         },
         "collaboration_modes": {
+          "type": "boolean"
+        },
+        "command_sessions_world_state": {
           "type": "boolean"
         },
         "compaction_image_budget": {

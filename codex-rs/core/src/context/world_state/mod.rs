@@ -1,6 +1,7 @@
 mod agents_md;
 mod apps_instructions;
 mod collaboration_mode;
+mod command_sessions;
 mod compact_permissions;
 mod context_window_guidance;
 mod environment;
@@ -36,12 +37,17 @@ use serde_json::Value;
 use sha1::Digest;
 use sha1::Sha1;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
 pub(crate) use agents_md::AgentsMdState;
 pub(crate) use apps_instructions::AppsInstructionsState;
 pub(crate) use collaboration_mode::CollaborationModeState;
+pub(crate) use command_sessions::CommandSession;
+pub(crate) use command_sessions::CommandSessionStatus;
+pub(crate) use command_sessions::CommandSessionsState;
+pub(crate) use command_sessions::DisabledCommandSessionsState;
 pub(crate) use compact_permissions::CompactPermissionsState;
 pub(crate) use context_window_guidance::ContextWindowGuidanceState;
 pub(crate) use environment::EnvironmentsState;
@@ -432,6 +438,9 @@ pub(crate) struct WorldState {
 #[serde(transparent)]
 pub(crate) struct WorldStateSnapshot {
     sections: BTreeMap<String, Value>,
+    // Rendering may need a refresh while persistence still needs the exact prior state.
+    #[serde(skip)]
+    invalidated_sections: BTreeSet<String>,
 }
 
 impl From<&Map<String, Value>> for WorldStateSnapshot {
@@ -441,6 +450,7 @@ impl From<&Map<String, Value>> for WorldStateSnapshot {
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
+            invalidated_sections: BTreeSet::new(),
         }
     }
 }
@@ -448,6 +458,11 @@ impl From<&Map<String, Value>> for WorldStateSnapshot {
 impl WorldStateSnapshot {
     pub(crate) fn remove_section(&mut self, id: &str) {
         self.sections.remove(id);
+        self.invalidated_sections.remove(id);
+    }
+
+    pub(crate) fn invalidate_section(&mut self, id: &str) {
+        self.invalidated_sections.insert(id.to_string());
     }
 
     pub(crate) fn into_object(self) -> Map<String, Value> {
@@ -455,6 +470,9 @@ impl WorldStateSnapshot {
     }
 
     fn section(&self, id: &str) -> Option<&Value> {
+        if self.invalidated_sections.contains(id) {
+            return None;
+        }
         let snapshot = self.sections.get(id)?;
         if id == PluginsInstructionsState::ID
             && snapshot == &Value::Bool(false)
@@ -506,6 +524,7 @@ impl WorldStateSnapshot {
     pub(crate) fn apply_merge_patch(&mut self, patch: &Map<String, Value>) {
         // Borrow existing keys; only newly inserted sections need owned keys.
         for (key, value) in patch {
+            self.invalidated_sections.remove(key);
             if value.is_null() {
                 self.sections.remove(key);
             } else if let Some(current) = self.sections.get_mut(key) {

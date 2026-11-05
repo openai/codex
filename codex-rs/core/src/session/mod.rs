@@ -2033,7 +2033,9 @@ impl Session {
             state.last_started_turn_id = last_started_turn_id;
             state.turn_attribution = turn_attribution;
             state.restored_turn_routing = restored_turn_routing;
-            if let Some(world_state) = world_state_baseline {
+            if let Some(mut world_state) = world_state_baseline {
+                // Handles belong to this runtime; a saved checkpoint can also lag its fragment.
+                world_state.invalidate_section("command_sessions");
                 state.history.set_world_state_baseline(world_state);
             }
             let fallback_ids = state.auto_compact_window_ids();
