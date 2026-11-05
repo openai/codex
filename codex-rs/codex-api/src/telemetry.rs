@@ -11,8 +11,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
-use tokio_tungstenite::tungstenite::Error;
-use tokio_tungstenite::tungstenite::Message;
 
 /// Generic telemetry.
 pub trait SseTelemetry: Send + Sync {
@@ -33,13 +31,15 @@ pub trait SseTelemetry: Send + Sync {
 
 /// Telemetry for Responses WebSocket transport.
 pub trait WebsocketTelemetry: Send + Sync {
+    /// Reports how long it took to send the request and whether the send failed.
     fn on_ws_request(&self, duration: Duration, error: Option<&ApiError>, connection_reused: bool);
 
-    fn on_ws_event(
-        &self,
-        result: &Result<Option<Result<Message, Error>>, ApiError>,
-        duration: Duration,
-    );
+    /// Reports the poll duration for timeouts, stream errors, end of stream,
+    /// and binary, close, or raw frames.
+    fn on_ws_receive_failure(&self, duration: Duration);
+
+    /// Reports each text frame and its poll duration. `kind` is `None` if decoding the stream event failed.
+    fn on_ws_text_event(&self, text: &str, kind: Option<&str>, duration: Duration);
 }
 
 pub(crate) trait WithStatus {

@@ -40,7 +40,6 @@ use crate::sanitize_metric_tag_value;
 use crate::tool_result::ToolResultEvent;
 use crate::tool_result::emit_tool_result;
 use codex_api::AgentIdentityTelemetry;
-use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -969,62 +968,52 @@ impl SessionTelemetry {
         );
     }
 
-    pub fn record_websocket_event(
+    pub fn record_websocket_receive_failure(&self, duration: Duration) {
+        self.record_websocket_event_metrics(
+            WEBSOCKET_UNKNOWN_KIND,
+            /*success*/ false,
+            duration,
+        );
+    }
+
+    /// Records the transport's decoded event kind. Timing events also carry metric values.
+    pub fn record_websocket_text_event(
         &self,
-        result: &Result<
-            Option<
-                Result<
-                    tokio_tungstenite::tungstenite::Message,
-                    tokio_tungstenite::tungstenite::Error,
-                >,
-            >,
-            ApiError,
-        >,
+        text: &str,
+        parsed_kind: Option<&str>,
         duration: Duration,
     ) {
-        let mut kind = None;
-        let mut success = true;
-
-        match result {
-            Ok(Some(Ok(message))) => match message {
-                tokio_tungstenite::tungstenite::Message::Text(text) => {
-                    match serde_json::from_str::<serde_json::Value>(text) {
-                        Ok(value) => {
-                            kind = value
-                                .get("type")
-                                .and_then(|value| value.as_str())
-                                .map(std::string::ToString::to_string);
-                            if kind.as_deref() == Some(RESPONSES_WEBSOCKET_TIMING_KIND) {
-                                self.record_responses_websocket_timing_metrics(&value);
-                            }
-                            if kind.as_deref() == Some("response.failed") {
-                                success = false;
-                            }
-                        }
-                        Err(_) => {
-                            kind = Some("parse_error".to_string());
-                            success = false;
-                        }
+        let value;
+        let kind = match parsed_kind {
+            Some(kind) if kind != RESPONSES_WEBSOCKET_TIMING_KIND => kind,
+            _ => {
+                // Valid JSON with an unknown or malformed stream shape still contributes its kind.
+                value = match serde_json::from_str::<serde_json::Value>(text) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return self.record_websocket_event_metrics(
+                            "parse_error",
+                            /*success*/ false,
+                            duration,
+                        );
                     }
+                };
+                let kind = value
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(WEBSOCKET_UNKNOWN_KIND);
+                if kind == RESPONSES_WEBSOCKET_TIMING_KIND {
+                    self.record_responses_websocket_timing_metrics(&value);
                 }
-                tokio_tungstenite::tungstenite::Message::Ping(_)
-                | tokio_tungstenite::tungstenite::Message::Pong(_) => {
-                    return;
-                }
-                tokio_tungstenite::tungstenite::Message::Binary(_)
-                | tokio_tungstenite::tungstenite::Message::Close(_)
-                | tokio_tungstenite::tungstenite::Message::Frame(_) => {
-                    success = false;
-                }
-            },
-            Ok(Some(Err(_))) | Ok(None) | Err(_) => {
-                success = false;
+                kind
             }
-        }
+        };
+        self.record_websocket_event_metrics(kind, kind != "response.failed", duration);
+    }
 
-        let kind_str = kind.as_deref().unwrap_or(WEBSOCKET_UNKNOWN_KIND);
+    fn record_websocket_event_metrics(&self, kind: &str, success: bool, duration: Duration) {
         let success_str = if success { "true" } else { "false" };
-        let tags = [("kind", kind_str), ("success", success_str)];
+        let tags = [("kind", kind), ("success", success_str)];
         self.counter(WEBSOCKET_EVENT_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
     }

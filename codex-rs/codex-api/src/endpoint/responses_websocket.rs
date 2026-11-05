@@ -768,6 +768,18 @@ struct InterruptAcknowledgement {
     response_id: String,
 }
 
+fn is_websocket_receive_failure(
+    response: &Result<Option<Result<Message, WsError>>, ApiError>,
+) -> bool {
+    match response {
+        Ok(Some(Ok(message))) => match message {
+            Message::Text(_) | Message::Ping(_) | Message::Pong(_) => false,
+            Message::Binary(_) | Message::Close(_) | Message::Frame(_) => true,
+        },
+        Ok(Some(Err(_))) | Ok(None) | Err(_) => true,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_websocket_response_stream(
     ws_stream: &mut WsStream,
@@ -827,8 +839,11 @@ async fn run_websocket_response_stream(
                 continue;
             }
         };
-        if let Some(t) = telemetry.as_ref() {
-            t.on_ws_event(&response, poll_start.elapsed());
+        let poll_duration = poll_start.elapsed();
+        if let Some(telemetry) = &telemetry
+            && is_websocket_receive_failure(&response)
+        {
+            telemetry.on_ws_receive_failure(poll_duration);
         }
         let message = match response {
             Ok(Some(Ok(msg))) => msg,
@@ -847,14 +862,21 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
-                if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
+                let event = serde_json::from_str::<ResponsesStreamEvent>(&text);
+                let kind = event.as_ref().ok().map(ResponsesStreamEvent::kind);
+                if let Some(t) = telemetry.as_ref() {
+                    t.on_ws_text_event(&text, kind, poll_duration);
+                }
+                // A wrapped error can still be valid when an unrelated stream field is malformed.
+                if matches!(kind, Some("error") | None)
+                    && let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
                 {
                     return Err(error);
                 }
 
-                let event = match serde_json::from_str::<ResponsesStreamEvent>(&text) {
+                let event = match event {
                     Ok(event) => event,
                     Err(err) => {
                         debug!("failed to parse websocket event: {err}, data: {text}");

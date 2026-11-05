@@ -1885,6 +1885,8 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
 
     let invalid_request_error = json!({
         "type": "error",
+        // An unexpected stream field must not hide the wrapped HTTP error.
+        "delta": {"unexpected": true},
         "status": 400,
         "error": {
             "type": "invalid_request_error",
