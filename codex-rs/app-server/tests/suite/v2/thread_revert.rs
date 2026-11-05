@@ -505,6 +505,7 @@ async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
                 cursor: items_backwards_cursor.map(ThreadItemsListCursor::Opaque),
                 limit: None,
                 sort_direction: None,
+                defer_output: None,
             },
         })
         .await?;

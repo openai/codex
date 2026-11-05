@@ -153,8 +153,8 @@ impl App {
                         .data
                         .into_iter()
                         .rev()
-                        .map(ThreadItem::from)
-                        .collect();
+                        .map(ThreadItem::try_from)
+                        .collect::<Result<_, _>>()?;
                     turn.items_view = TurnItemsView::Full;
                 }
             }

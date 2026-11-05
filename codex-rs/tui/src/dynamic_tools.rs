@@ -897,6 +897,7 @@ async fn execute_inner(
                                                 cursor: None,
                                                 limit: Some(20),
                                                 sort_direction: Some(SortDirection::Desc),
+                                                defer_output: None,
                                             },
                                         }
                                     }),
@@ -914,6 +915,7 @@ async fn execute_inner(
                                             .cloned()
                                             .map(|item| ThreadItemEntry {
                                                 turn_id: turn.id.clone(),
+                                                output_deferred: false,
                                                 started_at_ms: item.started_at_ms,
                                                 completed_at_ms: item.completed_at_ms,
                                                 item,

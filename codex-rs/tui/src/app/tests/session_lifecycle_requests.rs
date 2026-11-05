@@ -2590,6 +2590,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
                 cursor: Some(ThreadItemsListCursor::Opaque(cursor.clone())),
                 limit: Some(crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT),
                 sort_direction: Some(SortDirection::Desc),
+                defer_output: None,
             },
         })
         .await?;

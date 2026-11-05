@@ -718,6 +718,14 @@ Omitted or null cursors preserve normal first-page behavior. Continue anchored
 pages with the returned opaque string `nextCursor`; response fields and
 `backwardsCursor` semantics are unchanged.
 
+Experimental clients can set `"deferOutput": {"commandExecution": true}`
+with a `turnId`. Omitted or false options keep the full output. Unknown fields in
+`deferOutput` are ignored.
+For a completed command with a recorded completion time, exit code zero, and
+nonempty saved output, the entry returns `outputDeferred: true` and
+`item.aggregatedOutput: null`. Use `thread/items/read` with that turn and item ID
+to retrieve the full output. All other entries retain their recorded output.
+
 ## Workspace switching (experimental)
 
 For a managed ChatGPT login, `accountSession/list` returns an opaque

@@ -413,6 +413,7 @@ async fn transcript_preview_for_history_mode(
                     cursor: None,
                     limit: Some(TRANSCRIPT_PREVIEW_ITEMS_PAGE_SIZE),
                     sort_direction: Some(SortDirection::Desc),
+                    defer_output: None,
                 },
             })
             .await

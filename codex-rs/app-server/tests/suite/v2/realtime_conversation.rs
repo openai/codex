@@ -1879,6 +1879,7 @@ async fn realtime_conversation_stop_emits_closed_notification(
                 cursor: None,
                 limit: None,
                 sort_direction: None,
+                defer_output: None,
             })
             .await?;
         let items: ThreadItemsListResponse =

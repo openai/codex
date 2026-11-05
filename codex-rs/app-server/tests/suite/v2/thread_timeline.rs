@@ -223,6 +223,7 @@ async fn timeline_pages_mix_items_and_resolve_the_opening_realtime_session() -> 
                 cursor: None,
                 limit: Some(10),
                 sort_direction: Some(SortDirection::Asc),
+                defer_output: None,
             },
         })
         .await?;

@@ -546,6 +546,7 @@ export type { ThreadInjectItemsParams } from "./ThreadInjectItemsParams";
 export type { ThreadInjectItemsResponse } from "./ThreadInjectItemsResponse";
 export type { ThreadItem } from "./ThreadItem";
 export type { ThreadItemEntry } from "./ThreadItemEntry";
+export type { ThreadItemOutputDeferral } from "./ThreadItemOutputDeferral";
 export type { ThreadItemsListAnchor } from "./ThreadItemsListAnchor";
 export type { ThreadItemsListCursor } from "./ThreadItemsListCursor";
 export type { ThreadItemsListParams } from "./ThreadItemsListParams";

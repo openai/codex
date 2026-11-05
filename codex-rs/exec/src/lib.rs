@@ -1788,6 +1788,7 @@ async fn maybe_backfill_turn_completed_items(
                         cursor,
                         limit: None,
                         sort_direction: None,
+                        defer_output: None,
                     },
                 })
                 .await
@@ -1798,7 +1799,17 @@ async fn maybe_backfill_turn_completed_items(
                     return;
                 }
             };
-            items.extend(page.data.into_iter().map(ThreadItem::from));
+            for entry in page.data {
+                match ThreadItem::try_from(entry) {
+                    Ok(item) => items.push(item),
+                    Err(err) => {
+                        warn!(
+                            "thread/items/list returned an incomplete item during turn completion: {err}"
+                        );
+                        return;
+                    }
+                }
+            }
             let Some(next) = page.next_cursor else { break };
             if !seen_cursors.insert(next.clone()) {
                 warn!("thread/items/list returned a repeated cursor during turn completion");

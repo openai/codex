@@ -26,6 +26,7 @@ use crate::thread_sample::generate_sample;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadItemsListAnchor;
 use codex_app_server_protocol::ThreadItemsListCursor;
 use codex_app_server_protocol::ThreadRevertParams;
@@ -3728,7 +3729,10 @@ impl ThreadRequestProcessor {
             cursor,
             limit,
             sort_direction,
+            defer_output,
         } = params;
+        let defer_command_output =
+            turn_id.is_some() && defer_output.is_some_and(|options| options.command_execution);
         let position = cursor.map(|cursor| match cursor {
             ThreadItemsListCursor::Opaque(cursor) => StoreListItemsPosition::Cursor(cursor),
             ThreadItemsListCursor::Anchor(ThreadItemsListAnchor::Item { item_id }) => {
@@ -3777,11 +3781,26 @@ impl ThreadRequestProcessor {
                 }
                 err => internal_error(format!("failed to list thread items: {err}")),
             })?;
-        let data = page
-            .items
-            .into_iter()
-            .map(stored_thread_item_to_entry)
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut data = Vec::with_capacity(page.items.len());
+        for stored_item in page.items {
+            let mut entry = stored_thread_item_to_entry(stored_item)?;
+            if defer_command_output
+                && entry.completed_at_ms.is_some()
+                && let ThreadItemPayload::CommandExecution {
+                    status: codex_app_server_protocol::CommandExecutionStatus::Completed,
+                    exit_code: Some(0),
+                    aggregated_output,
+                    ..
+                } = &mut entry.item.payload
+                && aggregated_output
+                    .as_ref()
+                    .is_some_and(|output| !output.is_empty())
+            {
+                *aggregated_output = None;
+                entry.output_deferred = true;
+            }
+            data.push(entry);
+        }
 
         Ok(ThreadItemsListResponse {
             data,
@@ -6475,6 +6494,7 @@ fn stored_thread_item_to_entry(
     let item = stored_thread_item_to_api_item(&stored_item)?;
     Ok(ThreadItemEntry {
         turn_id: stored_item.turn_id,
+        output_deferred: false,
         started_at_ms: item.started_at_ms,
         completed_at_ms: item.completed_at_ms,
         item,
