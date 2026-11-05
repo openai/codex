@@ -1,0 +1,11 @@
+---
+source: tui/src/app/provider_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Model providers
+  Current chat: ollama · Default for new chats: lmstudio
+
+
+› 1. OpenAI  openai
+
+  enter select · esc back

@@ -11,7 +11,7 @@ expression: "render(&panel, 140)"
 › Automatic recaps       [ ] Off              Prepare recaps while the terminal is unfocused
   Session picker layout  Dense ›              Choose tighter rows or a roomier list when resuming and forking conversations
   Resume directory       Ask ›                Choose which working directory to use when the current directory and saved session differ
-
+  Model providers        Browse ›             Browse providers configured on the connected app server
 
 
 

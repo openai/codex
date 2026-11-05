@@ -27,6 +27,12 @@ impl ChatWidget {
         resume_current_availability: crate::config_panel::ResumeCurrentAvailability,
     ) {
         match handoff.editor {
+            ConfigEditor::ModelProviders => {
+                let (view, event) = crate::app::provider::loading();
+                self.bottom_pane.show_selection_view(view);
+                self.app_event_tx
+                    .send(crate::app_event::AppEvent::Provider(event));
+            }
             ConfigEditor::Theme => self.open_theme_picker(),
             ConfigEditor::Effects => {
                 let keymap = self.bottom_pane.list_keymap();

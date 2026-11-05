@@ -1778,6 +1778,8 @@ pub(crate) enum AppEvent {
     /// Remember the Command Center grouping across launches.
     PersistAgentsOverviewGrouping(codex_config::types::AgentsOverviewGrouping),
 
+    Provider(crate::app::provider::Event),
+
     /// Open an existing editor above the configuration panel.
     OpenConfigEditor(crate::config_panel::ConfigEditorHandoff),
 

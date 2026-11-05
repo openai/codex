@@ -1,0 +1,23 @@
+---
+source: tui/src/app/provider_tests.rs
+expression: "format!(\"{first_page}\\n{}\", terminal.backend())"
+---
+"/ Model provider details/ / / / / / / / / / / / "
+"OpenAI                                          "
+"                                                "
+"Provider ID  openai                             "
+"Type  Built-in OpenAI provider                  "
+"─────────────────────────────────────────── 0% ─"
+" ↑/↓ to scroll · pgup/pgdn to page · home/end to"
+" q close                                        "
+"                                                "
+
+"/ Model provider details/ / / / / / / / / / / / "
+"Type  Built-in OpenAI provider                  "
+"Base URL                                        "
+"https://example.test/organization/deployment/reg"
+"ion/service/openai/v1                           "
+"───────────────────────────────────────── 100% ─"
+" ↑/↓ to scroll · pgup/pgdn to page · home/end to"
+" q close                                        "
+"                                                "

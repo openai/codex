@@ -68,6 +68,7 @@ impl App {
                     | AppEvent::TerminalTitleSetupPreview { .. }
                     | AppEvent::TerminalTitleSetupCancelled
                     | AppEvent::OpenConfigEditor(_)
+                    | AppEvent::Provider(_)
                     | AppEvent::SyntaxThemeSelected { .. }
                     | AppEvent::SyntaxThemePreviewed
                     | AppEvent::OpenKeymapActionMenu { .. }
@@ -3635,6 +3636,7 @@ impl App {
                 self.chat_widget.cancel_terminal_title_setup();
                 self.chat_widget.refresh_config_panel(/*notice*/ None);
             }
+            AppEvent::Provider(event) => super::provider::handle(self, tui, app_server, event),
             AppEvent::OpenConfigEditor(handoff) => {
                 self.cancel_pending_key_chord();
                 if let Err(err) = tui.discard_pending_input_before_interactive_screen() {

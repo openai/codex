@@ -136,6 +136,11 @@ impl ChatWidget {
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
         self.config.model_provider_id = session.model_provider_id.clone();
+        if previous_thread_id.is_none()
+            && let Some(event) = crate::app::provider::refresh_list_if_present(self)
+        {
+            self.app_event_tx.send(AppEvent::Provider(event));
+        }
         self.set_daybreak_enabled(self.daybreak_enabled);
         if connector_scope_changed {
             self.invalidate_connector_scope();
