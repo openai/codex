@@ -1505,7 +1505,9 @@ fn unreadable_glob_traversal_errors_fail_closed() {
     let denied = temp.path().join("denied");
     fs::create_dir(&denied).expect("create denied directory");
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).expect("deny traversal");
-    let [result, bounded] = [None, Some(1)].map(|max_depth| {
+    // Keep the denied directory within the scan depth: ignore versions differ
+    // on whether parallel walks report errors at the depth boundary.
+    let results = [None, Some(2)].map(|max_depth| {
         expand_unreadable_globs(
             &[format!("{}/**/*.env", temp.path().display())],
             temp.path(),
@@ -1513,14 +1515,11 @@ fn unreadable_glob_traversal_errors_fail_closed() {
         )
     });
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o700)).expect("restore traversal");
-    let error = result.expect_err("incomplete scans must fail").to_string();
-    assert!(error.contains(&denied.display().to_string()));
-    assert!(error.contains(&io::Error::from_raw_os_error(libc::EACCES).to_string()));
-    assert_eq!(
-        bounded.is_ok(),
-        std::thread::available_parallelism().map_or(1, usize::from) == 1,
-        "rg's serial walk suppresses traversal errors beyond the depth limit",
-    );
+    for result in results {
+        let error = result.expect_err("incomplete scans must fail").to_string();
+        assert!(error.contains(&denied.display().to_string()));
+        assert!(error.contains(&io::Error::from_raw_os_error(libc::EACCES).to_string()));
+    }
 }
 
 #[test]
