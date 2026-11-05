@@ -102,6 +102,7 @@ pub(crate) fn decide_approval(
         };
         let _cancel_on_drop = cancellation.clone().drop_guard();
         let turn = context.turn();
+        turn.extension_data.insert_arc(Arc::clone(&turn.config));
         let live_config = session.get_config().await;
         let requirements = live_config.config_layer_stack.requirements();
         let model_requires_review =
@@ -159,6 +160,7 @@ pub(crate) fn decide_approval(
             action: request.action.as_ref().ok(),
             thread_id: session.thread_id,
             thread_store: &session.services.thread_extension_data,
+            turn_store: &turn.extension_data,
             category: request.category,
             approval_policy: context.approval_policy,
             approvals_reviewer: context.approvals_reviewer,

@@ -553,6 +553,20 @@ impl ConfigLayerStack {
         })
     }
 
+    /// Adds local session configuration while retaining independently owned runtime snapshots.
+    pub fn with_session_config(mut self, config: TomlValue) -> std::io::Result<Self> {
+        let index = self.layers.partition_point(|layer| {
+            layer.name.precedence() <= ConfigLayerSource::SessionFlags.precedence()
+        });
+        self.layers.insert(
+            index,
+            ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, config),
+        );
+        validate_enabled_config_layers(&self.layers)?;
+        self.validate_project_mitm_profiles()?;
+        Ok(self)
+    }
+
     pub fn with_session_plugins(mut self, plugins: TomlValue) -> std::io::Result<Self> {
         let session_index = self.layers.iter().rposition(|layer| {
             layer.name == ConfigLayerSource::SessionFlags && !layer.is_disabled()
@@ -577,16 +591,9 @@ impl ConfigLayerStack {
                 *layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, config);
             }
         } else {
-            let index = self.layers.partition_point(|layer| {
-                layer.name.precedence() <= ConfigLayerSource::SessionFlags.precedence()
-            });
-            self.layers.insert(
-                index,
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::SessionFlags,
-                    TomlValue::Table([("plugins".to_owned(), plugins)].into_iter().collect()),
-                ),
-            );
+            return self.with_session_config(TomlValue::Table(
+                [("plugins".to_owned(), plugins)].into_iter().collect(),
+            ));
         }
         Ok(self)
     }

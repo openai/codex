@@ -8,9 +8,6 @@ use crate::config::Config;
 use crate::config::deserialize_config_toml_with_base;
 use anyhow::anyhow;
 use codex_agent_roles::parse_agent_role_file_contents;
-use codex_config::ConfigLayerEntry;
-use codex_config::ConfigLayerSource;
-use codex_config::ConfigLayerStack;
 use codex_config::SkillsConfig;
 use codex_config::loader::resolve_relative_paths_in_config_toml;
 use codex_exec_server::read_sensitive_file_to_string;
@@ -180,7 +177,9 @@ mod role_overrides {
         overrides: &AgentRoleOverrides,
     ) -> anyhow::Result<Config> {
         let mut next_config = config.clone();
-        next_config.config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
+        next_config.config_layer_stack = next_config
+            .config_layer_stack
+            .with_session_config(role_layer_toml)?;
         if let Some(model) = &overrides.model {
             next_config.model = Some(model.clone());
         }
@@ -237,34 +236,6 @@ mod role_overrides {
             next_config.base_instructions_provenance = None;
         }
         Ok(next_config)
-    }
-
-    fn build_config_layer_stack(
-        config: &Config,
-        role_layer_toml: &TomlValue,
-    ) -> anyhow::Result<ConfigLayerStack> {
-        let mut layers: Vec<_> = config
-            .config_layer_stack
-            .all_layers_low_to_high()
-            .cloned()
-            .collect();
-        let role_layer =
-            ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, role_layer_toml.clone());
-        let insertion_index = layers.partition_point(|layer| layer.name <= role_layer.name);
-        layers.insert(insertion_index, role_layer);
-        Ok(ConfigLayerStack::new(
-            layers,
-            config.config_layer_stack.requirements().clone(),
-            config.config_layer_stack.requirements_toml().clone(),
-        )?
-        .with_cloud_config_binding(config.config_layer_stack.cloud_config_binding().cloned())
-        .with_mcp_ema_cancellation(config.config_layer_stack.mcp_ema_cancellation().clone())
-        .with_applied_config_server(config.config_layer_stack.applied_config_server().cloned())
-        .with_user_and_project_exec_policy_rules_ignored(
-            config
-                .config_layer_stack
-                .ignore_user_and_project_exec_policy_rules(),
-        ))
     }
 }
 

@@ -1,4 +1,4 @@
-//! Translates legacy Guardian settings and applies live managed constraints.
+//! Translates legacy Guardian settings and applies captured managed constraints.
 //! Catalog policies take precedence over legacy scope and feature settings.
 
 use codex_features::FeatureToml;
@@ -15,15 +15,11 @@ use crate::ConfigRequirements;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuardianPolicyLoader {
     default: GuardianModelPolicy,
-    force_synchronous_review: bool,
     scoring_disabled: bool,
 }
 
 impl GuardianPolicyLoader {
-    pub fn new(
-        legacy: Option<&FeatureToml<GuardianV2ConfigToml>>,
-        requirements: &ConfigRequirements,
-    ) -> Self {
+    pub fn new(legacy: Option<&FeatureToml<GuardianV2ConfigToml>>) -> Self {
         let scope = match legacy {
             Some(FeatureToml::Config(config)) => config.review_scope.as_ref(),
             Some(FeatureToml::Enabled(_)) | None => None,
@@ -61,14 +57,14 @@ impl GuardianPolicyLoader {
         Self {
             default,
             scoring_disabled: !enabled.unwrap_or(/*default*/ false),
-            force_synchronous_review: requirements
-                .approvals_reviewer
-                .can_set(&ApprovalsReviewer::User)
-                .is_err(),
         }
     }
 
-    pub fn resolve(&self, model: Option<&ModelInfo>) -> GuardianModelPolicy {
+    pub fn resolve(
+        &self,
+        model: Option<&ModelInfo>,
+        requirements: &ConfigRequirements,
+    ) -> GuardianModelPolicy {
         let catalog = model.and_then(|model| model.guardian.as_ref());
         let mut policy = catalog.cloned().unwrap_or_else(|| self.default.clone());
         if catalog.is_none()
@@ -80,17 +76,24 @@ impl GuardianPolicyLoader {
             policy.unscored_action = GuardianUnscoredAction::InvalidateScore;
         }
         // Preserve the legacy feature gate: explicit catalog policies bypass it.
-        if self.force_synchronous_review || self.scoring_disabled && catalog.is_none() {
+        if self.scoring_disabled && catalog.is_none() {
             policy.disable_scoring();
         }
+        requirements.constrain_guardian_policy(&mut policy, model.map(|model| model.slug.as_str()));
         policy
     }
 }
 
 impl ConfigRequirements {
-    /// Applies live administrator requirements to an already resolved model policy.
-    pub fn constrain_guardian_policy(&self, policy: &mut GuardianModelPolicy, model: &str) {
-        if self.auto_review_required_for_model(model) {
+    /// Applies the supplied administrator requirements to an already resolved model policy.
+    /// The reviewer allowlist applies even when model metadata is unavailable.
+    pub fn constrain_guardian_policy(&self, policy: &mut GuardianModelPolicy, model: Option<&str>) {
+        if [ApprovalsReviewer::User, ApprovalsReviewer::AutoReview]
+            .iter()
+            .any(|reviewer| self.approvals_reviewer.can_set(reviewer).is_err())
+        {
+            policy.disable_scoring();
+        } else if model.is_some_and(|model| self.auto_review_required_for_model(model)) {
             let computer_use = policy.computer_use;
             let initial_cua_call = policy.allows_initial_cua_call();
             policy.disable_scoring();

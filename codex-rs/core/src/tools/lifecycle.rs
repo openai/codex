@@ -30,6 +30,10 @@ pub(crate) async fn notify_tool_start(
     if contributors.is_empty() {
         return;
     }
+    invocation
+        .turn
+        .extension_data
+        .insert_arc(Arc::clone(&invocation.turn.config));
     let thread_store = &invocation.session.services.thread_extension_data;
     let conversation_history = invocation.session.conversation_history_snapshot().await;
     let root_turn_id = invocation.turn.turn_metadata_state.root_turn_id();

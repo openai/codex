@@ -167,6 +167,7 @@ async fn async_approval_revalidates_without_waiting_for_tracked_cleanup(state: A
         action: Some(&action),
         thread_id,
         thread_store: &store,
+        turn_store: &store,
         category: GuardianScope::Permissions,
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::AutoReview,

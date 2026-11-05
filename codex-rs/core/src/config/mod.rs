@@ -181,6 +181,7 @@ mod permission_profile_selection;
 mod permissions;
 mod requirements;
 mod resolved_permission_profile;
+pub(crate) use guardian_policy::resolve_guardian_policy_text;
 pub(crate) use guardian_policy::resolve_guardian_reviewer;
 mod runtime_refresh;
 pub(crate) use runtime_refresh::RuntimeConfigRefresh;
@@ -729,6 +730,8 @@ pub struct Config {
     /// `# Policy Configuration` section rather than replacing the whole
     /// guardian developer prompt.
     pub guardian_policy_config: Option<String>,
+    /// Guardian publication observed before startup loading or last policy refresh.
+    pub guardian_policy_revision: u64,
 
     /// Additional Guardian policy from requirements.toml or config.toml.
     /// Rendered into `{{ extra_policy }}` alongside the resolved tenant policy.
@@ -4304,26 +4307,9 @@ impl Config {
             .and_then(|skills| skills.max_context_tokens);
         let include_environment_context = cfg.include_environment_context.unwrap_or(true);
         let include_environment_context_time = cfg.include_environment_context_time.unwrap_or(true);
-        let guardian_policy_config =
-            guardian_policy_config_from_requirements(config_layer_stack.requirements_toml())
-                .or_else(|| {
-                    cfg.auto_review
-                        .as_ref()
-                        .and_then(|auto_review| normalize_guardian_policy_config(
-                            auto_review.policy.as_deref(),
-                        ))
-                });
-        let guardian_extra_policy = normalize_guardian_policy_config(
-            config_layer_stack
-                .requirements_toml()
-                .guardian_extra_policy
-                .as_deref(),
-        )
-        .or_else(|| {
-            cfg.auto_review.as_ref().and_then(|auto_review| {
-                normalize_guardian_policy_config(auto_review.extra_policy.as_deref())
-            })
-        });
+        let (guardian_policy_config, guardian_extra_policy) = resolve_guardian_policy_text(
+            config_layer_stack.requirements_toml(), cfg.auto_review.as_ref(),
+        );
         let guardian_transcript_mode = cfg
             .features
             .as_ref()
@@ -4760,6 +4746,7 @@ impl Config {
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
             guardian_policy_config,
+            guardian_policy_revision: 0,
             guardian_extra_policy,
             guardian_policy_template,
             guardian_transcript_mode,

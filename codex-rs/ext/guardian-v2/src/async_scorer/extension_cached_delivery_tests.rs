@@ -205,6 +205,7 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
     let mut config = test.config.clone();
     config.features.enable(Feature::GuardianV2)?;
     let session_store = ExtensionData::new("worker-cache-session");
+    worker.thread_extension_data().insert(config.clone());
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -229,10 +230,19 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
     // Hold tool lag at zero so only the delivery can invalidate either approval.
     for (thread, before) in [(&test.codex, &root_before), (&worker, &worker_before)] {
         let store = thread.thread_extension_data();
+        let turn_store = ExtensionData::new("approval-turn");
+        turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
         let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
         seed_cached_score(&progress, store, /*index*/ 1_000, before.clone());
         assert_eq!(
-            cached_approval(&registry, store, "review action", /*metrics*/ None).await,
+            cached_approval(
+                &registry,
+                store,
+                &turn_store,
+                "review action",
+                /*metrics*/ None
+            )
+            .await,
             Some(ReviewDecision::Approved)
         );
     }
@@ -266,10 +276,14 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
         }
     );
     for thread in [&test.codex, &worker] {
+        let store = thread.thread_extension_data();
+        let turn_store = ExtensionData::new("approval-turn");
+        turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
         assert_eq!(
             cached_approval(
                 &registry,
-                thread.thread_extension_data(),
+                store,
+                &turn_store,
                 "review action",
                 /*metrics*/ None
             )
@@ -298,12 +312,21 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
             .contains(&codex_core::GuardianRootMessage::IncompleteRootInstructions)
     );
     let store = worker.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
     let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
     let authorization = ScoreAuthorization::current(&worker, &Default::default()).await;
     assert!(authorization.local.retained_context_complete);
     seed_cached_score(&progress, store, /*index*/ 1_000, authorization);
     assert_eq!(
-        cached_approval(&registry, store, "review action", /*metrics*/ None).await,
+        cached_approval(
+            &registry,
+            store,
+            &turn_store,
+            "review action",
+            /*metrics*/ None
+        )
+        .await,
         Some(ReviewDecision::Approved)
     );
     let shutdown = test

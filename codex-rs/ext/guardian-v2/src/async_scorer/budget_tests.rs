@@ -42,6 +42,9 @@ async fn catalog_budget_fixture(base_url: String, window: i64) -> Result<Guardia
     );
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
+    test.codex
+        .thread_extension_data()
+        .insert(test.config.clone());
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &test.config,
@@ -195,6 +198,8 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             }
         };
         let thread_store = fixture.test.codex.thread_extension_data();
+        let turn_store = ExtensionData::new("turn-1");
+        turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
         if matches!(evidence, BudgetEvidence::UserInstructions) {
             set_cached_score(
                 thread_store,
@@ -213,6 +218,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 cached_approval(
                     &fixture.registry,
                     thread_store,
+                    &turn_store,
                     "review action",
                     /*metrics*/ None
                 )
@@ -220,7 +226,6 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 Some(ReviewDecision::Approved)
             );
         }
-        let turn_store = ExtensionData::new("turn-1");
         let tool_name = ToolName::plain("read_file");
         let payload = ToolPayload::Function {
             arguments: r#"{"path":"README.md"}"#.to_owned(),
@@ -290,6 +295,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             cached_approval(
                 &fixture.registry,
                 thread_store,
+                &turn_store,
                 "review action",
                 /*metrics*/ None
             )

@@ -42,6 +42,8 @@ pub struct ApprovalDecisionInput<'a> {
     pub action: &'a serde_json::Value,
     pub thread_id: ThreadId,
     pub thread_store: &'a ExtensionData,
+    /// Captured configuration and evidence owned by the requesting turn.
+    pub turn_store: &'a ExtensionData,
     pub category: codex_protocol::openai_models::GuardianScope,
     pub approval_policy: codex_protocol::protocol::AskForApproval,
     pub approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,

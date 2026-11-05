@@ -132,20 +132,20 @@ fn should_classify_tool(
 fn legacy_loader(
     scope: Option<&GuardianV2ReviewScopeConfigToml>,
 ) -> codex_config::GuardianPolicyLoader {
-    codex_config::GuardianPolicyLoader::new(
-        Some(&codex_features::FeatureToml::Config(
-            codex_features::GuardianV2ConfigToml {
-                enabled: Some(true),
-                review_scope: scope.cloned(),
-                ..Default::default()
-            },
-        )),
-        &codex_config::ConfigRequirements::default(),
-    )
+    codex_config::GuardianPolicyLoader::new(Some(&codex_features::FeatureToml::Config(
+        codex_features::GuardianV2ConfigToml {
+            enabled: Some(true),
+            review_scope: scope.cloned(),
+            ..Default::default()
+        },
+    )))
 }
 
 fn legacy_policy(scope: Option<&GuardianV2ReviewScopeConfigToml>) -> GuardianModelPolicy {
-    legacy_loader(scope).resolve(/*model*/ None)
+    legacy_loader(scope).resolve(
+        /*model*/ None,
+        &codex_config::ConfigRequirements::default(),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -239,6 +239,7 @@ async fn installed_extension_warms_connections_without_blocking_thread_start() -
     model.node_repl_auto_review_required = true;
     thread_store.insert(model);
 
+    thread_store.insert(config.clone());
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -313,6 +314,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
         .await;
     model.node_repl_auto_review_required = true;
     thread_store.insert_arc(model.model);
+    thread_store.insert(config.clone());
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -334,6 +336,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should initialize");
     let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let tool_name = ToolName::namespaced("mcp__node_repl__", "js");
     let payload = ToolPayload::Function {
         arguments: r#"{"path":"README.md"}"#.to_owned(),
@@ -371,6 +374,7 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
             cached_approval(
                 &registry,
                 thread_store,
+                &turn_store,
                 r#"{"tool":"mcp_tool_call","server":"node_repl"}"#,
                 /*metrics*/ None,
             )
@@ -618,6 +622,7 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
         .expect("Guardian v2 should track score progress per thread");
     let mut expected = score_progress.inspect(/*call_id*/ None);
     let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let tool_name = ToolName::plain("exec_command");
     for (call_id, payload, expected_decision) in [
         ("call-2", sandboxed, Some(ReviewDecision::Approved)),
@@ -646,6 +651,7 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
             cached_approval(
                 &fixture.registry,
                 thread_store,
+                &turn_store,
                 r#"{"tool":"exec_command","cmd":"pwd"}"#,
                 /*metrics*/ None,
             )
@@ -719,6 +725,7 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
     seed_cached_score(&progress, thread_store, /*index*/ 1, authorization);
     let cached = progress.inspect(/*call_id*/ None);
     let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let ordinary_tool = ToolName::namespaced("mcp__ordinary__", "write_record");
     let payload = ToolPayload::Function {
         arguments: r#"{"record":"sensitive"}"#.to_owned(),
@@ -770,6 +777,7 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
             cached_approval(
                 &fixture.registry,
                 thread_store,
+                &turn_store,
                 &prompt,
                 thread_store
                     .get::<RecordingMetrics>()
@@ -784,6 +792,7 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         cached_approval(
             &fixture.registry,
             thread_store,
+            &turn_store,
             "not valid JSON",
             thread_store
                 .get::<RecordingMetrics>()
@@ -808,6 +817,7 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
         cached_approval(
             &fixture.registry,
             thread_store,
+            &turn_store,
             &json!({"tool": "mcp_tool_call", "server": "node_repl", "tool_name": "js"}).to_string(),
             /*metrics*/ None,
         )
@@ -866,6 +876,7 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
             cached_approval(
                 &fixture.registry,
                 thread_store,
+                &turn_store,
                 r#"{"tool":"mcp_tool_call","server":"node_repl","tool_name":"js"}"#,
                 /*metrics*/ None,
             )
@@ -979,7 +990,7 @@ async fn sample_configured_conversation_history_with_delivery(
         .with_model("gpt-5.5")
         .with_config(move |config| {
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-            config.guardian_policy_config = guardian_policy;
+            config.guardian_policy_config = Some("Policy from the live thread.".to_owned());
             if code_mode {
                 for feature in [
                     Feature::Apps,
@@ -1031,7 +1042,10 @@ async fn sample_configured_conversation_history_with_delivery(
         server.uri().trim_start_matches("ws://")
     )));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+    // Capture policy independently of the newer live thread configuration.
     let mut config = test.config.clone();
+    config.guardian_policy_config = guardian_policy;
+    config.guardian_policy_revision = 0;
     config.model_provider = provider_info;
     config.features.enable(Feature::GuardianV2)?;
     let mut builder = ExtensionRegistryBuilder::new();
@@ -1043,6 +1057,7 @@ async fn sample_configured_conversation_history_with_delivery(
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("turn-1");
     thread_store.insert(RecordingMetrics::default());
     let metrics = thread_store.get::<RecordingMetrics>().unwrap();
     if has_model_defaults {
@@ -1057,12 +1072,14 @@ async fn sample_configured_conversation_history_with_delivery(
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
         .await,
         None
     );
+    thread_store.insert(config.clone());
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -1080,7 +1097,7 @@ async fn sample_configured_conversation_history_with_delivery(
         .expect("Guardian v2 should initialize")
         .wait_for_prewarm(PREWARM_TIMEOUT)
         .await?;
-    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let tool_name = ToolName::plain("read_file");
     let tool_payload = ToolPayload::Function {
         arguments: arguments.to_owned(),
@@ -1144,7 +1161,18 @@ async fn unscored_tools_invalidate_cached_scores() -> Result<()> {
         computer_use: Some(codex_protocol::openai_models::GuardianReviewMode::Adaptive),
         ..Default::default()
     });
+    let mut config = thread_store.get::<Config>().unwrap().as_ref().clone();
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.auto_review_required_models = Some(codex_config::Sourced::new(
+        [model.slug.clone()].into_iter().collect(),
+        codex_config::RequirementSource::Unknown,
+    ));
+    config.config_layer_stack =
+        codex_config::ConfigLayerStack::new(Vec::new(), requirements, Default::default())?;
+    thread_store.insert(config);
     thread_store.insert(model);
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("score progress");
@@ -1164,6 +1192,21 @@ async fn unscored_tools_invalidate_cached_scores() -> Result<()> {
         expected.has_unscored_failure = true;
         assert_eq!(progress.inspect(/*call_id*/ None), expected);
     }
+    // A classifier started before these actions may still publish, but cannot approve later CUA.
+    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+    seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
+    assert!(progress.inspect(/*call_id*/ None).has_unscored_failure);
+    assert_eq!(
+        cached_approval(
+            &fixture.registry,
+            thread_store,
+            &turn_store,
+            r#"{"tool":"mcp_tool_call","server":"cua_repl","tool_name":"js"}"#,
+            /*metrics*/ None,
+        )
+        .await,
+        None
+    );
     Ok(())
 }
 
@@ -1194,10 +1237,12 @@ impl GuardianFailureFixture {
         })
         .await?;
 
+        let session_store = ExtensionData::new("session-1");
+        session_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
         Ok(Self {
             test,
             registry,
-            session_store: ExtensionData::new("session-1"),
+            session_store,
         })
     }
 
@@ -1213,6 +1258,7 @@ impl GuardianFailureFixture {
             },
         );
         let turn_store = ExtensionData::new("turn-1");
+        turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
         let payload = ToolPayload::Function {
             arguments: r#"{"path":"README.md"}"#.to_owned(),
         };
@@ -1238,6 +1284,8 @@ impl GuardianFailureFixture {
 
     async fn assert_fails_closed(&self, expected_reason: &str) -> Result<()> {
         let thread_store = self.test.codex.thread_extension_data();
+        let turn_store = ExtensionData::new("approval-turn");
+        turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
         let score_progress = thread_store
             .get::<GuardianV2ScoreProgress>()
             .expect("Guardian v2 should track score progress per thread");
@@ -1257,6 +1305,7 @@ impl GuardianFailureFixture {
             cached_approval(
                 &self.registry,
                 thread_store,
+                &turn_store,
                 "review action",
                 thread_store
                     .get::<RecordingMetrics>()
@@ -1379,7 +1428,7 @@ extra_policy = "Allow proactive drafting. Keep {{ tenant_policy_config }} and {{
 enabled = true
 classifier_instructions = "Predict future violations.\n# Security Policy\n{{ tenant_policy_config }}\nReturn action_risk."
 "#;
-    let (request, _test, _registry) = sample_configured_conversation_history(
+    let (request, test, registry) = sample_configured_conversation_history(
         Vec::new(),
         r#"{"path":"README.md"}"#,
         Some(TEST_GUARDIAN_POLICY),
@@ -1407,6 +1456,32 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
                 ),
             }],
         })
+    );
+    let store = test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
+    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let mut updates = progress.updates.subscribe();
+    tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
+        while progress.inspect(/*call_id*/ None).authorization.is_none() {
+            updates.changed().await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+    let mut score = cached_score(store).expect("captured policy score");
+    score.scores.insert("action_risk".to_owned(), 0.0);
+    set_cached_score(store, score);
+    assert_eq!(
+        cached_approval(
+            &registry,
+            store,
+            &turn_store,
+            "review action",
+            /*metrics*/ None
+        )
+        .await,
+        Some(ReviewDecision::Approved)
     );
     Ok(())
 }
@@ -1570,6 +1645,8 @@ max_recent_non_user_entries = 8
     );
 
     let thread_store = test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let score_progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
@@ -1608,6 +1685,7 @@ max_recent_non_user_entries = 8
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             thread_store
                 .get::<RecordingMetrics>()
@@ -1629,6 +1707,7 @@ max_recent_non_user_entries = 8
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             thread_store
                 .get::<RecordingMetrics>()
@@ -1656,6 +1735,7 @@ max_recent_non_user_entries = 8
                 cached_approval(
                     &registry,
                     thread_store,
+                    &turn_store,
                     &action.to_string(),
                     /*metrics*/ None
                 )
@@ -1671,6 +1751,7 @@ max_recent_non_user_entries = 8
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             thread_store
                 .get::<RecordingMetrics>()
@@ -1687,6 +1768,7 @@ max_recent_non_user_entries = 8
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             thread_store
                 .get::<RecordingMetrics>()
@@ -1706,6 +1788,7 @@ max_recent_non_user_entries = 8
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             thread_store
                 .get::<RecordingMetrics>()
@@ -2007,6 +2090,8 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
     assert!(action.len() <= TruncationPolicy::Tokens(/*limit*/ 128).byte_budget());
 
     let thread_store = test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let guardian_config = thread_store
         .get::<crate::async_scorer::config::GuardianV2Config>()
         .expect("Guardian v2 configuration should be installed");
@@ -2046,6 +2131,7 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
@@ -2127,6 +2213,8 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
     .await?;
     let thread_id = test.session_configured.thread_id;
     let thread_store = test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     assert_eq!(request["model"], "gpt-5.6-luna");
     let classifier_thread_id = request["client_metadata"]["thread_id"]
         .as_str()
@@ -2245,6 +2333,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
@@ -2264,6 +2353,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
@@ -2284,6 +2374,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
@@ -2312,6 +2403,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             cached_approval(
                 &registry,
                 thread_store,
+                &turn_store,
                 "review action",
                 /*metrics*/ None
             )
@@ -2334,6 +2426,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         cached_approval(
             &registry,
             &disabled_thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None
         )
@@ -2444,6 +2537,7 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    thread_store.insert(config.clone());
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -2491,10 +2585,13 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
             sampled_at: None,
         },
     );
+    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     assert_eq!(
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             r#"{"tool":"mcp_tool_call","server":"node_repl"}"#,
             /*metrics*/ None,
         )
@@ -2502,7 +2599,6 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         None
     );
 
-    let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::namespaced("mcp__node_repl__", "js");
     let payload = ToolPayload::Function {
         arguments: json!({ "path": "protected.md" }).to_string(),
@@ -2513,6 +2609,7 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
             .repeat(3 * TruncationPolicy::Tokens(DEFAULT_PARENT_COMPACTION_TOKENS).byte_budget()),
         internal_chat_message_metadata_passthrough: None,
     };
+    let previous_score = cached_score(thread_store);
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
             serving_assessment: None,
@@ -2532,14 +2629,34 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         })
         .await;
 
-    assert!(
-        cached_score(thread_store).is_none(),
-        "protected models must not receive Guardian v2 fail-closed scores"
-    );
+    assert_eq!(cached_score(thread_store), previous_score);
+    assert_eq!(progress.inspect(/*call_id*/ None).lag, 1);
     assert!(
         server.connections().iter().all(Vec::is_empty),
         "protected models must not spawn Guardian v2 classifiers"
     );
+
+    // An old turn can still request adaptive scoring after live requirements tighten.
+    let mut captured = config;
+    captured.config_layer_stack = initial.config.config_layer_stack.clone();
+    thread_store.insert(captured);
+    let mut model = thread_store.get::<ModelInfo>().unwrap().as_ref().clone();
+    model.guardian = Some(GuardianModelPolicy {
+        computer_use: Some(codex_protocol::openai_models::GuardianReviewMode::Adaptive),
+        other_tools: codex_protocol::openai_models::GuardianReviewMode::Adaptive,
+        ..Default::default()
+    });
+    thread_store.insert(model);
+    let fixture = GuardianFailureFixture {
+        test,
+        registry,
+        session_store,
+    };
+    fixture.score_tool(ToolName::plain("read_file")).await;
+    let store = fixture.test.codex.thread_extension_data();
+    let authorization = ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
+    seed_cached_score(&progress, store, /*index*/ 0, authorization);
+    assert!(progress.inspect(/*call_id*/ None).has_unscored_failure);
 
     Ok(())
 }
@@ -2557,6 +2674,8 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
     )
     .await?;
     let thread_store = test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         while progress.inspect(/*call_id*/ None).authorization.is_none() {
@@ -2593,6 +2712,7 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
@@ -2617,6 +2737,7 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None
         )
@@ -2633,6 +2754,8 @@ async fn stale_review_context_blocks_cached_approval_without_changing_authorizat
 
     let fixture = GuardianFailureFixture::new().await?;
     let store = fixture.test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("captured-turn");
+    turn_store.insert_arc(store.get::<Config>().expect("captured turn config"));
     let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
     let mut score = cached_score(store).unwrap();
     score.scores.insert("action_risk".to_owned(), 0.25);
@@ -2650,13 +2773,13 @@ async fn stale_review_context_blocks_cached_approval_without_changing_authorizat
         (current.clone(), Some(ReviewDecision::Approved)),
         (stale_local, None),
         (stale_root, None),
-        (current, Some(ReviewDecision::Approved)),
     ] {
         seed_cached_score(&progress, store, /*index*/ 0, authorization);
         assert_eq!(
             cached_approval(
                 &fixture.registry,
                 store,
+                &turn_store,
                 "review action",
                 /*metrics*/ None
             )
@@ -2664,6 +2787,20 @@ async fn stale_review_context_blocks_cached_approval_without_changing_authorizat
             expected,
         );
     }
+    seed_cached_score(&progress, store, /*index*/ 0, current);
+    // The recovered approval must read its config only from the captured turn.
+    store.remove::<Config>().expect("captured turn config");
+    assert_eq!(
+        cached_approval(
+            &fixture.registry,
+            store,
+            &turn_store,
+            "review action",
+            /*metrics*/ None,
+        )
+        .await,
+        Some(ReviewDecision::Approved),
+    );
     Ok(())
 }
 
@@ -2676,6 +2813,8 @@ async fn incompatible_compaction_blocks_cached_score_and_initial_cua_allowance()
 
     let fixture = GuardianFailureFixture::with_config("").await?;
     let thread_store = fixture.test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     set_cached_score(
         thread_store,
         SecurityRiskScore {
@@ -2689,6 +2828,7 @@ async fn incompatible_compaction_blocks_cached_score_and_initial_cua_allowance()
         cached_approval(
             &fixture.registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None
         )
@@ -2753,6 +2893,7 @@ async fn incompatible_compaction_blocks_cached_score_and_initial_cua_allowance()
             cached_approval(
                 &fixture.registry,
                 thread_store,
+                &turn_store,
                 prompt,
                 /*metrics*/ None
             )
@@ -2777,6 +2918,8 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
     .await?;
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let score_progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
@@ -2803,6 +2946,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
@@ -2814,7 +2958,6 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
         .remove_thread(&test.session_configured.thread_id)
         .await
         .expect("the test thread should exist before simulating a failed lookup");
-    let turn_store = ExtensionData::new("turn-1");
     let tool_name = ToolName::plain("read_file");
     let payload = ToolPayload::Function {
         arguments: r#"{"path":"missing.md"}"#.to_owned(),
@@ -2843,6 +2986,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
@@ -3291,6 +3435,7 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
     let metrics = Arc::new(RecordingMetrics::default());
+    thread_store.insert(config.clone());
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -3309,6 +3454,7 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
         .wait_for_prewarm(PREWARM_TIMEOUT)
         .await?;
     let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert_arc(thread_store.get::<Config>().expect("captured test config"));
     let tool_name = ToolName::plain("read_file");
     let tool_payload = ToolPayload::Function {
         arguments: r#"{"path":"README.md"}"#.to_owned(),
@@ -3419,6 +3565,7 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
         cached_approval(
             &registry,
             thread_store,
+            &turn_store,
             "review action",
             /*metrics*/ None,
         )
@@ -3493,6 +3640,7 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
             cached_approval(
                 &registry,
                 thread_store,
+                &turn_store,
                 "review action",
                 /*metrics*/ None,
             )
@@ -3537,6 +3685,8 @@ async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let fixture = GuardianFailureFixture::new().await?;
     let store = fixture.test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
     let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
     let mut score = cached_score(store).unwrap();
     score.scores.insert("action_risk".to_owned(), 0.0);
@@ -3576,6 +3726,7 @@ async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
         cached_approval(
             &fixture.registry,
             store,
+            &turn_store,
             &json!({"tool": "mcp_tool_call", "server": "example", "id": call_id}).to_string(),
             /*metrics*/ None,
         )
@@ -3676,19 +3827,24 @@ async fn cached_approval_respects_action_order_and_wrapper_lag() -> Result<()> {
     Ok(())
 }
 
-/// Exercises decision routing; a fresh review is observed as a cache miss.
+/// Routes an approval using the thread and captured turn supplied by the test.
 async fn cached_approval(
     registry: &codex_extension_api::ExtensionRegistry<Config>,
-    store: &ExtensionData,
+    thread_store: &ExtensionData,
+    turn_store: &ExtensionData,
     action: &str,
     metrics: Option<Arc<dyn ExtensionMetrics>>,
 ) -> Option<ReviewDecision> {
     let action = serde_json::from_str(action).unwrap_or(serde_json::Value::Null);
+    let config = turn_store.get::<Config>()?;
     let category = match review_scope(&action) {
         Some(category) => category,
-        None if store
+        None if thread_store
             .get::<super::GuardianV2Config>()?
-            .policy_for_model(store.get::<ModelInfo>().as_deref())
+            .policy_for_model(
+                thread_store.get::<ModelInfo>().as_deref(),
+                config.config_layer_stack.requirements(),
+            )
             .other_tools
             == codex_protocol::openai_models::GuardianReviewMode::Adaptive =>
         {
@@ -3709,8 +3865,9 @@ async fn cached_approval(
         approval_id: "cache-probe",
         tool_call_id: action.get("id").and_then(serde_json::Value::as_str),
         action: &action,
-        thread_id: codex_protocol::ThreadId::from_string(store.level_id()).unwrap(),
-        thread_store: store,
+        thread_id: codex_protocol::ThreadId::from_string(thread_store.level_id()).unwrap(),
+        thread_store,
+        turn_store,
         category,
         approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::AutoReview,

@@ -301,6 +301,8 @@ async fn delayed_preparation_does_not_block_newer_requests_and_capacity_is_bound
         .get::<ConversationBackend>()
         .unwrap();
     let store = fixture.test.codex.thread_extension_data();
+    let turn_store = ExtensionData::new("approval-turn");
+    turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
     let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
     let mut reservations = (0..16)
         .map(|index| backend.reserve(|| index).1.unwrap())
@@ -323,6 +325,7 @@ async fn delayed_preparation_does_not_block_newer_requests_and_capacity_is_bound
         cached_approval(
             &fixture.registry,
             store,
+            &turn_store,
             "review action",
             /*metrics*/ None
         )
@@ -532,6 +535,8 @@ async fn preflight_skips_only_after_score_and_history_are_superseded() -> Result
         )
         .await?;
         let store = fixture.test.codex.thread_extension_data();
+        let turn_store = ExtensionData::new("approval-turn");
+        turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
         let mut cached = cached_score(store).unwrap();
         cached.scores.insert("action_risk".to_owned(), risk);
         set_cached_score(store, cached);
@@ -578,6 +583,7 @@ async fn preflight_skips_only_after_score_and_history_are_superseded() -> Result
         let approval_before = cached_approval(
             &fixture.registry,
             store,
+            &turn_store,
             r#"{"tool":"mcp_tool_call","server":"node_repl"}"#,
             /*metrics*/ None,
         )
@@ -609,6 +615,7 @@ async fn preflight_skips_only_after_score_and_history_are_superseded() -> Result
             cached_approval(
                 &fixture.registry,
                 store,
+                &turn_store,
                 r#"{"tool":"mcp_tool_call","server":"node_repl"}"#,
                 /*metrics*/ None
             )
@@ -652,6 +659,7 @@ async fn delayed_classification_skips_after_newer_score_and_history_complete() -
     let mut updates = progress.updates.subscribe();
     let metrics = store.get::<RecordingMetrics>().unwrap();
     let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert_arc(store.get::<Config>().expect("captured test config"));
     let tool_name = ToolName::plain("read_file");
     let payload = ToolPayload::Function {
         arguments: r#"{"path":"README.md"}"#.to_owned(),
