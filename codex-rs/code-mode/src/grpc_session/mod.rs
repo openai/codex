@@ -28,6 +28,7 @@ use codex_code_mode_protocol::grpc::code_mode_host_client::CodeModeHostClient;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use rand::Rng;
+use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -57,6 +58,9 @@ type GrpcClient = CodeModeHostClient<GrpcTransport>;
 
 const SHUTDOWN_ERROR: &str = "code mode session is shutting down";
 const ROUTE_HEADER: &str = "x-code-mode-route";
+// Bound result-delivery RPCs, not running tools. A full completion burst can
+// exhaust HTTP/2's small-DATA-frame budget and disconnect every shared session.
+const MAX_IN_FLIGHT_COMPLETIONS: usize = 64;
 
 fn inject_span_traceparent<T>(request: &mut tonic::Request<T>, span: &tracing::Span) {
     if let Some(traceparent) =
@@ -76,6 +80,7 @@ fn inject_span_traceparent<T>(request: &mut tonic::Request<T>, span: &tracing::S
 #[derive(Clone)]
 pub struct GrpcCodeModeSessionProvider {
     transport: Arc<SharedTransport>,
+    completion_permits: Arc<Semaphore>,
     // Reloaded threads share this counter rather than reusing a cell namespace.
     next_generation: Arc<AtomicU64>,
 }
@@ -124,6 +129,7 @@ impl GrpcCodeModeSessionProvider {
     fn from_transport(transport: SharedTransport) -> Self {
         Self {
             transport: Arc::new(transport),
+            completion_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_COMPLETIONS)),
             next_generation: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -153,6 +159,9 @@ impl GrpcCodeModeSessionProvider {
             let mut retries = 0;
             loop {
                 let mut request = tonic::Request::new(grpc::OpenSessionRequest {
+                    max_pending_delegate_calls: Some(
+                        codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS as u32,
+                    ),
                     cell_execution_limits,
                     output_truncation: match requested_mode {
                         CodeModeOutputTruncation::Client => None,
@@ -243,6 +252,7 @@ impl GrpcCodeModeSessionProvider {
             shutdown_result: Mutex::new(None),
             stopped: CancellationToken::new(),
             stream_tasks: TaskTracker::new(),
+            completion_permits: Arc::clone(&self.completion_permits),
             _transport: Arc::clone(&self.transport),
         });
         let mut opening = OpeningSession {
@@ -387,6 +397,7 @@ pub(super) struct SessionInner {
     shutdown_result: Mutex<Option<ShutdownResultReceiver>>,
     pub(super) stopped: CancellationToken,
     stream_tasks: TaskTracker,
+    completion_permits: Arc<Semaphore>,
     _transport: Arc<SharedTransport>,
 }
 

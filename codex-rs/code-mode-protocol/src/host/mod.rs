@@ -10,7 +10,13 @@ mod payload;
 mod types;
 
 /// Maximum number of unresolved delegate callbacks allowed per host connection.
-pub const MAX_PENDING_DELEGATE_CALLS: usize = 1_024;
+pub const MAX_PENDING_DELEGATE_CALLS: usize = 4_096;
+
+/// Callback capacity of clients that do not advertise the larger budget.
+pub const LEGACY_MAX_PENDING_DELEGATE_CALLS: usize = 1_024;
+
+/// Stdio clients that can accept up to 4,096 unresolved delegate callbacks.
+pub const LARGE_DELEGATE_CAPACITY_CAPABILITY: &str = "delegate-capacity-4096";
 
 /// Stdio connection support for the optional `session/open.outputTruncation` field.
 /// Each session selects its own setting after the connection hello.

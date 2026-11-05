@@ -21,6 +21,7 @@ async fn open_session_with_truncation(
 ) -> (proto::SessionOpened, GrpcStream<proto::SessionEvent>) {
     let mut stream = host
         .open_session(Request::new(proto::OpenSessionRequest {
+            max_pending_delegate_calls: None,
             cell_execution_limits: None,
             output_truncation,
         }))
@@ -605,6 +606,7 @@ async fn unknown_output_truncation_is_rejected_before_opening_a_session() {
     let host = GrpcCodeModeHost::new();
     let result = host
         .open_session(Request::new(proto::OpenSessionRequest {
+            max_pending_delegate_calls: None,
             cell_execution_limits: None,
             output_truncation: Some(42),
         }))

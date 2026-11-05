@@ -24,7 +24,7 @@ use super::session::ToolSubscription;
 use super::validation;
 use crate::OUTGOING_CHANNEL_CAPACITY;
 
-const MAX_SUBSCRIPTIONS: usize = OUTGOING_CHANNEL_CAPACITY;
+const MAX_SUBSCRIPTIONS: usize = 128;
 
 impl GrpcSession {
     pub(super) fn subscribe(

@@ -28,6 +28,8 @@ use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::FramedReader;
 use codex_code_mode_protocol::host::FramedWriter;
 use codex_code_mode_protocol::host::HostToClient;
+use codex_code_mode_protocol::host::LARGE_DELEGATE_CAPACITY_CAPABILITY;
+use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
@@ -58,7 +60,8 @@ use self::reader::drive_reader;
 mod driver;
 mod reader;
 
-const IPC_CHANNEL_CAPACITY: usize = 128;
+// Accommodate a completion burst and concurrent control messages from a full host.
+const IPC_CHANNEL_CAPACITY: usize = MAX_PENDING_DELEGATE_CALLS * 2;
 const LOCAL_HOST_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 // TODO(anp) make this timeout configurable if 60 seconds is insufficient.
 const DEFAULT_HOST_WAIT_TRANSPORT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -215,10 +218,13 @@ impl Connection {
                 Capability::new(YIELD_OBSERVATION_CAPABILITY).map_err(|error| error.to_string())?;
             let output_capability =
                 Capability::new(BOUNDED_OUTPUT_CAPABILITY).map_err(|error| error.to_string())?;
+            let delegate_capacity = Capability::new(LARGE_DELEGATE_CAPACITY_CAPABILITY)
+                .map_err(|error| error.to_string())?;
             let optional_capabilities = CapabilitySet::try_new([
                 session_limits_capability,
                 yield_capability,
                 output_capability,
+                delegate_capacity,
             ])
             .map_err(|error| error.to_string())?;
             let hello = ClientHello::new(

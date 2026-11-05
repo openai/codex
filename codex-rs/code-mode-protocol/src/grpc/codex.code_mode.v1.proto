@@ -60,6 +60,10 @@ message OpenSessionRequest {
   optional SessionCellExecutionLimits cell_execution_limits = 1;
   // Absent preserves the legacy client-side truncation behavior.
   optional OutputTruncation output_truncation = 2;
+  // Maximum pending tool callbacks the client can accept.
+  // Absent preserves the legacy 1,024 callback budget. Hosts may impose a lower
+  // shared limit, and older hosts ignore this field and retain their own limit.
+  optional uint32 max_pending_delegate_calls = 3;
 }
 
 enum OutputTruncation {

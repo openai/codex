@@ -28,6 +28,9 @@ use codex_code_mode_protocol::host::HostHello;
 use codex_code_mode_protocol::host::HostRequest;
 use codex_code_mode_protocol::host::HostResponse;
 use codex_code_mode_protocol::host::HostToClient;
+use codex_code_mode_protocol::host::LARGE_DELEGATE_CAPACITY_CAPABILITY;
+use codex_code_mode_protocol::host::LEGACY_MAX_PENDING_DELEGATE_CALLS;
+use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
@@ -61,16 +64,20 @@ mod peer;
 mod process_metrics;
 mod transport;
 
-const MAX_IN_FLIGHT_REQUESTS: usize = 256;
-const MAX_ACTIVE_CELLS: usize = 128;
+// A host is shared by independent chats and all their subagents.
+// Test live V8 isolates before increasing this, not just cell permit capacity.
+const MAX_ACTIVE_CELLS: usize = 2_048;
+// Leave observation and control headroom during a full callback-completion burst.
+const MAX_IN_FLIGHT_REQUESTS: usize = MAX_PENDING_DELEGATE_CALLS * 2;
 const MAX_RECENT_REQUEST_IDS: usize = 4096;
 const MAX_RECENT_SESSION_IDS: usize = 4096;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-const OUTGOING_CHANNEL_CAPACITY: usize = 128;
+// Allow a full callback-completion burst plus concurrent control messages.
+const OUTGOING_CHANNEL_CAPACITY: usize = MAX_PENDING_DELEGATE_CALLS * 2;
 
 enum NegotiatedConnection {
     Rejected,
-    Accepted,
+    Accepted { max_pending_delegate_calls: usize },
 }
 
 struct HostLimits {
@@ -132,12 +139,14 @@ where
 {
     let mut reader = FramedReader::new(reader);
     let mut writer = FramedWriter::new(writer);
-    match negotiate(&mut reader, &mut writer).await? {
+    let max_pending_delegate_calls = match negotiate(&mut reader, &mut writer).await? {
         NegotiatedConnection::Rejected => return Ok(()),
-        NegotiatedConnection::Accepted => {}
-    }
+        NegotiatedConnection::Accepted {
+            max_pending_delegate_calls,
+        } => max_pending_delegate_calls,
+    };
     let (outgoing_tx, outgoing_rx) = mpsc::channel::<EncodedFrame>(OUTGOING_CHANNEL_CAPACITY);
-    let peer = Arc::new(HostPeer::new(outgoing_tx));
+    let peer = Arc::new(HostPeer::new(outgoing_tx, max_pending_delegate_calls));
     let state = Arc::new(HostState {
         sessions: Mutex::new(HashMap::new()),
         limits: Arc::new(HostLimits::new()),
@@ -284,6 +293,7 @@ async fn negotiate<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
             SESSION_RESOURCE_LIMITS_CAPABILITY,
             YIELD_OBSERVATION_CAPABILITY,
             BOUNDED_OUTPUT_CAPABILITY,
+            LARGE_DELEGATE_CAPACITY_CAPABILITY,
         ]
         .into_iter()
         .map(Capability::new)
@@ -310,12 +320,20 @@ async fn negotiate<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         return Ok(NegotiatedConnection::Rejected);
     }
 
+    let max_pending_delegate_calls =
+        if host_capabilities.contains(&Capability::new(LARGE_DELEGATE_CAPACITY_CAPABILITY)?) {
+            MAX_PENDING_DELEGATE_CALLS
+        } else {
+            LEGACY_MAX_PENDING_DELEGATE_CALLS
+        };
     let hello = HostHello::new(ProtocolVersion::V1, host_capabilities);
     writer
         .write(&HostToClient::HostHello(hello))
         .await
         .context("failed to write code-mode host hello")?;
-    Ok(NegotiatedConnection::Accepted)
+    Ok(NegotiatedConnection::Accepted {
+        max_pending_delegate_calls,
+    })
 }
 
 struct HostState {

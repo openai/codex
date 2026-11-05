@@ -14,7 +14,6 @@ use codex_code_mode_protocol::host::DelegateRequestId;
 use codex_code_mode_protocol::host::DelegateResponse;
 use codex_code_mode_protocol::host::EncodedFrame;
 use codex_code_mode_protocol::host::HostToClient;
-use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SessionId;
 use codex_code_mode_protocol::host::WireResult;
@@ -66,11 +65,14 @@ struct InitialRequest {
 }
 
 impl HostPeer {
-    pub(super) fn new(outgoing_tx: mpsc::Sender<EncodedFrame>) -> Self {
+    pub(super) fn new(
+        outgoing_tx: mpsc::Sender<EncodedFrame>,
+        max_pending_delegate_calls: usize,
+    ) -> Self {
         Self {
             outgoing_tx,
             pending: Mutex::new(HashMap::new()),
-            delegate_permits: Arc::new(Semaphore::new(MAX_PENDING_DELEGATE_CALLS)),
+            delegate_permits: Arc::new(Semaphore::new(max_pending_delegate_calls)),
             cell_routes: StdMutex::new(HashMap::new()),
             cell_routes_changed: Notify::new(),
             next_request_id: AtomicI64::new(1),

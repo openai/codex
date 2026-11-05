@@ -19,6 +19,8 @@ use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::grpc as proto;
 use codex_code_mode_protocol::grpc::code_mode_host_server::CodeModeHost;
+use codex_code_mode_protocol::host::LEGACY_MAX_PENDING_DELEGATE_CALLS;
+use codex_code_mode_protocol::host::MAX_PENDING_DELEGATE_CALLS;
 use codex_protocol::protocol::W3cTraceContext;
 use futures::Stream;
 use futures::StreamExt;
@@ -78,6 +80,16 @@ impl GrpcCodeModeHost {
         request: proto::OpenSessionRequest,
     ) -> Result<Response<GrpcStream<proto::SessionEvent>>, Status> {
         let _permit = self.state.request_permit()?;
+        let max_pending_delegate_calls = request
+            .max_pending_delegate_calls
+            .map(|limit| limit as usize)
+            .unwrap_or(LEGACY_MAX_PENDING_DELEGATE_CALLS)
+            .min(MAX_PENDING_DELEGATE_CALLS);
+        if max_pending_delegate_calls == 0 {
+            return Err(Status::invalid_argument(
+                "callback capacity must be positive",
+            ));
+        }
         let limits = conversions::session_limits(request.cell_execution_limits)?;
         let output_truncation = match request
             .output_truncation
@@ -95,6 +107,7 @@ impl GrpcCodeModeHost {
                 cell_execution_limits: limits,
                 output_truncation,
             },
+            max_pending_delegate_calls,
         )?))
     }
 
@@ -533,3 +546,7 @@ mod tests;
 #[cfg(test)]
 #[path = "robustness_tests.rs"]
 mod robustness_tests;
+
+#[cfg(test)]
+#[path = "capacity_tests.rs"]
+mod capacity_tests;

@@ -10,6 +10,7 @@ use codex_code_mode_protocol::CodeModeOutputTruncation;
 use http_body_util::Full;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tonic::body::Body;
@@ -19,6 +20,7 @@ use tower::service_fn;
 use tower::util::BoxCloneSyncService;
 
 use super::super::GrpcClient;
+use super::super::MAX_IN_FLIGHT_COMPLETIONS;
 use super::super::state::SessionState;
 use super::super::transport::SharedTransport;
 use super::SessionInner;
@@ -59,8 +61,34 @@ fn session(client: GrpcClient) -> Arc<SessionInner> {
         shutdown_result: Mutex::new(/*t*/ None),
         stopped: CancellationToken::new(),
         stream_tasks: TaskTracker::new(),
+        completion_permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_COMPLETIONS)),
         _transport: Arc::new(SharedTransport::Connected(client)),
     })
+}
+
+#[tokio::test]
+async fn cancelled_completion_does_not_wait_for_delivery_capacity() {
+    let client = GrpcClient::new(BoxCloneSyncService::new(service_fn(|_request| async {
+        Ok(tonic::Status::internal("a queued completion must not send an RPC").into_http())
+    })));
+    let session = session(client);
+    let _capacity = session
+        .completion_permits
+        .acquire_many(MAX_IN_FLIGHT_COMPLETIONS as u32)
+        .await
+        .expect("fill delivery window");
+    let cancellation = CancellationToken::new();
+    let completion = session.complete_tool_call(
+        "queued".to_string(),
+        cancellation.clone(),
+        Ok(serde_json::Value::Null),
+    );
+    tokio::pin!(completion);
+    assert!(futures::poll!(completion.as_mut()).is_pending());
+
+    cancellation.cancel();
+    completion.await;
+    assert_eq!(session.require_open(), Ok(()));
 }
 
 #[tokio::test(start_paused = true)]
