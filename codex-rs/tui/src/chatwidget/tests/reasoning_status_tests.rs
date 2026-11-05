@@ -37,9 +37,19 @@ fn complete(chat: &mut ChatWidget, id: &str) {
 async fn reasoning_status_accepts_bold_text_with_a_plain_suffix() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
-    handle_agent_reasoning_started(&mut chat, "reasoning");
-
-    delta(&mut chat, "reasoning", "**Checking tests");
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification::new(
+            "thread-1".into(),
+            "turn-1".into(),
+            AppServerThreadItemPayload::Reasoning {
+                id: "reasoning".into(),
+                summary: vec!["**Checking tests".into()],
+                content: Vec::new(),
+            },
+            /*started_at_ms*/ 0,
+        )),
+        /*replay_kind*/ None,
+    );
     let before_close = chat
         .bottom_pane
         .status_widget()
@@ -271,20 +281,33 @@ async fn completed_reasoning_stays_in_expanded_transcript_for_live_and_replay() 
                 "**Tracing terminal components**\n\nThe playback clock preserves elapsed time.",
             ),
         ] {
+            let item = AppServerThreadItemPayload::Reasoning {
+                id: id.into(),
+                summary: vec![summary.into()],
+                content: vec!["private reasoning".into()],
+            };
             if replay {
                 chat.handle_thread_item(
-                    AppServerThreadItemPayload::Reasoning {
-                        id: id.to_string(),
-                        summary: vec![summary.to_string()],
-                        content: Vec::new(),
-                    },
+                    item,
                     "turn-1".to_string(),
                     ThreadItemRenderSource::Replay(ReplayKind::ThreadSnapshot),
                 );
             } else {
                 handle_agent_reasoning_started(&mut chat, id);
-                delta(&mut chat, id, summary);
-                complete(&mut chat, id);
+                // Providers can stream a partial summary or supply it only at completion.
+                if id == "first" {
+                    delta(&mut chat, id, "**Inspecting");
+                }
+                chat.handle_server_notification(
+                    ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+                        "thread-1".into(),
+                        "turn-1".into(),
+                        item,
+                        /*started_at_ms*/ None,
+                        /*completed_at_ms*/ 0,
+                    )),
+                    /*replay_kind*/ None,
+                );
             }
         }
         let mut compact = Vec::new();

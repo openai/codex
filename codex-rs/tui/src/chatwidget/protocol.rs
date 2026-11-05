@@ -582,21 +582,24 @@ impl ChatWidget {
             ThreadItemPayload::AgentMessage { id, .. } if replay_kind.is_none() => {
                 self.is_realtime_delegated_agent_item(&notification.turn_id, &id);
             }
-            ThreadItemPayload::Reasoning { id, .. } => {
+            ThreadItemPayload::Reasoning {
+                id,
+                summary,
+                content,
+            } => {
                 if replay_kind.is_none()
                     && !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
                 {
                     // A later voice handoff can steer this turn without making an
                     // already-started typed reasoning item private.
-                    self.realtime_conversation
-                        .agent_items
-                        .entry((notification.turn_id.clone(), id.clone()))
-                        .or_insert(realtime::RealtimeAgentItemOrigin::Typed);
+                    self.remember_typed_reasoning_item(notification.turn_id.clone(), &id);
                 }
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages))
                     && !self.is_realtime_delegated_reasoning_item(&notification.turn_id, &id)
+                    && self.status_state.reasoning_item_id.as_ref() != Some(&id)
                 {
                     self.on_reasoning_item_started(id);
+                    self.replace_reasoning_parts(summary, content);
                 }
             }
             ThreadItemPayload::ContextCompaction { id }

@@ -41,7 +41,6 @@ impl ChatWidget {
             return;
         }
         self.status_state.reasoning_item_id = Some(id);
-        self.status_state.reasoning_recovered_after_refresh = false;
         self.reasoning_buffer.clear();
         self.reasoning_summary_parts.clear();
         self.restore_reasoning_status_header();
@@ -408,6 +407,26 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn replace_reasoning_parts(
+        &mut self,
+        mut summary: Vec<String>,
+        content: Vec<String>,
+    ) {
+        if self.config.show_raw_agent_reasoning {
+            summary.extend(content);
+        }
+        // Empty completions follow some streamed items. Preserve their deltas.
+        if summary.iter().all(String::is_empty) {
+            return;
+        }
+        self.reasoning_buffer.clear();
+        self.reasoning_summary_parts.clear();
+        for part in summary {
+            self.on_reasoning_section_break();
+            self.on_agent_reasoning_delta(part);
+        }
+    }
+
     pub(super) fn on_agent_reasoning_delta(&mut self, delta: String) {
         // Accumulate the current reasoning block for history and activity text.
         self.reasoning_buffer.push_str(&delta);
@@ -486,7 +505,6 @@ impl ChatWidget {
         // Keep the last useful summary through tools and later empty items.
         self.status_state.reasoning_item_id = None;
         self.status_state.reasoning_resume_turn_id = None;
-        self.status_state.reasoning_recovered_after_refresh = false;
         self.reasoning_summary_parts.clear();
         self.request_redraw();
     }

@@ -762,6 +762,13 @@ impl ChatWidget {
             .retain(|saved| saved != turn_id);
     }
 
+    pub(crate) fn remember_typed_reasoning_item(&mut self, turn_id: String, item_id: &str) {
+        self.realtime_conversation
+            .agent_items
+            .entry((turn_id, item_id.to_owned()))
+            .or_insert(RealtimeAgentItemOrigin::Typed);
+    }
+
     pub(crate) fn remember_realtime_delegated_reasoning_turn(&mut self, turn_id: &str) {
         if turn_id.len() > 512
             || self

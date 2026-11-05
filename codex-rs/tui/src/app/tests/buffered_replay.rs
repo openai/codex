@@ -58,7 +58,7 @@ async fn refreshed_active_reasoning_accepts_later_deltas_and_complete_summary() 
                     turn.id.clone(),
                     ThreadItemPayload::Reasoning {
                         id: "reasoning".into(),
-                        summary: Vec::new(),
+                        summary: vec!["**First heading**".into()],
                         content: Vec::new(),
                     },
                     /*started_at_ms*/ 0,
@@ -69,7 +69,7 @@ async fn refreshed_active_reasoning_accepts_later_deltas_and_complete_summary() 
                     thread_id: thread_id.to_string(),
                     turn_id: turn.id.clone(),
                     item_id: "reasoning".into(),
-                    delta: "**First heading**\nOriginal analysis paragraph".into(),
+                    delta: "\nOriginal analysis paragraph".into(),
                     summary_index: 0,
                 },
             ));
@@ -111,6 +111,9 @@ async fn refreshed_active_reasoning_accepts_later_deltas_and_complete_summary() 
         }
         assert!(snapshot.active_reasoning_item.is_some());
         app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+        if refresh && !refreshed_item_is_partial && !voice_handoff {
+            assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("First heading"));
+        }
         app.chat_widget.handle_server_notification(
             ServerNotification::ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaNotification {
                 thread_id: thread_id.to_string(),
@@ -472,7 +475,7 @@ fn snapshot_keeps_typed_item_completed_after_voice_handoff() {
         }],
     };
     let mut store = ThreadEventStore::new(/*capacity*/ 8);
-    for item in [typed.clone(), marker, private.clone()] {
+    for item in [typed.clone(), marker.clone(), private.clone()] {
         store.push_notification(ServerNotification::ItemStarted(
             codex_app_server_protocol::ItemStartedNotification::new(
                 "thread".into(),
@@ -493,45 +496,99 @@ fn snapshot_keeps_typed_item_completed_after_voice_handoff() {
             ),
         ));
     }
-    let completed = store
+    let visible = store
         .snapshot()
         .events
         .into_iter()
         .filter_map(|event| match event {
             ThreadBufferedEvent::Notification(notification) => match *notification {
+                ServerNotification::ItemStarted(n) => Some(n.item.payload),
                 ServerNotification::ItemCompleted(n) => Some(n.item.payload),
                 _ => None,
             },
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(completed, vec![typed]);
+    assert_eq!(visible, vec![typed.clone(), marker, typed]);
 }
 
 #[tokio::test]
-async fn evicted_voice_marker_survives_widget_snapshot_for_late_reasoning() {
+async fn voice_handoff_replay_keeps_public_reasoning_and_hides_private_reasoning() {
     let thread_id = ThreadId::new();
-    let mut store = ThreadEventStore::new(/*capacity*/ 1);
-    store.push_notification(ServerNotification::ItemStarted(
-        codex_app_server_protocol::ItemStartedNotification::new(
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut store = ThreadEventStore::new_with_session(
+        /*capacity*/ 5,
+        test_thread_session(thread_id, app.config.cwd.to_path_buf()),
+        vec![test_turn("voice-turn", TurnStatus::InProgress, Vec::new())],
+    );
+    let reasoning = |id: &str, summary: Vec<String>| ThreadItemPayload::Reasoning {
+        id: id.into(),
+        summary,
+        content: Vec::new(),
+    };
+    let start = |item| {
+        ServerNotification::ItemStarted(ItemStartedNotification::new(
             thread_id.to_string(),
             "voice-turn".into(),
-            ThreadItemPayload::UserMessage {
-                id: "user".into(),
-                client_id: None,
-                content: vec![codex_app_server_protocol::UserInput::Text {
-                    text: "<realtime_delegation><input>question</input></realtime_delegation>"
-                        .into(),
-                    text_elements: Vec::new(),
-                }],
-            },
+            item,
             /*started_at_ms*/ 0,
+        ))
+    };
+    let public = reasoning("typed", Vec::new());
+    store.push_notification(start(public.clone()));
+    store.push_notification(ServerNotification::ReasoningSummaryTextDelta(
+        ReasoningSummaryTextDeltaNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "voice-turn".into(),
+            item_id: "typed".into(),
+            delta: "**Public progress**".into(),
+            summary_index: 0,
+        },
+    ));
+    store.push_notification(ServerNotification::ItemCompleted(
+        ItemCompletedNotification::new(
+            thread_id.to_string(),
+            "voice-turn".into(),
+            public,
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 0,
         ),
     ));
+    store.push_notification(start(ThreadItemPayload::UserMessage {
+        id: "user".into(),
+        client_id: None,
+        content: vec![AppServerUserInput::Text {
+            text: "<realtime_delegation><input>question</input></realtime_delegation>".into(),
+            text_elements: Vec::new(),
+        }],
+    }));
+    store.push_notification(start(reasoning(
+        "private",
+        vec!["private after handoff".into()],
+    )));
+    app.replay_thread_snapshot(store.snapshot(), /*resume_restored_queue*/ false);
+    let activity = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    assert!(activity.contains("Public progress"), "{activity}");
+    assert!(!activity.contains("private"), "{activity}");
+    let summaries: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell)
+                if cell
+                    .as_any()
+                    .is::<crate::history_cell::ReasoningSummaryCell>() =>
+            {
+                Some(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .collect();
+    insta::assert_snapshot!(summaries.join("\n"), @"• Public progress");
+
+    // Force the handoff out of the buffer before checking late private updates.
+    store.capacity = 1;
     store.push_notification(delta(&thread_id.to_string(), "voice-turn", "private"));
     let snapshot = store.snapshot();
     assert!(snapshot.events.is_empty());
-    assert!(snapshot.turns.is_empty());
     assert_eq!(snapshot.delegated_turns, vec!["voice-turn"]);
 
     let mut app = make_test_app().await;

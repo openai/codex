@@ -38,6 +38,14 @@ impl ReasoningReplay {
     }
 
     pub(super) fn before_event(&mut self, event: &ThreadBufferedEvent, chat: &mut ChatWidget) {
+        // The store retains only typed reasoning starts. Restore their origin even if a
+        // later handoff has already marked the whole turn as delegated in the new widget.
+        if let ThreadBufferedEvent::Notification(notification) = event
+            && let ServerNotification::ItemStarted(started) = notification.as_ref()
+            && let ThreadItemPayload::Reasoning { id, .. } = &started.item.payload
+        {
+            chat.remember_typed_reasoning_item(started.turn_id.clone(), id);
+        }
         if self.started.as_ref().is_some_and(|started| {
             matches!(event, ThreadBufferedEvent::Notification(notification) if match notification.as_ref() {
                 ServerNotification::ItemStarted(item) => {
