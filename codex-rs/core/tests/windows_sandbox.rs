@@ -517,6 +517,7 @@ async fn windows_elevated_temp_only_core_and_direct_spawn_enforce_carveouts() ->
                             additional_permissions: None,
                         },
                         permissions: &permission_profile,
+                        workspace_roots: None,
                         sandbox: SandboxType::WindowsRestrictedToken,
                         enforce_managed_network: false,
                         environment_id: None,

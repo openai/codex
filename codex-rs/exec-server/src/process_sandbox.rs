@@ -311,6 +311,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
                 additional_permissions: None,
             },
             permissions: &permissions,
+            workspace_roots: None,
             sandbox,
             enforce_managed_network: params.enforce_managed_network,
             environment_id: None,

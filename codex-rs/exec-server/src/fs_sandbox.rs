@@ -191,6 +191,7 @@ impl FileSystemSandboxRunner {
                 transform: SandboxTransformRequest {
                     command,
                     permissions: permission_profile,
+                    workspace_roots: None,
                     sandbox,
                     enforce_managed_network: false,
                     environment_id: None,

@@ -164,6 +164,7 @@ impl ShellSnapshotSandbox {
                     additional_permissions,
                 },
                 permissions: &self.permissions,
+                workspace_roots: None,
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
                 environment_id: Some(&self.environment_id),
