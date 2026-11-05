@@ -147,6 +147,7 @@ members = [
     "utils/cli",
     "utils/elapsed",
     "utils/sandbox-summary",
+    "utils/model-facing-id",
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",

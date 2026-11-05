@@ -5401,6 +5401,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-model-facing-id"
+version = "0.0.0"
+dependencies = [
+ "blake3",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "codex-utils-oss"
 version = "0.0.0"
 dependencies = [

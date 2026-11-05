@@ -1,0 +1,23 @@
+[package]
+name = "codex-utils-model-facing-id"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+test = false
+
+[dependencies]
+blake3.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+pretty_assertions.workspace = true
