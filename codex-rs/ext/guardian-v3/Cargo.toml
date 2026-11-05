@@ -12,6 +12,17 @@ test = false
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
+codex-history = { workspace = true }
 codex-message-board = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
+codex-thread-store = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+codex-context-fragments = { workspace = true }
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

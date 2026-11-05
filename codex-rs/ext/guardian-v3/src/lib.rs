@@ -1,12 +1,18 @@
 //! Guardian's durable evidence storage, owned by the main thread.
 //! Shared boards provide persistence and access checks. This crate starts no background work
-//! and exposes no model tools; ingestion and review integration follow separately.
+//! and exposes no model tools. Evidence capture reads original root history;
+//! live worker and review integration follow separately.
 //! Hosts invoke permanent-deletion cleanup only when Guardian V3 is enabled.
 
 use codex_message_board::LocalBoard;
 use codex_message_board::LocalBoardOptions;
 use codex_protocol::SessionId;
 use codex_state::SqliteConfig;
+
+mod evidence;
+pub use evidence::EvidenceId;
+pub use evidence::EvidenceSnapshot;
+pub use evidence::OriginalEvidence;
 
 /// Storage selected by the Guardian consumer for setup, opening and cleanup.
 pub fn local_board_options() -> LocalBoardOptions {

@@ -3797,9 +3797,18 @@ dependencies = [
 name = "codex-guardian-v3"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
+ "codex-context-fragments",
+ "codex-history",
  "codex-message-board",
  "codex-protocol",
  "codex-state",
+ "codex-thread-store",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
