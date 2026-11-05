@@ -80,9 +80,7 @@ impl GuardianV2Config {
             ..configured
         });
         resolved.policy = GuardianPolicyLoader::new(Some(&legacy));
-        resolved.review_multi_agent_calls = config
-            .features
-            .enabled(codex_features::Feature::GuardianNativeMultiAgentHistory);
+        resolved.review_multi_agent_calls = config.guardian_native_multi_agent_history_enabled();
         resolved.multi_agent_namespace = config.multi_agent_v2.tool_namespace.clone();
         Ok(resolved)
     }

@@ -1500,8 +1500,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             let tool_namespace = turn_context.config.multi_agent_v2.tool_namespace.as_deref();
             let native_review = if turn_context
                 .config
-                .features
-                .enabled(Feature::GuardianNativeMultiAgentHistory)
+                .guardian_native_multi_agent_history_enabled()
             {
                 NativeReview::Required
             } else {

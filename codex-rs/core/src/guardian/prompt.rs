@@ -1,5 +1,4 @@
 use codex_extension_api::ConversationHistorySnapshot;
-use codex_features::Feature;
 use codex_guardian_context::CollectedContext;
 use codex_guardian_context::ContextProfile;
 use codex_guardian_context::GuardianRootMessage;
@@ -145,9 +144,7 @@ pub(super) async fn collect_guardian_prompt_items_with_parent_turn(
     profile.transcript.options.native_multi_agent_namespace = parent_context
         .is_some_and(|context| {
             let turn = context.turn();
-            turn.config
-                .features
-                .enabled(Feature::GuardianNativeMultiAgentHistory)
+            turn.config.guardian_native_multi_agent_history_enabled()
                 && turn.multi_agent_version == codex_protocol::protocol::MultiAgentVersion::V2
         })
         .then(|| {
