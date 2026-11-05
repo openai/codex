@@ -2960,7 +2960,7 @@ async fn try_run_sampling_request(
     let mut response_id_for_assessment = None;
     let mut pending_assessment: Option<codex_api::GuardianAssessment> = None;
     let mut response_completed = false;
-    let mut request_token_usage = None;
+    let mut request_token_usage: Option<codex_protocol::protocol::TokenUsage> = None;
     let mut includes_reasoning = step_context.settings.model_info.use_responses_lite;
     // Catalog policies can enable adaptive review independently of the legacy scorer flag.
     // Capture evidence whenever Guardian is available; the reviewer resolves the policy.
@@ -2973,21 +2973,25 @@ async fn try_run_sampling_request(
     } else {
         None
     };
-    let stream = client_session
-        .stream(
-            &prompt,
-            &step_context.settings.model_info,
-            &step_context.session_telemetry,
-            effort,
-            step_context.settings.reasoning_summary,
-            step_context.settings.service_tier.clone(),
-            responses_metadata,
-            &inference_trace,
-        )
-        .instrument(trace_span!("stream_request"))
+    let mut resampling = crate::guardian::ResponseResampling::new(&sess);
+    let mut stream_request = async |prompt: &Prompt| {
+        client_session
+            .stream(
+                prompt,
+                &step_context.settings.model_info,
+                &step_context.session_telemetry,
+                effort.clone(),
+                step_context.settings.reasoning_summary,
+                step_context.settings.service_tier.clone(),
+                responses_metadata,
+                &inference_trace,
+            )
+            .instrument(trace_span!("stream_request"))
+            .await
+    };
+    let stream = stream_request(&prompt)
         .or_cancel(&cancellation_token)
         .await?;
-    drop(prompt);
     let mut stream = match stream {
         Ok(stream) => stream,
         Err(error) => {
@@ -3041,6 +3045,16 @@ async fn try_run_sampling_request(
     let mut active_item_is_streaming_to_client = false;
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
+        if response_completed && resampling.accepted_output.is_empty() {
+            if resampling.update_usage_boundary {
+                sess.state.lock().await.history.reset_last_usage_boundary();
+            }
+            break Ok(SamplingRequestResult {
+                needs_follow_up,
+                mailbox_preempted: *draining_for_mailbox,
+                last_agent_message,
+            });
+        }
         let handle_responses = trace_span!(
             parent: &receiving_span,
             "handle_responses",
@@ -3058,8 +3072,8 @@ async fn try_run_sampling_request(
         );
 
         let receive_started = Instant::now();
-        let event = stream
-            .next()
+        let event = resampling
+            .next(&mut stream)
             .instrument(trace_span!(parent: &handle_responses, "receiving"))
             .or_cancel(&preempt)
             .or_cancel(&cancellation_token)
@@ -3112,7 +3126,11 @@ async fn try_run_sampling_request(
             Ok(event) => event,
             Err(err) => {
                 if let CodexErrorDetails::ResponseIncomplete(incomplete) = err.details() {
-                    request_token_usage = incomplete.token_usage.clone();
+                    if let Some(usage) = &incomplete.token_usage {
+                        request_token_usage
+                            .get_or_insert_default()
+                            .add_assign(usage);
+                    }
                     sess.record_incomplete_response_usage(
                         &turn_context,
                         &step_context.settings,
@@ -3134,10 +3152,13 @@ async fn try_run_sampling_request(
             }
         };
 
+        record_turn_ttft_metric(&turn_context, &event).await;
+        let Some(event) = resampling.filter(event, &step_context.tool_router) else {
+            continue;
+        };
         sess.services
             .session_telemetry
             .record_responses(&handle_responses, &event);
-        record_turn_ttft_metric(&turn_context, &event).await;
 
         match event {
             ResponseEvent::Created { response_id } => {
@@ -3490,7 +3511,11 @@ async fn try_run_sampling_request(
                     .await;
                 }
                 response_completed = true;
-                request_token_usage = token_usage.clone();
+                if let Some(usage) = &token_usage {
+                    request_token_usage
+                        .get_or_insert_default()
+                        .add_assign(usage);
+                }
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(
@@ -3520,9 +3545,13 @@ async fn try_run_sampling_request(
                         &turn_context,
                         &step_context.settings,
                         token_usage.as_ref(),
-                        super::TokenUsageContext::Sampling {
-                            includes_reasoning,
-                            input_item_count,
+                        if resampling.retry_pending {
+                            super::TokenUsageContext::SpendingOnly
+                        } else {
+                            super::TokenUsageContext::Sampling {
+                                includes_reasoning,
+                                input_item_count,
+                            }
                         },
                     )
                     .await;
@@ -3531,14 +3560,23 @@ async fn try_run_sampling_request(
                 if let Err(err) = budget_result {
                     break Err(err);
                 }
+                if resampling.retry_pending {
+                    response_completed = false;
+                    response_id_for_assessment = None;
+                    pending_assessment = None;
+                    includes_reasoning = step_context.settings.model_info.use_responses_lite;
+                    stream = match resampling
+                        .retry(stream_request(&prompt), &cancellation_token)
+                        .await
+                    {
+                        Ok(stream) => stream,
+                        Err(error) => break Err(error),
+                    };
+                    continue;
+                }
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }
-                break Ok(SamplingRequestResult {
-                    needs_follow_up,
-                    mailbox_preempted: *draining_for_mailbox,
-                    last_agent_message,
-                });
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the

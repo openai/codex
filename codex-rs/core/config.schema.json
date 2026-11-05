@@ -442,10 +442,6 @@
           "description": "Experimental replacement for the history-retrieval instructions when history tools and Apps are enabled. Omitted or blank values use the built-in prompt.",
           "type": "string"
         },
-        "experimental_denial_reconsideration_prompt": {
-          "description": "Developer message used when `features.guardian_denial_reconsideration` is enabled. Omitted or blank values use the built-in prompt. Maximum 1,000 UTF-8 bytes.",
-          "type": "string"
-        },
         "experimental_policy_template": {
           "description": "Experimental full Guardian prompt template containing the tenant policy placeholder.",
           "type": "string"

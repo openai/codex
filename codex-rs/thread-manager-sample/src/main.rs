@@ -279,7 +279,6 @@ async fn new_config(
         guardian_transcript_mode: Default::default(),
         guardian_sync_elastic_budget: None,
         guardian_conversation_history_prompt: None,
-        guardian_denial_reconsideration_prompt: None,
         guardian_conversation_history_max_output_tokens: None,
         guardian_circuit_break_action: Default::default(),
         guardian_review_timeout: Some(std::time::Duration::from_secs(90)),

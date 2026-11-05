@@ -19,6 +19,8 @@ pub(crate) use recorded_tool_call::review_tool_call;
 mod request_budget;
 pub(crate) use request_budget::ExhaustedReviewBudget;
 pub(crate) use request_budget::prepare_prompt as prepare_guardian_prompt;
+mod response_resampling;
+pub(crate) use response_resampling::ResponseResampling;
 mod review;
 mod review_session;
 mod reviewer_config;

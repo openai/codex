@@ -444,7 +444,7 @@ pub enum Feature {
     GuardianTrustOrchestratorConnectors,
     /// Give Guardian access to the root conversation's message history tools.
     GuardianConversationHistoryTools,
-    /// Reconsider a synchronous Guardian denial once before publishing it.
+    /// Resample a synchronous Guardian denial once before publishing it.
     GuardianDenialReconsideration,
     /// Enable Guardian V2 automatic approval reviews.
     GuardianV2,

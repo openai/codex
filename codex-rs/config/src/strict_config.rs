@@ -312,6 +312,9 @@ pub(crate) fn ignored_config_warning(
             .collect::<Vec<_>>()
             .as_slice()
         {
+            ["auto_review", "experimental_denial_reconsideration_prompt"] => {
+                " Remove auto_review.experimental_denial_reconsideration_prompt from config.toml; Guardian retries replay the original request without a reconsideration prompt."
+            }
             ["windows", "sandbox_private_desktop"] => {
                 " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
             }

@@ -111,7 +111,7 @@ pub use execution::ReviewTurnResult;
 pub use execution::ReviewerRuntime;
 pub use execution::start_review_turn;
 pub use execution::wait_for_guardian_review;
-pub use reconsideration::reconsider_denial;
+pub use reconsideration::DenialResample;
 pub use session::GUARDIAN_REVIEWER_NAME;
 pub use session::is_basic_session_source;
 pub use session::prompt_cache_key_override_for_review_session;

@@ -1127,13 +1127,8 @@ async fn parent_checkpoint_recovery_stops_after_one_restart() {
     assert!(pool.trunk().await.is_none());
 }
 
-#[test_case::test_case(None; "single_review")]
-#[test_case::test_case(Some(r#"{"outcome":"allow"}"#); "reconsideration_allows")]
-#[test_case::test_case(Some("invalid assessment"); "reconsideration_keeps_denial")]
 #[tokio::test]
-async fn compaction_and_review_submissions_share_execution_observer(
-    reconsidered_assessment: Option<&str>,
-) {
+async fn compaction_and_review_submissions_share_execution_observer() {
     let (review_session, events, submissions) = test_review_session().await;
     let child_session = Arc::clone(&review_session.session);
     let mut params = test_review_params().await;
@@ -1144,13 +1139,6 @@ async fn compaction_and_review_submissions_share_execution_observer(
         .unwrap();
     params.spawn_config.model_auto_compact_token_limit = Some(0);
     params.spawn_config.token_budget = None;
-    if reconsidered_assessment.is_some() {
-        params
-            .spawn_config
-            .features
-            .enable(Feature::GuardianDenialReconsideration)
-            .unwrap();
-    }
     let turn = Arc::get_mut(&mut params.parent_context.turn).expect("unshared turn fixture");
     turn.configured_token_budget = None;
     turn.use_model_token_budget_defaults = false;
@@ -1169,11 +1157,7 @@ async fn compaction_and_review_submissions_share_execution_observer(
         .await
     });
     let start = std::time::Instant::now();
-    let mut child_intervals = vec![(10, 30), (40, 70)];
-    if reconsidered_assessment.is_some() {
-        child_intervals.push((75, 90));
-    }
-    for (index, (left, right)) in child_intervals.into_iter().enumerate() {
+    for (index, (left, right)) in [(10, 30), (40, 70)].into_iter().enumerate() {
         let submission = tokio::time::timeout(Duration::from_secs(10), submissions.recv())
             .await
             .expect("child submission deadline")
@@ -1195,26 +1179,17 @@ async fn compaction_and_review_submissions_share_execution_observer(
             .services
             .thread_extension_data
             .remove::<crate::turn_timing::review_execution::PendingReviewExecution>();
-        if index < 2 {
-            let pending = pending.expect("instrumented child");
-            assert_eq!(pending.0, execution);
-            let child_start = start + Duration::from_millis(left);
-            pending.0.started(child_start);
-            pending
-                .0
-                .completed(child_start, start + Duration::from_millis(right));
-        } else {
-            assert!(pending.is_none());
-        }
-        let assessment = match (index, reconsidered_assessment) {
-            (1, Some(_)) => r#"{"outcome":"deny"}"#,
-            (2, Some(assessment)) => assessment,
-            _ => "complete",
-        };
+        let pending = pending.expect("instrumented child");
+        assert_eq!(pending.0, execution);
+        let child_start = start + Duration::from_millis(left);
+        pending.0.started(child_start);
+        pending
+            .0
+            .completed(child_start, start + Duration::from_millis(right));
         events
             .send(turn_complete_event(
                 &submission.id,
-                Some(assessment),
+                Some("complete"),
                 /*time_to_first_token_ms*/ None,
             ))
             .await
@@ -1238,10 +1213,5 @@ async fn compaction_and_review_submissions_share_execution_observer(
         .auto_review(start, end, vec![execution])
         .durations(start, end);
     assert_eq!(totals.auto_review, Duration::from_millis(100));
-    assert_eq!(
-        totals.auto_review_overhead,
-        reconsidered_assessment
-            .is_none()
-            .then_some(Duration::from_millis(50))
-    );
+    assert_eq!(totals.auto_review_overhead, Some(Duration::from_millis(50)));
 }

@@ -1088,8 +1088,8 @@ impl ContextManager {
         self.set_token_info_with_boundary(Some(info), covered_item_count);
     }
 
-    /// Restored or rewritten history keeps the existing last-model-output approximation.
-    fn reset_last_usage_boundary(&mut self) {
+    /// Align the context count after history changes or buffered model output is committed.
+    pub(crate) fn reset_last_usage_boundary(&mut self) {
         self.last_model_output_item_count = self
             .items
             .iter()
