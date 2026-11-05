@@ -32,8 +32,8 @@ const _: Option<&dyn AgentMessageBoard> = None;
 /// Implementations enforce hard input/output limits and return backend failures
 /// as errors. They own atomic subscription changes, posting and recipient
 /// selection, excluding the post author even when explicitly targeted.
-/// Notification delivery must neither wake finalized agents nor
-/// leave notifications for a later turn.
+/// Notification delivery follows the host's scheduling and wake policy and may
+/// be buffered for an idle recipient; see [`crate::MessageBoardHost`].
 ///
 /// Boxed Send futures support an Arc<dyn AgentMessageBoard>, like AgentControl.
 pub trait AgentMessageBoard: Send + Sync {
