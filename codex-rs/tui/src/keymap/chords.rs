@@ -57,6 +57,8 @@ const BACKEND_CYCLING: u32 = 1 << 21;
 const SIDE_PANE: u32 = 1 << 22;
 const MAIN_COMPOSER_FOCUS: u32 = 1 << 23;
 const PANE_DIRECTION: u32 = 1 << 24;
+const OPEN_PANE: u32 = 1 << 25;
+const FOCUSED_SIDE_PANE: u32 = 1 << 26;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
@@ -167,6 +169,14 @@ impl KeymapContextSet {
         Self(self.0 | MAIN_COMPOSER_FOCUS)
     }
 
+    pub(crate) const fn with_open_pane(self) -> Self {
+        Self(self.0 | OPEN_PANE)
+    }
+
+    pub(crate) const fn with_focused_side_pane(self) -> Self {
+        Self(self.0 | FOCUSED_SIDE_PANE)
+    }
+
     pub(crate) const fn with_side_pane(self) -> Self {
         Self(self.0 | SIDE_PANE)
     }
@@ -179,6 +189,12 @@ impl KeymapContextSet {
         if action.is_side_pane() {
             let required = match action.action {
                 "focus_pane_left" | "focus_pane_right" => PANE_DIRECTION,
+                "move_divider_left" | "move_divider_right" => FOCUSED_SIDE_PANE,
+                "toggle_pane_zoom"
+                | "equalize_pane_widths"
+                | "minimize_pane_width"
+                | "maximize_pane_width"
+                | "resize_panes" => OPEN_PANE,
                 "focus_main_composer" => MAIN_COMPOSER_FOCUS,
                 _ => SIDE_PANE,
             };

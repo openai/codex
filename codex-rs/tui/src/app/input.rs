@@ -243,6 +243,12 @@ impl App {
             return contexts;
         }
         let mut contexts = contexts.with_pane_directions();
+        if self.open_pane_focus().is_some() {
+            contexts = contexts.with_open_pane();
+        }
+        if self.can_nudge_side_width(tui) {
+            contexts = contexts.with_focused_side_pane();
+        }
         if self.main_composer_shortcut_available() {
             contexts = contexts.with_main_composer_focus();
         }

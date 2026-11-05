@@ -14,6 +14,9 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use crossterm::event::MouseButton::Left;
 use crossterm::event::MouseEventKind::Down;
 use crossterm::event::MouseEventKind::Drag;
@@ -27,6 +30,13 @@ use ratatui::widgets::Widget;
 use std::time::Duration;
 
 const GAP: u16 = 1;
+
+#[derive(Clone, Copy)]
+pub(super) struct PaneResize {
+    focused: ThreadId,
+    companion: ThreadId,
+    preview_width: Option<u16>,
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct DividerDrag {
@@ -44,10 +54,13 @@ impl DividerDrag {
     }
 
     fn percent(&self) -> Option<u8> {
-        let total = u32::from(self.screen.width);
-        (self.width != self.initial_width)
-            .then(|| ((u32::from(self.width) * 100 + total / 2) / total).clamp(1, 99) as u8)
+        (self.width != self.initial_width).then(|| width_percent(self.width, self.screen.width))
     }
+}
+
+fn width_percent(width: u16, total: u16) -> u8 {
+    let total = u32::from(total);
+    ((u32::from(width) * 100 + total / 2) / total).clamp(1, 99) as u8
 }
 
 fn sidebar_width(width: i32, total: u16) -> u16 {
@@ -71,6 +84,13 @@ pub(super) struct SidePaneLayout {
 
 /// A wide terminal can show a pair once the outgoing conversation has been captured.
 pub(super) fn layout(app: &App, tui: &crate::tui::Tui, area: Rect) -> Option<SidePaneLayout> {
+    if app.zoomed_thread.is_some() && app.zoomed_thread == app.current_displayed_thread_id() {
+        return None;
+    }
+    split_layout(app, tui, area)
+}
+
+fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidePaneLayout> {
     if area.width < 100
         || app.conversation_frame.has_caller_inset()
         || !app.side_retention_enabled(tui)
@@ -96,7 +116,7 @@ pub(super) fn layout(app: &App, tui: &crate::tui::Tui, area: Rect) -> Option<Sid
     if !app.side_companions.contains_key(&passive_thread) {
         return None;
     }
-    let percent = app
+    let preview = app
         .divider_drag
         .filter(|drag| {
             !drag.guide_only
@@ -104,9 +124,21 @@ pub(super) fn layout(app: &App, tui: &crate::tui::Tui, area: Rect) -> Option<Sid
                 && drag.passive_thread == passive_thread
                 && app.conversation_focus_available(tui)
         })
-        .and_then(|drag| drag.percent())
-        .or(app.local_settings.tui.sidebar_width_percent);
-    let child_width = preferred_width(area.width, percent);
+        .and_then(|drag| drag.percent());
+    let saved = app.local_settings.tui.sidebar_width_percent;
+    let keyboard_width = app
+        .pane_resize
+        .filter(|mode| mode.focused == active && mode.companion == passive_thread)
+        .and_then(|mode| mode.preview_width);
+    let child_width = match (keyboard_width, preview, app.exact_sidebar_width) {
+        (Some(width), _, _) => sidebar_width(i32::from(width), area.width),
+        (_, None, Some((total, width)))
+            if total == area.width && saved == Some(width_percent(width, total)) =>
+        {
+            width
+        }
+        _ => preferred_width(area.width, preview.or(saved)),
+    };
     let [parent, child] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(child_width)])
             .spacing(GAP)
@@ -125,6 +157,157 @@ pub(super) fn layout(app: &App, tui: &crate::tui::Tui, area: Rect) -> Option<Sid
 }
 
 impl App {
+    pub(super) fn begin_pane_resize(&mut self, tui: &mut Tui) -> Result<()> {
+        let screen = tui.prepare_draw_size()?.into();
+        if let Some(panes) = split_layout(self, tui, screen)
+            && let Some(focused) = self.current_displayed_thread_id()
+        {
+            self.divider_drag = None;
+            self.passive_link_drag = None;
+            self.pending_right_click_paste = None;
+            self.zoomed_thread = None;
+            self.pane_resize = Some(PaneResize {
+                focused,
+                companion: panes.passive_thread,
+                preview_width: None,
+            });
+            tui.frame_requester().schedule_frame();
+        }
+        Ok(())
+    }
+
+    pub(super) async fn handle_pane_resize(&mut self, tui: &Tui, event: &TuiEvent) -> bool {
+        let Some(mut mode) = self.pane_resize else {
+            return false;
+        };
+        let screen: Rect = match event {
+            TuiEvent::Resize(size) => *size,
+            _ => tui.terminal.last_known_screen_size,
+        }
+        .into();
+        let Some(panes) = layout(self, tui, screen).filter(|panes| {
+            !matches!(event, TuiEvent::FocusLost)
+                && self.conversation_focus_available(tui)
+                && self.current_displayed_thread_id() == Some(mode.focused)
+                && panes.passive_thread == mode.companion
+        }) else {
+            self.pane_resize = None;
+            tui.frame_requester().schedule_frame();
+            return false;
+        };
+        let TuiEvent::Key(key) = event else {
+            return matches!(event, TuiEvent::Mouse(_) | TuiEvent::Paste(_));
+        };
+        if key.kind == KeyEventKind::Release {
+            return true;
+        }
+        let current = screen.right() - panes.divider - GAP;
+        let step = match (key.code, key.modifiers) {
+            (KeyCode::Left | KeyCode::Char('h'), KeyModifiers::NONE) => 1,
+            (KeyCode::Right | KeyCode::Char('l'), KeyModifiers::NONE) => -1,
+            (KeyCode::Left, KeyModifiers::SHIFT) => 10,
+            (KeyCode::Right, KeyModifiers::SHIFT) => -10,
+            (KeyCode::Enter | KeyCode::Esc, KeyModifiers::NONE)
+                if key.kind == KeyEventKind::Press =>
+            {
+                self.pane_resize = None;
+                if mode.preview_width.is_some()
+                    && self
+                        .save_sidebar_width(width_percent(current, screen.width))
+                        .await
+                {
+                    self.exact_sidebar_width = Some((screen.width, current));
+                }
+                tui.frame_requester().schedule_frame();
+                self.chat_widget.suppress_current_view_key_until_release(
+                    crate::key_hint::KeyBinding::from_event(*key),
+                    std::time::Instant::now(),
+                    crate::activation_key_guard::ActivationKeySuppression::ViewTransition,
+                );
+                return true;
+            }
+            _ => return true,
+        };
+        let next = sidebar_width(i32::from(current) + step, screen.width);
+        if next != current {
+            mode.preview_width = Some(next);
+            self.pane_resize = Some(mode);
+            tui.frame_requester().schedule_frame();
+        }
+        true
+    }
+
+    pub(super) async fn set_focused_pane_width(
+        &mut self,
+        tui: &mut Tui,
+        focused_percent: u8,
+    ) -> Result<()> {
+        let screen: Rect = tui.prepare_draw_size()?.into();
+        if split_layout(self, tui, screen).is_none() {
+            return Ok(());
+        }
+        let side_percent = if self.active_side_parent_thread_id().is_some() {
+            focused_percent
+        } else {
+            100 - focused_percent
+        };
+        // The sidebar gets the spare column when an equal split is odd.
+        let available = u32::from(screen.width - GAP);
+        let preferred = (available * u32::from(side_percent)).div_ceil(100);
+        let width = sidebar_width(preferred as i32, screen.width);
+        let percent = width_percent(width, screen.width);
+        if self.save_sidebar_width(percent).await {
+            self.exact_sidebar_width = Some((screen.width, width));
+            self.zoomed_thread = None;
+            self.divider_drag = None;
+            tui.frame_requester().schedule_frame();
+        }
+        Ok(())
+    }
+
+    pub(super) fn can_nudge_side_width(&self, tui: &Tui) -> bool {
+        self.active_side_parent_thread_id().is_some()
+            && layout(self, tui, tui.terminal.last_known_screen_size.into()).is_some()
+    }
+
+    pub(super) async fn nudge_side_width(&mut self, tui: &mut Tui, percent: i32) -> Result<()> {
+        if self.active_side_parent_thread_id().is_some() {
+            let screen: Rect = tui.prepare_draw_size()?.into();
+            if let Some(panes) = layout(self, tui, screen) {
+                let step = (i32::from(screen.width) * percent.abs() + 50) / 100;
+                let current = panes.focused.width;
+                let width =
+                    sidebar_width(i32::from(current) + step * percent.signum(), screen.width);
+                if width != current {
+                    self.save_sidebar_width(width_percent(width, screen.width))
+                        .await;
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn save_sidebar_width(&mut self, percent: u8) -> bool {
+        if self.local_settings.tui.sidebar_width_percent != Some(percent)
+            && let Err(err) =
+                ConfigEditsBuilder::for_config_path(self.local_settings.user_config_path.as_path())
+                    .with_edits([ConfigEdit::SetPath {
+                        segments: vec!["tui".into(), "sidebar_width_percent".into()],
+                        value: i64::from(percent).into(),
+                    }])
+                    .apply()
+                    .await
+        {
+            self.chat_widget
+                .add_error_message(format!("Could not save sidebar width: {err}"));
+            return false;
+        }
+        self.local_settings.tui.sidebar_width_percent = Some(percent);
+        self.exact_sidebar_width = None;
+        true
+    }
+
     pub(super) async fn handle_divider_event(
         &mut self,
         tui: &mut Tui,
@@ -179,25 +362,8 @@ impl App {
                     drag.width = sidebar_width(width, screen.width);
                     if mouse.kind == Drag(Left) {
                         self.divider_drag = Some(drag);
-                    } else if let Some(percent) = drag.percent()
-                        && self.local_settings.tui.sidebar_width_percent != Some(percent)
-                    {
-                        let edit = ConfigEdit::SetPath {
-                            segments: vec!["tui".into(), "sidebar_width_percent".into()],
-                            value: i64::from(percent).into(),
-                        };
-                        match ConfigEditsBuilder::for_config_path(
-                            self.local_settings.user_config_path.as_path(),
-                        )
-                        .with_edits([edit])
-                        .apply()
-                        .await
-                        {
-                            Ok(()) => self.local_settings.tui.sidebar_width_percent = Some(percent),
-                            Err(err) => self
-                                .chat_widget
-                                .add_error_message(format!("Could not save sidebar width: {err}")),
-                        }
+                    } else if let Some(percent) = drag.percent() {
+                        self.save_sidebar_width(percent).await;
                     }
                 }
             }
@@ -220,7 +386,7 @@ impl SidePaneLayout {
         companion: &mut SideCompanion,
         frame: &mut Frame<'_>,
         drag: Option<DividerDrag>,
-        divider_hovered: bool,
+        highlight_divider: bool,
         frames: &FrameRequester,
     ) {
         companion.flush_answer();
@@ -304,7 +470,7 @@ impl SidePaneLayout {
                     })
                     - GAP
             });
-        let style = if divider_hovered || drag.is_some() {
+        let style = if highlight_divider || drag.is_some() {
             crate::style::accent_style()
         } else {
             ratatui::style::Style::default().dim()

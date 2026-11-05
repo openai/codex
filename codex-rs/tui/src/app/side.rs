@@ -240,6 +240,9 @@ impl App {
     }
 
     pub(super) fn sync_side_thread_ui(&mut self) {
+        if self.zoomed_thread.is_some() && self.zoomed_thread != self.open_pane_focus() {
+            self.zoomed_thread = None;
+        }
         let clear_side_ui = |chat_widget: &mut crate::chatwidget::ChatWidget| {
             chat_widget.set_side_conversation_context_label(/*label*/ None);
             chat_widget.set_side_conversation_active(/*active*/ false);
@@ -323,6 +326,13 @@ impl App {
 
     pub(super) fn main_composer_shortcut_available(&self) -> bool {
         !self.reconnect.offline || self.active_side_parent_thread_id().is_none()
+    }
+
+    /// Zoom follows the displayed conversation even when its peer cannot be selected offline.
+    pub(super) fn open_pane_focus(&self) -> Option<ThreadId> {
+        let focused = self.current_displayed_thread_id()?;
+        let child = self.side_pair_key(focused)?;
+        self.side_threads.get(&child)?.pane_open.then_some(focused)
     }
 
     pub(super) fn switchable_side_child(&self) -> Option<ThreadId> {

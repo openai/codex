@@ -19,7 +19,34 @@ impl App {
             bindings.focus_main_composer.is_pressed(key) && self.main_composer_shortcut_available();
         let sidebar = bindings.focus_sidebar_content.is_pressed(key);
         let hide = bindings.hide_pane.is_pressed(key);
-        if !(left || right || main || sidebar || hide) || !self.conversation_focus_available(tui) {
+        let width_change = if bindings.move_divider_left.is_pressed(key) {
+            2
+        } else if bindings.move_divider_right.is_pressed(key) {
+            -2
+        } else {
+            0
+        };
+        let focused_percent = [
+            (&bindings.equalize_pane_widths, 50),
+            (&bindings.minimize_pane_width, 0),
+            (&bindings.maximize_pane_width, 100),
+        ]
+        .into_iter()
+        .find_map(|(binding, percent)| binding.is_pressed(key).then_some(percent))
+        .filter(|_| self.open_pane_focus().is_some());
+        let zoom_target = if bindings.toggle_pane_zoom.is_pressed(key) {
+            self.open_pane_focus()
+        } else {
+            None
+        };
+        if width_change != 0 && !self.can_nudge_side_width(tui) {
+            return false;
+        }
+        let resize = bindings.resize_panes.is_pressed(key) && self.open_pane_focus().is_some();
+        let resizing = resize || width_change != 0 || focused_percent.is_some();
+        if !(left || right || main || sidebar || hide || zoom_target.is_some() || resizing)
+            || !self.conversation_focus_available(tui)
+        {
             return false;
         }
         let child = self.switchable_side_child();
@@ -40,7 +67,17 @@ impl App {
             && !on_child
             && (self.transcript_view.has_active_interaction()
                 || self.backtrack.overlay_preview_active);
-        let result = if main {
+        let result = if resize {
+            self.begin_pane_resize(tui)
+        } else if let Some(percent) = focused_percent {
+            self.set_focused_pane_width(tui, percent).await
+        } else if width_change != 0 {
+            self.nudge_side_width(tui, width_change).await
+        } else if let Some(target) = zoom_target {
+            self.zoomed_thread = (self.zoomed_thread != Some(target)).then_some(target);
+            tui.frame_requester().schedule_frame();
+            Ok(())
+        } else if main {
             self.focus_main_composer(tui, app_server).await
         } else if (left && on_child)
             || (right && !on_child && child.is_some_and(|id| self.side_threads[&id].pane_open))

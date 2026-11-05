@@ -40,6 +40,13 @@ pub(in crate::keymap) fn register(
         (Global, "focus_pane_left", Char('h'), "h"),
         (Global, "focus_pane_right", KeyCode::Right, "right"),
         (Global, "focus_pane_right", Char('l'), "l"),
+        (Global, "toggle_pane_zoom", Char('z'), "z"),
+        (Global, "move_divider_left", Char('H'), "shift-h"),
+        (Global, "move_divider_right", Char('L'), "shift-l"),
+        (Global, "equalize_pane_widths", Char('='), "="),
+        (Global, "resize_panes", Char('r'), "r"),
+        (Global, "minimize_pane_width", Char(','), ","),
+        (Global, "maximize_pane_width", Char('.'), "."),
     ] {
         if remaining == 0 {
             break;
@@ -61,7 +68,7 @@ pub(in crate::keymap) fn register(
                 action,
                 chord: KeyChord {
                     prefix,
-                    completion: crate::key_hint::plain(completion),
+                    completion: crate::key_hint::KeyBinding::from_event(completion.into()),
                 },
                 spec: format!("leader {spec}"),
             };

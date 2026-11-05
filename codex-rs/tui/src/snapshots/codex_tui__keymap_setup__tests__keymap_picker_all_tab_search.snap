@@ -7,11 +7,11 @@ Focus Sidebar Content | leader s (ctrl-x s) | Global focus_sidebar_content Focus
 Hide Pane | leader - (ctrl-x -) | Global hide_pane Hide Pane Hide the focused sidebar pane. leader - (ctrl-x -) Default
 Focus Pane Left | leader left (ctrl-x left), leader h (ctrl-x h) | Global focus_pane_left Focus Pane Left Focus the parent conversation. leader left (ctrl-x left), leader h (ctrl-x h) Default
 Focus Pane Right | leader right (ctrl-x right), leader l (ctrl-x l) | Global focus_pane_right Focus Pane Right Focus the open side conversation. leader right (ctrl-x right), leader l (ctrl-x l) Default
+Minimize Pane Width | leader , (ctrl-x ,) | Global minimize_pane_width Minimize Pane Width Minimize the focused pane width. leader , (ctrl-x ,) Default
+Maximize Pane Width | leader . (ctrl-x .) | Global maximize_pane_width Maximize Pane Width Maximize the focused pane width. leader . (ctrl-x .) Default
+Equalize Pane Widths | leader = (ctrl-x =) | Global equalize_pane_widths Equalize Pane Widths Equalize visible pane widths. leader = (ctrl-x =) Default
+Resize Panes | leader r (ctrl-x r) | Global resize_panes Resize Panes Enter keyboard resize mode for visible dividers. leader r (ctrl-x r) Default
+Move Divider Left | leader shift-h (ctrl-x shift-h) | Global move_divider_left Move Divider Left Move the divider left when the side pane has focus. leader shift-h (ctrl-x shift-h) Default
+Move Divider Right | leader shift-l (ctrl-x shift-l) | Global move_divider_right Move Divider Right Move the divider right when the side pane has focus. leader shift-l (ctrl-x shift-l) Default
+Toggle Pane Zoom | leader z (ctrl-x z) | Global toggle_pane_zoom Toggle Pane Zoom Zoom or restore the focused pane. leader z (ctrl-x z) Default
 Open Agents | unbound | Global open_agents Open Agents Open the agent command center. unbound Default
-Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
-Find Transcript | f3 | Global find_transcript Find Transcript Find text in the full transcript. f3 Default
-Focus Activity | f4 | Global focus_activity Focus Activity Focus transcript activity groups to expand or collapse their details. f4 Default
-Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g Default
-Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
-Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the terminal UI. ctrl-l Default
-Toggle Vim Mode | unbound | Global toggle_vim_mode Toggle Vim Mode Turn Vim composer mode on or off. unbound Default

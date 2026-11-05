@@ -218,7 +218,8 @@ impl App {
         let inset = caller_inset.or_else(|| dock.as_ref().map(|panes| panes.focused));
         let prepared = self.prepare_conversation(screen_size.into(), inset, &frames);
         self.conversation_frame.side_pane = dock;
-        let divider_hovered = tui.link_hover.shape == tui::PointerShape::Resize;
+        let highlight_divider =
+            self.pane_resize.is_some() || tui.link_hover.shape == tui::PointerShape::Resize;
         // An input refresh opens a fresh terminal buffer. Carry the outer owner's
         // completed cells through it when only the conversation is being redrawn.
         let backdrop = caller_inset.map(|_| {
@@ -254,7 +255,7 @@ impl App {
                     companion,
                     frame,
                     self.divider_drag,
-                    divider_hovered,
+                    highlight_divider,
                     &frames,
                 );
             }
@@ -348,7 +349,15 @@ impl App {
         let mut composer_gap = (!self.chat_widget.has_active_view()
             && !self.chat_widget.is_external_writer_view())
         .then(crate::bottom_pane::ComposerGap::default);
-        let prompt_footer = self.prompt_navigation_footer(area.width.saturating_sub(/*rhs*/ 2));
+        let prompt_footer = if self.pane_resize.is_some() {
+            Some(crate::bottom_pane::TranscriptFooter {
+                text: "Resize · ←/h →/l · Shift+←/→ 10 cols · Enter/Esc done".into(),
+                cursor_column: None,
+                is_interactive: true,
+            })
+        } else {
+            self.prompt_navigation_footer(area.width.saturating_sub(/*rhs*/ 2))
+        };
         let chat_widget = &self.chat_widget;
         let view = &mut self.transcript_view;
         let active_key = chat_widget.active_cell_transcript_key();

@@ -147,6 +147,20 @@ pub struct TuiGlobalKeymap {
     pub focus_pane_left: Option<KeybindingsSpec>,
     /// Focus the open side conversation.
     pub focus_pane_right: Option<KeybindingsSpec>,
+    /// Minimize the focused pane width.
+    pub minimize_pane_width: Option<KeybindingsSpec>,
+    /// Maximize the focused pane width.
+    pub maximize_pane_width: Option<KeybindingsSpec>,
+    /// Equalize visible pane widths.
+    pub equalize_pane_widths: Option<KeybindingsSpec>,
+    /// Enter keyboard resize mode for visible dividers.
+    pub resize_panes: Option<KeybindingsSpec>,
+    /// Move the divider left when the side pane has focus.
+    pub move_divider_left: Option<KeybindingsSpec>,
+    /// Move the divider right when the side pane has focus.
+    pub move_divider_right: Option<KeybindingsSpec>,
+    /// Zoom or restore the focused pane.
+    pub toggle_pane_zoom: Option<KeybindingsSpec>,
     /// Open the shared agent-session overview.
     pub open_agents: Option<KeybindingsSpec>,
     /// Open the transcript overlay.

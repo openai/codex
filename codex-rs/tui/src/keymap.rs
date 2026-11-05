@@ -109,6 +109,13 @@ pub(crate) struct AppKeymap {
     pub(crate) hide_pane: Vec<KeyBinding>,
     pub(crate) focus_pane_left: Vec<KeyBinding>,
     pub(crate) focus_pane_right: Vec<KeyBinding>,
+    pub(crate) minimize_pane_width: Vec<KeyBinding>,
+    pub(crate) maximize_pane_width: Vec<KeyBinding>,
+    pub(crate) equalize_pane_widths: Vec<KeyBinding>,
+    pub(crate) resize_panes: Vec<KeyBinding>,
+    pub(crate) move_divider_left: Vec<KeyBinding>,
+    pub(crate) move_divider_right: Vec<KeyBinding>,
+    pub(crate) toggle_pane_zoom: Vec<KeyBinding>,
     /// Open the agent command center.
     pub(crate) open_agents: Vec<KeyBinding>,
     /// Open transcript overlay.
@@ -780,6 +787,41 @@ impl RuntimeKeymap {
                 keymap.global.focus_pane_right.as_ref(),
                 &[],
                 "tui.keymap.global.focus_pane_right",
+            )?,
+            minimize_pane_width: resolve_bindings(
+                keymap.global.minimize_pane_width.as_ref(),
+                &[],
+                "tui.keymap.global.minimize_pane_width",
+            )?,
+            maximize_pane_width: resolve_bindings(
+                keymap.global.maximize_pane_width.as_ref(),
+                &[],
+                "tui.keymap.global.maximize_pane_width",
+            )?,
+            equalize_pane_widths: resolve_bindings(
+                keymap.global.equalize_pane_widths.as_ref(),
+                &[],
+                "tui.keymap.global.equalize_pane_widths",
+            )?,
+            resize_panes: resolve_bindings(
+                keymap.global.resize_panes.as_ref(),
+                &[],
+                "tui.keymap.global.resize_panes",
+            )?,
+            move_divider_left: resolve_bindings(
+                keymap.global.move_divider_left.as_ref(),
+                &[],
+                "tui.keymap.global.move_divider_left",
+            )?,
+            move_divider_right: resolve_bindings(
+                keymap.global.move_divider_right.as_ref(),
+                &[],
+                "tui.keymap.global.move_divider_right",
+            )?,
+            toggle_pane_zoom: resolve_bindings(
+                keymap.global.toggle_pane_zoom.as_ref(),
+                &[],
+                "tui.keymap.global.toggle_pane_zoom",
             )?,
             open_agents: resolve_bindings(
                 keymap.global.open_agents.as_ref(),
@@ -1761,6 +1803,13 @@ impl RuntimeKeymap {
                 hide_pane: Vec::new(),
                 focus_pane_left: Vec::new(),
                 focus_pane_right: Vec::new(),
+                minimize_pane_width: Vec::new(),
+                maximize_pane_width: Vec::new(),
+                equalize_pane_widths: Vec::new(),
+                resize_panes: Vec::new(),
+                move_divider_left: Vec::new(),
+                move_divider_right: Vec::new(),
+                toggle_pane_zoom: Vec::new(),
                 open_agents: default_bindings![],
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 find_transcript: default_bindings![plain(KeyCode::F(3))],
@@ -2108,6 +2157,10 @@ impl RuntimeKeymap {
                 ));
             }
         }
+        let minimize = &self.app.minimize_pane_width;
+        let maximize = &self.app.maximize_pane_width;
+        let equalize = &self.app.equalize_pane_widths;
+        let resize = &self.app.resize_panes;
         #[cfg(unix)]
         for (action, bindings) in [
             ("global.change_host", &self.app.change_host),
@@ -2119,6 +2172,13 @@ impl RuntimeKeymap {
             ),
             ("global.focus_pane_left", &self.app.focus_pane_left),
             ("global.focus_pane_right", &self.app.focus_pane_right),
+            ("global.minimize_pane_width", minimize),
+            ("global.maximize_pane_width", maximize),
+            ("global.equalize_pane_widths", equalize),
+            ("global.resize_panes", resize),
+            ("global.move_divider_left", &self.app.move_divider_left),
+            ("global.move_divider_right", &self.app.move_divider_right),
+            ("global.toggle_pane_zoom", &self.app.toggle_pane_zoom),
             ("global.hide_pane", &self.app.hide_pane),
             ("chat.open_presets", &self.chat.open_presets),
             ("chat.toggle_voice", &self.chat.toggle_voice),
@@ -2147,6 +2207,8 @@ impl RuntimeKeymap {
             side_toggle_bindings.push(legacy_slash_binding);
         }
 
+        let divider_left = self.app.move_divider_left.as_slice();
+        let divider_right = self.app.move_divider_right.as_slice();
         let main_bindings = [
             ("change_host", self.app.change_host.as_slice()),
             (
@@ -2159,6 +2221,13 @@ impl RuntimeKeymap {
             ),
             ("focus_pane_left", self.app.focus_pane_left.as_slice()),
             ("focus_pane_right", self.app.focus_pane_right.as_slice()),
+            ("minimize_pane_width", minimize),
+            ("maximize_pane_width", maximize),
+            ("equalize_pane_widths", equalize),
+            ("resize_panes", resize),
+            ("move_divider_left", divider_left),
+            ("move_divider_right", divider_right),
+            ("toggle_pane_zoom", self.app.toggle_pane_zoom.as_slice()),
             ("hide_pane", self.app.hide_pane.as_slice()),
             ("open_agents", self.app.open_agents.as_slice()),
             ("open_transcript", self.app.open_transcript.as_slice()),
@@ -2338,6 +2407,13 @@ impl RuntimeKeymap {
                 ),
                 ("focus_pane_left", self.app.focus_pane_left.as_slice()),
                 ("focus_pane_right", self.app.focus_pane_right.as_slice()),
+                ("minimize_pane_width", minimize),
+                ("maximize_pane_width", maximize),
+                ("equalize_pane_widths", equalize),
+                ("resize_panes", resize),
+                ("move_divider_left", divider_left),
+                ("move_divider_right", divider_right),
+                ("toggle_pane_zoom", self.app.toggle_pane_zoom.as_slice()),
                 ("hide_pane", self.app.hide_pane.as_slice()),
                 ("open_agents", self.app.open_agents.as_slice()),
                 ("open_transcript", self.app.open_transcript.as_slice()),
@@ -2480,6 +2556,16 @@ impl RuntimeKeymap {
                     "global.focus_pane_right",
                     self.app.focus_pane_right.as_slice(),
                 ),
+                ("global.minimize_pane_width", minimize),
+                ("global.maximize_pane_width", maximize),
+                ("global.equalize_pane_widths", equalize),
+                ("global.resize_panes", resize),
+                ("global.move_divider_left", divider_left),
+                ("global.move_divider_right", divider_right),
+                (
+                    "global.toggle_pane_zoom",
+                    self.app.toggle_pane_zoom.as_slice(),
+                ),
                 ("global.hide_pane", self.app.hide_pane.as_slice()),
                 (
                     "global.select_transcript",
@@ -2528,6 +2614,16 @@ impl RuntimeKeymap {
                 (
                     "global.focus_pane_right",
                     self.app.focus_pane_right.as_slice(),
+                ),
+                ("global.minimize_pane_width", minimize),
+                ("global.maximize_pane_width", maximize),
+                ("global.equalize_pane_widths", equalize),
+                ("global.resize_panes", resize),
+                ("global.move_divider_left", divider_left),
+                ("global.move_divider_right", divider_right),
+                (
+                    "global.toggle_pane_zoom",
+                    self.app.toggle_pane_zoom.as_slice(),
                 ),
                 ("global.hide_pane", self.app.hide_pane.as_slice()),
                 ("global.focus_activity", self.app.focus_activity.as_slice()),
@@ -3998,6 +4094,7 @@ mod tests {
             ("focus_sidebar_content", "list", "move_down"),
             ("focus_pane_left", "list", "move_down"),
             ("focus_pane_right", "pager", "page_up"),
+            ("toggle_pane_zoom", "pager", "page_up"),
         ] {
             let config: TuiKeymap = toml::from_str(&format!(
                 "[global]\n{pane} = 'f8'\n[{section}]\n{action} = 'f8'"
@@ -4016,6 +4113,7 @@ mod tests {
             "focus_sidebar_content",
             "focus_pane_left",
             "focus_pane_right",
+            "toggle_pane_zoom",
         ] {
             let config: TuiKeymap =
                 toml::from_str(&format!("[global]\n{action} = 'ctrl-z'")).unwrap();
@@ -4057,10 +4155,12 @@ mod tests {
         let mut keymap = TuiKeymap::default();
         keymap.global.open_transcript = Some(one("leader left"));
         keymap.global.focus_pane_right = Some(one("f12 b"));
+        keymap.global.toggle_pane_zoom = Some(one("f12 z"));
         let runtime = RuntimeKeymap::for_session(&keymap, /*workspace*/ true).unwrap();
         for (action, expected) in [
             ("focus_pane_left", "leader h"),
             ("focus_pane_right", "f12 b"),
+            ("toggle_pane_zoom", "f12 z"),
         ] {
             let installed: Vec<_> = runtime
                 .chords

@@ -1,0 +1,61 @@
+---
+source: tui/src/app/tests.rs
+expression: "format!(\"Zoomed\\n{zoomed}\\nRestored\\n{restored}\\nEqualized\\n{equalized}\")"
+---
+Zoomed
+• unfinished answer
+
+
+
+
+
+
+
+
+
+
+
+
+
+› xchild draft!
+
+  GPT-6.1-Sol default · Agent
+  tab to queue message                                                                                                                                                                                                                                  Side from main thread · ⌃/ to switch · ⌃c to close
+Restored
+parent-24                                                                                                                                                                                            │• unfinished answer
+                                                                                                                                                                                                     │
+parent-25                                                                                                                                                                                            │
+                                                                                                                                                                                                     │
+parent-26                                                                                                                                                                                            │
+                                                                                                                                                                                                     │
+parent-27                                                                                                                                                                                            │
+                                                                                                                                                                                                     │
+parent-28                                                                                                                                                                                            │
+                                                                                                                                                                                                     │
+parent-29                                                                                                                                                                                            │
+                                                                                                                                                                                                     │
+                                                                                                                                                                                                     │
+                                                                                                                                                                                                     │
+› xparent draft-!                                                                                                                                                                                    │› xchild draft!
+  second line                                                                                                                                                                                        │
+  GPT-6.1-Sol default                                                                                                                                                                                │  GPT-6.1-Sol default · Agent
+                                                                                                                                                                                                     │  tab to queue message                            Side from main thread · ⌃/ to switch · ⌃c to close
+Equalized
+parent-24                                                                                          │• unfinished answer
+                                                                                                   │
+parent-25                                                                                          │
+                                                                                                   │
+parent-26                                                                                          │
+                                                                                                   │
+parent-27                                                                                          │
+                                                                                                   │
+parent-28                                                                                          │
+                                                                                                   │
+parent-29                                                                                          │
+                                                                                                   │
+                                                                                                   │
+                                                                                                   │
+› xparent draft-!                                                                                  │› xchild draft!
+  second line                                                                                      │
+  GPT-6.1-Sol default                                                                              │  GPT-6.1-Sol default · Agent
+                                                                                                   │  tab to queue message                          Side from main thread · ⌃/ to switch · ⌃c to close
