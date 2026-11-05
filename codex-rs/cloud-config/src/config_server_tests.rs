@@ -49,21 +49,34 @@ fn oauth_config(base_url: &str) -> OAuthSessionConfig {
 }
 
 #[tokio::test]
-async fn policy_fetch_requires_config_server_sign_in() {
+async fn a_supplied_chatgpt_token_does_not_replace_config_server_sign_in() {
     let server = MockServer::start().await;
     let home = tempdir().unwrap();
     let endpoint = format!("https://{}", server.address());
-    let factory = transport_default_auth_route_config()
-        .http_client_factory()
-        .clone();
-    let loader = config_server_bundle_loader(
-        ConfigServer {
+    let mut config = codex_core::config::ConfigBuilder::default()
+        .codex_home(home.path().into())
+        .build()
+        .await
+        .unwrap()
+        .auth_config();
+    config.chatgpt_base_url = Some(server.uri());
+    let requirements = codex_config::ConfigRequirementsToml {
+        config_server: Some(ConfigServer {
             base_url: format!("{endpoint}/settings"),
             oauth: Some(Box::new(oauth_config(&endpoint))),
-        },
-        home.path().to_path_buf(),
-        factory,
-    );
+        }),
+        ..Default::default()
+    };
+    let chatgpt = codex_login::CodexAuth::from_external_chatgpt_tokens(
+        "e30.e30.c2ln",
+        "endor",
+        /*chatgpt_plan_type*/ None,
+    )
+    .unwrap();
+    let loader = crate::managed_config_bundle_loader_for_auth(config, &chatgpt, &requirements)
+        .await
+        .unwrap();
+    assert_eq!(loader.config_server(), requirements.config_server.as_ref());
     let error = loader.get().await.unwrap_err();
     assert_eq!(error.code(), CloudConfigBundleLoadErrorCode::Auth);
     assert_eq!(

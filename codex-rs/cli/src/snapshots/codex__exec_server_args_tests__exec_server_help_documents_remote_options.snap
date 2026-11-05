@@ -106,6 +106,12 @@ Options:
           Read rotating executor credentials from stdin; exit when the pipe
           closes
 
+      --chatgpt-token-stdin
+          Read a ChatGPT access token from stdin for HTTPS registration
+
+      --chatgpt-account-id <ID>
+          ChatGPT account ID. Must match the token's account claim when present
+
       --aws-sigv4
           Sign Direct registration and WebSocket handshake requests with AWS
           SigV4

@@ -1,5 +1,6 @@
 use crate::backend::BackendBundleClient;
 use crate::chatgpt::ChatGptSource;
+use crate::chatgpt::plan_requires_managed_config;
 use crate::config_server::config_server_http_client_factory;
 use crate::config_source::BundleSource;
 use crate::service::CLOUD_CONFIG_BUNDLE_TIMEOUT;
@@ -9,6 +10,8 @@ use codex_config::ConfigRequirementsToml;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthConfig;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_protocol::account::PlanType;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::task::AbortHandle;
@@ -162,6 +165,63 @@ pub async fn chatgpt_config_bundle_loader_for_storage(
         chatgpt_config_bundle_service_for_storage(auth_config, enable_codex_api_key_env).await?;
     let (loader, _) = managed_config_bundle_loader_for_service(service);
     Ok(loader)
+}
+
+/// Use the configured policy server or the supplied account's ChatGPT policy when eligible.
+pub async fn managed_config_bundle_loader_for_auth(
+    config: AuthConfig,
+    auth: &CodexAuth,
+    requirements: &ConfigRequirementsToml,
+) -> std::io::Result<CloudConfigBundleLoader> {
+    if requirements.config_server.is_some() {
+        return managed_config_bundle_loader_for_storage(
+            config,
+            requirements,
+            /*enable_codex_api_key_env*/ false,
+        )
+        .await;
+    }
+    // Only skip the policy lookup when the supplied account's plan is known.
+    if auth
+        .account_plan_type()
+        .is_some_and(|plan| plan != PlanType::Unknown && !plan_requires_managed_config(plan))
+    {
+        return Ok(CloudConfigBundleLoader::default());
+    }
+
+    let base_url = config
+        .chatgpt_base_url
+        .as_deref()
+        .unwrap_or("https://chatgpt.com/backend-api/");
+    codex_http_client::validate_https_endpoint_url(base_url, "ChatGPT policy endpoint")
+        .map_err(std::io::Error::other)?;
+    let mut client = codex_backend_client::Client::new_without_redirects(
+        base_url,
+        config.auth_route_config.http_client_factory().clone(),
+    )
+    .with_user_agent(codex_login::default_client::get_codex_user_agent())
+    .with_bearer_token(auth.get_token()?)
+    .map_err(std::io::Error::other)?
+    .with_chatgpt_account_id(
+        auth.get_account_id()
+            .ok_or_else(|| std::io::Error::other("missing ChatGPT account ID"))?,
+    );
+    if auth.is_fedramp_account() {
+        client = client.with_fedramp_routing_header();
+    }
+    let response = tokio::time::timeout(CLOUD_CONFIG_BUNDLE_TIMEOUT, client.get_config_bundle())
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out loading ChatGPT account policy",
+            )
+        })?
+        .map_err(|_| std::io::Error::other("could not load ChatGPT account policy"))?;
+    let bundle = crate::backend::bundle_from_response(response);
+    Ok(CloudConfigBundleLoader::new(
+        async move { Ok(Some(bundle)) },
+    ))
 }
 
 /// Fetches directly from the network on each load, without reading or writing

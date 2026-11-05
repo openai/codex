@@ -119,3 +119,11 @@ pub fn validate_endpoint_url(value: &str, field: &str) -> Result<Url, String> {
     }
     Ok(url)
 }
+
+/// Validates a credential-bearing HTTPS endpoint without including the URL in errors.
+pub fn validate_https_endpoint_url(value: &str, field: &str) -> Result<Url, String> {
+    validate_endpoint_url(value, field)
+        .ok()
+        .filter(|url| url.scheme() == "https")
+        .ok_or_else(|| format!("{field} URLs must use HTTPS without userinfo or fragments"))
+}

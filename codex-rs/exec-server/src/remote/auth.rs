@@ -36,21 +36,20 @@ impl EnvironmentRegistryClient {
         let send = async {
             let mut retried = false;
             loop {
-                let (authenticated, credential) =
-                    if self.auth_mode == RegistryAuthMode::ExecutorCredential {
-                        let (headers, credential) = self.resolve_auth().await?;
-                        let mut authenticated = request.clone();
-                        authenticated.headers.extend(headers);
-                        (authenticated, credential)
-                    } else {
-                        (
-                            self.auth_provider
-                                .apply_auth(request.clone())
-                                .await
-                                .map_err(registry_auth_error)?,
-                            None,
-                        )
-                    };
+                let (authenticated, credential) = if self.auth_mode != RegistryAuthMode::Legacy {
+                    let (headers, credential) = self.resolve_auth().await?;
+                    let mut authenticated = request.clone();
+                    authenticated.headers.extend(headers);
+                    (authenticated, credential)
+                } else {
+                    (
+                        self.auth_provider
+                            .apply_auth(request.clone())
+                            .await
+                            .map_err(registry_auth_error)?,
+                        None,
+                    )
+                };
                 let prepared = authenticated
                     .prepare_body_for_send()
                     .map_err(ExecServerError::EnvironmentRegistryConfig)?;

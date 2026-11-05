@@ -712,6 +712,43 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
 }
 
 #[tokio::test]
+async fn forward_rejects_stdin_credentials_on_opposite_sides_of_subcommand() -> Result<()> {
+    let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
+    let home = TempDir::new()?;
+    let remote = [
+        "--remote",
+        "https://registry.example",
+        "--environment-id",
+        "env-1",
+    ];
+    let bearer = "--registration-bearer-stdin";
+    let rotating = "--executor-credential-stdin";
+    for (before, after) in [(bearer, rotating), (rotating, bearer)] {
+        let mut child = tokio::process::Command::new(&codex)
+            .env("CODEX_HOME", home.path())
+            .arg("exec-server")
+            .args(remote)
+            .args([before, "forward", "--connect", "ws://127.0.0.1:8765"])
+            .args(remote)
+            .arg(after)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+        // Keep the empty pipe open so either credential read would block.
+        let _stdin = child.stdin.take().context("credential pipe")?;
+        let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+            .await
+            .context("exec-server waited for a credential")??;
+        assert!(!output.status.success());
+        assert!(String::from_utf8(output.stderr)?.contains(
+            "--registration-bearer-stdin cannot be used with --executor-credential-stdin"
+        ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn remote_exec_server_scoped_credentials_authenticate_only_register_and_validate()
 -> Result<()> {
     const ENVIRONMENT: &str = "environment-scoped-credentials";
