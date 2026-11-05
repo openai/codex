@@ -35,7 +35,7 @@ esac
 libcap_version="2.75"
 libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
 libcap_tarball_name="libcap-${libcap_version}.tar.xz"
-libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+libcap_download_url="https://github.com/openai/codex/releases/download/libcap-v${libcap_version}/${libcap_tarball_name}"
 libcap_debian_url="https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_${libcap_version}.orig.tar.xz"
 
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
