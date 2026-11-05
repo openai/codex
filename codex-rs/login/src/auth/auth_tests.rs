@@ -60,7 +60,9 @@ fn header_auth_exposes_a_valid_chatgpt_account_id() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn cancelled_refresh_marks_only_started_exchanges_as_unsettled() -> anyhow::Result<()> {
+    let _access_token_guard = remove_access_token_env_var();
     let home = tempdir()?;
     write_auth_file(
         AuthFileParams {

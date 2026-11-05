@@ -671,6 +671,8 @@ crate.annotation(
         "@rules_foreign_cc//toolchains:current_ninja_toolchain",
     ],
     crate = "opusic-sys",
+    patch_args = ["-p1"],
+    patches = ["//patches:opusic_sys_install_headers.patch"],
 )
 
 # The musl CLI's allocator needs declared native tools and consistent header flags.

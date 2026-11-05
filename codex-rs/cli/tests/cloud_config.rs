@@ -258,9 +258,17 @@ async fn login_and_logout_persist_only_cloud_managed_mcp_oauth_credentials() -> 
         .mount(&fixture.server)
         .await;
 
-    let mut command = fixture.command(&["mcp", "login", MANAGED_SERVER_NAME])?;
-    command.stdout(Stdio::piped()).stderr(Stdio::inherit());
+    let mut command = fixture.command(&["mcp", "login", MANAGED_SERVER_NAME, "--no-browser"])?;
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
     let mut child = command.spawn()?;
+    // Keep input open through child.wait() so the HTTP callback cannot race EOF.
+    let _stdin = child
+        .stdin
+        .take()
+        .context("MCP login did not provide stdin")?;
     let stdout = child
         .stdout
         .take()
