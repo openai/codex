@@ -39,6 +39,8 @@ use crate::package_lifecycle::with_owner_impersonation;
 
 mod known_folder;
 mod metadata;
+pub(crate) use metadata::read_acl;
+pub(crate) use metadata::write_acl;
 mod registration_result;
 mod removal;
 

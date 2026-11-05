@@ -140,7 +140,7 @@ fn edit_root_acl(
     Ok(())
 }
 
-fn read_acl(handle: &OwnedHandle) -> Result<Option<(Vec<u32>, u16)>> {
+pub(crate) fn read_acl(handle: &OwnedHandle) -> Result<Option<(Vec<u32>, u16)>> {
     let mut acl = ptr::null_mut();
     let mut descriptor = ptr::null_mut();
     let status = unsafe {
@@ -156,7 +156,7 @@ fn read_acl(handle: &OwnedHandle) -> Result<Option<(Vec<u32>, u16)>> {
         )
     };
     if status != 0 {
-        return Err(io::Error::from_raw_os_error(status as i32)).context("read AppData DACL");
+        return Err(io::Error::from_raw_os_error(status as i32)).context("read directory DACL");
     }
     let result = (|| {
         if acl.is_null() {
@@ -164,7 +164,7 @@ fn read_acl(handle: &OwnedHandle) -> Result<Option<(Vec<u32>, u16)>> {
         }
         ensure!(
             unsafe { security::IsValidAcl(acl) } != 0,
-            "invalid AppData DACL"
+            "invalid directory DACL"
         );
         let length = unsafe { (*acl).AclSize } as usize;
         let mut control = 0;
@@ -172,7 +172,7 @@ fn read_acl(handle: &OwnedHandle) -> Result<Option<(Vec<u32>, u16)>> {
         let queried = unsafe {
             security::GetSecurityDescriptorControl(descriptor, &mut control, &mut revision)
         };
-        BOOL(queried).ok().context("read AppData DACL control")?;
+        BOOL(queried).ok().context("read directory DACL control")?;
         let mut buffer = vec![0u32; length.div_ceil(4)];
         unsafe {
             ptr::copy_nonoverlapping(acl.cast::<u8>(), buffer.as_mut_ptr().cast(), length);
@@ -279,14 +279,14 @@ fn insert_metadata_ace(acl: &mut Vec<u32>, sid: &LocalSid) -> Result<()> {
     Ok(())
 }
 
-fn write_acl(handle: &OwnedHandle, acl: &mut [u32], control: u16) -> Result<()> {
+pub(crate) fn write_acl(handle: &OwnedHandle, acl: &mut [u32], control: u16) -> Result<()> {
     let mut descriptor: security::SECURITY_DESCRIPTOR = unsafe { std::mem::zeroed() };
     let preserved = security::SE_DACL_PROTECTED | security::SE_DACL_AUTO_INHERITED;
     let raw_descriptor = (&mut descriptor as *mut security::SECURITY_DESCRIPTOR).cast();
     unsafe {
         BOOL(security::InitializeSecurityDescriptor(raw_descriptor, 1))
             .ok()
-            .context("initialize AppData security descriptor")?;
+            .context("initialize directory security descriptor")?;
         BOOL(security::SetSecurityDescriptorDacl(
             raw_descriptor,
             1,
@@ -294,14 +294,14 @@ fn write_acl(handle: &OwnedHandle, acl: &mut [u32], control: u16) -> Result<()> 
             i32::from(control & security::SE_DACL_DEFAULTED != 0),
         ))
         .ok()
-        .context("set AppData DACL")?;
+        .context("set directory DACL")?;
         BOOL(security::SetSecurityDescriptorControl(
             raw_descriptor,
             preserved,
             control & preserved,
         ))
         .ok()
-        .context("preserve AppData DACL control")?;
+        .context("preserve directory DACL control")?;
     }
     // SetSecurityInfo recursively reapplies existing inheritable ACEs. The native
     // object setter changes only this retained, owner-authorized directory handle.
@@ -316,7 +316,7 @@ fn write_acl(handle: &OwnedHandle, acl: &mut [u32], control: u16) -> Result<()> 
         return Err(io::Error::from_raw_os_error(
             unsafe { RtlNtStatusToDosError(status) } as i32,
         ))
-        .context("write AppData metadata DACL");
+        .context("write directory DACL");
     }
     Ok(())
 }

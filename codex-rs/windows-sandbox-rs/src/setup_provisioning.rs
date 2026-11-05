@@ -370,22 +370,23 @@ fn lock_sandbox_dir(
     let system_sid = resolve_sid("SYSTEM")?;
     let admins_sid = resolve_sid("Administrators")?;
     let real_sid = resolve_sid(real_user)?;
+    let modify = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
+    let (security_information, system_access) = match dacl_inheritance {
+        DaclInheritance::Inherited => (DACL_SECURITY_INFORMATION, modify),
+        // The SYSTEM helper must be able to reapply the bin policy to existing children.
+        DaclInheritance::Protected => (
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            modify | WRITE_DAC,
+        ),
+    };
     let entries = [
         (
             sandbox_group_sid.to_vec(),
             sandbox_group_mask,
             sandbox_group_access_mode,
         ),
-        (
-            system_sid,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-            GRANT_ACCESS,
-        ),
-        (
-            admins_sid,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-            GRANT_ACCESS,
-        ),
+        (system_sid, system_access, GRANT_ACCESS),
+        (admins_sid, modify, GRANT_ACCESS),
         (real_sid, real_user_mask, GRANT_ACCESS),
     ];
     unsafe {
@@ -427,12 +428,6 @@ fn lock_sandbox_dir(
                 "SetEntriesInAclW sandbox dir failed: {set}",
             ));
         }
-        let security_information = match dacl_inheritance {
-            DaclInheritance::Inherited => DACL_SECURITY_INFORMATION,
-            DaclInheritance::Protected => {
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
-            }
-        };
         let (res, api) = match directory.as_ref() {
             Some(directory) => (
                 SetSecurityInfo(

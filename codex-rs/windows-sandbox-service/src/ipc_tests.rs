@@ -48,6 +48,60 @@ struct NonOwningPipeHandle(foundation::HANDLE);
 // threads. This wrapper does not own the handle or extend its lifetime.
 unsafe impl Send for NonOwningPipeHandle {}
 
+// Run as LocalSystem on a disposable Windows VM. The interactive user seeds both
+// homes with the legacy DACL, with a SYSTEM WRITE_DAC deny on the second bin.
+#[test]
+#[ignore = "requires SYSTEM, an interactive owner, and two user-owned legacy sandbox homes"]
+fn repair_legacy_bin_as_its_owner() -> anyhow::Result<()> {
+    use std::os::windows::io::AsHandle;
+    use windows_sys::Win32::System::RemoteDesktop::WTSQueryUserToken;
+
+    let session = std::env::var("CODEX_TEST_OWNER_SESSION")?.parse()?;
+    let mut token = std::ptr::null_mut();
+    if unsafe { WTSQueryUserToken(session, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: WTSQueryUserToken transferred this interactive user's token.
+    let owner = unsafe { OwnedHandle::from_raw_handle(token) };
+    for (variable, should_repair) in [
+        ("CODEX_TEST_LEGACY_HOME", true),
+        ("CODEX_TEST_DENIED_HOME", false),
+    ] {
+        let home = std::path::PathBuf::from(std::env::var(variable)?);
+        let (home, _pins) = crate::package_lifecycle::with_owner_impersonation(token, || {
+            prepare_codex_home(
+                &home,
+                SetupRuntime::Legacy,
+                DirectoryOpenDisposition::OpenExisting,
+            )
+        })?;
+        let open = || {
+            super::pin_directory(
+                &home.join(".sandbox-bin"),
+                filesystem::READ_CONTROL | filesystem::WRITE_DAC,
+                DirectoryOpenDisposition::OpenExisting,
+            )
+        };
+        let denied = open().expect_err("the seeded bin must refuse SYSTEM ACL writes");
+        assert_eq!(
+            denied
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error),
+            Some(5)
+        );
+        let repair = || crate::provisioning::legacy_bin::prepare(&home, owner.as_handle());
+        if should_repair {
+            repair()?;
+            open()?;
+            repair()?;
+        } else {
+            assert!(repair().is_err());
+            assert!(open().is_err());
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn provisioning_error_response_preserves_causes_within_message_limits() {
     let error = anyhow::anyhow!("Windows error\t5\n")

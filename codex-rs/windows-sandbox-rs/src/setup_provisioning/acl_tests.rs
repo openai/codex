@@ -158,10 +158,21 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
             )
             .expect("sandbox cannot change the bin DACL")
         );
+        let system_sid = resolve_sid("SYSTEM").expect("resolve SYSTEM SID");
+        let system_psid = sid_bytes_to_psid(&system_sid).expect("convert SYSTEM SID");
         let new_runner = sandbox_bin.join("new-runner.exe");
         fs::write(&new_runner, b"new").expect("create new runner");
 
         for path in [&sandbox_bin, &existing_runner, &new_runner] {
+            assert!(
+                path_mask_allows(
+                    path,
+                    &[system_psid],
+                    WRITE_DAC,
+                    /*require_all_bits*/ true
+                )
+                .expect("SYSTEM can reapply the bin policy")
+            );
             assert!(
                 !path_mask_allows(
                     path,
