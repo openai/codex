@@ -1,0 +1,13 @@
+---
+source: ext/guardian-v3/tests/housekeeping.rs
+expression: 'context_snapshot::format_request_history_snapshot("Housekeeper routes captured originals and updates discovery descriptions.", &response.requests(), &ContextSnapshotOptions::default().rewrite_known_segments(),)'
+---
+Scenario: Housekeeper routes captured originals and updates discovery descriptions.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+02:function_call_output/guardian.guardian_housekeeper_input:{"catalog":{"release":"Release procedure"},"sources":[{"id":{"ordinal":1},"original":{"type":"response_i...a":{"client_authored":false,"user_input_order":1}}}]} [hash=6fdbbcb4f9522d4c]

@@ -10,10 +10,16 @@ use codex_protocol::SessionId;
 use codex_state::SqliteConfig;
 
 mod evidence;
+mod housekeeper;
+mod sampling;
 pub use evidence::EvidenceCursor;
 pub use evidence::EvidenceId;
 pub use evidence::EvidenceSnapshot;
 pub use evidence::OriginalEvidence;
+pub use housekeeper::HOUSEKEEPER_INSTRUCTIONS;
+pub use housekeeper::HOUSEKEEPER_TIMEOUT;
+pub use housekeeper::Housekeeper;
+pub use sampling::HousekeeperResult;
 
 /// Storage selected by the Guardian consumer for setup, opening and cleanup.
 pub fn local_board_options() -> LocalBoardOptions {

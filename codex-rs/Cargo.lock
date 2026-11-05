@@ -3798,17 +3798,28 @@ name = "codex-guardian-v3"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "codex-analytics",
  "codex-context-fragments",
+ "codex-core",
+ "codex-extension-api",
+ "codex-guardian-reviewer",
  "codex-history",
  "codex-message-board",
  "codex-protocol",
  "codex-state",
  "codex-thread-store",
+ "codex-utils-string",
+ "core_test_support",
+ "futures",
+ "insta",
  "pretty_assertions",
  "serde",
  "serde_json",
  "tempfile",
+ "test-case",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

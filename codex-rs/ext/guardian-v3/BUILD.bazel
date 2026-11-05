@@ -3,4 +3,8 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "guardian-v3",
     crate_name = "codex_guardian_v3",
+    extra_binaries = ["//codex-rs/linux-sandbox:codex-linux-sandbox"],
+    integration_compile_data_extra = ["//codex-rs/message-board:tests/common/mod.rs"],
+    run_tests_with_wine_exec = True,
+    test_tags = ["no-sandbox"],
 )
