@@ -302,19 +302,6 @@ fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
     policy
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn dynamic_network_policy(
-    sandbox_policy: &SandboxPolicy,
-    enforce_managed_network: bool,
-    proxy: &ProxyPolicyInputs,
-) -> String {
-    dynamic_network_policy_for_network(
-        NetworkSandboxPolicy::from(sandbox_policy),
-        enforce_managed_network,
-        proxy,
-    )
-}
-
 fn dynamic_network_policy_for_network(
     network_policy: NetworkSandboxPolicy,
     enforce_managed_network: bool,

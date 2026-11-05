@@ -8,7 +8,7 @@ use super::UnixDomainSocketPolicy;
 use super::create_seatbelt_command_args;
 use super::create_seatbelt_command_args_for_legacy_policy;
 use super::create_seatbelt_command_args_with_profile;
-use super::dynamic_network_policy;
+use super::dynamic_network_policy_for_network;
 use super::normalize_path_for_sandbox;
 use super::seatbelt_regex_for_glob;
 use super::seatbelt_regex_for_unreadable_glob;
@@ -391,8 +391,8 @@ fn process_platform_defaults_allow_scratch_without_granting_it_to_filesystem_hel
 
 #[test]
 fn create_seatbelt_args_routes_network_through_proxy_ports() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::new_read_only_policy(),
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Restricted,
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
             ports: vec![43128, 48081],
@@ -430,13 +430,8 @@ fn create_seatbelt_args_routes_network_through_proxy_ports() {
 
 #[test]
 fn dynamic_network_policy_allows_tls_without_darwin_user_cache_write() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            network_access: true,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Enabled,
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs::default(),
     );
@@ -1454,8 +1449,8 @@ fn restricted_reads_cannot_read_preferences_outside_allowed_roots() {
 
 #[test]
 fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::new_read_only_policy(),
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Restricted,
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
             ports: vec![43128],
@@ -1485,13 +1480,8 @@ fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
 
 #[test]
 fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_ports() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            network_access: true,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Enabled,
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
             ports: vec![],
@@ -1521,13 +1511,8 @@ fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_
 
 #[test]
 fn dynamic_network_policy_blocks_dns_when_local_binding_has_no_proxy_ports() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            network_access: true,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Enabled,
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
             ports: vec![],
@@ -1549,13 +1534,8 @@ fn dynamic_network_policy_blocks_dns_when_local_binding_has_no_proxy_ports() {
 
 #[test]
 fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_without_proxy_config() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            network_access: true,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Enabled,
         /*enforce_managed_network*/ true,
         &ProxyPolicyInputs {
             ports: vec![],
@@ -1581,8 +1561,8 @@ fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_withou
 
 #[test]
 fn create_seatbelt_args_allowlists_unix_socket_paths() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::new_read_only_policy(),
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Restricted,
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
             ports: vec![43128],
@@ -1821,8 +1801,8 @@ fn normalize_path_for_sandbox_rejects_relative_paths() {
 
 #[test]
 fn create_seatbelt_args_allows_all_unix_sockets_when_enabled() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::new_read_only_policy(),
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Restricted,
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
             ports: vec![43128],
@@ -1852,13 +1832,8 @@ fn create_seatbelt_args_allows_all_unix_sockets_when_enabled() {
 
 #[test]
 fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
-    let policy = dynamic_network_policy(
-        &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            network_access: true,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        },
+    let policy = dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::Enabled,
         /*enforce_managed_network*/ false,
         &ProxyPolicyInputs {
             ports: vec![43128],
