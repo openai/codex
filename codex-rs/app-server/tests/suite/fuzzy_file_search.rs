@@ -262,7 +262,8 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     .await??;
 
     let value = resp.result;
-    let expected_score = 72;
+    // Each basename matches, so its score includes one filename priority bonus.
+    let filename_bonus = u32::from(u16::MAX) + 1;
 
     assert_eq!(
         value,
@@ -273,7 +274,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "path": "abexy",
                     "match_type": "file",
                     "file_name": "abexy",
-                    "score": 84,
+                    "score": filename_bonus + 84,
                     "indices": [0, 1, 2],
                 },
                 {
@@ -281,7 +282,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "path": sub_abce_rel,
                     "match_type": "file",
                     "file_name": "abce",
-                    "score": expected_score,
+                    "score": filename_bonus + 72,
                     "indices": [4, 5, 7],
                 },
                 {
@@ -289,7 +290,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "path": "abcde",
                     "match_type": "file",
                     "file_name": "abcde",
-                    "score": 71,
+                    "score": filename_bonus + 71,
                     "indices": [0, 1, 4],
                 },
             ]

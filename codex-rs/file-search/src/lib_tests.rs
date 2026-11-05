@@ -48,6 +48,50 @@ fn tie_breakers_sort_by_path_when_scores_equal() {
 }
 
 #[test]
+fn matching_filenames_survive_the_path_result_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("viewmodel");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("build.gradle.kts"), "").unwrap();
+    let source = Path::new("feature").join("src");
+    fs::create_dir_all(root.path().join(&source)).unwrap();
+    let filename = source.join("ChatViewModel.kt");
+    fs::write(root.path().join(&filename), "").unwrap();
+
+    let search = |query, limit| {
+        run(
+            query,
+            vec![root.path().to_path_buf()],
+            FileSearchOptions {
+                limit: NonZero::new(limit).unwrap(),
+                ..Default::default()
+            },
+            /*cancel_flag*/ None,
+        )
+        .unwrap()
+        .matches
+    };
+    for i in 0..80 {
+        fs::create_dir_all(root.path().join(format!("parent-{i}/viewmodel"))).unwrap();
+    }
+    let hits = search("ViewModel", 2);
+    assert_eq!(hits[0].match_type, MatchType::Directory);
+    assert_eq!(hits[1].path, filename);
+    assert_eq!(search("VM", 1)[0].path, filename);
+    fs::create_dir(root.path().join("src")).unwrap();
+    for i in 0..80 {
+        fs::write(root.path().join(format!("source-{i}.rs")), "").unwrap();
+    }
+    assert_eq!(search("src", 1)[0].path, Path::new("src"));
+    fs::write(root.path().join(&source).join("src"), "").unwrap();
+    assert_eq!(search("src", 1)[0].path, source.join("src"));
+    assert_eq!(
+        search(&format!("viewmodel{}", std::path::MAIN_SEPARATOR), 1)[0].path,
+        Path::new("viewmodel").join("build.gradle.kts")
+    );
+}
+
+#[test]
 fn file_name_from_path_uses_basename() {
     assert_eq!(file_name_from_path("foo/bar.txt"), "bar.txt");
 }
