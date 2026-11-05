@@ -1065,6 +1065,7 @@ impl App {
                 self.finish_initial_history_replay_buffer(tui);
             }
             AppEvent::ConsolidateAgentMessage {
+                interrupted_item,
                 source,
                 copy_source,
                 cwd,
@@ -1072,14 +1073,35 @@ impl App {
                 scrollback_reflow,
                 deferred_history_cell,
             } => {
+                let mut cell = history_cell::AgentMarkdownCell::new_with_inline_visualizations(source, &cwd, inline_visualization_context).with_copy_source(copy_source);
+                cell.interrupted_item = interrupted_item;
                 self.handle_consolidate_agent_message(
                     tui,
-                    history_cell::AgentMarkdownCell::new_with_inline_visualizations(source, &cwd, inline_visualization_context).with_copy_source(copy_source),
+                    cell,
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
                 self.chat_widget.note_stream_consolidation_completed();
                 self.insert_pending_usage_output_after_stream_shutdown(tui);
+            }
+            AppEvent::CorrectFlushedAgentMessage { item, cell } => {
+                let belongs_to_item = |cell: &Arc<dyn HistoryCell>| {
+                    cell.as_any().downcast_ref::<history_cell::AgentMarkdownCell>().is_some_and(|cell| cell.interrupted_item.as_ref() == Some(&item))
+                };
+                if let Some(index) = self.transcript_cells.iter().position(belongs_to_item) {
+                    // Keep the reply where it first appeared, with intervening tools in order.
+                    if self.transcript_cells.extract_if(index + 1.., |cell| belongs_to_item(cell)).count() > 0 {
+                        self.native_history.retain(&self.transcript_cells);
+                        self.transcript_view.restart_search();
+                        self.transcript_view.history_loaded(&self.transcript_cells, 0..0);
+                        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+                            overlay.replace_cells(self.transcript_cells.clone());
+                        }
+                    }
+                    self.replace_agent_message(tui, index..index + 1, cell, crate::app_event::ConsolidationScrollbackReflow::Required)?;
+                } else {
+                    self.insert_history_cell(tui, Box::new(cell));
+                }
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 let end = self.transcript_cells.len();

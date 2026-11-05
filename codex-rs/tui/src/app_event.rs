@@ -1318,12 +1318,19 @@ pub(crate) enum AppEvent {
     /// `deferred_history_cell` lets callers add the final stream tail to the
     /// transcript without first writing its provisional render to scrollback.
     ConsolidateAgentMessage {
+        interrupted_item: Option<(String, String)>,
         source: String,
         copy_source: Option<String>,
         cwd: PathBuf,
         inline_visualization_context: Option<InlineVisualizationContext>,
         scrollback_reflow: ConsolidationScrollbackReflow,
         deferred_history_cell: Option<Box<dyn HistoryCell>>,
+    },
+
+    /// Update a message already committed before a tool started with its completed text.
+    CorrectFlushedAgentMessage {
+        item: (String, String),
+        cell: crate::history_cell::AgentMarkdownCell,
     },
 
     /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the

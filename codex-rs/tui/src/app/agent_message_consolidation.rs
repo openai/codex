@@ -8,6 +8,7 @@
 //! resize re-renders. The retained view preserves its displayed revision before that
 //! replacement, then repaints without replaying terminal scrollback.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use color_eyre::eyre::Result;
@@ -50,6 +51,17 @@ impl App {
             source.copy_source().map_or(/*default*/ 0, str::len)
         );
         let start = trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
+        self.replace_agent_message(tui, start..end, source, scrollback_reflow)
+    }
+
+    pub(super) fn replace_agent_message(
+        &mut self,
+        tui: &mut tui::Tui,
+        range: Range<usize>,
+        source: history_cell::AgentMarkdownCell,
+        scrollback_reflow: ConsolidationScrollbackReflow,
+    ) -> Result<()> {
+        let Range { start, end } = range;
         if start < end {
             tracing::debug!(
                 "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"

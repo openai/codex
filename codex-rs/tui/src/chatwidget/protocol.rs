@@ -579,8 +579,31 @@ impl ChatWidget {
             {
                 self.remember_realtime_delegated_reasoning_turn(&notification.turn_id);
             }
-            ThreadItemPayload::AgentMessage { id, .. } if replay_kind.is_none() => {
-                self.is_realtime_delegated_agent_item(&notification.turn_id, &id);
+            ThreadItemPayload::AgentMessage {
+                id,
+                text,
+                questions,
+                ..
+            } => {
+                let delegated = replay_kind.is_none()
+                    && self.is_realtime_delegated_agent_item(&notification.turn_id, &id);
+                // Some streams carry their first text on item/started. Async questions
+                // render with their choices on completion.
+                if delegated
+                    || self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
+                    || questions.is_some()
+                    || text.is_empty()
+                {
+                    return;
+                }
+                let key = (notification.turn_id, id);
+                // A tool can interrupt this item and cause a second start before completion.
+                if self.transcript.active_streamed_agent_message.as_ref() != Some(&key)
+                    && self.transcript.last_flushed_agent_message.as_ref() != Some(&key)
+                {
+                    self.transcript.active_streamed_agent_message = Some(key);
+                    self.on_agent_message_delta(text);
+                }
             }
             ThreadItemPayload::Reasoning {
                 id,

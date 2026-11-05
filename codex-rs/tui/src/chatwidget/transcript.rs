@@ -51,7 +51,7 @@ pub(super) struct TranscriptState {
     /// Turn and item IDs for the agent message currently supplying streamed deltas.
     pub(super) active_streamed_agent_message: Option<(String, String)>,
     /// Turn/item identity and raw source of the latest interleaved stream flush.
-    pub(super) last_flushed_agent_message: Option<((String, String), String)>,
+    pub(super) last_flushed_agent_message: Option<(String, String)>,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
     /// Whether this turn already produced a copyable response.

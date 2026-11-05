@@ -287,6 +287,7 @@ async fn inactive_thread_user_verification_preserves_foreground_stream() -> Resu
                 inline_visualization_context,
                 scrollback_reflow,
                 deferred_history_cell,
+                ..
             } => {
                 completed_messages.push(source.clone());
                 app.handle_consolidate_agent_message(
