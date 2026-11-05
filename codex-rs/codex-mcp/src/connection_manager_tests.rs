@@ -2154,6 +2154,7 @@ async fn shared_apps_snapshot_requires_writable_discovery_and_a_shared_cache() -
             McpPublicationGate::already_published(),
             McpRuntimeInput {
                 network_policy_metadata: None,
+                runtime_auth: None,
                 startup_policy: McpStartupPolicy::Eager,
                 config: Arc::new(config),
                 plugins_available: false,
@@ -2234,6 +2235,7 @@ async fn hosted_apps_protocol_mode_is_independent_of_generic_mode() -> anyhow::R
             McpPublicationGate::already_published(),
             McpRuntimeInput {
                 network_policy_metadata: None,
+                runtime_auth: None,
                 startup_policy: McpStartupPolicy::Eager,
                 config: Arc::new(config),
                 plugins_available: false,
@@ -2405,6 +2407,7 @@ async fn codex_apps_extension_does_not_share_host_owned_tools_cache() -> anyhow:
             McpPublicationGate::already_published(),
             McpRuntimeInput {
                 network_policy_metadata: None,
+                runtime_auth: None,
                 startup_policy: McpStartupPolicy::Eager,
                 config: Arc::new(config),
                 plugins_available: false,
@@ -4973,6 +4976,7 @@ async fn executor_owned_chatgpt_mcp_accepts_only_safe_explicit_authorization() -
                 &resolved_environment,
                 &runtime_context,
                 /*runtime_auth_provider*/ None,
+                /*runtime_auth_mode*/ None,
                 Some(&hosted_auth),
                 /*codex_apps_cache_identity*/ None,
                 ElicitationCapability::default(),
@@ -5020,6 +5024,7 @@ async fn executor_owned_chatgpt_mcp_accepts_only_safe_explicit_authorization() -
             McpPublicationGate::already_published(),
             McpRuntimeInput {
                 network_policy_metadata: None,
+                runtime_auth: None,
                 startup_policy: McpStartupPolicy::Eager,
                 config: Arc::new(runtime_config.clone()),
                 plugins_available: false,
@@ -5141,6 +5146,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth: None,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(crate::mcp::tests::test_mcp_config(
                 codex_home.path().to_path_buf(),
@@ -5521,6 +5527,7 @@ pub(crate) fn reusable_server_identity(
         &resolved_environment,
         runtime_context,
         /*runtime_auth_provider*/ None,
+        /*runtime_auth_mode*/ None,
         /*auth*/ None,
         /*codex_apps_cache_identity*/ None,
         ElicitationCapability::default(),
@@ -5603,6 +5610,7 @@ async fn reconcile_reusable_server_with_mcp_config(
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth: None,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(mcp_config),
             plugins_available: false,
@@ -6343,6 +6351,7 @@ fn connection_identity_tracks_only_oauth_credentials_when_oauth_is_active() {
                 &Ok(None),
                 &runtime_context,
                 /*runtime_auth_provider*/ None,
+                /*runtime_auth_mode*/ None,
                 /*auth*/ None,
                 /*codex_apps_cache_identity*/ None,
                 ElicitationCapability::default(),
@@ -6425,6 +6434,7 @@ fn connection_identity_uses_effective_authorization_headers() {
                 &Ok(None),
                 &runtime_context,
                 /*runtime_auth_provider*/ None,
+                /*runtime_auth_mode*/ None,
                 /*auth*/ None,
                 /*codex_apps_cache_identity*/ None,
                 ElicitationCapability::default(),
@@ -6575,6 +6585,7 @@ async fn reconciliation_replaces_connection_when_protocol_mode_changes() {
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth: None,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(mcp_config),
             plugins_available: false,
@@ -6639,6 +6650,7 @@ async fn reconciliation_reuses_legacy_stdio_server_when_modern_protocol_is_enabl
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth: None,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(mcp_config),
             plugins_available: false,
@@ -6920,6 +6932,7 @@ async fn reconciliation_reconnects_when_host_plugin_root_changes() {
         &resolved_environment,
         &runtime_context,
         /*runtime_auth_provider*/ None,
+        /*runtime_auth_mode*/ None,
         /*auth*/ None,
         /*codex_apps_cache_identity*/ None,
         ElicitationCapability::default(),
@@ -7000,7 +7013,8 @@ async fn connection_identity_distinguishes_accounts_with_the_same_token() -> any
             McpOAuthRefreshMode::Legacy,
             &Ok(None),
             &runtime_context,
-            Some(&provider),
+            Some(&crate::auth::McpAuthProvider::Credentials(provider)),
+            /*runtime_auth_mode*/ None,
             Some(auth),
             /*codex_apps_cache_identity*/ None,
             ElicitationCapability::default(),
@@ -7054,7 +7068,8 @@ async fn connection_identity_distinguishes_agent_account_runtime_and_task() -> a
             McpOAuthRefreshMode::Legacy,
             &Ok(None),
             &runtime_context,
-            Some(&provider),
+            Some(&crate::auth::McpAuthProvider::Credentials(provider)),
+            /*runtime_auth_mode*/ None,
             Some(auth),
             /*codex_apps_cache_identity*/ None,
             ElicitationCapability::default(),

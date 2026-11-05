@@ -2869,10 +2869,19 @@ impl AuthManager {
     /// Reloads stored credentials without hiding storage or hydration failures.
     /// Failed loads retain the last known owner so a temporary outage does not
     /// invalidate application network policy as if the user had logged out.
-    /// Callers must serialize reload and refresh and reject cached headers on error.
+    /// Leaves host-provided credentials alone and serializes with token refresh.
+    /// Callers must reject cached headers on error.
     pub async fn reload_with_cached_auth(&self) -> std::io::Result<bool> {
+        let _refresh_guard = self
+            .refresh_lock
+            .acquire()
+            .await
+            .map_err(std::io::Error::other)?;
         loop {
             let generation = self.auth_change_state_tx.borrow().generation;
+            if self.has_external_auth() {
+                return Ok(false);
+            }
             let cached = self.auth_cached();
             let new_auth = self.try_load_managed_auth(cached.as_ref()).await?;
             if let Some(publication) = self.publish_reloaded_auth(generation, new_auth) {

@@ -59,14 +59,30 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     config: &Config,
     path: String,
 ) -> anyhow::Result<T> {
-    // This helper is used by the standalone apply command. Harness callers pass their owner below.
-    // The temporary credential manager does not own account changes.
-    let mut captured_config = config.clone();
-    captured_config.application_network_policy = config
+    let mut config = config.clone();
+    let (auth, runtime) = standalone_auth(&mut config).await?;
+    chatgpt_get_request_with_timeout(
+        &config,
+        &auth,
+        runtime.as_ref(),
+        path,
+        /*timeout*/ None,
+    )
+    .await
+}
+
+pub(crate) async fn standalone_auth(
+    config: &mut Config,
+) -> anyhow::Result<(
+    CodexAuth,
+    Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
+)> {
+    // Standalone commands create one owner. Freeze the caller's account policy before loading
+    // credentials; this temporary manager does not own later account changes.
+    config.application_network_policy = config
         .application_network_policy
         .clone()
         .for_current_account();
-    let config = &captured_config;
     if config.features.enabled(Feature::RuntimeAgentInstances) {
         codex_model_provider::validate_runtime_destination(Some(&config.chatgpt_base_url))?;
     }
@@ -85,7 +101,7 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
         .auth()
         .await
         .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
-    chatgpt_get_request_with_timeout(config, &auth, runtime.as_ref(), path, /*timeout*/ None).await
+    Ok((auth, runtime))
 }
 
 pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(

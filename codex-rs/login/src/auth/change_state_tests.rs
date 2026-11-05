@@ -117,7 +117,7 @@ fn api_workload_identity_changes_retire_previous_owner() {
 
 #[tokio::test]
 #[serial_test::serial(codex_auth_env)]
-async fn auth_refresh_read_failure_is_transient_and_preserves_network_permit() {
+async fn auth_reload_and_refresh_read_failure_preserves_network_permit() {
     let home = tempfile::tempdir().unwrap();
     let storage = FileAuthStorage::new(home.path().to_path_buf());
     let initial = chatgpt_auth("user-a", "workspace-a", "token-1");
@@ -167,9 +167,15 @@ async fn auth_refresh_read_failure_is_transient_and_preserves_network_permit() {
         jwt_auth.as_str(),
     ] {
         std::fs::write(home.path().join("auth.json"), contents).unwrap();
+        let reload_error = manager.reload_with_cached_auth().await.unwrap_err();
         let error = manager.refresh_token().await.unwrap_err();
         assert!(matches!(error, RefreshTokenError::Transient(_)));
-        for formatted in [error.to_string(), format!("{error:?}")] {
+        for formatted in [
+            reload_error.to_string(),
+            format!("{reload_error:?}"),
+            error.to_string(),
+            format!("{error:?}"),
+        ] {
             assert!(
                 !formatted.contains("private-credential-value"),
                 "{formatted}"

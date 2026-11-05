@@ -4,9 +4,9 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::auth::McpAuthProvider;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::runtime::McpRuntimeContext;
-use codex_api::SharedAuthProvider;
 use codex_config::AppToolApproval;
 use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
@@ -92,7 +92,7 @@ impl EffectiveMcpServer {
     pub(crate) fn can_discover_local_stdio(
         &self,
         server_name: &str,
-        runtime_auth_provider: Option<&SharedAuthProvider>,
+        runtime_auth_provider: Option<&McpAuthProvider>,
     ) -> bool {
         server_name != CODEX_APPS_MCP_SERVER_NAME
             && self.config.is_local_environment()
@@ -178,6 +178,7 @@ pub(crate) struct McpServerConnectionIdentity {
     referenced_environment_variables: Vec<(String, Option<OsString>)>,
     runtime_auth: Option<CodexAuth>,
     runtime_auth_token: Option<String>,
+    runtime_auth_mode: Option<codex_features::RuntimeAuthMode>,
     codex_apps_cache_identity: Option<(PathBuf, ConnectorRuntimeContextKey)>,
     client_elicitation_capability: ElicitationCapability,
     client_mcp_extensions: ClientMcpExtensions,
@@ -196,7 +197,8 @@ impl McpServerConnectionIdentity {
         oauth_refresh_mode: McpOAuthRefreshMode,
         resolved_environment: &Result<Option<Arc<Environment>>, String>,
         runtime_context: &McpRuntimeContext,
-        runtime_auth_provider: Option<&SharedAuthProvider>,
+        runtime_auth_provider: Option<&McpAuthProvider>,
+        runtime_auth_mode: Option<codex_features::RuntimeAuthMode>,
         auth: Option<&CodexAuth>,
         codex_apps_cache_identity: Option<(PathBuf, ConnectorRuntimeContextKey)>,
         client_elicitation_capability: ElicitationCapability,
@@ -306,6 +308,7 @@ impl McpServerConnectionIdentity {
             referenced_environment_variables,
             runtime_auth,
             runtime_auth_token,
+            runtime_auth_mode,
             codex_apps_cache_identity,
             client_elicitation_capability,
             client_mcp_extensions,
@@ -345,6 +348,7 @@ impl McpServerConnectionIdentity {
             && self.referenced_environment_variables == other.referenced_environment_variables
             && same_runtime_auth
             && self.runtime_auth_token == other.runtime_auth_token
+            && self.runtime_auth_mode == other.runtime_auth_mode
             && self.codex_apps_cache_identity == other.codex_apps_cache_identity
             && self.client_elicitation_capability == other.client_elicitation_capability
             && self.client_mcp_extensions == other.client_mcp_extensions

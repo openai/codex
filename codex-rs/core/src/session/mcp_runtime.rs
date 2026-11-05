@@ -368,6 +368,16 @@ impl Session {
             self.mcp_runtime_context(&desired.environments, &desired.local_process_cwd);
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth: desired
+                .config
+                .features
+                .enabled(Feature::RuntimeAgentInstances)
+                .then(|| {
+                    (
+                        Arc::clone(&self.services.runtime_auth),
+                        desired.config.runtime_auth_mode,
+                    )
+                }),
             startup_policy: if matches!(desired.session_source, SessionSource::SubAgent(_)) {
                 McpStartupPolicy::LazyWhenCached
             } else {

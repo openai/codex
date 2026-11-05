@@ -342,6 +342,133 @@ async fn fixed_thread_text_supersedes_the_live_provider_and_isolated_helpers_rej
     }
 }
 
+#[test_case::test_case(None, "chatgpt.com", 1; "ordinary_openai")]
+#[test_case::test_case(Some(codex_features::RuntimeAuthMode::DualHeader), "chatgpt.com", 0; "dual_header_openai")]
+#[test_case::test_case(Some(codex_features::RuntimeAuthMode::AssertionOnly), "chatgpt.com", 0; "assertion_only_openai")]
+#[test_case::test_case(Some(codex_features::RuntimeAuthMode::DualHeader), "example.test", 1; "dual_header_custom_backend")]
+#[test_case::test_case(Some(codex_features::RuntimeAuthMode::AssertionOnly), "example.test", 1; "assertion_only_custom_backend")]
+#[tokio::test]
+async fn resumed_analytics_validates_openai_destination(
+    mode: Option<codex_features::RuntimeAuthMode>,
+    host: &str,
+    expected_requests: usize,
+) {
+    let proxy = MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::path("/codex/analytics-events/events"))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .mount(&proxy)
+        .await;
+    let home = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = home.path().abs();
+    config.cwd = home.path().abs();
+    config.chatgpt_base_url = format!("http://{host}:{}", proxy.address().port());
+    config.model_provider.base_url = Some(proxy.uri());
+    config.respect_system_proxy = true;
+    config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
+    config.analytics_enabled = Some(true);
+    if let Some(mode) = mode {
+        config
+            .features
+            .enable(Feature::RuntimeAgentInstances)
+            .unwrap();
+        config.runtime_auth_mode = mode;
+    } else {
+        config
+            .features
+            .disable(Feature::RuntimeAgentInstances)
+            .unwrap();
+    }
+    codex_http_client::cache_system_proxy_route_for_test(
+        &format!("{}/codex/analytics-events/events", config.chatgpt_base_url),
+        proxy.uri(),
+    );
+    codex_login::login_with_api_key(
+        &config.codex_home,
+        "resumed-key",
+        codex_login::AuthCredentialsStoreMode::File,
+        codex_login::AuthKeyringBackendKind::default(),
+    )
+    .unwrap();
+    let resumed_auth =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
+            .await
+            .unwrap();
+    let original_auth = CodexAuth::from_api_key("startup-key");
+    let mut manager = ThreadManager::with_models_provider_and_home_for_tests(
+        original_auth.clone(),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let startup_analytics = AnalyticsEventsClient::new(
+        AuthManager::from_auth_for_testing(original_auth),
+        proxy.uri(),
+        /*analytics_enabled*/ Some(true),
+    );
+    Arc::get_mut(&mut manager.state)
+        .expect("unshared thread manager state")
+        .analytics_events_client = Some(startup_analytics);
+
+    let original = manager
+        .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Legacy),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("start original thread");
+    original.thread.ensure_rollout_materialized().await;
+    original.thread.flush_rollout().await.unwrap();
+    original.thread.shutdown_and_wait().await.unwrap();
+    manager.remove_thread(&original.thread_id).await;
+
+    let resumed = manager
+        .resume_thread_with_history(
+            config,
+            InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
+                conversation_id: original.thread_id,
+                history: Arc::new(Vec::new()),
+                rollout_path: original.thread.rollout_path(),
+            }),
+            resumed_auth,
+            /*parent_trace*/ None,
+            ClientMcpExtensions::default(),
+        )
+        .await
+        .expect("resume with another auth owner");
+    let analytics = &resumed.thread.session.services.analytics_events_client;
+    analytics.track_plugin_used(
+        codex_analytics::TrackEventsContext {
+            turn_metadata: None,
+            model_slug: "test-model".to_string(),
+            turn_id: "test-turn".to_string(),
+            thread_id: resumed.thread_id.to_string(),
+            product_client_id: "codex_work_cca".to_string(),
+        },
+        codex_plugin::PluginTelemetryMetadata {
+            plugin_id: Some(codex_plugin::PluginId::parse("test@local").expect("valid plugin ID")),
+            remote_plugin_id: None,
+            capability_summary: None,
+        },
+    );
+    analytics.flush().await;
+    resumed.thread.shutdown_and_wait().await.unwrap();
+
+    let requests: Vec<_> = proxy
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/codex/analytics-events/events")
+        .collect();
+    assert_eq!(requests.len(), expected_requests);
+    for request in requests {
+        assert_eq!(request.headers["authorization"], "Bearer resumed-key");
+        assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+    }
+}
+
 /// A thread opt-out wins over a shared client without disabling its siblings.
 #[tokio::test]
 async fn thread_analytics_opt_out_overrides_shared_client() {

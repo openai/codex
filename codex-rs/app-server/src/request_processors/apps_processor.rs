@@ -8,7 +8,6 @@ mod read;
 pub(super) use read::APP_READ_MAX_IDS;
 
 pub(crate) struct AppsRequestProcessor {
-    auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
@@ -18,7 +17,6 @@ pub(crate) struct AppsRequestProcessor {
 
 impl AppsRequestProcessor {
     pub(crate) fn new(
-        auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
@@ -26,7 +24,6 @@ impl AppsRequestProcessor {
     ) -> Self {
         let shutdown_drop_guard = shutdown_token.clone().drop_guard();
         Self {
-            auth_manager,
             thread_manager,
             outgoing,
             config_manager,
@@ -64,13 +61,27 @@ impl AppsRequestProcessor {
         };
         let mut config = self.load_latest_config(fallback_cwd).await?;
 
-        if let Some(thread) = thread {
+        if let Some(thread) = thread.as_ref() {
             let _ = config
                 .features
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
         }
 
-        let auth = self.auth_manager.auth().await;
+        let mcp_manager = thread
+            .as_ref()
+            .map(|thread| thread.mcp_manager())
+            .unwrap_or_else(|| self.thread_manager.mcp_manager());
+        self.thread_manager
+            .runtime_auth_for_mcp_manager(&config, &mcp_manager)
+            .map_err(|error| internal_error(error.to_string()))?;
+        let auth_manager = mcp_manager.auth_manager();
+        if params.force_refetch && !auth_manager.has_external_auth() {
+            auth_manager
+                .reload_with_cached_auth()
+                .await
+                .map_err(|error| internal_error(error.to_string()))?;
+        }
+        let auth = auth_manager.auth().await;
         if !config
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
@@ -86,8 +97,7 @@ impl AppsRequestProcessor {
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
-        let mcp_manager = self.thread_manager.mcp_manager();
-        let plugins_manager = self.thread_manager.plugins_manager();
+        let plugins_manager = mcp_manager.plugins_manager();
         let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
             tokio::select! {
@@ -195,10 +205,33 @@ impl AppsRequestProcessor {
                 loaded_plugins.capability_summaries(),
             );
         let plugin_apps = connector_snapshot.connector_ids().to_vec();
-        let (mut accessible_connectors, mut all_connectors) = tokio::join!(
-            connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
-            connectors::list_cached_all_connectors(&config, &plugin_apps)
-        );
+        let mut config = config;
+        let auth = match mcp_manager
+            .auth_manager()
+            .auth_with_http_client_factory()
+            .await
+        {
+            Some((auth, factory)) => {
+                config.application_network_policy = factory.network_policy().clone();
+                Some(auth)
+            }
+            None => None,
+        };
+        let runtime = mcp_manager
+            .runtime_auth_for_config(&config)
+            .map(|(slot, mode)| {
+                slot.get()
+                    .cloned()
+                    .map(|runtime| (runtime, mode))
+                    .ok_or_else(|| {
+                        internal_error("runtime authentication is not initialized".to_string())
+                    })
+            })
+            .transpose()?;
+        let mut accessible_connectors =
+            connectors::list_cached_accessible_connectors_from_mcp_tools(&config, auth.as_ref());
+        let mut all_connectors =
+            connectors::list_cached_all_connectors(&config, auth.as_ref(), &plugin_apps);
         let cached_all_connectors = all_connectors.clone();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -222,6 +255,8 @@ impl AppsRequestProcessor {
         tokio::spawn(async move {
             let result = connectors::list_all_connectors_with_options(
                 &all_config,
+                auth.as_ref(),
+                runtime.as_ref(),
                 force_refetch,
                 &all_plugin_apps,
             )
@@ -354,19 +389,32 @@ impl AppsRequestProcessor {
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
-    async fn load_apps_config(&self, thread_id: Option<&str>) -> Result<Config, JSONRPCErrorError> {
+    async fn load_apps_config(
+        &self,
+        thread_id: Option<&str>,
+    ) -> Result<(Config, Arc<McpManager>), JSONRPCErrorError> {
         let Some(thread_id) = thread_id else {
-            return self.load_latest_config(/*fallback_cwd*/ None).await;
+            let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+            self.thread_manager
+                .runtime_auth_for_config(&config)
+                .map_err(|error| internal_error(error.to_string()))?;
+            return Ok((config, self.thread_manager.mcp_manager()));
         };
         let (_, thread) = self.load_thread(thread_id).await?;
         let thread_config = thread.config().await;
-        self.config_manager
+        let config = self
+            .config_manager
             .load_latest_config_with_session_layers(
                 &thread_config.config_layer_stack,
                 &thread_config.cwd,
             )
             .await
-            .map_err(|err| internal_error(format!("failed to reload config: {err}")))
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+        let mcp_manager = thread.mcp_manager();
+        self.thread_manager
+            .runtime_auth_for_mcp_manager(&config, &mcp_manager)
+            .map_err(|error| internal_error(error.to_string()))?;
+        Ok((config, mcp_manager))
     }
 }
 

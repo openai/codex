@@ -277,6 +277,7 @@ impl Fixture {
         let startup_cancellation_token = CancellationToken::new();
         let runtime_input = || McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth: None,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::clone(&config),
             plugins_available: false,

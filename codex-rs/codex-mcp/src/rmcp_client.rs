@@ -32,6 +32,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::auth::McpAuthProvider;
 use crate::client_tool_catalog::ClientToolCatalog;
 use crate::codex_apps::normalize_codex_apps_callable_name;
 use crate::codex_apps::normalize_codex_apps_callable_namespace;
@@ -59,7 +60,6 @@ use crate::tools::ToolInfo;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
-use codex_api::SharedAuthProvider;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::McpServerAuth;
@@ -285,7 +285,7 @@ struct ManagedClientStartup {
     tool_catalog_cache_context: Option<McpToolCatalogCacheContext>,
     runtime_context: McpRuntimeContext,
     resolved_environment: std::result::Result<Option<Arc<Environment>>, String>,
-    runtime_auth_provider: Option<SharedAuthProvider>,
+    runtime_auth_provider: Option<McpAuthProvider>,
     client_elicitation_capability: ElicitationCapability,
     client_mcp_extensions: ClientMcpExtensions,
     auth_changes: Option<watch::Receiver<AuthChangeState>>,
@@ -490,7 +490,7 @@ impl AsyncManagedClient {
         tool_catalog_cache_context: Option<McpToolCatalogCacheContext>,
         runtime_context: McpRuntimeContext,
         resolved_environment: std::result::Result<Option<Arc<Environment>>, String>,
-        runtime_auth_provider: Option<SharedAuthProvider>,
+        runtime_auth_provider: Option<McpAuthProvider>,
         client_elicitation_capability: ElicitationCapability,
         client_mcp_extensions: ClientMcpExtensions,
         auth_changes: Option<watch::Receiver<AuthChangeState>>,
@@ -1429,7 +1429,7 @@ pub(crate) async fn make_rmcp_client(
     oauth_refresh_mode: McpOAuthRefreshMode,
     runtime_context: McpRuntimeContext,
     resolved_environment: std::result::Result<Option<Arc<Environment>>, String>,
-    runtime_auth_provider: Option<SharedAuthProvider>,
+    runtime_auth_provider: Option<McpAuthProvider>,
     protocol_mode: McpProtocolMode,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let config = server.config().clone();
@@ -1535,6 +1535,13 @@ pub(crate) async fn make_rmcp_client(
             bearer_token_env_var,
             http_headers_helper: _,
         } => {
+            let (runtime_auth_provider, runtime_context) = match runtime_auth_provider {
+                Some(provider) => {
+                    let (provider, context) = provider.resolve(runtime_context, &url).await?;
+                    (Some(provider), context)
+                }
+                None => (None, runtime_context),
+            };
             let http_client = runtime_context
                 .http_client_for_server(server.config(), resolved_environment.as_ref())
                 .map_err(|error| StartupOutcomeError::from(anyhow!(error)))?;

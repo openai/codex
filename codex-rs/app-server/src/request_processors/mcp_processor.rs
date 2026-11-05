@@ -428,8 +428,15 @@ impl McpRequestProcessor {
                 }
                 None => self.load_global_config().await?,
             };
-            let mcp_manager = self.thread_manager.mcp_manager();
-            let auth = self.auth_manager.auth().await;
+            let mcp_manager = thread
+                .as_ref()
+                .map(|thread| thread.mcp_manager())
+                .unwrap_or_else(|| self.thread_manager.mcp_manager());
+            self.thread_manager
+                .runtime_auth_for_mcp_manager(&config, &mcp_manager)
+                .map_err(|error| internal_error(error.to_string()))?;
+            let auth = mcp_manager.auth_manager().auth().await;
+            let runtime_auth = mcp_manager.runtime_auth_for_config(&config);
             let (mcp_config, runtime_context) = match thread.as_ref() {
                 Some(thread) => thread.runtime_mcp_config_and_context(&config).await,
                 None => (
@@ -444,6 +451,7 @@ impl McpRequestProcessor {
                 &mcp_config,
                 auth.as_ref(),
                 Some(&self.auth_manager),
+                runtime_auth,
                 runtime_context,
                 mcp_manager.codex_apps_tools_cache(),
                 mcp_manager.tool_catalog_cache(),
@@ -700,7 +708,11 @@ impl McpRequestProcessor {
         let mcp_config = mcp_manager.runtime_config(&config).await;
         let codex_apps_tools_cache = mcp_manager.codex_apps_tools_cache();
         let tool_catalog_cache = mcp_manager.tool_catalog_cache();
-        let auth = self.auth_manager.auth().await;
+        self.thread_manager
+            .runtime_auth_for_mcp_manager(&config, &mcp_manager)
+            .map_err(|error| internal_error(error.to_string()))?;
+        let runtime_auth = mcp_manager.runtime_auth_for_config(&config);
+        let auth = mcp_manager.auth_manager().auth().await;
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless resource-read path has no turn cwd or turn-selected
         // environment. Use config cwd only as the local stdio fallback; named
@@ -713,6 +725,7 @@ impl McpRequestProcessor {
             let result = read_mcp_resource_without_thread(
                 &mcp_config,
                 auth.as_ref(),
+                runtime_auth,
                 runtime_context,
                 codex_apps_tools_cache,
                 tool_catalog_cache,

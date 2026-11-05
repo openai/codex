@@ -730,6 +730,14 @@ impl PluginsManager {
         )
     }
 
+    pub fn auth_manager(&self) -> Arc<AuthManager> {
+        Arc::clone(&self.auth_manager)
+    }
+
+    pub fn runtime_auth_slot(&self) -> RuntimeAuthSlot {
+        Arc::clone(&self.runtime_auth)
+    }
+
     /// Reuse host configuration without sharing another actor's remote caches or credentials.
     pub fn for_auth_context(
         &self,

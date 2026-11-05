@@ -76,6 +76,7 @@ fn connection_identity(
         &Ok(None),
         runtime_context,
         /*runtime_auth_provider*/ None,
+        /*runtime_auth_mode*/ None,
         /*auth*/ None,
         /*codex_apps_cache_identity*/ None,
         ElicitationCapability::default(),

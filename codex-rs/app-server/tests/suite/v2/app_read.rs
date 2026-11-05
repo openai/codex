@@ -115,14 +115,19 @@ async fn connector_requests_preserve_account_policy() -> Result<()> {
     let (auth, factory) = manager.auth_with_http_client_factory().await.unwrap();
     config.application_network_policy = factory.network_policy().clone();
     let app_ids = vec!["alpha".to_string()];
-    connectors::read_connector_metadata(&config, &auth, &app_ids, /*include_tools*/ false).await?;
+    connectors::read_connector_metadata(
+        &config, &auth, /*runtime*/ None, &app_ids, /*include_tools*/ false,
+    )
+    .await?;
     assert_eq!(state.requests().len(), 1);
 
     policy.invalidate();
     controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
     let error = timeout(
         DEFAULT_TIMEOUT,
-        connectors::read_connector_metadata(&config, &auth, &app_ids, /*include_tools*/ false),
+        connectors::read_connector_metadata(
+            &config, &auth, /*runtime*/ None, &app_ids, /*include_tools*/ false,
+        ),
     )
     .await?
     .err()
@@ -139,9 +144,17 @@ async fn connector_requests_preserve_account_policy() -> Result<()> {
             allowed_hosts: Default::default(),
         },
     );
+    let (auth, factory) = manager.auth_with_http_client_factory().await.unwrap();
+    config.application_network_policy = factory.network_policy().clone();
     let error = timeout(
         DEFAULT_TIMEOUT,
-        connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true, &[]),
+        connectors::list_all_connectors_with_options(
+            &config,
+            Some(&auth),
+            /*runtime*/ None,
+            /*force_refetch*/ true,
+            &[],
+        ),
     )
     .await?
     .unwrap_err();

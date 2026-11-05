@@ -406,6 +406,23 @@ impl AnalyticsEventsClient {
         }
     }
 
+    /// Give a resumed actor its own queue while preserving the caller's analytics setting.
+    pub fn for_auth_context(
+        &self,
+        auth_manager: Arc<AuthManager>,
+        base_url: String,
+        runtime_auth: Option<(RuntimeAuthSlot, RuntimeAuthMode)>,
+        api_key_headers: HeaderMap,
+    ) -> Self {
+        Self::new_with_runtime(
+            auth_manager,
+            base_url,
+            Some(self.queue.is_some()),
+            runtime_auth,
+            api_key_headers,
+        )
+    }
+
     pub fn disabled() -> Self {
         Self { queue: None }
     }

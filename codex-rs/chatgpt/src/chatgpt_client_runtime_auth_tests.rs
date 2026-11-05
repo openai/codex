@@ -44,6 +44,11 @@ async fn helpers_use_captured_auth_and_strip_cross_origin_proofs() {
             .expect(1)
             .mount(&server)
             .await;
+        Mock::given(path("/ps/apps/batch"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "apps": [{"id": "calendar", "name": "Calendar", "description": "Calendar metadata"}],
+            })))
+            .expect(1).mount(&server).await;
         let home = tempfile::TempDir::new().unwrap();
         let mut config = codex_core::config::ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
@@ -94,6 +99,18 @@ async fn helpers_use_captured_auth_and_strip_cross_origin_proofs() {
         )
         .await
         .unwrap();
+        let metadata = crate::connectors::read_connector_metadata(
+            &config,
+            &auth,
+            Some(&runtime),
+            &["calendar".into()],
+            /*include_tools*/ false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(metadata.apps.len(), 1);
+        assert_eq!(metadata.apps[0].name, "Calendar");
+        assert!(metadata.missing_app_ids.is_empty());
         assert_eq!(get, json!({"ok": true}));
         assert_eq!(post, get);
         let redirected_result = chatgpt_get_request_with_timeout::<serde_json::Value>(
@@ -116,9 +133,22 @@ async fn helpers_use_captured_auth_and_strip_cross_origin_proofs() {
         );
         redirected.verify().await;
         let requests = server.received_requests().await.unwrap();
+        let metadata_request = requests
+            .iter()
+            .find(|request| request.url.path() == "/ps/apps/batch")
+            .unwrap();
+        assert_eq!(
+            metadata_request.headers["authorization"],
+            format!("Bearer {token}")
+        );
+        assert!(
+            !metadata_request
+                .headers
+                .contains_key("x-openai-agent-assertion")
+        );
         let proofs: HashSet<_> = requests
             .iter()
-            .filter(|r| r.url.path() != "/agent/register")
+            .filter(|r| !matches!(r.url.path(), "/agent/register" | "/ps/apps/batch"))
             .map(|r| {
                 assert_eq!(r.headers["chatgpt-account-id"], "workspace-a");
                 let authorization = r.headers["authorization"].to_str().unwrap();
@@ -184,6 +214,85 @@ async fn standalone_apply_keeps_custom_backend_auth_when_runtime_feature_is_enab
     assert_eq!(requests.len(), 1);
     assert!(!requests[0].headers.contains_key("x-openai-agent-assertion"));
     server.verify().await;
+}
+
+#[tokio::test]
+async fn connector_requests_reject_unsupported_openai_destinations() {
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        for base_url in [
+            "http://chatgpt.com",
+            "https://future.openai.com/backend-api",
+        ] {
+            let home = tempfile::TempDir::new().unwrap();
+            let mut config = codex_core::config::ConfigBuilder::default()
+                .codex_home(home.path().to_path_buf())
+                .build()
+                .await
+                .unwrap();
+            config.chatgpt_base_url = base_url.to_string();
+            config.features.enable(Feature::Apps).unwrap();
+            let auth = CodexAuth::from_external_chatgpt_tokens(
+                &actor_token(),
+                "workspace-a",
+                /*chatgpt_plan_type*/ None,
+            )
+            .unwrap();
+            let runtime = (
+                Arc::new(RuntimeAuthManager::for_chatgpt(
+                    AuthManager::from_auth_for_testing(auth.clone()),
+                    uuid::Uuid::nil().to_string(),
+                    base_url.to_string(),
+                    RuntimeRegistrationMetadata {
+                        harness: Some("codex".to_string()),
+                        harness_version: None,
+                        role: RuntimeRole::Orchestrator,
+                    },
+                )),
+                mode,
+            );
+
+            // Keep a broken validation path from sending the test credential to the network.
+            let controller = codex_http_client::NetworkPolicyController::default();
+            config.application_network_policy = controller.policy();
+            assert!(controller.publish(
+                config.application_network_policy.revision(),
+                codex_http_client::DestinationPolicy::Restricted {
+                    allowed_hosts: Default::default(),
+                },
+            ));
+
+            let directory_error = crate::connectors::list_all_connectors_with_options(
+                &config,
+                Some(&auth),
+                Some(&runtime),
+                /*force_refetch*/ true,
+                &[],
+            )
+            .await
+            .expect_err("reject unsupported directory destination");
+            let metadata_error = crate::connectors::read_connector_metadata(
+                &config,
+                &auth,
+                Some(&runtime),
+                &["calendar".to_string()],
+                /*include_tools*/ false,
+            )
+            .await
+            .err()
+            .expect("reject unsupported metadata destination");
+            for error in [directory_error, metadata_error] {
+                assert!(
+                    matches!(
+                        error
+                            .downcast_ref::<codex_protocol::error::CodexErr>()
+                            .map(codex_protocol::error::CodexErr::details),
+                        Some(codex_protocol::error::CodexErrorDetails::UnsupportedOperation(_))
+                    ),
+                    "{base_url} ({mode:?}): {error:#}",
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]

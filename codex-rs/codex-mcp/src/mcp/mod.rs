@@ -469,9 +469,14 @@ pub fn tool_plugin_context(config: &McpConfig) -> ToolPluginContext {
     ToolPluginContext::from_config(config)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn read_mcp_resource(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
+    runtime_auth: Option<(
+        codex_runtime_agent_instance::RuntimeAuthSlot,
+        codex_features::RuntimeAuthMode,
+    )>,
     runtime_context: McpRuntimeContext,
     codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     tool_catalog_cache: crate::McpToolCatalogCache,
@@ -489,6 +494,7 @@ pub async fn read_mcp_resource(
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(runtime_config),
             plugins_available: false,
@@ -534,6 +540,10 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     auth_manager: Option<&Arc<codex_login::AuthManager>>,
+    runtime_auth: Option<(
+        codex_runtime_agent_instance::RuntimeAuthSlot,
+        codex_features::RuntimeAuthMode,
+    )>,
     runtime_context: McpRuntimeContext,
     codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     tool_catalog_cache: crate::McpToolCatalogCache,
@@ -578,6 +588,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         McpPublicationGate::already_published(),
         McpRuntimeInput {
             network_policy_metadata: None,
+            runtime_auth,
             startup_policy: McpStartupPolicy::Eager,
             config: Arc::new(runtime_config),
             plugins_available: false,

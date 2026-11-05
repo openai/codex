@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::auth::McpAuthProvider;
 use anyhow::Result;
 use anyhow::bail;
-use codex_api::SharedAuthProvider;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
@@ -35,7 +35,7 @@ pub(crate) struct EventStreamConnectionSettings {
     pub oauth_refresh_mode: McpOAuthRefreshMode,
     pub runtime_context: McpRuntimeContext,
     pub resolved_environment: std::result::Result<Option<Arc<Environment>>, String>,
-    pub auth_provider: Option<SharedAuthProvider>,
+    pub auth_provider: Option<McpAuthProvider>,
     pub auth_manager: Option<Arc<AuthManager>>,
     pub auth: Option<CodexAuth>,
     pub protocol_mode: McpProtocolMode,

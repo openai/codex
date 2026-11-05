@@ -1197,6 +1197,11 @@ impl CodexThread {
             .collect()
     }
 
+    /// The thread's MCP manager also owns its actor-scoped plugin and runtime auth state.
+    pub fn mcp_manager(&self) -> Arc<crate::mcp::McpManager> {
+        Arc::clone(&self.session.services.mcp_manager)
+    }
+
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.session.get_config().await
     }

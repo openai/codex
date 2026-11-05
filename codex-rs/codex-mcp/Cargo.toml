@@ -22,17 +22,21 @@ codex-config = { workspace = true }
 codex-connectors = { workspace = true }
 codex-diagnostics = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-features = { workspace = true }
+codex-http-client = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-process = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 lru = { workspace = true }
 regex-lite = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }
@@ -47,6 +51,7 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 assert_matches = { workspace = true }
 codex-exec-server-test-support = { workspace = true }
 codex-plugin = { workspace = true }
@@ -55,3 +60,5 @@ insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = ["base64", "macros", "schemars", "server"] }
 tempfile = { workspace = true }
+uuid = { workspace = true }
+wiremock = { workspace = true }

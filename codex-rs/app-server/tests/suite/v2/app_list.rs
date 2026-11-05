@@ -27,6 +27,8 @@ use codex_app_server_protocol::AppReview;
 use codex_app_server_protocol::AppScreenshot;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
+use codex_app_server_protocol::GetAccountParams;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
@@ -1122,6 +1124,40 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     assert_eq!(initial_data.len(), 1);
     assert!(initial_data.iter().all(|app| app.is_accessible));
 
+    let account_request = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let initial_account: GetAccountResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(account_request)).await??;
+    assert!(initial_account.account.is_some());
+
+    let auth_path = codex_home.path().join("auth.json");
+    std::fs::write(&auth_path, "")?;
+    let refetch_request = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: true,
+        })
+        .await?;
+    let _: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(refetch_request)),
+    )
+    .await??;
+
+    let account_request = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(account_request)).await??;
+    assert_eq!(account, initial_account);
+
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("chatgpt-token-invalid")
@@ -1586,6 +1622,18 @@ async fn start_apps_server_with_delays_and_control_inner(
     );
 
     let router = Router::new()
+        .route(
+            "/api/codex/accounts/check",
+            get(|State(state): State<Arc<AppsServerState>>| async move {
+                Json(json!({
+                    "accounts": [{
+                        "id": state.expected_account_id,
+                        "workspace_backend_origin": "https://chatgpt.com",
+                        "account_routing_override": "NO_CONSTRAINT",
+                    }],
+                }))
+            }),
+        )
         .route("/connectors/directory/list", get(list_directory_connectors))
         .route(
             "/connectors/directory/list_workspace",

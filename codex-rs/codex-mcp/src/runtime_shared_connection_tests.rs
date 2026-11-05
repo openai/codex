@@ -80,6 +80,7 @@ async fn forced_refresh_replaces_pending_connection_without_interrupting_other_c
     }));
     let input = McpRuntimeInput {
         network_policy_metadata: None,
+        runtime_auth: None,
         startup_policy: McpStartupPolicy::Eager,
         config,
         plugins_available: false,

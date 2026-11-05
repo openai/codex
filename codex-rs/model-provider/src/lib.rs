@@ -61,7 +61,7 @@ pub use request_preparation::prepare_provider_request;
 pub use request_setup::ResolvedProviderRequest;
 pub use request_setup::resolve_request;
 pub use runtime_auth::runtime_auth_for_url;
-pub use runtime_auth::select_runtime_auth_for_source;
+pub(crate) use runtime_auth::select_runtime_auth_for_source;
 pub use runtime_auth::validate_runtime_destination;
 pub use runtime_auth::validate_runtime_provider;
 pub use runtime_auth::validate_runtime_selectors;

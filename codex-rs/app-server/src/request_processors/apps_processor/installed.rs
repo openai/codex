@@ -58,12 +58,14 @@ impl AppsRequestProcessor {
                     None,
                 ),
             };
-            let auth = self.auth_manager.auth().await;
+            let mcp_manager = thread.as_ref().map(|thread| thread.mcp_manager())
+                .unwrap_or_else(|| self.thread_manager.mcp_manager());
+            let auth_manager = mcp_manager.auth_manager();
+            let auth = auth_manager.auth().await;
             let runtime_enabled = config
                 .features
                 .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend));
 
-            let mcp_manager = self.thread_manager.mcp_manager();
             let cache_key = connector_runtime_context_key(auth.as_ref());
             let previous_snapshot = mcp_manager
                 .codex_apps_tools_cache()
@@ -96,9 +98,11 @@ impl AppsRequestProcessor {
                     let cancellation_token = CancellationToken::new();
                     let codex_apps_auth_manager =
                         host_owned_codex_apps_enabled(&mcp_config, auth.as_ref())
-                            .then(|| Arc::clone(&self.auth_manager));
+                            .then(|| Arc::clone(&auth_manager));
+                    self.thread_manager.runtime_auth_for_mcp_manager(&config, &mcp_manager)?;
                     let runtime = McpRuntime::new(McpRuntimeInput {
                         network_policy_metadata: None,
+                        runtime_auth: mcp_manager.runtime_auth_for_config(&config),
                         startup_policy: McpStartupPolicy::Eager,
                         config: Arc::clone(&mcp_config),
                         plugins_available: false,

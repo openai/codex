@@ -484,7 +484,6 @@ impl MessageProcessor {
             Arc::clone(&model_catalog),
         );
         let apps_processor = AppsRequestProcessor::new(
-            auth_manager.clone(),
             Arc::clone(&thread_manager),
             outgoing.clone(),
             config_manager.clone(),

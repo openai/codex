@@ -116,6 +116,7 @@ pub struct TrustedAccessContext {
     auth_manager: Arc<AuthManager>,
     chatgpt_base_url: String,
     http_client: Arc<dyn HttpClient>,
+    runtime_auth: Option<(crate::auth::McpAuthProvider, crate::McpRuntimeContext)>,
 }
 
 impl TrustedAccessContext {
@@ -127,12 +128,26 @@ impl TrustedAccessContext {
         ) {
             return None;
         }
-        Some(Self::new(
+        let mut context = Self::new(
             auth.clone(),
             input.auth_manager.clone()?,
             input.config.chatgpt_base_url.clone(),
             input.runtime_context.local_http_client(),
-        ))
+        );
+        context.runtime_auth = input
+            .runtime_auth
+            .as_ref()
+            .filter(|_| {
+                codex_http_client::classify_openai_api_url(&input.config.chatgpt_base_url)
+                    != codex_http_client::OpenAiDestination::Other
+            })
+            .map(|runtime| {
+                (
+                    crate::auth::McpAuthProvider::runtime(runtime.clone(), auth.clone()),
+                    input.runtime_context.clone(),
+                )
+            });
+        Some(context)
     }
 
     pub fn new(
@@ -146,6 +161,7 @@ impl TrustedAccessContext {
             auth_manager,
             chatgpt_base_url,
             http_client,
+            runtime_auth: None,
         }
     }
 
@@ -203,8 +219,25 @@ impl TrustedAccessContext {
             return None;
         }
 
-        let headers = codex_model_provider::auth_provider_from_auth(&auth)
-            .to_auth_headers()
+        let (provider, http_client) = match &self.runtime_auth {
+            Some((resolver, context)) => {
+                let (resolver, context) = resolver
+                    .resolve(context.clone(), &self.chatgpt_base_url)
+                    .await
+                    .ok()?;
+                (
+                    resolver.resolve(&Default::default()).await.ok()?,
+                    context.local_http_client(),
+                )
+            }
+            None => (
+                codex_model_provider::auth_provider_from_auth(&auth),
+                Arc::clone(&self.http_client),
+            ),
+        };
+        let headers = provider
+            .apply_auth_headers(Default::default())
+            .await
             .ok()?
             .iter()
             .map(|(name, value)| {
@@ -215,8 +248,7 @@ impl TrustedAccessContext {
                 })
             })
             .collect::<Option<Vec<_>>>()?;
-        let (response, mut response_body) = self
-            .http_client
+        let (response, mut response_body) = http_client
             .http_request_stream(HttpRequestParams {
                 method: "GET".to_string(),
                 url: format!(

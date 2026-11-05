@@ -378,6 +378,7 @@ impl McpConnectionSet {
             client_mcp_extensions,
             auth,
             auth_manager,
+            runtime_auth,
             elicitation_reviewer,
             elicitation_lifecycle,
         } = input;
@@ -546,6 +547,17 @@ impl McpConnectionSet {
                 && should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
             let shares_codex_apps_tools_cache =
                 eligible_for_apps_cache && codex_apps_tools_cache.shares_snapshot();
+            let openai_runtime = runtime_auth.as_ref().filter(|_| {
+                !uses_env_bearer_token
+                    && configured_config.is_local_environment()
+                    && matches!(configured_config.auth, codex_config::McpServerAuth::ChatGpt)
+                    && auth.is_some_and(codex_login::CodexAuth::uses_codex_backend)
+                    && matches!(&configured_config.transport,
+                        McpServerTransportConfig::StreamableHttp { url, .. }
+                            if codex_http_client::classify_openai_api_url(url)
+                                != codex_http_client::OpenAiDestination::Other)
+            });
+            let runtime_auth_mode = openai_runtime.map(|(_, mode)| *mode);
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
                 // Only equivalent discovery inputs may share executable Apps tools.
                 let mut transport = configured_config.transport.clone();
@@ -561,6 +573,7 @@ impl McpConnectionSet {
                 let mut scope = serde_json::json!([
                     transport,
                     &configured_config.auth,
+                    runtime_auth_mode,
                     protocol_mode.preferred_protocol_version().as_str(),
                     catalog_item_limit,
                     &client_elicitation_capability,
@@ -590,7 +603,14 @@ impl McpConnectionSet {
                 if server_name == CODEX_APPS_MCP_SERVER_NAME && uses_env_bearer_token {
                     None
                 } else {
-                    chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider)
+                    chatgpt_auth_provider_for_server(&server, chatgpt_auth_provider).map(
+                        |provider| match (openai_runtime, auth) {
+                            (Some(runtime), Some(auth)) => {
+                                crate::auth::McpAuthProvider::runtime(runtime.clone(), auth.clone())
+                            }
+                            _ => crate::auth::McpAuthProvider::Credentials(provider),
+                        },
+                    )
                 };
             let discover_local_stdio = config.discover_local_stdio
                 && server.can_discover_local_stdio(&server_name, runtime_auth_provider.as_ref());
@@ -624,6 +644,7 @@ impl McpConnectionSet {
                 &resolved_environment,
                 &runtime_context,
                 runtime_auth_provider.as_ref(),
+                runtime_auth_mode,
                 auth,
                 eligible_for_apps_cache
                     .then(|| (codex_home.clone(), codex_apps_tools_cache_key.clone())),

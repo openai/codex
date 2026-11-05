@@ -151,82 +151,7 @@ async fn harness_shares_runtime_and_honors_thread_auth_config() -> Result<()> {
         .mount(&server)
         .await;
 
-    // The production destination check stays intact. A test-only CA and CONNECT proxy route
-    // the real host names to wiremock, only inside this isolated test subprocess.
-    codex_utils_rustls_provider::ensure_rustls_crypto_provider();
-    let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec![
-        "api.openai.com".into(),
-        "auth.openai.com".into(),
-        "chatgpt.com".into(),
-        "us.chatgpt.com".into(),
-    ])?;
-    let ca_dir = tempfile::tempdir()?;
-    let ca_path = ca_dir.path().join("ca.pem");
-    std::fs::write(&ca_path, cert.pem())?;
-    let acceptor = TlsAcceptor::from(Arc::new(
-        rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(vec![cert.der().clone()], signing_key.into())?,
-    ));
-    let proxy = TcpListener::bind("127.0.0.1:0").await?;
-    let proxy_url = format!("http://{}", proxy.local_addr()?);
-    let target = *server.address();
-    let proxy_task = tokio::spawn(async move {
-        let mut connections = JoinSet::new();
-        loop {
-            let (mut stream, _) = proxy.accept().await?;
-            let acceptor = acceptor.clone();
-            connections.spawn(async move {
-                let mut headers = Vec::new();
-                while !headers.ends_with(b"\r\n\r\n") && headers.len() < 8192 {
-                    headers.push(stream.read_u8().await?);
-                }
-                let headers = std::str::from_utf8(&headers)?;
-                anyhow::ensure!(
-                    matches!(
-                        headers.lines().next(),
-                        Some(
-                            "CONNECT api.openai.com:443 HTTP/1.1"
-                                | "CONNECT auth.openai.com:443 HTTP/1.1"
-                                | "CONNECT chatgpt.com:443 HTTP/1.1"
-                                | "CONNECT us.chatgpt.com:443 HTTP/1.1"
-                        )
-                    ),
-                    "unexpected proxy destination"
-                );
-                stream
-                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-                    .await?;
-                let mut stream = acceptor.accept(stream).await?;
-                let mut target = TcpStream::connect(target).await?;
-                tokio::io::copy_bidirectional(&mut stream, &mut target).await?;
-                Ok::<_, anyhow::Error>(())
-            });
-        }
-        #[allow(unreachable_code)]
-        Ok::<_, anyhow::Error>(())
-    });
-    let mut command = Command::new(std::env::current_exe()?);
-    command
-        .args(["--exact", TEST_NAME, "--nocapture"])
-        .kill_on_drop(true);
-    for &key in codex_network_proxy::PROXY_ENV_KEYS {
-        command.env_remove(key);
-    }
-    command
-        .env(PROBE_SERVER, server.uri())
-        .env("HTTPS_PROXY", proxy_url)
-        .env("NO_PROXY", codex_network_proxy::DEFAULT_NO_PROXY_VALUE)
-        .env("CODEX_CA_CERTIFICATE", ca_path);
-    let output = tokio::time::timeout(Duration::from_secs(90), command.output()).await;
-    proxy_task.abort();
-    let output = output??;
-    assert!(
-        output.status.success(),
-        "harness subprocess failed\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    run_harness_through_proxy(&server, TEST_NAME).await?;
 
     let requests = responses.requests();
     let expected = [
@@ -726,5 +651,440 @@ async fn upload_with_harness(
     )
     .await?;
     assert_eq!(uploaded.uri, "sediment://file-a");
+    Ok(())
+}
+
+async fn run_harness_through_proxy(server: &MockServer, test_name: &str) -> Result<()> {
+    // The production destination check stays intact. A test-only CA and CONNECT proxy route
+    // the real host names to wiremock, only inside this isolated test subprocess.
+    codex_utils_rustls_provider::ensure_rustls_crypto_provider();
+    let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec![
+        "api.openai.com".into(),
+        "auth.openai.com".into(),
+        "chatgpt.com".into(),
+        "us.chatgpt.com".into(),
+    ])?;
+    let ca_dir = tempfile::tempdir()?;
+    let ca_path = ca_dir.path().join("ca.pem");
+    std::fs::write(&ca_path, cert.pem())?;
+    let acceptor = TlsAcceptor::from(Arc::new(
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert.der().clone()], signing_key.into())?,
+    ));
+    let proxy = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_url = format!("http://{}", proxy.local_addr()?);
+    let target = *server.address();
+    let proxy_task = tokio::spawn(async move {
+        let mut connections = JoinSet::new();
+        loop {
+            let (mut stream, _) = proxy.accept().await?;
+            let acceptor = acceptor.clone();
+            connections.spawn(async move {
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") && headers.len() < 8192 {
+                    headers.push(stream.read_u8().await?);
+                }
+                let headers = std::str::from_utf8(&headers)?;
+                anyhow::ensure!(
+                    matches!(
+                        headers.lines().next(),
+                        Some(
+                            "CONNECT api.openai.com:443 HTTP/1.1"
+                                | "CONNECT auth.openai.com:443 HTTP/1.1"
+                                | "CONNECT chatgpt.com:443 HTTP/1.1"
+                                | "CONNECT us.chatgpt.com:443 HTTP/1.1"
+                        )
+                    ),
+                    "unexpected proxy destination"
+                );
+                stream
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await?;
+                let mut stream = acceptor.accept(stream).await?;
+                let mut target = TcpStream::connect(target).await?;
+                tokio::io::copy_bidirectional(&mut stream, &mut target).await?;
+                Ok::<_, anyhow::Error>(())
+            });
+        }
+        #[allow(unreachable_code)]
+        Ok::<_, anyhow::Error>(())
+    });
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args(["--exact", test_name, "--nocapture"])
+        .kill_on_drop(true);
+    for &key in codex_network_proxy::PROXY_ENV_KEYS {
+        command.env_remove(key);
+    }
+    command
+        .env(PROBE_SERVER, server.uri())
+        .env("HTTPS_PROXY", proxy_url)
+        .env("NO_PROXY", codex_network_proxy::DEFAULT_NO_PROXY_VALUE)
+        .env("CODEX_CA_CERTIFICATE", ca_path);
+    let output = tokio::time::timeout(Duration::from_secs(90), command.output()).await;
+    proxy_task.abort();
+    let output = output??;
+    assert!(
+        output.status.success(),
+        "harness subprocess failed\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_uploads_follow_a_resumed_actors_runtime() -> Result<()> {
+    use core_test_support::apps_test_server::*;
+    skip_if_no_network!(Ok(()));
+    if std::env::var(PROBE_SERVER).is_ok() {
+        return exercise_mcp_uploads().await;
+    }
+    let server = MockServer::start().await;
+    let other_origin = MockServer::start().await;
+    let _apps = AppsTestServer::mount(&server).await?;
+    Mock::given(path("/agent/register"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: Value = request.body_json().unwrap();
+            let credential = body["actor_auth"]["credential"].as_str().unwrap();
+            let claims: Value = serde_json::from_slice(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .decode(credential.split('.').nth(1).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            let user = claims["https://api.openai.com/auth"]["user_id"]
+                .as_str()
+                .unwrap();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "runtime_agent_instance_id": format!("runtime-{user}"), "agent_host_id": "host-a",
+                "actor": {"kind": "chatgpt", "user_id": user, "account_id": "account_id"},
+            }))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(path("/files"))
+        .respond_with(
+            ResponseTemplate::new(307).insert_header("location", "/files/create-redirect"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(path("/files/create-redirect"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "file_id": "file-runtime", "upload_url": format!("{}/blob", server.uri()),
+        })))
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(path("/files/file-runtime/uploaded"))
+        .respond_with(
+            ResponseTemplate::new(307)
+                .insert_header("location", "/files/file-runtime/uploaded-redirect"),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(path("/files/file-runtime/uploaded-redirect"))
+        .respond_with(
+            ResponseTemplate::new(307)
+                .insert_header("location", format!("{}/finalize", other_origin.uri())),
+        )
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(path("/finalize"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "success", "download_url": format!("{}/blob", server.uri()),
+            "file_name": "report.txt", "file_size_bytes": 6,
+        })))
+        .expect(3)
+        .mount(&other_origin)
+        .await;
+    Mock::given(path("/blob"))
+        .and(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let events = (0..3)
+        .flat_map(|_| {
+            [
+                responses::sse(vec![
+                    responses::ev_tool_search_call(
+                        "search-file",
+                        &json!({"query": "extract text from uploaded document", "limit": 1}),
+                    ),
+                    responses::ev_completed("search"),
+                ]),
+                responses::sse(vec![
+                    responses::ev_function_call_with_namespace(
+                        "extract-file",
+                        SEARCH_CALENDAR_NAMESPACE,
+                        SEARCH_CALENDAR_EXTRACT_TEXT_TOOL,
+                        &json!({"file": "report.txt"}).to_string(),
+                    ),
+                    responses::ev_completed("extract"),
+                ]),
+                responses::sse(vec![
+                    responses::ev_assistant_message("done", "done"),
+                    responses::ev_completed("done"),
+                ]),
+            ]
+        })
+        .collect();
+    let responses = responses::mount_sse_sequence(&server, events).await;
+    run_harness_through_proxy(
+        &server,
+        "suite::runtime_auth::mcp_uploads_follow_a_resumed_actors_runtime",
+    )
+    .await?;
+    assert_eq!(responses.requests().len(), 9);
+    let requests = server.received_requests().await.unwrap();
+    let mut proof_ids = BTreeSet::new();
+    let mut runtimes = BTreeSet::new();
+    let mut uploaded_calls = 0;
+    let mut file_requests = 0;
+    for request in &requests {
+        let path = request.url.path().trim_end_matches('/');
+        if path == "/blob" {
+            assert!(!request.headers.contains_key("authorization"));
+            assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+            assert_eq!(request.body, b"report");
+            continue;
+        }
+        if !(path.ends_with("/responses")
+            || path == "/backend-api/ps/mcp"
+            || path.starts_with("/files"))
+        {
+            continue;
+        }
+        file_requests += usize::from(path.starts_with("/files"));
+        let authorization = request.headers["authorization"].to_str()?;
+        let assertion_only = authorization.starts_with("AgentAssertion ");
+        let proof = if let Some(proof) = authorization.strip_prefix("AgentAssertion ") {
+            assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+            proof
+        } else {
+            assert_eq!(
+                authorization,
+                format!("Bearer {}", mcp_actor_token("user-a"))
+            );
+            request.headers["x-openai-agent-assertion"].to_str()?
+        };
+        let claims: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(2).unwrap())?,
+        )?;
+        let runtime = claims["runtime_agent_instance"].as_str().unwrap();
+        assert!(matches!(runtime, "runtime-user-a" | "runtime-user-b"));
+        if !assertion_only {
+            assert_eq!(runtime, "runtime-user-a");
+        }
+        let proof_id = claims["id"].as_str().unwrap();
+        if path.ends_with("-redirect") {
+            assert!(
+                proof_ids.contains(proof_id),
+                "redirect preserves the request proof"
+            );
+        } else {
+            assert!(proof_ids.insert(proof_id.to_owned()));
+        }
+        runtimes.insert(runtime.to_owned());
+        if path == "/backend-api/ps/mcp"
+            && let Ok(body) = request.body_json::<Value>()
+            && body["method"] == "tools/call"
+            && body["params"]["name"] == CALENDAR_EXTRACT_TEXT_TOOL_NAME
+        {
+            assert_eq!(
+                body["params"]["arguments"]["file"]["file_id"],
+                "file-runtime"
+            );
+            assert_eq!(assertion_only, uploaded_calls != 0);
+            assert_eq!(
+                runtime,
+                if uploaded_calls < 2 {
+                    "runtime-user-a"
+                } else {
+                    "runtime-user-b"
+                }
+            );
+            uploaded_calls += 1;
+        }
+    }
+    assert_eq!(runtimes.len(), 2);
+    let rpc_calls: Vec<_> = requests
+        .iter()
+        .map(|request| {
+            let body = request.body_json::<Value>().unwrap_or_default();
+            (
+                request.url.path(),
+                body["method"].clone(),
+                body["params"]["name"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        uploaded_calls, 3,
+        "recorded RPC calls: {rpc_calls:?}; file control requests: {file_requests}"
+    );
+    assert_eq!(file_requests, 12);
+    let redirected = other_origin.received_requests().await.unwrap();
+    assert_eq!(redirected.len(), 3);
+    for request in redirected {
+        assert!(
+            !request.headers.contains_key("authorization"),
+            "cross-origin finalization must not receive authorization",
+        );
+        assert!(
+            !request.headers.contains_key("x-openai-agent-assertion"),
+            "cross-origin finalization must not receive the runtime assertion",
+        );
+    }
+    other_origin.verify().await;
+    server.verify().await;
+    Ok(())
+}
+
+fn mcp_actor_token(user: &str) -> String {
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        json!({
+            "iss": "https://auth.openai.com/", "session_id": format!("login-{user}"),
+            "https://api.openai.com/auth": {"user_id": user, "chatgpt_account_id": "account_id"},
+        })
+        .to_string(),
+    );
+    format!("header.{claims}.signature")
+}
+
+async fn exercise_mcp_uploads() -> Result<()> {
+    use core_test_support::apps_test_server::apps_enabled_builder;
+    let server = MockServer::start().await;
+    let actor = |user| {
+        CodexAuth::from_external_chatgpt_tokens(
+            &mcp_actor_token(user),
+            "account_id",
+            /*chatgpt_plan_type*/ None,
+        )
+        .expect("valid test actor")
+    };
+    let mut test = apps_enabled_builder("https://chatgpt.com")
+        .with_auth(actor("user-a"))
+        .with_config(|config| {
+            config.model_provider.base_url = Some("https://api.openai.com/v1".into());
+            config.model_provider.env_http_headers = None;
+            core_test_support::apps_test_server::configure_search_capable_model(config);
+            config
+                .features
+                .enable(Feature::RuntimeAgentInstances)
+                .expect("enable runtime auth");
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            let report = core_test_support::test_codex::executor_path_uri(cwd.join("report.txt"))?;
+            fs.write_file(
+                &report,
+                b"report".to_vec(),
+                Default::default(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok(())
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn_with_environments(
+        "Extract the report text with the app tool.",
+        Some(vec![test.executor_environment().selection().clone()]),
+    )
+    .await?;
+    // A second thread uses the same actor and MCP manager but must not inherit dual-header auth.
+    let mut assertion_only = test.config.clone();
+    assertion_only.runtime_auth_mode = RuntimeAuthMode::AssertionOnly;
+    let assertion_thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions::new(assertion_only))
+        .await?;
+    let thread_id = assertion_thread.thread_id;
+    test.codex = assertion_thread.thread;
+    test.submit_turn_with_environments(
+        "Extract the report text with the app tool.",
+        Some(vec![test.executor_environment().selection().clone()]),
+    )
+    .await?;
+    let rollout = test.codex.rollout_path().context("saved thread")?;
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+    test.thread_manager.remove_thread(&thread_id).await;
+    let context = test
+        .thread_store
+        .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await?;
+    let mut config = test.config.clone();
+    config.runtime_auth_mode = RuntimeAuthMode::AssertionOnly;
+    let auth = codex_core::test_support::auth_manager_from_auth_with_home(
+        actor("user-b"),
+        test.codex_home_path().to_path_buf(),
+    );
+    let resumed = test
+        .thread_manager
+        .resume_thread_with_history(
+            config,
+            InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
+                conversation_id: context.thread_id,
+                history: Arc::new(context.items),
+                rollout_path: Some(rollout),
+            }),
+            auth,
+            /*parent_trace*/ None,
+            ClientMcpExtensions::default(),
+        )
+        .await?;
+    test.codex = resumed.thread;
+    test.submit_turn_with_environments(
+        "Extract the report text with the app tool.",
+        Some(vec![test.executor_environment().selection().clone()]),
+    )
+    .await?;
+    // Custom MCP hosts use their own authentication, without ambient OpenAI credentials.
+    let external = MockServer::start().await;
+    let _apps = core_test_support::apps_test_server::AppsTestServer::mount(&external).await?;
+    let mut custom = test.config.clone();
+    custom.chatgpt_base_url = external.uri();
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        custom.runtime_auth_mode = mode;
+        let apps =
+            codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+                &custom,
+                /*force_refetch*/ true,
+                test.thread_manager.environment_manager(),
+                test.codex.mcp_manager(),
+            )
+            .await?;
+        assert!(apps.codex_apps_ready);
+        assert!(!apps.connectors.is_empty());
+    }
+    let requests = external
+        .received_requests()
+        .await
+        .context("custom MCP destination should record requests")?;
+    assert!(requests.iter().any(|request| {
+        request
+            .body_json::<Value>()
+            .is_ok_and(|body| body["method"] == "tools/list")
+    }));
+    for request in requests {
+        assert!(!request.headers.contains_key("authorization"));
+        assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+    }
     Ok(())
 }

@@ -31,7 +31,7 @@ pub(crate) async fn select_runtime_auth(
 }
 
 /// Select fresh request auth without allowing a reusable client's source to change.
-pub async fn select_runtime_auth_for_source(
+pub(crate) async fn select_runtime_auth_for_source(
     manager: &Arc<RuntimeAuthManager>,
     source_generation: u64,
     headers: &HeaderMap,

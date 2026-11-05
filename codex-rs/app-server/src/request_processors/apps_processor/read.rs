@@ -26,14 +26,22 @@ impl AppsRequestProcessor {
             .into_iter()
             .filter(|app_id| seen_app_ids.insert(app_id.clone()))
             .collect::<Vec<_>>();
-        let mut config = self.load_apps_config(thread_id.as_deref()).await?;
-        let auth = match self.auth_manager.auth_with_http_client_factory().await {
+        let (mut config, mcp_manager) = self.load_apps_config(thread_id.as_deref()).await?;
+        let auth = match mcp_manager
+            .auth_manager()
+            .auth_with_http_client_factory()
+            .await
+        {
             Some((auth, factory)) => {
                 config.application_network_policy = factory.network_policy().clone();
                 Some(auth)
             }
             None => None,
         };
+        let runtime = self
+            .thread_manager
+            .runtime_auth_for_mcp_manager(&config, &mcp_manager)
+            .map_err(|error| internal_error(error.to_string()))?;
         if !config
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
@@ -52,11 +60,16 @@ impl AppsRequestProcessor {
         let connectors::ConnectorMetadataReadResult {
             apps,
             missing_app_ids,
-        } = connectors::read_connector_metadata(&config, auth, &app_ids, include_tools)
-            .await
-            .map_err(|err| internal_error(format!("failed to read app metadata: {err}")))?;
-        let loaded_plugins = self
-            .thread_manager
+        } = connectors::read_connector_metadata(
+            &config,
+            auth,
+            runtime.as_ref(),
+            &app_ids,
+            include_tools,
+        )
+        .await
+        .map_err(|err| internal_error(format!("failed to read app metadata: {err}")))?;
+        let loaded_plugins = mcp_manager
             .plugins_manager()
             .plugins_for_config(&config.plugins_config_input())
             .await;
