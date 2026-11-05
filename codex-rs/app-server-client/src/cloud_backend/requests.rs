@@ -164,6 +164,7 @@ impl Requests {
                         Some(protocol::ThreadItemEntry {
                             turn_id: entry.turn_id,
                             item: events::item_summary(entry.summary?)?,
+                            output_deferred: false,
                             started_at_ms: entry.started_at_ms,
                             completed_at_ms: entry.completed_at_ms,
                         })
