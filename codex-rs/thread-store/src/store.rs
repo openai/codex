@@ -254,6 +254,23 @@ pub trait ThreadStore: Any + Send + Sync {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredThreadHistory>;
 
+    /// Captures a complete tail, optionally reading originals after a saved position.
+    /// Local storage uses one reader for the cutoff and records; compressed rollouts
+    /// are decoded once per call. It supports append-only paginated roots;
+    /// other histories and backends must fail explicitly rather than omit originals.
+    /// Callers flush pending writes before capturing a boundary and own progress.
+    fn read_original_history(
+        &self,
+        _thread_id: ThreadId,
+        _request: crate::OriginalHistoryRequest,
+    ) -> ThreadStoreFuture<'_, crate::OriginalHistoryRead> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "read_original_history",
+            })
+        })
+    }
+
     /// Loads the persisted rollout items needed to reconstruct the latest model-visible context.
     ///
     /// Implementations that cannot perform a targeted read may return the full persisted history.

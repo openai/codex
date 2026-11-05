@@ -4,7 +4,7 @@ use codex_context_fragments::AdditionalContextUserFragment;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::ContextualUserFragment;
 use codex_context_fragments::message_from_parts;
-use codex_guardian_v3::EvidenceSnapshot;
+use codex_guardian_v3::EvidenceCursor;
 use codex_history::AcceptedFileAudio;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
@@ -62,7 +62,7 @@ async fn captures_originals_without_generated_context_or_later_appends() -> anyh
             dynamic_tools: Vec::new(),
             selected_capability_roots: Vec::new(),
             multi_agent_version: None,
-            history_mode: ThreadHistoryMode::Legacy,
+            history_mode: ThreadHistoryMode::Paginated,
             history_base: None,
             subagent_history_start_ordinal: None,
             initial_window_id: "window-1".into(),
@@ -147,6 +147,22 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         RolloutItem::ResponseItem(approval),
         delivered,
     ];
+    let mut old = user.clone();
+    old.item = serde_json::from_value(json!({"type":"message","id":"old","role":"user",
+        "content":[{"type":"input_text","text":"Before board activation"}]}))?;
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id: owner,
+            items: vec![RolloutItem::ResponseItem(old)],
+        })
+        .await?;
+    store
+        .persist_thread(owner, PersistContext::Standard)
+        .await?;
+    store.flush_thread(owner).await?;
+    let mut cursor = EvidenceCursor::from_now(&store, owner).await?;
+    assert!(cursor.capture(&store).await?.records().is_empty());
+
     let mut items = expected.clone();
     items.insert(1, RolloutItem::ResponseItem(generated));
     items.extend([
@@ -171,7 +187,7 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         .persist_thread(owner, PersistContext::Standard)
         .await?;
     store.flush_thread(owner).await?;
-    let captured = EvidenceSnapshot::capture(&store, owner).await?;
+    let captured = cursor.capture(&store).await?;
     let originals = captured
         .records()
         .iter()
@@ -179,7 +195,7 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         .collect::<Vec<_>>();
     assert_eq!(
         serde_json::to_value(originals)?,
-        serde_json::to_value(expected)?
+        serde_json::to_value(&expected)?
     );
 
     let mut later = user.clone();
@@ -196,17 +212,36 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         })
         .await?;
     store.flush_thread(owner).await?;
-    let latest = EvidenceSnapshot::capture(&store, owner).await?;
-    let new_record = latest.records().last().expect("later original");
+    // Reads do not acknowledge delivery, and a later append cannot enter the old capture.
+    assert_eq!(cursor.pending(&captured)?.len(), expected.len());
+    cursor.acknowledge(&captured, /*count*/ 2)?;
     assert_eq!(
-        serde_json::to_value(&new_record.original)?,
-        serde_json::to_value(RolloutItem::ResponseItem(later.clone()))?
+        serde_json::to_value(
+            cursor
+                .pending(&captured)?
+                .iter()
+                .map(|r| &r.original)
+                .collect::<Vec<_>>()
+        )?,
+        serde_json::to_value(&expected[2..])?
     );
-    assert_eq!(latest.records().len(), captured.records().len() + 1);
+    cursor.acknowledge(&captured, expected.len() - 2)?;
+    assert!(cursor.pending(&captured)?.is_empty());
+    let latest = cursor.capture(&store).await?;
     assert_eq!(
-        serde_json::to_value(&latest.records()[..captured.records().len()])?,
-        serde_json::to_value(captured.records())?
+        serde_json::to_value(
+            latest
+                .records()
+                .iter()
+                .map(|r| &r.original)
+                .collect::<Vec<_>>()
+        )?,
+        serde_json::to_value(vec![RolloutItem::ResponseItem(later.clone())])?
     );
+    assert_eq!(captured.records().len(), expected.len());
+    cursor.acknowledge(&latest, /*count*/ 1)?;
+    assert!(cursor.capture(&store).await?.records().is_empty());
+    assert!(cursor.acknowledge(&captured, /*count*/ 0).is_err());
 
     let mut ambiguous = later;
     ambiguous.metadata = None;
@@ -217,7 +252,9 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         })
         .await?;
     store.flush_thread(owner).await?;
-    assert!(EvidenceSnapshot::capture(&store, owner).await.is_err());
+    let before = cursor.clone();
+    assert!(cursor.capture(&store).await.is_err());
+    assert_eq!(cursor, before);
     store.shutdown_thread(owner).await?;
     Ok(())
 }

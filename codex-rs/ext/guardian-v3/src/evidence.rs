@@ -1,5 +1,5 @@
-//! Captures original conversation, tool activity and host-verified evidence from history.
-//! The prototype supports append-only root histories; it has no durable intake state.
+//! Captures original evidence after an in-memory source cursor, without backfilling.
+//! A capture has a fixed end; consumers acknowledge records only after their writes succeed.
 
 use anyhow::ensure;
 use codex_history::ResponseItemEnvelope;
@@ -9,7 +9,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItemProvenance;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_thread_store::LoadThreadHistoryParams;
+use codex_protocol::protocol::HistoryPosition;
+use codex_thread_store::OriginalHistoryRequest;
 use codex_thread_store::ThreadStore;
 use serde::Serialize;
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 /// Position in the containing snapshot's root history, independent of channel routing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct EvidenceId {
-    pub ordinal: usize,
+    pub ordinal: u64,
 }
 
 /// The original rollout record retains roles, call IDs and host provenance unchanged.
@@ -26,6 +27,8 @@ pub struct EvidenceId {
 pub struct OriginalEvidence {
     pub id: EvidenceId,
     pub original: RolloutItem,
+    #[serde(skip)]
+    end: HistoryPosition,
 }
 
 /// An immutable capture. Later history appends cannot enter its reads or routing.
@@ -33,27 +36,55 @@ pub struct OriginalEvidence {
 #[derive(Clone)]
 pub struct EvidenceSnapshot {
     thread_id: ThreadId,
+    start: HistoryPosition,
+    end: HistoryPosition,
     records: Arc<[OriginalEvidence]>,
 }
 
 impl EvidenceSnapshot {
-    /// Load through the existing history API after the host flushes pending originals.
-    /// This deliberately reloads history; incremental IO and restart recovery are deferred.
-    /// Forked, reverted and ambiguously attributed user histories are unsupported.
-    pub async fn capture(store: &dyn ThreadStore, thread_id: ThreadId) -> anyhow::Result<Self> {
-        let history = store
-            .load_history(LoadThreadHistoryParams {
-                thread_id,
-                include_archived: false,
-            })
+    pub fn thread_id(&self) -> ThreadId {
+        self.thread_id
+    }
+
+    pub fn records(&self) -> &[OriginalEvidence] {
+        &self.records
+    }
+}
+
+/// Live progress for one board. Never serialized or reconstructed after restart.
+/// Create it at board activation, before accepting new input. Hosts flush pending
+/// history before activation/capture and coordinate lifetime with thread deletion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvidenceCursor {
+    thread_id: ThreadId,
+    position: HistoryPosition,
+}
+
+impl EvidenceCursor {
+    /// Start at the current complete tail. Existing records are not backfilled.
+    pub async fn from_now(store: &dyn ThreadStore, thread_id: ThreadId) -> anyhow::Result<Self> {
+        let tail = store
+            .read_original_history(thread_id, OriginalHistoryRequest::Tail)
             .await?;
-        ensure!(
-            history.thread_id == thread_id,
-            "evidence history owner mismatch"
-        );
+        Ok(Self {
+            thread_id,
+            position: tail.end,
+        })
+    }
+
+    pub fn thread_id(&self) -> ThreadId {
+        self.thread_id
+    }
+
+    /// Read the unread suffix through a fixed cutoff without advancing progress.
+    pub async fn capture(&self, store: &dyn ThreadStore) -> anyhow::Result<EvidenceSnapshot> {
+        let history = store
+            .read_original_history(self.thread_id, OriginalHistoryRequest::After(self.position))
+            .await?;
+        let end = history.end;
         let mut records = Vec::new();
-        for (ordinal, item) in history.items.into_iter().enumerate() {
-            let include = match &item {
+        for record in history.items {
+            let include = match &record.item {
                 RolloutItem::ResponseItem(envelope) => selected(envelope)?,
                 RolloutItem::RetainedContext(RetainedContextEvent::VerifiedAnswer {
                     answer,
@@ -69,15 +100,9 @@ impl EvidenceSnapshot {
                     ensure!(message.complete, "incomplete delivered assistant message");
                     true
                 }
-                RolloutItem::SessionMeta(meta) => {
-                    ensure!(
-                        meta.meta.forked_from_id.is_none(),
-                        "forked evidence is unsupported"
-                    );
-                    continue;
-                }
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
-                    anyhow::bail!("reverted evidence is unsupported");
+                RolloutItem::SessionMeta(_)
+                | RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
+                    anyhow::bail!("evidence history was replaced");
                 }
                 RolloutItem::RetainedContext(RetainedContextEvent::AcceptedFileAudio {
                     ..
@@ -91,27 +116,65 @@ impl EvidenceSnapshot {
                 | RolloutItem::WorldState(_)
                 | RolloutItem::SecurityRiskScore(_)
                 | RolloutItem::EventMsg(_)
-                | RolloutItem::RealtimeItem(_) => continue,
+                | RolloutItem::RealtimeItem(_) => false,
             };
             if include {
                 records.push(OriginalEvidence {
-                    id: EvidenceId { ordinal },
-                    original: item,
+                    id: EvidenceId {
+                        ordinal: record.end.end_ordinal_exclusive.checked_sub(1).ok_or_else(
+                            || anyhow::anyhow!("evidence record has no source ordinal"),
+                        )?,
+                    },
+                    original: record.item,
+                    end: record.end,
                 });
             }
         }
-        Ok(Self {
-            thread_id,
+        Ok(EvidenceSnapshot {
+            thread_id: self.thread_id,
+            start: self.position,
+            end,
             records: records.into(),
         })
     }
 
-    pub fn thread_id(&self) -> ThreadId {
-        self.thread_id
+    /// Records from this capture that have not yet been acknowledged.
+    pub fn pending<'a>(
+        &self,
+        snapshot: &'a EvidenceSnapshot,
+    ) -> anyhow::Result<&'a [OriginalEvidence]> {
+        ensure!(
+            snapshot.thread_id == self.thread_id
+                && snapshot.start.thread_id == self.position.thread_id
+                && snapshot.end.thread_id == self.position.thread_id
+                && snapshot.start.end_byte_offset <= self.position.end_byte_offset
+                && self.position.end_byte_offset <= snapshot.end.end_byte_offset
+                && snapshot.start.end_ordinal_exclusive <= self.position.end_ordinal_exclusive
+                && self.position.end_ordinal_exclusive <= snapshot.end.end_ordinal_exclusive,
+            "evidence capture does not contain the current cursor"
+        );
+        let start = snapshot
+            .records
+            .partition_point(|record| record.end.end_byte_offset <= self.position.end_byte_offset);
+        Ok(&snapshot.records[start..])
     }
 
-    pub fn records(&self) -> &[OriginalEvidence] {
-        &self.records
+    /// Acknowledge a successfully consumed prefix of the pending evidence.
+    /// Completing a capture also skips trailing records excluded by evidence selection.
+    pub fn acknowledge(&mut self, snapshot: &EvidenceSnapshot, count: usize) -> anyhow::Result<()> {
+        let pending = self.pending(snapshot)?;
+        ensure!(
+            count <= pending.len(),
+            "acknowledgement exceeds pending evidence"
+        );
+        self.position = if count == pending.len() {
+            snapshot.end
+        } else if count > 0 {
+            pending[count - 1].end
+        } else {
+            self.position
+        };
+        Ok(())
     }
 }
 

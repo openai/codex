@@ -7,6 +7,7 @@ mod list_threads;
 mod live_writer;
 mod model_context;
 mod move_thread_to_section;
+mod original_history;
 mod paginated_fork;
 mod pending_thread_metadata;
 mod projects;
@@ -614,6 +615,14 @@ impl ThreadStore for LocalThreadStore {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredModelContext> {
         Box::pin(async move { model_context::load_latest_model_context(self, params).await })
+    }
+
+    fn read_original_history(
+        &self,
+        thread_id: ThreadId,
+        request: crate::OriginalHistoryRequest,
+    ) -> ThreadStoreFuture<'_, crate::OriginalHistoryRead> {
+        Box::pin(original_history::read(self, thread_id, request))
     }
 
     fn is_model_context_current(

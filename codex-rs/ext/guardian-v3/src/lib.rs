@@ -10,6 +10,7 @@ use codex_protocol::SessionId;
 use codex_state::SqliteConfig;
 
 mod evidence;
+pub use evidence::EvidenceCursor;
 pub use evidence::EvidenceId;
 pub use evidence::EvidenceSnapshot;
 pub use evidence::OriginalEvidence;
