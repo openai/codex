@@ -308,6 +308,9 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 }
 
 pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    if let Some(reporting) = &sess.outcome_reporting {
+        reporting.handoffs.close();
+    }
     let startup_prewarm = {
         let mut state = sess.state.lock().await;
         // Stop admission and take the current warmup together so resume cannot replace it.
@@ -319,6 +322,9 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     }
     let _ = sess.conversation.shutdown().await;
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    if let Some(reporting) = &sess.outcome_reporting {
+        reporting.handoffs.wait().await;
+    }
     super::async_compaction::shutdown(sess).await;
     let shell_snapshot_prewarm = sess.state.lock().await.shell_snapshot_prewarm.take();
     if let Some(shell_snapshot_prewarm) = shell_snapshot_prewarm {

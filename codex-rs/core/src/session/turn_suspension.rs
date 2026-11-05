@@ -54,6 +54,8 @@ pub(super) async fn suspend_turn_and_shutdown(
         CodexErr::Fatal("accepted root turn suspension had no running task".to_string())
     })?;
     let turn_id = task.turn_context.sub_id.clone();
+    // A suspended task emits no terminal outcome.
+    drop(task.outcome_handoff);
     // Normal shutdown records a terminal turn event, preventing another worker from
     // recovering this turn under its original ID. Cancel the task without that event.
     task.cancellation_token.cancel();

@@ -9,6 +9,7 @@ use super::step_settings::StepSettingsUpdate;
 use super::*;
 use crate::agent::api::AgentControl;
 use crate::agent::host::AgentRuntimeServices;
+use crate::agent::host::AgentTurnOutcomeReporter;
 use crate::agent::host::InheritedSessionId;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
@@ -56,9 +57,16 @@ use codex_utils_git_discovery::GitRootDiscovery;
 use codex_utils_path::replace_path_and_deduplicate;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
+use tokio_util::task::TaskTracker;
 
 type McpToolApprovalMetadataMap =
     HashMap<(String, String), std::sync::Weak<McpToolApprovalContext>>;
+
+/// A thread's installed reporter and the tasks that may still hand it an outcome.
+pub(crate) struct AgentOutcomeReporting {
+    pub(super) reporter: Arc<dyn AgentTurnOutcomeReporter>,
+    pub(crate) handoffs: TaskTracker,
+}
 
 /// Context for an initialized model agent
 ///
@@ -67,6 +75,7 @@ pub(crate) struct Session {
     pub(crate) thread_id: ThreadId,
     pub(crate) item_id_generator: ItemIdGenerator,
     pub(crate) agent_runtime: AgentRuntimeServices,
+    pub(crate) outcome_reporting: Option<AgentOutcomeReporting>,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     /// Installed by Guardian before its first review; forwards items and cancellation without
@@ -711,6 +720,12 @@ async fn warm_plugins_and_skills_for_session_init(
 }
 
 impl Session {
+    pub(crate) fn outcome_handoffs_closed(&self) -> bool {
+        self.outcome_reporting
+            .as_ref()
+            .is_some_and(|reporting| reporting.handoffs.is_closed())
+    }
+
     pub(crate) fn new_item_id_generator() -> ItemIdGenerator {
         Arc::new(|prefix| ResponseItemId::with_suffix(prefix, uuid::Uuid::now_v7()))
     }
@@ -1842,6 +1857,12 @@ impl Session {
                     .await;
             }
 
+            let outcome_reporting = thread_extension_data
+                .get::<Arc<dyn AgentTurnOutcomeReporter>>()
+                .map(|reporter| AgentOutcomeReporting {
+                    reporter: Arc::clone(&reporter),
+                    handoffs: TaskTracker::new(),
+                });
             let (agent_runtime, mut startup_error) =
                 match AgentRuntimeServices::from_extensions(&thread_extension_data) {
                     Ok(runtime) => (runtime, None),
@@ -2006,6 +2027,7 @@ impl Session {
                 thread_id,
                 item_id_generator,
                 agent_runtime,
+                outcome_reporting,
                 installation_id,
                 tx_event: tx_event.clone(),
                 parent_observer_event_tx: OnceLock::new(),

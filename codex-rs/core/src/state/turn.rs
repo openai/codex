@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 
 use codex_diagnostics::GaugeGuard;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -86,6 +87,8 @@ pub(crate) struct RunningTask {
     pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,
+    /// Follows the task into whichever finalizer claims its terminal event.
+    pub(crate) outcome_handoff: Option<TaskTrackerToken>,
     /// Unrecorded input retained during host admission or preparation that can wait on the roster.
     pub(crate) pending_initial_input: Option<Vec<TurnInput>>,
     pub(crate) _diagnostics_guard: GaugeGuard,

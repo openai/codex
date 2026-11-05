@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_core::AgentConfigUpdate;
 use codex_core::AgentControl;
@@ -13,6 +14,7 @@ use codex_core::AgentInfo;
 use codex_core::AgentRef;
 use codex_core::AgentTarget;
 use codex_core::AgentTurnOutcome;
+use codex_core::AgentTurnOutcomeReporter;
 use codex_core::DeliveryReceipt;
 use codex_core::ForkSnapshot;
 use codex_core::GuardianRootSnapshot;
@@ -24,13 +26,18 @@ use codex_core::SendRequest;
 use codex_core::SpawnRequest;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
+use codex_core::TurnStartOptions;
 use codex_core::config::Config;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
+use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStopInput;
 use codex_features::Feature;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -42,25 +49,32 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::ThreadTraceContext;
 use codex_thread_store::LoadThreadHistoryParams;
+use core_test_support::ThreadIdle;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
+use tokio::sync::Notify;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use wiremock::MockServer;
 
 pub(super) struct HostRuntime;
@@ -638,6 +652,258 @@ async fn fresh_hosted_child_persists_inherited_session_id(
         (child.thread_id, root_session_id, None)
     );
     resumed.thread.shutdown_and_wait().await?;
+    root.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_child_reports_terminal_turn_outcomes() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const ANSWER: &str = "The patch looks good.";
+    const FAILURE: &str = "The request was rejected.";
+    const FOLLOWUP: &str = "Try again with the smaller patch.";
+    const ASSIGNING_TURN: &str = "assigner-turn";
+
+    struct Reporter {
+        outcomes: mpsc::UnboundedSender<AgentTurnOutcome>,
+        gate: Mutex<Option<oneshot::Receiver<()>>>,
+    }
+
+    impl AgentTurnOutcomeReporter for Reporter {
+        fn report(&self, outcome: AgentTurnOutcome) -> BoxFuture<'_, ()> {
+            Box::pin(async move {
+                let failed = matches!(outcome.status, AgentStatus::Errored(_));
+                self.outcomes.send(outcome).expect("report receiver");
+                if failed {
+                    let gate = self.gate.lock().expect("report gate").take();
+                    gate.expect("one failure report")
+                        .await
+                        .expect("release failure report");
+                }
+            })
+        }
+    }
+
+    let server = responses::start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let root = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    let session_id = root.session_configured.session_id;
+    let (release_report, report_gate) = oneshot::channel();
+    let (outcomes, mut reports) = mpsc::unbounded_channel();
+    let reporter = Arc::new(Reporter {
+        outcomes,
+        gate: Mutex::new(Some(report_gate)),
+    });
+    let source = SessionSource::Custom("host".to_string());
+    let mut options = StartThreadOptions {
+        session_source: Some(source.clone()),
+        thread_source: Some(ThreadSource::Subagent),
+        ..root.start_thread_options().await
+    };
+    options
+        .thread_extension_init
+        .insert(InheritedSessionId(session_id));
+    options
+        .thread_extension_init
+        .insert(reporter as Arc<dyn AgentTurnOutcomeReporter>);
+    let child = root.thread_manager.start_thread(options).await?;
+    let thread = &child.thread;
+
+    responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("review"),
+                responses::ev_assistant_message("answer", ANSWER),
+                responses::ev_completed("review"),
+            ]),
+            responses::sse_failed("failed", "invalid_prompt", FAILURE),
+            responses::sse_completed("silent-followup"),
+        ],
+    )
+    .await;
+    let mut expect_report = async |expected_status| {
+        let turn_id = wait_for_event_match(thread, |event| match event {
+            EventMsg::TurnComplete(event) => Some(event.turn_id.clone()),
+            _ => None,
+        })
+        .await;
+        let report = tokio::time::timeout(Duration::from_secs(10), reports.recv())
+            .await
+            .expect("timed out waiting for the terminal turn report")
+            .expect("reporter dropped");
+        assert_eq!(
+            (report.thread_id, &report.turn_id, &report.source),
+            (child.thread_id, &turn_id, &source),
+        );
+        assert_eq!(
+            (&report.status, report.error_info.as_ref()),
+            (&expected_status, None)
+        );
+        report
+    };
+    for (prompt, expected_status) in [
+        (
+            "Review the patch.",
+            AgentStatus::Completed(Some(ANSWER.into())),
+        ),
+        ("Fail this request.", AgentStatus::Errored(FAILURE.into())),
+    ] {
+        thread
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: prompt.into(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        let report = expect_report(expected_status).await;
+        if !matches!(report.status, AgentStatus::Errored(_)) {
+            ThreadIdle::wait(thread).await;
+        }
+    }
+
+    // Queue the next task while the previous turn is still reporting its outcome.
+    let assigner = AgentPath::root().join("assigner").expect("assigner path");
+    let mail = InterAgentCommunication::new(
+        assigner.clone(),
+        AgentPath::root().join("reviewer").expect("child path"),
+        Vec::new(),
+        FOLLOWUP.into(),
+        /*trigger_turn*/ true,
+    );
+    let followup = TurnInputRequest::new(TurnInput::InterAgentCommunication(mail)).on_start(
+        TurnStartOptions {
+            parent_turn_id: Some(ASSIGNING_TURN.into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        thread.start_or_steer_turn(followup).await?,
+        TurnInputSubmission::Accepted
+    );
+    release_report.send(()).expect("release failure report");
+
+    let report = expect_report(AgentStatus::Completed(None)).await;
+    ThreadIdle::wait(thread).await;
+    assert_eq!(
+        (
+            report.parent_turn_id.as_deref(),
+            report.initiating_agent_path
+        ),
+        (Some(ASSIGNING_TURN), Some(assigner)),
+    );
+    assert_eq!(
+        reports.try_recv().err(),
+        Some(mpsc::error::TryRecvError::Empty)
+    );
+    thread.shutdown_and_wait().await?;
+    let requests = responses::received_responses_requests(&server).await;
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[2].body_json()["client_metadata"]["turn_id"],
+        report.turn_id
+    );
+    let messages = requests[2].inputs_of_type("agent_message");
+    assert_eq!(messages.len(), 1);
+    assert!(
+        messages[0]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.ends_with(FOLLOWUP))
+    );
+    root.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_host_outcome_handoff() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    #[derive(Default)]
+    struct Handoff {
+        entered: Notify,
+        release: Notify,
+        events: Mutex<Vec<&'static str>>,
+    }
+
+    impl Handoff {
+        async fn pause(&self) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+
+    impl TurnLifecycleContributor for Handoff {
+        fn on_turn_stop<'a>(&'a self, _input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
+            Box::pin(self.pause())
+        }
+    }
+
+    impl AgentTurnOutcomeReporter for Handoff {
+        fn report(&self, _outcome: AgentTurnOutcome) -> BoxFuture<'_, ()> {
+            Box::pin(async move {
+                self.pause().await;
+                self.events.lock().expect("handoff events").push("reported");
+            })
+        }
+    }
+
+    impl ThreadLifecycleContributor<Config> for Handoff {
+        fn on_thread_stop<'a>(&'a self, _input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
+            Box::pin(async move { self.events.lock().expect("handoff events").push("stopped") })
+        }
+    }
+
+    let handoff = Arc::new(Handoff::default());
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.turn_lifecycle_contributor(handoff.clone());
+    extensions.thread_lifecycle_contributor(handoff.clone());
+    let server = responses::start_mock_server().await;
+    let root = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    let mut options = root.start_thread_options().await;
+    options
+        .thread_extension_init
+        .insert(handoff.clone() as Arc<dyn AgentTurnOutcomeReporter>);
+    let child = root.thread_manager.start_thread(options).await?;
+    let thread = &child.thread;
+
+    responses::mount_sse_once(&server, responses::sse_completed("done")).await;
+    thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Finish the task.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+
+    // The finalizer has detached its task, but has not entered the reporter.
+    let wait_for_gate =
+        async || tokio::time::timeout(Duration::from_secs(10), handoff.entered.notified()).await;
+    wait_for_gate().await?;
+    thread.submit(Op::Shutdown).await?;
+    let assert_pending_then_release = async || {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), thread.wait_until_terminated())
+                .await
+                .is_err(),
+            "shutdown completed before the local handoff"
+        );
+        handoff.release.notify_one();
+    };
+    assert_pending_then_release().await;
+    // The reporter has now been called, but the host has not accepted the outcome yet.
+    wait_for_gate().await?;
+    assert_pending_then_release().await;
+    tokio::time::timeout(Duration::from_secs(10), thread.wait_until_terminated()).await?;
+    assert_eq!(
+        *handoff.events.lock().expect("handoff events"),
+        ["reported", "stopped"]
+    );
     root.codex.shutdown_and_wait().await?;
     Ok(())
 }

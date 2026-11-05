@@ -2,20 +2,65 @@
 
 use super::*;
 use codex_config::config_toml::CircuitBreakAction;
+use codex_core::AgentTurnOutcome;
+use codex_core::AgentTurnOutcomeReporter;
+use codex_core::TurnInputSubmission;
 use codex_core::config::Constrained;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadStartInput;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TurnAbortReason;
 use core_test_support::ThreadIdle;
+use core_test_support::responses::received_responses_requests;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::sync::Mutex;
 use test_case::test_case;
 use tokio::sync::oneshot;
+
+type ReportedOutcome = (ThreadId, String, AgentStatus, Option<CodexErrorInfo>);
+
+#[derive(Clone, Default)]
+struct CompletionReports(Arc<Mutex<Vec<ReportedOutcome>>>);
+
+impl AgentTurnOutcomeReporter for CompletionReports {
+    fn report(&self, outcome: AgentTurnOutcome) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.0.lock().expect("completion reports").push((
+                outcome.thread_id,
+                outcome.turn_id,
+                outcome.status,
+                outcome.error_info,
+            ));
+        })
+    }
+}
+
+impl ThreadLifecycleContributor<Config> for CompletionReports {
+    fn on_thread_start<'a>(
+        &'a self,
+        input: ThreadStartInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if matches!(
+                input.session_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            ) {
+                input
+                    .thread_store
+                    .insert(Arc::new(self.clone()) as Arc<dyn AgentTurnOutcomeReporter>);
+            }
+        })
+    }
+}
 
 #[test_case(CircuitBreakAction::Strict; "strict_notifies_parent")]
 #[test_case(CircuitBreakAction::Default; "default_stays_silent")]
@@ -24,7 +69,9 @@ async fn guardian_circuit_breaker_notifies_parent(action: CircuitBreakAction) ->
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let mut extensions = ExtensionRegistryBuilder::new();
+    let reports = CompletionReports::default();
     extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    extensions.thread_lifecycle_contributor(Arc::new(reports.clone()));
     let test = test_codex()
         .with_model_info_override("test-gpt-5.1-codex", |model| {
             model.multi_agent_version = Some(MultiAgentVersion::V2);
@@ -140,14 +187,11 @@ async fn guardian_circuit_breaker_notifies_parent(action: CircuitBreakAction) ->
         .mount(&server)
         .await;
 
-    let mut created = test.thread_manager.subscribe_thread_created();
     test.submit_text_turn("Spawn a worker to run the checks.")
         .await?;
     ThreadIdle::wait(&test.codex).await;
-    let worker = test
-        .thread_manager
-        .get_thread(created.recv().await?)
-        .await?;
+    let worker_id = test.codex.resolve_agent_reference("/root/worker").await?;
+    let worker = test.thread_manager.get_thread(worker_id).await?;
     let warning = wait_for_event_match(&worker, |event| match event {
         EventMsg::GuardianWarning(warning) if warning.message.contains("3 consecutive") => {
             Some(warning.message.clone())
@@ -174,43 +218,47 @@ async fn guardian_circuit_breaker_notifies_parent(action: CircuitBreakAction) ->
             AgentStatus::Interrupted,
         ),
     );
-
-    // Delivery is queued. If the parent samples before draining its mailbox,
-    // wait_agent must observe the notification before the next model request.
-    let _wait = if action == CircuitBreakAction::Strict {
-        Some(
-            mount_sse_once_match(
-                &server,
-                move |request: &wiremock::Request| {
-                    is_root(request) && !body_contains(request, "Agent interrupted by Guardian:")
-                },
-                sse(vec![
-                    ev_function_call_with_namespace(
-                        "wait-worker",
-                        MULTI_AGENT_V2_NAMESPACE,
-                        "wait_agent",
-                        "{}",
-                    ),
-                    ev_completed("parent-wait"),
-                ]),
-            )
-            .await,
+    let expected_report = (action == CircuitBreakAction::Strict).then(|| {
+        (
+            worker_id,
+            aborted.turn_id.expect("aborted worker turn ID"),
+            AgentStatus::Errored(warning.clone()),
+            Some(CodexErrorInfo::TooManyDenials),
         )
-    } else {
-        None
+    });
+    assert_eq!(
+        reports.0.lock().expect("completion reports").as_slice(),
+        expected_report.as_slice(),
+    );
+
+    // Core can sample the user prompt and drain queued mail on a later request in the same turn.
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(is_root)
+        .respond_with(sse_response(sse(vec![ev_completed("parent-continued")])))
+        .mount(&server)
+        .await;
+    let TurnInputSubmission::Started { turn_id, .. } = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Report the worker's status.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?
+    else {
+        anyhow::bail!("parent prompt should start a turn");
     };
-    let continued = mount_sse_once_match(
-        &server,
-        move |request: &wiremock::Request| {
-            is_root(request)
-                && (action == CircuitBreakAction::Default
-                    || body_contains(request, "Agent interrupted by Guardian:"))
-        },
-        sse(vec![ev_completed("parent-continued")]),
-    )
+    let done = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(done) if done.turn_id == turn_id => Some(done.clone()),
+        _ => None,
+    })
     .await;
-    test.submit_text_turn("Report the worker's status.").await?;
-    let continued_request = continued.single_request();
+    assert_eq!(done.error, None);
+    let continued_request = received_responses_requests(&server)
+        .await
+        .into_iter()
+        .rfind(|request| request.body_json()["client_metadata"]["turn_id"] == turn_id)
+        .expect("model request for the parent's follow-up turn");
     let messages = continued_request.inputs_of_type("agent_message");
     let expected = if action == CircuitBreakAction::Strict {
         vec![json!({
