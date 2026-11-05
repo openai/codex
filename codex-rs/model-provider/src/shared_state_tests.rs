@@ -75,7 +75,8 @@ async fn gateway_credentials_accompany_primary_auth_in_models_and_responses() {
             resource: None,
             scopes: vec![],
             redirect_port: None,
-            credentials_store: Default::default(),
+            // Avoid spending the model discovery deadline on keyring-backed decryption.
+            credentials_store: OAuthCredentialsStore::File,
             delivery: delivery.clone(),
         };
         let info = ModelProviderInfo {
