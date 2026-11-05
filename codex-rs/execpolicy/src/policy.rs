@@ -1,6 +1,7 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::executable_name::executable_lookup_key;
 use crate::executable_name::executable_path_lookup_key;
 use crate::rule::NetworkRule;
 use crate::rule::NetworkRuleProtocol;
@@ -9,6 +10,7 @@ use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
 use crate::rule::RuleMatch;
 use crate::rule::RuleRef;
+use crate::rule::canonical_key;
 use crate::rule::normalize_network_rule_host;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use multimap::MultiMap;
@@ -26,6 +28,7 @@ pub struct MatchOptions {
 
 #[derive(Clone, Debug)]
 pub struct Policy {
+    insensitive_rules: MultiMap<String, RuleRef>,
     rules_by_program: MultiMap<String, RuleRef>,
     network_rules: Vec<NetworkRule>,
     host_executables_by_name: HashMap<String, Arc<[AbsolutePathBuf]>>,
@@ -78,7 +81,21 @@ impl Policy {
         network_rules: Vec<NetworkRule>,
         host_executables_by_name: HashMap<String, Arc<[AbsolutePathBuf]>>,
     ) -> Self {
+        let insensitive_rules = rules_by_program
+            .iter_all()
+            .flat_map(|(program, rules)| {
+                rules
+                    .iter()
+                    .filter(|rule| {
+                        rule.as_any()
+                            .downcast_ref::<PrefixRule>()
+                            .is_some_and(|rule| rule.pattern.canonical_matching)
+                    })
+                    .map(|rule| (canonical_key(program).collect::<String>(), rule.clone()))
+            })
+            .collect();
         Self {
+            insensitive_rules,
             rules_by_program,
             network_rules,
             host_executables_by_name,
@@ -132,6 +149,7 @@ impl Policy {
 
         let rule: RuleRef = Arc::new(PrefixRule {
             pattern: PrefixPattern {
+                canonical_matching: false,
                 first: Arc::from(first_token.as_str()),
                 rest: rest
                     .iter()
@@ -195,6 +213,31 @@ impl Policy {
             let Ok(path) = AbsolutePathBuf::try_from(program.as_str()) else {
                 continue;
             };
+            // A differently cased path can shadow a managed basename at that spelling.
+            if rules.iter().any(|rule| {
+                rule.as_any()
+                    .downcast_ref::<PrefixRule>()
+                    .is_some_and(|rule| rule.pattern.canonical_matching)
+            }) && let Some(name) = executable_path_lookup_key(path.as_path())
+                && managed.rules().iter_all().any(|(program, fallbacks)| {
+                    canonical_key(program).eq(canonical_key(&name))
+                        && rules
+                            .iter()
+                            .filter(|rule| {
+                                rule.as_any()
+                                    .downcast_ref::<PrefixRule>()
+                                    .is_some_and(|prefix| prefix.pattern.canonical_matching)
+                                    && !managed.contains_prefix_rule(rule.program(), rule)
+                            })
+                            .any(|rule| {
+                                fallbacks
+                                    .iter()
+                                    .any(|fallback| can_weaken_fallback(rule, fallback, rules))
+                            })
+                })
+            {
+                return false;
+            }
             if let Some((_, fallback_rules)) = managed.host_executable_rules(&path)
                 && rules.iter().any(|rule| {
                     !managed.contains_prefix_rule(program, rule)
@@ -383,11 +426,30 @@ impl Policy {
     fn match_exact_rules(&self, cmd: &[String]) -> Option<Vec<RuleMatch>> {
         let first = cmd.first()?;
         Some(
-            self.rules_by_program
-                .get_vec(first)
-                .map(|rules| rules.iter().filter_map(|rule| rule.matches(cmd)).collect())
-                .unwrap_or_default(),
+            self.candidates(first)
+                .into_iter()
+                .filter_map(|rule| rule.matches(cmd))
+                .collect(),
         )
+    }
+
+    fn candidates(&self, program: &str) -> Vec<&RuleRef> {
+        let mut candidates: Vec<_> = self
+            .rules_by_program
+            .get_vec(program)
+            .into_iter()
+            .flatten()
+            .collect();
+        if !self.insensitive_rules.is_empty() {
+            candidates.extend(
+                self.insensitive_rules
+                    .get_vec(&canonical_key(program).collect::<String>())
+                    .into_iter()
+                    .flatten()
+                    .filter(|rule| rule.program() != program),
+            );
+        }
+        candidates
     }
 
     fn match_host_executable_rules(&self, cmd: &[String]) -> Vec<RuleMatch> {
@@ -411,14 +473,22 @@ impl Policy {
             .collect()
     }
 
-    fn host_executable_rules(&self, path: &AbsolutePathBuf) -> Option<(String, &[RuleRef])> {
+    fn host_executable_rules(&self, path: &AbsolutePathBuf) -> Option<(String, Vec<&RuleRef>)> {
         let basename = executable_path_lookup_key(path.as_path())?;
         if let Some(paths) = self.host_executables_by_name.get(&basename)
             && !paths.contains(path)
         {
             return None;
         }
-        let rules = self.rules_by_program.get_vec(&basename)?;
+        let mut rules = self.candidates(&basename);
+        // Canonical rules can use a different name, whose declaration also restricts the path.
+        rules.retain(|rule| {
+            rule.program() == basename.as_str()
+                || self
+                    .host_executables_by_name
+                    .get(&executable_lookup_key(rule.program()))
+                    .is_none_or(|paths| paths.contains(path))
+        });
         Some((basename, rules))
     }
 }
@@ -433,31 +503,53 @@ fn can_weaken_fallback(exact: &RuleRef, fallback: &RuleRef, path_rules: &[RuleRe
     if exact.decision >= fallback.decision {
         return false;
     }
-    let (mut shorter, mut longer) = (&exact.pattern.rest, &fallback.pattern.rest);
-    if shorter.len() > longer.len() {
-        std::mem::swap(&mut shorter, &mut longer);
-    }
-    // The overlapping commands use arguments allowed by both prefixes where both apply.
-    let shared_arguments_at = |i: usize| {
-        longer[i].alternatives().iter().filter(move |arg| {
-            shorter
-                .get(i)
-                .is_none_or(|token| token.alternatives().contains(arg))
+    let fallback_decision = fallback.decision;
+    let exact = &exact.pattern;
+    let fallback = &fallback.pattern;
+    let length = exact.rest.len().max(fallback.rest.len());
+    // Where both rules constrain an argument, use the case-sensitive spellings
+    // if available. A missing token leaves the other rule's alternatives unrestricted.
+    let overlap_at = |i: usize| {
+        let (source, filter) = if i >= exact.rest.len()
+            || (i < fallback.rest.len() && exact.canonical_matching && !fallback.canonical_matching)
+        {
+            (fallback, exact)
+        } else {
+            (exact, fallback)
+        };
+        source.rest[i].alternatives().iter().filter_map(move |arg| {
+            let matches = filter.rest.get(i).is_none_or(|token| {
+                token
+                    .alternatives()
+                    .iter()
+                    .any(|alt| filter.tokens_equal(alt, arg))
+            });
+            matches.then_some((arg, source.canonical_matching))
         })
     };
-    if (0..shorter.len()).any(|i| shared_arguments_at(i).next().is_none()) {
+    if (0..length).any(|i| overlap_at(i).next().is_none()) {
         return false;
     }
-    // Exact matches take the strongest decision. A shorter or equal exact rule
-    // can therefore preserve the fallback for every command in the overlap.
+    // A protecting exact rule must cover every spelling in the overlap.
     !path_rules.iter().any(|rule| {
         let Some(rule) = rule.as_any().downcast_ref::<PrefixRule>() else {
             return false;
         };
-        rule.decision >= fallback.decision
-            && rule.pattern.rest.len() <= longer.len()
+        rule.decision >= fallback_decision
+            && (!exact.canonical_matching || rule.pattern.canonical_matching)
+            && rule.pattern.rest.len() <= length
             && rule.pattern.rest.iter().enumerate().all(|(i, token)| {
-                shared_arguments_at(i).all(|arg| token.alternatives().contains(arg))
+                overlap_at(i).all(|(arg, insensitive)| {
+                    // For a folded overlap, an exact spelling alone proves coverage
+                    // only for ASCII tokens without letters.
+                    let needs_fold = insensitive
+                        && (!arg.is_ascii() || arg.bytes().any(|b| b.is_ascii_alphabetic()));
+                    (!needs_fold || rule.pattern.canonical_matching)
+                        && token
+                            .alternatives()
+                            .iter()
+                            .any(|alt| rule.pattern.tokens_equal(alt, arg))
+                })
             })
     })
 }

@@ -21,6 +21,8 @@ pub struct RequirementsExecPolicyToml {
 /// This shares the builtin's matching semantics and additionally supports managed `prompt-user` decisions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RequirementsExecPolicyPrefixRuleToml {
+    #[serde(default)]
+    pub canonical_matching: bool,
     pub pattern: Vec<RequirementsExecPolicyPatternTokenToml>,
     pub decision: Option<RequirementsExecPolicyDecisionToml>,
     pub justification: Option<String>,
@@ -136,6 +138,7 @@ impl RequirementsExecPolicyToml {
             for head in first_token.alternatives() {
                 let rule: RuleRef = Arc::new(PrefixRule {
                     pattern: PrefixPattern {
+                        canonical_matching: rule.canonical_matching,
                         first: Arc::from(head.as_str()),
                         rest: rest.clone(),
                     },

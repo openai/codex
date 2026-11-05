@@ -40,8 +40,8 @@ host_executable(
   - execpolicy always tries exact first-token matches first.
   - With host-executable resolution disabled, `/usr/bin/git status` only matches a rule whose first token is `/usr/bin/git`.
   - With host-executable resolution enabled, if no exact rule matches, execpolicy may fall back from `/usr/bin/git` to basename rules for `git`.
-  - If `host_executable(name="git", ...)` exists, basename fallback is only allowed for listed absolute paths.
-  - If no `host_executable()` entry exists for a basename, basename fallback is allowed.
+  - A `host_executable()` declaration restricts basename fallback to its listed absolute paths. Declarations apply to the command's basename and the matching rule's program name; if both have declarations, the path must appear in both lists.
+  - Without an applicable declaration, basename fallback is allowed.
 
 ## CLI
 
@@ -95,3 +95,5 @@ cargo run -p codex-execpolicy -- check --rules path/to/policy.rules git status
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
 
 Note: `execpolicy` commands are still in preview. The API may have breaking changes in the future.
+
+Set `canonical_matching=True` on a `prefix_rule` to use Unicode canonical caseless matching for every token in the prefix, including alternatives. For example, `["bash", "run"]` matches `bAſh RUN`, and a rule containing `café` also matches `CAFE` followed by a combining acute accent. This compares the supplied tokens without resolving the executable on the filesystem. Prefix rules match case exactly by default.

@@ -256,6 +256,7 @@ fn add_prefix_rule_extends_policy() -> Result<()> {
     assert_eq!(
         vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
+                canonical_matching: false,
                 first: Arc::from("ls"),
                 rest: vec![PatternToken::Single(String::from("-l"))].into(),
             },
@@ -317,6 +318,7 @@ prefix_rule(
         vec![
             RuleSnapshot::Prefix(PrefixRule {
                 pattern: PrefixPattern {
+                    canonical_matching: false,
                     first: Arc::from("git"),
                     rest: Vec::<PatternToken>::new().into(),
                 },
@@ -325,6 +327,7 @@ prefix_rule(
             }),
             RuleSnapshot::Prefix(PrefixRule {
                 pattern: PrefixPattern {
+                    canonical_matching: false,
                     first: Arc::from("git"),
                     rest: vec![PatternToken::Single("commit".to_string())].into(),
                 },
@@ -394,6 +397,7 @@ prefix_rule(
     assert_eq!(
         vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
+                canonical_matching: false,
                 first: Arc::from("bash"),
                 rest: vec![PatternToken::Alts(vec!["-c".to_string(), "-l".to_string()])].into(),
             },
@@ -405,6 +409,7 @@ prefix_rule(
     assert_eq!(
         vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
+                canonical_matching: false,
                 first: Arc::from("sh"),
                 rest: vec![PatternToken::Alts(vec!["-c".to_string(), "-l".to_string()])].into(),
             },
@@ -459,6 +464,7 @@ prefix_rule(
     assert_eq!(
         vec![RuleSnapshot::Prefix(PrefixRule {
             pattern: PrefixPattern {
+                canonical_matching: false,
                 first: Arc::from("npm"),
                 rest: vec![
                     PatternToken::Alts(vec!["i".to_string(), "install".to_string()]),
@@ -810,7 +816,7 @@ fn inherited_absolute_amendments_preserve_managed_basename_restrictions() -> Res
     let mut parser = PolicyParser::new();
     parser.parse(
         "managed.rules",
-        r#"prefix_rule(pattern = ["git", ["push", "send-pack"]], decision = "forbidden")"#,
+        r#"prefix_rule(pattern = ["git", ["push", "send-pack"]], canonical_matching=True, decision = "forbidden")"#,
     )?;
     let managed = parser.build();
     let requirements = RequirementsExecPolicy::new(managed.clone());
@@ -819,6 +825,7 @@ fn inherited_absolute_amendments_preserve_managed_basename_restrictions() -> Res
         (&["status"][..], Decision::Allow, true),
         (&[], Decision::Allow, false),
         (&["send-pack", "origin"], Decision::Allow, false),
+        (&["PUſH"], Decision::Allow, false),
         (&["push"], Decision::Forbidden, true),
     ] {
         let mut snapshot = managed.clone();
@@ -827,6 +834,20 @@ fn inherited_absolute_amendments_preserve_managed_basename_restrictions() -> Res
         snapshot.add_prefix_rule(&prefix, decision)?;
         assert_eq!(
             snapshot.preserves_managed_requirements(&requirements),
+            accepted
+        );
+    }
+    let path = starlark_string(&git);
+    for (insensitive, accepted) in [("True", true), ("False", false)] {
+        let mut parser = PolicyParser::new();
+        parser.parse("path.rules", &format!(
+            r#"prefix_rule(pattern=["{path}", ["push", "send-pack"]], canonical_matching={insensitive}, decision="forbidden")"#
+        ))?;
+        let managed = managed.merge_overlay(&parser.build());
+        let mut snapshot = managed.clone();
+        snapshot.add_prefix_rule(std::slice::from_ref(&git), Decision::Allow)?;
+        assert_eq!(
+            snapshot.preserves_managed_requirements(&RequirementsExecPolicy::new(managed)),
             accepted
         );
     }
@@ -874,6 +895,31 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
     let mut parser = PolicyParser::new();
     parser.parse("test.rules", &policy_src)?;
 
+    Ok(())
+}
+
+#[test]
+fn canonical_host_executable_resolution_uses_only_relevant_declarations() -> Result<()> {
+    let bash_path = starlark_string(&host_absolute_path(&[
+        "usr",
+        "bin",
+        &host_executable_name("bash"),
+    ]));
+    // The long s keeps the executable lookup keys distinct on Windows too.
+    let long_s_bash_path = starlark_string(&host_absolute_path(&[
+        "usr",
+        "bin",
+        &host_executable_name("baſh"),
+    ]));
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["bash"], canonical_matching = True, decision = "forbidden",
+            match = [["{bash_path}"]], not_match = [["{long_s_bash_path}"]])
+host_executable(name = "bash", paths = ["{bash_path}"])
+host_executable(name = "baſh", paths = ["{long_s_bash_path}"])
+"#
+    );
+    PolicyParser::new().parse("test.rules", &policy_src)?;
     Ok(())
 }
 
@@ -1009,5 +1055,32 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
             }],
         }
     );
+    Ok(())
+}
+
+#[test]
+fn canonical_matching_prefix_matches_each_token() -> Result<()> {
+    let mut parser = PolicyParser::new();
+    parser.parse(
+        "case.rules",
+        r#"
+prefix_rule(pattern=[["Tool", "bash"], "Run", ["ONE", "two", "set"]], canonical_matching=True,
+            match=["TOOL rUn Two extra", "bAſh RUN one", "bash run ſet"],
+            not_match=["TOOL run three", "tool runner two"])
+prefix_rule(pattern=["café", ["résumé", "run"]], canonical_matching=True,
+            match=["CAFÉ RÉSUMÉ"], not_match=["cafe resume", "ｃafé résumé"])
+# Full case folding can expand one character into two, within a single token.
+prefix_rule(pattern=["straße"], canonical_matching=True,
+            match=["STRASSE"], not_match=["STRAS SE"])
+# U+0345 folds to a spacing iota. Reorder the acute accent before folding
+# so it stays attached to the alpha.
+prefix_rule(pattern=["α\u0345\u0301"], canonical_matching=True,
+            match=["άι"], not_match=["αί"])
+prefix_rule(pattern=["café"], not_match=["café"])
+prefix_rule(pattern=["set-content"], canonical_matching=True, not_match=["set-cøntent"])
+prefix_rule(pattern=["bash"], not_match=["baſh"])
+prefix_rule(pattern=["Tool", "Run"], not_match=["tool Run", "Tool run"])
+"#,
+    )?;
     Ok(())
 }

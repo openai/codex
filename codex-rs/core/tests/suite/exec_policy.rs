@@ -638,7 +638,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
         .expect("create policy directory");
         fs::write(
             &policy_path,
-            r#"prefix_rule(pattern=["echo"], decision="forbidden")"#,
+            r#"prefix_rule(pattern=["bash"], canonical_matching=True, decision="forbidden")"#,
         )
         .expect("write policy file");
     });
@@ -647,7 +647,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
 
     let call_id = "shell-forbidden";
     let args = json!({
-        "cmd": "echo blocked",
+        "cmd": "bAſh --version",
         "yield_time_ms": 1_000,
     });
 
@@ -706,7 +706,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
         .function_call_output_text(call_id)
         .expect("forbidden command should produce a tool response");
     assert!(
-        output.contains("policy forbids commands starting with `echo`"),
+        output.contains("policy forbids commands starting with `'bAſh'`"),
         "unexpected output: {output}"
     );
 
@@ -720,7 +720,7 @@ async fn inherited_policy_allows_remembered_commands_and_enforces_managed_denial
     let test = test_codex()
         .with_cloud_config_bundle(CloudConfigBundleFixture::loader_with_enterprise_requirement(
             r#"[rules]
-prefix_rules = [{ pattern = [{ token = "touch" }, { token = "denied-marker" }], decision = "forbidden" }]"#,
+prefix_rules = [{ pattern = [{ token = "touch" }, { token = "denied-ma\u0301rker" }], canonical_matching = true, decision = "forbidden" }]"#,
         ))
         .build_with_auto_env(&server)
         .await?;
@@ -752,7 +752,7 @@ prefix_rules = [{ pattern = [{ token = "touch" }, { token = "denied-marker" }], 
             sse(vec![
                 ev_response_created("commands"),
                 ev_exec_command_call("allowed", "touch allowed-marker"),
-                ev_exec_command_call("denied", "touch denied-marker"),
+                ev_exec_command_call("denied", "touch Denied-MárKer"),
                 ev_completed("commands"),
             ]),
             sse_completed("done"),
@@ -784,12 +784,12 @@ prefix_rules = [{ pattern = [{ token = "touch" }, { token = "denied-marker" }], 
         )
         .await?;
     assert!(files.iter().any(|file| file.file_name == "allowed-marker"));
-    assert!(!files.iter().any(|file| file.file_name == "denied-marker"));
+    assert!(!files.iter().any(|file| file.file_name == "Denied-MárKer"));
     let denial = requests
         .function_call_output_text("denied")
         .expect("denied command output");
     assert!(
-        denial.contains("policy forbids commands starting with `touch denied-marker`"),
+        denial.contains("policy forbids commands starting with `touch 'Denied-MárKer'`"),
         "{denial}"
     );
     Ok(())

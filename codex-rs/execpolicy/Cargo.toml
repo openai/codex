@@ -18,6 +18,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+caseless = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-utils-absolute-path = { workspace = true }
@@ -29,6 +30,7 @@ starlark = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt"] }
+unicode-normalization = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
