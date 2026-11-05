@@ -5327,6 +5327,7 @@
               "focus_pane_left": null,
               "focus_pane_right": null,
               "focus_sidebar_content": null,
+              "focus_sidebar_tabs": null,
               "hide_pane": null,
               "leader": null,
               "maximize_pane_width": null,
@@ -6211,6 +6212,14 @@
           ],
           "description": "Focus the side conversation, or hide it when already focused."
         },
+        "focus_sidebar_tabs": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the sidebar tab chooser."
+        },
         "hide_pane": {
           "allOf": [
             {
@@ -6485,6 +6494,7 @@
             "focus_pane_left": null,
             "focus_pane_right": null,
             "focus_sidebar_content": null,
+            "focus_sidebar_tabs": null,
             "hide_pane": null,
             "leader": null,
             "maximize_pane_width": null,

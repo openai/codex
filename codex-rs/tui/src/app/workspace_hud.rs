@@ -48,6 +48,7 @@ impl App {
             let (group, label) = match action {
                 "focus_command_center" => (0, "Command Center"),
                 "focus_main_composer" => (0, "Main composer"),
+                "focus_sidebar_tabs" => (0, "Open in sidebar"),
                 "focus_sidebar_content" if side => (0, "Hide sidebar"),
                 "focus_sidebar_content" => (0, "Sidebar content"),
                 "resize_panes" if can_size => (2, "Resize panes"),

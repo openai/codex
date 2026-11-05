@@ -51,6 +51,59 @@ async fn backend_sessions_parked_request_does_not_hide_disconnect() -> Result<()
     let initial = backends.displayed;
     let thread_id = ThreadId::new();
 
+    // A startup failure that arrives before a fork is registered stays on its owning backend.
+    let mut app = make_test_app().await;
+    app.sidebar_mut().creation = Some(sidebar::SideCreation {
+        owner: background_id,
+        state: sidebar::CreationState::Waiting {
+            request: uuid::Uuid::new_v4(),
+            started: Instant::now(),
+        },
+        message: None,
+    });
+    let failure = ServerNotification::McpServerStatusUpdated(
+        codex_app_server_protocol::McpServerStatusUpdatedNotification {
+            thread_id: Some(thread_id.to_string()),
+            name: "tools".into(),
+            status: McpServerStartupState::Failed,
+            error: Some("startup failed".into()),
+            failure_reason: None,
+        },
+    );
+    let event = crate::app_server_session::AppServerSessionEvent {
+        backend_id: background_id,
+        event: AppServerEvent::ServerNotification(Box::new(failure.clone())),
+    };
+    assert!(app.defer_side_startup_notification(&event, displayed_id));
+    backends.defer_side_startup(event);
+    backends.replay_ready_side_startup(&app);
+    assert!(
+        backends
+            .next_event(/*paused_backend*/ None)
+            .now_or_never()
+            .is_none()
+    );
+    backends.displayed = backends.slot(background_id).unwrap();
+    backends.replay_ready_side_startup(&app);
+    assert!(
+        backends
+            .next_event(/*paused_backend*/ None)
+            .now_or_never()
+            .is_none()
+    );
+    app.ensure_thread_channel(thread_id);
+    backends.replay_ready_side_startup(&app);
+    let (owner, event) = backends.next_event(/*paused_backend*/ None).await;
+    assert_eq!(owner, background_id);
+    let AppServerEvent::ServerNotification(notification) = event.unwrap().event else {
+        panic!("expected the parked MCP startup failure");
+    };
+    assert_eq!(
+        serde_json::to_value(notification)?,
+        serde_json::to_value(failure)?
+    );
+    backends.displayed = initial;
+
     background_events
         .send(AppServerEvent::ServerRequest(Box::new(approval_request(
             thread_id, /*request_id*/ 1,

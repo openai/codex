@@ -723,6 +723,15 @@ pub(crate) fn render_context_right(area: Rect, buf: &mut Buffer, line: &Line<'st
     }
 }
 
+pub(crate) fn render_unfocused_status(text: String, area: Rect, buf: &mut Buffer) {
+    let area = inset_footer_hint_area(area);
+    crate::line_truncation::truncate_line_with_ellipsis_if_overflow(
+        text.dim().into(),
+        usize::from(area.width),
+    )
+    .render(area, buf);
+}
+
 pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {
     if area.width > 2 {
         area.x += 2;

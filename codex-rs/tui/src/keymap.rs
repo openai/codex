@@ -106,6 +106,7 @@ pub(crate) struct AppKeymap {
     pub(crate) change_host: Vec<KeyBinding>,
     pub(crate) focus_main_composer: Vec<KeyBinding>,
     pub(crate) focus_sidebar_content: Vec<KeyBinding>,
+    pub(crate) focus_sidebar_tabs: Vec<KeyBinding>,
     pub(crate) hide_pane: Vec<KeyBinding>,
     pub(crate) focus_pane_left: Vec<KeyBinding>,
     pub(crate) focus_pane_right: Vec<KeyBinding>,
@@ -707,6 +708,7 @@ impl RuntimeKeymap {
             classic_keymap = keymap.clone();
             classic_keymap.global.focus_main_composer = None;
             classic_keymap.global.focus_sidebar_content = None;
+            classic_keymap.global.focus_sidebar_tabs = None;
             classic_keymap.global.hide_pane = None;
             classic_keymap.global.focus_pane_left = None;
             classic_keymap.global.focus_pane_right = None;
@@ -772,6 +774,11 @@ impl RuntimeKeymap {
                 keymap.global.focus_sidebar_content.as_ref(),
                 &[],
                 "tui.keymap.global.focus_sidebar_content",
+            )?,
+            focus_sidebar_tabs: resolve_bindings(
+                keymap.global.focus_sidebar_tabs.as_ref(),
+                &[],
+                "tui.keymap.global.focus_sidebar_tabs",
             )?,
             hide_pane: resolve_bindings(
                 keymap.global.hide_pane.as_ref(),
@@ -1800,6 +1807,7 @@ impl RuntimeKeymap {
                 change_host: Vec::new(),
                 focus_main_composer: Vec::new(),
                 focus_sidebar_content: Vec::new(),
+                focus_sidebar_tabs: Vec::new(),
                 hide_pane: Vec::new(),
                 focus_pane_left: Vec::new(),
                 focus_pane_right: Vec::new(),
@@ -2170,6 +2178,7 @@ impl RuntimeKeymap {
                 "global.focus_sidebar_content",
                 &self.app.focus_sidebar_content,
             ),
+            ("global.focus_sidebar_tabs", &self.app.focus_sidebar_tabs),
             ("global.focus_pane_left", &self.app.focus_pane_left),
             ("global.focus_pane_right", &self.app.focus_pane_right),
             ("global.minimize_pane_width", minimize),
@@ -2219,6 +2228,7 @@ impl RuntimeKeymap {
                 "focus_sidebar_content",
                 self.app.focus_sidebar_content.as_slice(),
             ),
+            ("focus_sidebar_tabs", self.app.focus_sidebar_tabs.as_slice()),
             ("focus_pane_left", self.app.focus_pane_left.as_slice()),
             ("focus_pane_right", self.app.focus_pane_right.as_slice()),
             ("minimize_pane_width", minimize),
@@ -2405,6 +2415,7 @@ impl RuntimeKeymap {
                     "focus_sidebar_content",
                     self.app.focus_sidebar_content.as_slice(),
                 ),
+                ("focus_sidebar_tabs", self.app.focus_sidebar_tabs.as_slice()),
                 ("focus_pane_left", self.app.focus_pane_left.as_slice()),
                 ("focus_pane_right", self.app.focus_pane_right.as_slice()),
                 ("minimize_pane_width", minimize),
@@ -2549,6 +2560,10 @@ impl RuntimeKeymap {
                     self.app.focus_sidebar_content.as_slice(),
                 ),
                 (
+                    "global.focus_sidebar_tabs",
+                    self.app.focus_sidebar_tabs.as_slice(),
+                ),
+                (
                     "global.focus_pane_left",
                     self.app.focus_pane_left.as_slice(),
                 ),
@@ -2606,6 +2621,10 @@ impl RuntimeKeymap {
                 (
                     "global.focus_sidebar_content",
                     self.app.focus_sidebar_content.as_slice(),
+                ),
+                (
+                    "global.focus_sidebar_tabs",
+                    self.app.focus_sidebar_tabs.as_slice(),
                 ),
                 (
                     "global.focus_pane_left",
@@ -4183,18 +4202,16 @@ mod tests {
 
     #[test]
     fn pane_binding_only_shadows_side_toggle_in_workspace_sessions() {
-        let keymap = toml::from_str("[global]\nfocus_pane_right = 'ctrl-/'").unwrap();
-        let classic = RuntimeKeymap::for_session(&keymap, /*workspace*/ false).unwrap();
-        assert_eq!(
-            classic.app.toggle_side_conversation,
-            RuntimeKeymap::defaults().app.toggle_side_conversation
-        );
-        let workspace = RuntimeKeymap::for_session(&keymap, /*workspace*/ true).unwrap();
-        assert!(workspace.app.toggle_side_conversation.is_empty());
-        assert_eq!(
-            workspace.app.focus_pane_right,
-            vec![key_hint::ctrl(KeyCode::Char('/'))]
-        );
+        for action in ["focus_pane_right", "focus_sidebar_tabs"] {
+            let keymap = toml::from_str(&format!("[global]\n{action} = 'ctrl-/'")).unwrap();
+            let classic = RuntimeKeymap::for_session(&keymap, /*workspace*/ false).unwrap();
+            assert_eq!(
+                classic.app.toggle_side_conversation,
+                RuntimeKeymap::defaults().app.toggle_side_conversation
+            );
+            let workspace = RuntimeKeymap::for_session(&keymap, /*workspace*/ true).unwrap();
+            assert!(workspace.app.toggle_side_conversation.is_empty());
+        }
     }
 
     #[test]

@@ -5,6 +5,30 @@
 use super::*;
 
 impl ChatComposer {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<FooterContent>) -> bool {
+        if self.footer.status_line_value == status_line {
+            return false;
+        }
+        self.footer.status_line_value = status_line;
+        true
+    }
+
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) -> bool {
+        if self.footer.status_line_enabled == enabled {
+            return false;
+        }
+        self.footer.status_line_enabled = enabled;
+        true
+    }
+
+    pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) -> bool {
+        if self.footer.side_conversation_context_label == label {
+            return false;
+        }
+        self.footer.side_conversation_context_label = label;
+        true
+    }
+
     pub(super) fn status_surface_height(&self, options: ComposerRenderOptions<'_>) -> u16 {
         u16::from(options.separate_status_line && self.footer.status_line_enabled)
     }
@@ -26,6 +50,16 @@ impl ChatComposer {
         options: ComposerRenderOptions<'_>,
     ) {
         if area.is_empty() {
+            return;
+        }
+        if options.unfocused {
+            if let Some(content) = self.status_line_content() {
+                crate::bottom_pane::footer::render_unfocused_status(
+                    content.clone().into_hyperlink_line().line.to_string(),
+                    area,
+                    buf,
+                );
+            }
             return;
         }
         let mut props = self.footer_props();

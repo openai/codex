@@ -14,6 +14,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::items::AsyncUserInputQuestion;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -49,6 +50,26 @@ impl SideAnswer {
 }
 
 impl SideCompanion {
+    pub(super) fn empty(cwd: AbsolutePathBuf) -> Self {
+        Self {
+            display: CapturedSideDisplay {
+                rendered_completion_turn_ids: Default::default(),
+                active: None,
+                auxiliary: Vec::new(),
+                draft: Box::default(),
+                status: None,
+                work: None,
+                last_completed_agent_message: None,
+                cwd,
+                visualizations: None,
+            },
+            cells: Vec::new(),
+            view: TranscriptView::default(),
+            answer: None,
+            parked_tail: 0,
+        }
+    }
+
     pub(super) fn apply_notification(
         &mut self,
         notification: &ServerNotification,

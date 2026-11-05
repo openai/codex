@@ -21,6 +21,7 @@ use crate::keymap::configured_binding_for_action;
 use crate::keymap::keymap_action_ids;
 use crate::motion::MotionMode;
 use crate::pager_overlay::TranscriptHistoryState;
+use crate::sidebar_chooser::TabState;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::transcript_image::ImagePlacement;
 use crate::transcript_view::TranscriptView;
@@ -34,6 +35,7 @@ use ratatui::widgets::Widget;
 pub(super) struct ConversationFrame {
     inset: Option<Rect>,
     sidebar: Option<sidebar::SidebarLayout>,
+    pub(super) chat_strip: Option<Rect>,
     pub(super) leader_hud: Option<Rect>,
     /// A dialog can obscure neighboring content in the terminal's completed buffer.
     behind_dialog: Option<ratatui::buffer::Buffer>,
@@ -47,7 +49,7 @@ impl ConversationFrame {
     }
 
     pub(super) fn has_caller_inset(&self) -> bool {
-        self.inset.is_some() && self.sidebar.is_none()
+        self.inset.is_some() && self.sidebar.is_none() && self.chat_strip.is_none()
     }
 
     pub(super) fn side_pane(&self) -> Option<&side_pane::SidePaneLayout> {
@@ -229,20 +231,39 @@ impl App {
     ) -> Result<Rect> {
         self.transcript_view.image_protocol = self.prepare_frame_images();
         let frames = tui.frame_requester();
-        if self.conversation_frame.sidebar.is_some() {
+        if self.conversation_frame.sidebar.is_some() || self.conversation_frame.chat_strip.is_some()
+        {
             // Recompute our own inset on every frame, including the first narrow frame.
             self.conversation_frame = ConversationFrame::default();
         }
         let caller_inset = self.conversation_frame.inset;
         let layout = sidebar::paint_layout(self, tui, screen_size.into());
-        let live = match &layout {
-            Some(sidebar::SidebarLayout::Chat(panes)) => Some(panes.focused),
-            Some(sidebar::SidebarLayout::Chooser { main, .. }) if !main.is_empty() => Some(*main),
-            _ => None,
+        let displayed = self.current_displayed_thread_id();
+        let chat = match displayed.and_then(|id| self.side_pair_key(id)) {
+            Some(child) if Some(child) == displayed => TabState::Active,
+            Some(_) => TabState::Inactive,
+            None => TabState::Absent,
+        };
+        let (live, strip) = match &layout {
+            Some(sidebar::SidebarLayout::Chat(panes)) => {
+                (Some(panes.focused), Some(panes.tab_strip))
+            }
+            Some(sidebar::SidebarLayout::Chooser { main, .. }) => {
+                ((!main.is_empty()).then_some(*main), None)
+            }
+            None if chat == TabState::Active
+                && caller_inset.is_none()
+                && self.side_retention_enabled(tui) =>
+            {
+                let [strip, body] = side_pane::tab_and_body(screen_size.into());
+                (Some(body), Some(strip))
+            }
+            None => (None, None),
         };
         let mut prepared =
             self.prepare_conversation(screen_size.into(), caller_inset.or(live), &frames);
         self.conversation_frame.sidebar = layout;
+        self.conversation_frame.chat_strip = strip;
         if self.divider_drag.is_some_and(|drag| {
             !drag.matches(screen_size.into(), self.conversation_frame.side_pane())
                 || !self.conversation_focus_available(tui)
@@ -294,7 +315,34 @@ impl App {
                     focus,
                 }) => {
                     let focused = *focus == PaneFocus::Sidebar;
-                    crate::sidebar_chooser::paint(focused, *sidebar, frame.buffer, &self.keymap);
+                    if let Some(creation) = self.sidebar().and_then(|pane| pane.creation.as_ref()) {
+                        use sidebar::CreationState;
+                        ratatui::widgets::Clear.render(*sidebar, frame.buffer);
+                        let body = sidebar.inner(ratatui::layout::Margin::new(1, 1));
+                        let text = match &creation.state {
+                            CreationState::Waiting { started, .. } => {
+                                let mode = MotionMode::from_animations_enabled(
+                                    self.local_settings.tui.animations,
+                                );
+                                let glyph = crate::motion::loading_glyph(*started, mode, &frames);
+                                format!("{glyph} Starting side chat…")
+                            }
+                            CreationState::Failed { message, .. } => {
+                                format!("{message}\nEnter retry · Esc back")
+                            }
+                        };
+                        ratatui::widgets::Paragraph::new(text)
+                            .wrap(ratatui::widgets::Wrap { trim: false })
+                            .render(body, frame.buffer);
+                    } else {
+                        crate::sidebar_chooser::paint(
+                            focused,
+                            *sidebar,
+                            frame.buffer,
+                            &self.keymap,
+                            chat,
+                        );
+                    }
                     frame
                         .image_placements
                         .retain(|image| !sidebar.intersects(image.area));
@@ -305,6 +353,9 @@ impl App {
                 }
                 None => None,
             };
+            if let Some(strip) = strip {
+                crate::sidebar_chooser::tab_strip(strip, TabState::Absent, chat, frame.buffer);
+            }
             if let Some(x) = divider {
                 side_pane::paint_divider(frame, x, self.divider_drag, highlight_divider);
             }
@@ -331,6 +382,7 @@ impl App {
     ) -> PreparedConversation {
         self.conversation_frame.inset = conversation_inset;
         self.conversation_frame.sidebar = None;
+        self.conversation_frame.chat_strip = None;
         let area = self.conversation_area(viewport);
         if let Some((previous, reflowed)) = self.chat_widget.resize_owned_conversation(area.width) {
             self.transcript_view
@@ -430,11 +482,19 @@ impl App {
         let max_composer_height = ((u32::from(area.height) * 2 / 3) as u16)
             .max(8)
             .min(area.height);
+        let unfocused = matches!(
+            self.conversation_frame.sidebar,
+            Some(sidebar::SidebarLayout::Chooser {
+                focus: PaneFocus::Sidebar,
+                ..
+            })
+        );
         let options = |interacting| ComposerRenderOptions {
+            unfocused,
             max_height: Some(max_composer_height),
             overlay_top: area.top(),
             floating_shortcuts: prepared.floating_shortcuts,
-            command_popup_placement: if interacting {
+            command_popup_placement: if interacting || unfocused {
                 CommandPopupPlacement::Hidden
             } else {
                 CommandPopupPlacement::Overlay

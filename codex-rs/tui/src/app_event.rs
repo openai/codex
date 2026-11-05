@@ -472,6 +472,13 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
 
+    SideCreated {
+        backend_id: crate::backend_id::BackendId,
+        parent: ThreadId,
+        request: uuid::Uuid,
+        result: Result<Box<crate::app_server_session::SidebarFork>, String>,
+    },
+
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,

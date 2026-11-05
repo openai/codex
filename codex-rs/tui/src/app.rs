@@ -1087,7 +1087,7 @@ impl App {
         {
             return Ok(AppRunControl::Continue);
         }
-        if self.handle_chooser_input(tui, &event) {
+        if Box::pin(self.handle_sidebar_input(tui, app_server, &event)).await {
             return Ok(AppRunControl::Continue);
         }
         if let TuiEvent::Mouse(press) = &event

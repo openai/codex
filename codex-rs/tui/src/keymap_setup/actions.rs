@@ -119,6 +119,7 @@ define_keymap_actions! {
     global "Global" {
         change_host [MultiBackend] => "Change where a new conversation runs.",
         focus_main_composer [Workspace] => "Focus the main conversation composer.",
+        focus_sidebar_tabs [Workspace] => "Open the sidebar tab chooser.",
         focus_sidebar_content [Workspace] => "Focus the side conversation, or hide it when already focused.",
         hide_pane [Workspace] => "Hide the focused sidebar pane.",
         focus_pane_left [Workspace] => "Focus the parent conversation.",

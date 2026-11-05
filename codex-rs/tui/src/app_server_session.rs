@@ -446,6 +446,14 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct SidebarFork {
+    pub(crate) thread: AppServerStartedThread,
+    pub(crate) boundary: Result<(), String>,
+    pub(crate) inherited_profile: bool,
+    legacy: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
@@ -1190,6 +1198,49 @@ impl AppServerSession {
             ForkConfigSource::Session,
         )
         .await
+    }
+
+    /// Fork and inject the side boundary on a request-only view. The live session
+    /// keeps receiving notifications and drawing frames while these RPCs run.
+    pub(crate) fn sidebar_fork(
+        &self,
+        settings: LocalSettings,
+        config: Config,
+        parent: ThreadId,
+        profile: Option<PermissionProfileSelection>,
+        boundary: ResponseItem,
+    ) -> impl Future<Output = Result<SidebarFork>> + Send + use<> {
+        let mut view = self
+            .request_view()
+            .with_thread_tool_transport(self.thread_tool_transport());
+        if self.task_tools_available(parent) {
+            view.remember_task_tool_thread(parent);
+        }
+        async move {
+            let thread = view
+                .fork_side_thread(&settings, config, parent, profile.as_ref())
+                .await?;
+            let boundary = view
+                .thread_inject_items(thread.session.thread_id, vec![boundary])
+                .await
+                .map(|_| ())
+                .map_err(|err| err.to_string());
+            Ok(SidebarFork {
+                thread,
+                boundary,
+                inherited_profile: profile.is_some(),
+                legacy: view.history_support == ThreadHistorySupport::LegacyOnly,
+            })
+        }
+    }
+
+    pub(crate) fn observe_sidebar_fork(&mut self, fork: &SidebarFork) {
+        if fork.legacy {
+            self.history_support = ThreadHistorySupport::LegacyOnly;
+        }
+        if fork.thread.task_tools_available {
+            self.remember_task_tool_thread(fork.thread.session.thread_id);
+        }
     }
 
     pub(crate) async fn fork_side_thread(

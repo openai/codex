@@ -475,6 +475,10 @@ impl ChatWidget {
         self.bottom_pane.no_modal_or_popup_active()
     }
 
+    pub(crate) fn completion_can_yield_focus(&self) -> bool {
+        self.bottom_pane.completion_can_yield_focus()
+    }
+
     pub(crate) fn can_launch_external_editor(&self) -> bool {
         !self.external_writer_view && self.bottom_pane.can_launch_external_editor()
     }

@@ -3,6 +3,7 @@ source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
 Focus Main Composer | leader c (ctrl-x c) | Global focus_main_composer Focus Main Composer Focus the main conversation composer. leader c (ctrl-x c) Default
+Focus Sidebar Tabs | leader t (ctrl-x t) | Global focus_sidebar_tabs Focus Sidebar Tabs Open the sidebar tab chooser. leader t (ctrl-x t) Default
 Focus Sidebar Content | leader s (ctrl-x s) | Global focus_sidebar_content Focus Sidebar Content Focus the side conversation, or hide it when already focused. leader s (ctrl-x s) Default
 Hide Pane | leader - (ctrl-x -) | Global hide_pane Hide Pane Hide the focused sidebar pane. leader - (ctrl-x -) Default
 Focus Pane Left | leader left (ctrl-x left), leader h (ctrl-x h) | Global focus_pane_left Focus Pane Left Focus the parent conversation. leader left (ctrl-x left), leader h (ctrl-x h) Default
@@ -14,4 +15,3 @@ Resize Panes | leader r (ctrl-x r) | Global resize_panes Resize Panes Enter keyb
 Move Divider Left | leader shift-h (ctrl-x shift-h) | Global move_divider_left Move Divider Left Move the divider left when the side pane has focus. leader shift-h (ctrl-x shift-h) Default
 Move Divider Right | leader shift-l (ctrl-x shift-l) | Global move_divider_right Move Divider Right Move the divider right when the side pane has focus. leader shift-l (ctrl-x shift-l) Default
 Toggle Pane Zoom | leader z (ctrl-x z) | Global toggle_pane_zoom Toggle Pane Zoom Zoom or restore the focused pane. leader z (ctrl-x z) Default
-Open Agents | unbound | Global open_agents Open Agents Open the agent command center. unbound Default

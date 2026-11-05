@@ -26,6 +26,7 @@ pub(crate) use chat_composer::TranscriptFooter;
 pub(crate) use composer_gap::ComposerGap;
 pub(crate) use footer::footer_hint_items_line;
 pub(crate) use footer::inset_footer_hint_area;
+pub(crate) use footer::render_unfocused_status;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
@@ -1930,8 +1931,13 @@ impl BottomPane {
 
     /// Return true when no popups or modal views are active, regardless of task state.
     pub(crate) fn can_launch_external_editor(&self) -> bool {
+        self.completion_can_yield_focus() && !self.composer.popup_active()
+    }
+
+    /// A hidden completion popup can yield to another pane. Prompts and queries keep input.
+    pub(crate) fn completion_can_yield_focus(&self) -> bool {
         !self.has_active_view()
-            && !self.composer.popup_active()
+            && !self.composer.query_active()
             && !self.questions.as_ref().is_some_and(|q| q.expanded)
     }
 

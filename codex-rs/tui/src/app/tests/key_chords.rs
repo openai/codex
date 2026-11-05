@@ -1205,6 +1205,7 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
     let parent = ThreadId::new();
     app.chat_widget
         .handle_thread_session(test_thread_session(parent, app.config.cwd.to_path_buf()));
+    app.chat_widget.local_settings.tui.status_line = Some(vec!["model-with-reasoning".into()]);
     app.chat_widget.insert_str("parent draft");
 
     let size = ratatui::layout::Size::new(120, 12);
@@ -1223,14 +1224,15 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
         }
         if key == KeyCode::Esc {
             let frame = super::side_frame(&mut app, &mut tui, size)?;
-            let panel: Vec<_> = frame
-                .lines()
-                .map(|line| line.chars().skip(80).collect::<String>())
-                .filter(|line| !line.trim().is_empty())
-                .collect();
-            insta::assert_snapshot!("sidebar_new_chat", panel.join("\n"));
+            insta::assert_snapshot!("sidebar_new_chat", frame);
             for stroke in [
                 ctrl('x'),
+                KeyCode::Char('c').into(),
+                KeyEvent::new_with_kind(
+                    KeyCode::Char('c'),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Repeat,
+                ),
                 KeyCode::Char('c').into(),
                 KeyCode::Char('!').into(),
                 KeyCode::Left.into(), // Flush buffered typing before the focus change.
@@ -1257,6 +1259,37 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
             assert_eq!(app.conversation_frame.chooser_area().unwrap().width, 20);
         }
     }
+    let request = uuid::Uuid::new_v4();
+    app.sidebar_mut().creation = Some(crate::app::sidebar::SideCreation {
+        owner: server.backend_id(),
+        state: crate::app::sidebar::CreationState::Waiting {
+            request,
+            started: std::time::Instant::now(),
+        },
+        message: Some("first prompt".into()),
+    });
+    app.finish_side_creation(
+        &mut tui,
+        &mut server,
+        parent,
+        request,
+        Err("The side conversation could not be prepared.".into()),
+    )
+    .await;
+    app.handle_start_side(&mut tui, &mut server, parent, Some("second prompt".into()))
+        .await?;
+    let narrow = super::side_frame(&mut app, &mut tui, ratatui::layout::Size::new(30, 8))?;
+    insta::assert_snapshot!("sidebar_failed_creation", narrow);
+    Box::pin(press(&mut app, &mut tui, &mut server, KeyCode::Esc.into())).await?;
+    assert!(
+        super::side_frame(&mut app, &mut tui, ratatui::layout::Size::new(30, 8))?
+            .contains("Open in sidebar")
+    );
+    let draft = app.chat_widget.composer_text_with_pending();
+    assert!(
+        draft.contains("first prompt") && draft.contains("second prompt"),
+        "{draft}"
+    );
     tokio::time::resume();
     server.shutdown().await?;
     Ok(())

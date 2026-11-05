@@ -47,6 +47,7 @@ pub(in crate::keymap) fn register(
         (Global, "resize_panes", Char('r'), "r"),
         (Global, "minimize_pane_width", Char(','), ","),
         (Global, "maximize_pane_width", Char('.'), "."),
+        (Global, "focus_sidebar_tabs", Char('t'), "t"),
     ] {
         if remaining == 0 {
             break;

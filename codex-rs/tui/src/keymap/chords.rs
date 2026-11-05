@@ -205,7 +205,7 @@ impl KeymapContextSet {
                 | "maximize_pane_width"
                 | "resize_panes" => OPEN_PANE,
                 "focus_main_composer" => MAIN_COMPOSER_FOCUS,
-                "focus_sidebar_content" => SIDE_PANE | SIDEBAR_CHOOSER,
+                "focus_sidebar_content" | "focus_sidebar_tabs" => SIDE_PANE | SIDEBAR_CHOOSER,
                 _ => SIDE_PANE,
             };
             return self.0 & required != 0;

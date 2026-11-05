@@ -23,18 +23,18 @@ parent-29
   New activity · esc latest
 
 100 columns, reopened
-parent-24                                                      │child-24
-                                                               │
-parent-25                                                      │child-25
-                                                               │
-parent-26                                                      │child-26
-                                                               │
-parent-27                                                      │child-27
-                                                               │
-parent-28                                                      │child-28
-                                                               │
-parent-29                                                      │child-29
-                                                               │
+parent-24                                                      │ Side chat                       +
+                                                               │child-24
+parent-25                                                      │
+                                                               │child-25
+parent-26                                                      │
+                                                               │child-26
+parent-27                                                      │
+                                                               │child-27
+parent-28                                                      │
+                                                               │child-28
+parent-29                                                      │
+                                                               │child-29
                                                                │
                                                                │
 › parent draft-                                                │› child draft!
@@ -43,6 +43,7 @@ parent-29                                                      │child-29
                                                                │  Side from main thread · ⌃/ to swit
 
 99 columns, reopened
+ Side chat                                                                                      +
 child-24
 
 child-25
@@ -54,7 +55,6 @@ child-27
 child-28
 
 child-29
-
 
 
 › child draft!

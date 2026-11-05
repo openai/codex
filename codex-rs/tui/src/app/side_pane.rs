@@ -4,11 +4,10 @@ use super::App;
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 use super::side_companion::SideCompanion;
 use super::sidebar::SidebarContent;
-use crate::bottom_pane::inset_footer_hint_area;
+use crate::bottom_pane::render_unfocused_status;
 use crate::custom_terminal::Frame;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
-use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -25,9 +24,7 @@ use crossterm::event::MouseEventKind::Up;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
 use ratatui::widgets::StatefulWidgetRef;
-use ratatui::widgets::Widget;
 use std::time::Duration;
 
 const GAP: u16 = 1;
@@ -81,6 +78,7 @@ pub(super) struct SidePaneLayout {
     pub(super) passive_thread: ThreadId,
     pub(super) passive: Rect,
     pub(super) divider: u16,
+    pub(super) tab_strip: Rect,
 }
 
 /// A wide terminal can show a pair once the outgoing conversation has been captured.
@@ -119,6 +117,7 @@ pub(super) fn pair_layout(
     }
     let active = app.current_displayed_thread_id()?;
     let side = app.side_threads.get(&child)?;
+    let [tab_strip, sidebar] = tab_and_body(sidebar);
     let (focused, passive, passive_thread) = if active == child {
         (sidebar, parent, side.parent_thread_id)
     } else {
@@ -131,8 +130,13 @@ pub(super) fn pair_layout(
         focused,
         passive,
         passive_thread,
+        tab_strip,
         divider: parent.right(),
     })
+}
+
+pub(super) fn tab_and_body(area: Rect) -> [Rect; 2] {
+    Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area)
 }
 
 pub(super) fn sidebar_areas(app: &App, tui: &Tui, area: Rect, fraction: f64) -> Option<[Rect; 2]> {
@@ -462,16 +466,15 @@ impl SidePaneLayout {
             );
         }
         if let Some(status) = &companion.display.status {
-            let footer = inset_footer_hint_area(Rect {
-                y: composer.bottom(),
-                height: status_height,
-                ..area
-            });
-            truncate_line_with_ellipsis_if_overflow(
-                status.clone().dim().into(),
-                usize::from(footer.width),
-            )
-            .render(footer, frame.buffer);
+            render_unfocused_status(
+                status.clone(),
+                Rect {
+                    y: composer.bottom(),
+                    height: status_height,
+                    ..area
+                },
+                frame.buffer,
+            );
         }
     }
 }

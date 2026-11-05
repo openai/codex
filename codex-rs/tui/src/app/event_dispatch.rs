@@ -90,6 +90,7 @@ impl App {
                     | AppEvent::InsertHistoryCell(_)
                     | AppEvent::CommitRealtimeTranscriptHistory
                     | AppEvent::ParkSideCompanion { .. }
+                    | AppEvent::SideCreated { .. }
                     | AppEvent::SideReplayFinished(_)
                     | AppEvent::ResetTranscriptForThreadSwitch
                     | AppEvent::ResetTranscriptForThreadSwitchPreservingScreen
@@ -1051,7 +1052,9 @@ impl App {
             AppEvent::ResetTranscriptForThreadSwitchPreservingScreen => {
                 self.reset_transcript_state_after_clear();
                 tui.clear_pending_history_lines();
-                tui.defer_thread_switch_clear();
+                if self.conversation_frame.chooser_area().is_none() && self.chooser_focus().is_none() {
+                    tui.defer_thread_switch_clear();
+                }
                 self.pending_thread_switch_resets -= 1;
             }
             AppEvent::CommitRealtimeTranscriptHistory => {
@@ -3362,9 +3365,15 @@ impl App {
                 parent_thread_id,
                 user_message,
             } => {
-                return self
-                    .handle_start_side(tui, app_server, parent_thread_id, user_message)
-                    .await;
+                return Box::pin(self.handle_start_side(tui, app_server, parent_thread_id, user_message)).await;
+            }
+            AppEvent::SideCreated {
+                backend_id: _,
+                parent,
+                request,
+                result,
+            } => {
+                Box::pin(self.finish_side_creation(tui, app_server, parent, request, result)).await;
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();

@@ -747,6 +747,15 @@ impl App {
             });
         }
         self.render_thread_snapshot(tui, app_server, thread_id, snapshot, !is_replay_only)?;
+        if !is_replay_only
+            && let Some(message) = self
+                .side_threads
+                .get_mut(&thread_id)
+                .and_then(|side| side.opening_message.take())
+        {
+            self.chat_widget
+                .submit_user_message_as_plain_user_turn(message);
+        }
         if self.side_retention_enabled(tui) {
             if self.side_threads.contains_key(&thread_id) {
                 self.sidebar_mut().show(

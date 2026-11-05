@@ -1311,12 +1311,19 @@ See the Codex keymap documentation for supported actions and examples."
             backends.set_preference_key(backends.displayed_owner(), "local");
         }
 
+        let mut parked_side_completions = HashMap::<_, Vec<AppEvent>>::new();
         let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
             Ok(exit_reason)
         } else {
             loop {
                 let displayed_session = backends.displayed;
                 let displayed_owner = backends.displayed_owner();
+                if let Some(events) = parked_side_completions.remove(&displayed_owner) {
+                    for event in events {
+                        app.app_event_tx.send(event);
+                    }
+                }
+                backends.replay_ready_side_startup(&app);
                 let multi_backend = app.config.features.enabled(Feature::TuiMultiBackend);
                 let next_backend = if multi_backend && app.can_cycle_conversation_backend() {
                     backends.next_listening_backend(displayed_owner)
@@ -1507,6 +1514,10 @@ See the Codex keymap documentation for supported actions and examples."
                                 if cell.as_any().is::<history_cell::SessionInfoCell>()
                         );
                         let event_session = match &event {
+                            AppEvent::SideCreated { backend_id, .. } if *backend_id != displayed_owner => {
+                                parked_side_completions.entry(*backend_id).or_default().push(event);
+                                continue;
+                            }
                             AppEvent::StartupThreadStarted { backend_id, .. } => {
                                 backends.slot(*backend_id).unwrap_or(displayed_session)
                             }
@@ -1588,6 +1599,9 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     (owner, app_server_event) = backends.next_event(paused_backend) => {
                         match app_server_event {
+                            Some(event) if app.defer_side_startup_notification(&event, displayed_owner) => {
+                                backends.defer_side_startup(event);
+                            }
                             Some(event) if owner != displayed_owner || !app.reconnect.offline => {
                                 if let Some(session) = backends.session(owner) {
                                     app.handle_polled_backend_event(session, displayed_owner, event).await;

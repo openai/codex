@@ -1,4 +1,4 @@
-//! The empty sidebar belongs to its parent conversation and can remain open without taking input.
+//! The sidebar chooser belongs to its parent conversation and can remain open without taking input.
 
 use crate::footer_hint;
 use crate::keymap::KeymapContext;
@@ -28,6 +28,46 @@ pub(crate) fn footer(keymap: &RuntimeKeymap, area: Rect) -> footer_hint::HintLin
     footer_hint::HintLine::new(hints.into_iter().chain(hide), body_row(area, area.y).width)
 }
 
+const CHAT_TAB: &str = " Side chat ";
+
+pub(crate) fn strip_targets(area: Rect) -> (Rect, Rect) {
+    let width = area.width.saturating_sub(1);
+    let plus = width.min(3);
+    let tabs = width - plus;
+    let height = area.height.min(1);
+    let tab_width = tabs.min(CHAT_TAB.len() as u16);
+    (
+        Rect::new(area.x, area.y, tab_width, height),
+        Rect::new(area.x + tabs, area.y, plus, height),
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TabState {
+    Absent,
+    Active,
+    Inactive,
+}
+
+pub(crate) fn tab_strip(area: Rect, chooser: TabState, chat: TabState, buf: &mut Buffer) {
+    let (tab, add) = strip_targets(area);
+    let quiet = crate::style::secondary_text_style();
+    let tab_style = |state| match state {
+        TabState::Active => crate::style::selection_style().not_underlined(),
+        TabState::Inactive => crate::bottom_pane::active_tab_style(),
+        TabState::Absent => quiet,
+    };
+    if chat != TabState::Absent {
+        let style = if chooser == TabState::Absent {
+            tab_style(chat)
+        } else {
+            quiet
+        };
+        Line::from(CHAT_TAB).style(style).render(tab, buf);
+    }
+    Line::from(" + ").style(tab_style(chooser)).render(add, buf);
+}
+
 pub(crate) fn choice_contains(area: Rect, y: u16) -> bool {
     let rows = if body_row(area, area.y).width < WIDE_WIDTH {
         4..6
@@ -37,7 +77,13 @@ pub(crate) fn choice_contains(area: Rect, y: u16) -> bool {
     y < area.bottom().saturating_sub(1) && rows.contains(&y.saturating_sub(area.y))
 }
 
-pub(crate) fn paint(focused: bool, area: Rect, buf: &mut Buffer, keymap: &RuntimeKeymap) {
+pub(crate) fn paint(
+    focused: bool,
+    area: Rect,
+    buf: &mut Buffer,
+    keymap: &RuntimeKeymap,
+    chat: TabState,
+) {
     Clear.render(area, buf);
     if area.is_empty() {
         return;
@@ -47,15 +93,12 @@ pub(crate) fn paint(focused: bool, area: Rect, buf: &mut Buffer, keymap: &Runtim
     } else {
         crate::style::quiet_workspace_style()
     };
-    let strip_width = area.width.saturating_sub(1);
-    let add_width = strip_width.min(3);
-    let add = Rect::new(area.x + strip_width - add_width, area.y, add_width, 1);
-    let tab_style = if focused {
-        style.not_underlined()
+    let chooser = if focused {
+        TabState::Active
     } else {
-        crate::bottom_pane::active_tab_style()
+        TabState::Inactive
     };
-    Line::from(" + ").style(tab_style).render(add, buf);
+    tab_strip(area, chooser, chat, buf);
     let row = |y| body_row(area, y);
     let footer_y = area.bottom() - 1;
     let mut paint = |offset, line: Line<'_>| {
@@ -65,8 +108,11 @@ pub(crate) fn paint(focused: bool, area: Rect, buf: &mut Buffer, keymap: &Runtim
         }
     };
     paint(2, Line::from("Open in sidebar").bold());
-    let detail = "Start from this conversation";
-    let title = "› + New side chat";
+    let (title, detail) = if chat == TabState::Absent {
+        ("› + New side chat", "Start from this conversation")
+    } else {
+        ("›   Side chat", "Return to this conversation")
+    };
     let width = row(area.y).width;
     if width >= WIDE_WIDTH {
         let pad = usize::from(width - 1) - detail.len();
