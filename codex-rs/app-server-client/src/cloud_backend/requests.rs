@@ -1,7 +1,9 @@
 //! Maps conversation requests onto native Cloud operations.
 
+use super::PreflightRejection;
 use super::events;
 use super::send_notification;
+use crate::CloudUserMessageReceipt;
 use codex_app_server_protocol as protocol;
 use codex_cloud_client as cloud;
 use color_eyre::eyre::Result;
@@ -51,6 +53,7 @@ impl Requests {
     pub(super) async fn handle(
         &mut self,
         request: protocol::ClientRequest,
+        mode: cloud::SubmissionMode,
         output: &mpsc::UnboundedSender<crate::AppServerEvent>,
     ) -> Result<Response> {
         use protocol::ClientRequest as Request;
@@ -188,12 +191,15 @@ impl Requests {
                 })?
             }
             Request::TurnStart { params, .. } => {
-                let admission = self
-                    .client
-                    .add_user_message(&cloud_message(params)?)
-                    .await?;
-                let turn = admitted_turn(admission.outcome)?;
-                serde_json::to_value(protocol::TurnStartResponse { turn })?
+                let mut message = cloud_message(params)?;
+                message.mode = mode;
+                let admission = self.client.add_user_message(&message).await?;
+                if matches!(mode, cloud::SubmissionMode::Steer) {
+                    serde_json::to_value(admitted_message(admission.outcome)?)?
+                } else {
+                    let turn = admitted_turn(admission.outcome)?;
+                    serde_json::to_value(protocol::TurnStartResponse { turn })?
+                }
             }
             Request::TurnInterrupt { params, .. } => {
                 self.client
@@ -275,16 +281,22 @@ fn history_order(direction: protocol::SortDirection) -> cloud::HistoryOrder {
     }
 }
 
-fn cloud_message(mut params: protocol::TurnStartParams) -> Result<cloud::AddUserMessageRequest> {
+fn cloud_message(
+    mut params: protocol::TurnStartParams,
+) -> Result<cloud::AddUserMessageRequest, PreflightRejection> {
     let thread_id = std::mem::take(&mut params.thread_id);
     let client_user_message_id = params
         .client_user_message_id
         .take()
-        .ok_or_else(|| eyre!("A cloud message needs a stable submission ID."))?;
+        .ok_or(PreflightRejection(
+            "A cloud message needs a stable submission ID.",
+        ))?;
     let input = std::mem::take(&mut params.input);
     let turn_trigger = params.turn_trigger.take();
     if params != protocol::TurnStartParams::default() {
-        bail!("Changing cloud settings or sending structured input is not supported yet.");
+        return Err(PreflightRejection(
+            "Changing cloud settings or sending structured input is not supported yet.",
+        ));
     }
     let text = input
         .into_iter()
@@ -293,9 +305,11 @@ fn cloud_message(mut params: protocol::TurnStartParams) -> Result<cloud::AddUser
                 text,
                 text_elements,
             } if text_elements.is_empty() => Ok(text),
-            _ => bail!("Cloud conversations currently accept plain text only."),
+            _ => Err(PreflightRejection(
+                "Cloud conversations currently accept plain text only.",
+            )),
         })
-        .collect::<Result<Vec<_>>>()?
+        .collect::<Result<Vec<_>, _>>()?
         .join("\n");
     Ok(cloud::AddUserMessageRequest {
         thread_id,
@@ -307,16 +321,29 @@ fn cloud_message(mut params: protocol::TurnStartParams) -> Result<cloud::AddUser
     })
 }
 
+fn admitted_message(outcome: cloud::AdmissionOutcome) -> Result<CloudUserMessageReceipt> {
+    Ok(match outcome {
+        cloud::AdmissionOutcome::Started(turn) => {
+            CloudUserMessageReceipt::Started(events::turn(turn)?)
+        }
+        cloud::AdmissionOutcome::Steered(turn) => {
+            CloudUserMessageReceipt::Steered(events::turn(turn)?)
+        }
+        cloud::AdmissionOutcome::Duplicate { turn_id } => {
+            CloudUserMessageReceipt::Duplicate { turn_id }
+        }
+        cloud::AdmissionOutcome::Queued { .. } => bail!(
+            "Cloud already accepted this message without returning a turn. Reopen the conversation to see its status before sending again."
+        ),
+    })
+}
+
 fn admitted_turn(outcome: cloud::AdmissionOutcome) -> Result<protocol::Turn> {
-    match outcome {
-        cloud::AdmissionOutcome::Started(turn) | cloud::AdmissionOutcome::Steered(turn) => {
-            events::turn(turn)
-        }
-        cloud::AdmissionOutcome::Duplicate { .. } | cloud::AdmissionOutcome::Queued { .. } => {
-            bail!(
-                "Cloud already accepted this message without returning a turn. Reopen the conversation to see its status before sending again."
-            )
-        }
+    match admitted_message(outcome)? {
+        CloudUserMessageReceipt::Started(turn) | CloudUserMessageReceipt::Steered(turn) => Ok(turn),
+        CloudUserMessageReceipt::Duplicate { .. } => bail!(
+            "Cloud already accepted this message without returning a turn. Reopen the conversation to see its status before sending again."
+        ),
     }
 }
 

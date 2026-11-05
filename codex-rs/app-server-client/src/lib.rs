@@ -29,6 +29,7 @@ pub use cloud::CloudClient;
 pub use cloud::CloudCommand;
 pub use cloud::CloudOperation;
 pub use cloud::CloudRequestHandle;
+pub use cloud::CloudUserMessageReceipt;
 mod server_request;
 pub use server_request::AppServerReplyHandle;
 

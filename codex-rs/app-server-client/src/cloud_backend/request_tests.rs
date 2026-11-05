@@ -108,3 +108,43 @@ fn duplicate_and_queued_admissions_never_invent_a_running_turn() {
         );
     }
 }
+
+#[test]
+fn admission_receipts_preserve_server_turns_and_duplicate_identity() -> Result<()> {
+    let turn = |id: &str, status| cloud::TurnSummary {
+        id: id.into(),
+        status,
+        error: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
+    };
+    for (outcome, expected) in [
+        (
+            cloud::AdmissionOutcome::Started(turn("u", cloud::TurnStatus::InProgress)),
+            ("started", "u", protocol::TurnStatus::InProgress),
+        ),
+        (
+            cloud::AdmissionOutcome::Steered(turn("v", cloud::TurnStatus::Completed)),
+            ("steered", "v", protocol::TurnStatus::Completed),
+        ),
+    ] {
+        let (kind, turn) = match admitted_message(outcome)? {
+            CloudUserMessageReceipt::Started(turn) => ("started", turn),
+            CloudUserMessageReceipt::Steered(turn) => ("steered", turn),
+            CloudUserMessageReceipt::Duplicate { .. } => panic!("expected a turn"),
+        };
+        assert_eq!((kind, turn.id.as_str(), turn.status), expected);
+    }
+    for turn_id in [None, Some("original".into())] {
+        let CloudUserMessageReceipt::Duplicate { turn_id: actual } =
+            admitted_message(cloud::AdmissionOutcome::Duplicate {
+                turn_id: turn_id.clone(),
+            })?
+        else {
+            panic!("a duplicate must not become a running turn");
+        };
+        assert_eq!(actual, turn_id);
+    }
+    Ok(())
+}

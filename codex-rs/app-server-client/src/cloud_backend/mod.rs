@@ -21,6 +21,11 @@ use tokio::sync::mpsc;
 
 type ReplyStream = BoxStream<'static, Result<cloud::Event, cloud::Error>>;
 
+/// Rejected locally before an admission request can be sent.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct PreflightRejection(&'static str);
+
 struct Attachment {
     thread_id: String,
     stream: ReplyStream,
@@ -119,7 +124,7 @@ impl Replies {
         &mut self,
         id: &str,
         output: &mpsc::UnboundedSender<AppServerEvent>,
-    ) -> Result<()> {
+    ) -> Result<(), PreflightRejection> {
         // Notice a ready disconnect before sending. A continuous stream of events
         // must still allow commands to make progress.
         let _ = tokio::task::unconstrained(self.forward_next(output)).now_or_never();
@@ -128,7 +133,9 @@ impl Replies {
             .as_ref()
             .is_none_or(|active| active.thread_id != id)
         {
-            bail!("Cloud stream is not connected. Reopen the conversation before sending.");
+            return Err(PreflightRejection(
+                "Cloud stream is not connected. Reopen the conversation before sending.",
+            ));
         }
         Ok(())
     }
@@ -136,7 +143,7 @@ impl Replies {
 
 /// Opens an app-server client backed by the authenticated native Cloud client.
 pub fn connect(client: cloud::Client, account: protocol::GetAccountResponse) -> AppServerClient {
-    let (app_client, mut commands, output) = CloudClient::channel(/*capacity*/ 32);
+    let (app_client, commands, output) = CloudClient::channel(/*capacity*/ 32);
     let mut requests = requests::Requests {
         client,
         account,
@@ -144,49 +151,80 @@ pub fn connect(client: cloud::Client, account: protocol::GetAccountResponse) -> 
         warned_partial_history: None,
     };
     tokio::spawn(async move {
-        let mut replies = Replies::default();
-        loop {
-            let command = tokio::select! {
-                _ = output.closed() => break,
-                () = replies.forward_next(&output) => continue,
-                command = commands.recv() => match command { Some(command) => command, None => break },
-            };
-            let result = match command.operation {
-                CloudOperation::Shutdown => {
-                    let _ = command.response.send(Ok(Ok(Value::Null)));
-                    break;
-                }
-                CloudOperation::Request(request) => tokio::select! {
-                    _ = output.closed() => break,
-                    result = handle_request(*request, &mut requests, &mut replies, &output) => result,
-                },
-                CloudOperation::Notify(_) => {
-                    Err(eyre!("Cloud client notifications are not supported yet."))
-                }
-                CloudOperation::Resolve { .. } | CloudOperation::Reject { .. } => Err(eyre!(
-                    "Answer this cloud approval in another client; TUI approval replies are not supported yet."
-                )),
-            };
-            let result = result.map_err(|error| protocol::JSONRPCErrorError {
-                code: if error
-                    .downcast_ref::<requests::UnsupportedOperation>()
-                    .is_some()
-                {
-                    -32601
-                } else {
-                    -32000
-                },
-                message: error.to_string(),
-                data: None,
-            });
-            let _ = command.response.send(Ok(result));
-        }
+        run_worker(commands, &mut requests, &mut Replies::default(), &output).await;
     });
     AppServerClient::Cloud(app_client)
 }
 
+async fn run_worker(
+    mut commands: mpsc::Receiver<crate::CloudCommand>,
+    requests: &mut requests::Requests,
+    replies: &mut Replies,
+    output: &mpsc::UnboundedSender<AppServerEvent>,
+) {
+    loop {
+        let command = tokio::select! {
+            _ = output.closed() => return,
+            () = replies.forward_next(output) => continue,
+            command = commands.recv() => match command { Some(command) => command, None => return },
+        };
+        let user_message_submission =
+            matches!(&command.operation, CloudOperation::SubmitUserMessage(_));
+        let request = match command.operation {
+            CloudOperation::Shutdown => {
+                let _ = command.response.send(Ok(Ok(Value::Null)));
+                return;
+            }
+            CloudOperation::Request(request) => Ok((*request, cloud::SubmissionMode::StartIfIdle)),
+            CloudOperation::SubmitUserMessage(params) => Ok((
+                protocol::ClientRequest::TurnStart {
+                    // Native admission is keyed by the caller's stable message ID.
+                    request_id: protocol::RequestId::Integer(0),
+                    params: *params,
+                },
+                cloud::SubmissionMode::Steer,
+            )),
+            CloudOperation::Notify(_) => {
+                Err(eyre!("Cloud client notifications are not supported yet."))
+            }
+            CloudOperation::Resolve { .. } | CloudOperation::Reject { .. } => Err(eyre!(
+                "Answer this cloud approval in another client; TUI approval replies are not supported yet."
+            )),
+        };
+        let result = match request {
+            Ok((request, mode)) => tokio::select! {
+                _ = output.closed() => return,
+                result = handle_request(request, mode, requests, replies, output) => result,
+            },
+            Err(error) => Err(error),
+        };
+        let result = result.map_err(|error| protocol::JSONRPCErrorError {
+            code: if error
+                .downcast_ref::<requests::UnsupportedOperation>()
+                .is_some()
+            {
+                -32601
+            } else if user_message_submission
+                && (error.is::<PreflightRejection>()
+                    || matches!(
+                        error.downcast_ref::<cloud::MutationError>(),
+                        Some(cloud::MutationError::InvalidRequest)
+                    ))
+            {
+                -32602
+            } else {
+                -32000
+            },
+            message: error.to_string(),
+            data: None,
+        });
+        let _ = command.response.send(Ok(result));
+    }
+}
+
 async fn handle_request(
     request: protocol::ClientRequest,
+    mode: cloud::SubmissionMode,
     requests: &mut requests::Requests,
     replies: &mut Replies,
     output: &mpsc::UnboundedSender<AppServerEvent>,
@@ -212,7 +250,7 @@ async fn handle_request(
         replies.admit_turn(&params.thread_id, output)?;
     }
     match replies
-        .while_listening(requests.handle(request, output), output)
+        .while_listening(requests.handle(request, mode, output), output)
         .await?
     {
         requests::Response::Value(value) => Ok(value),
@@ -278,3 +316,7 @@ fn cloud_error(id: &str, message: &str) -> protocol::ServerNotification {
 #[cfg(test)]
 #[path = "connection_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "submission_tests.rs"]
+mod submission_tests;
