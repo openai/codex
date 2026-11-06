@@ -1,0 +1,33 @@
+name: Set up Windows Bazel build tools
+description: Prepare MSVC and verified native dependencies for Windows Bazel builds.
+inputs:
+  target:
+    description: Native Windows target triple
+    required: true
+  windows-tools:
+    description: Directory containing the public Windows voice bootstrap
+    default: .github/scripts
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-msvc-env
+      with:
+        target: ${{ inputs.target }}
+    - name: Install verified public Windows tools
+      shell: pwsh
+      env:
+        WINDOWS_TOOLS: ${{ inputs.windows-tools }}
+        TARGET: ${{ inputs.target }}
+      run: |
+        ./.github/scripts/compute-bazel-windows-path.ps1
+        $manifest = Get-Content -Raw "$env:WINDOWS_TOOLS/voice-cygwin-snapshot.json" | ConvertFrom-Json
+        $pin = $manifest.archive
+        $archive = Join-Path $env:RUNNER_TEMP $pin.name
+        Invoke-WebRequest "https://github.com/openai/codex/releases/download/$($pin.tag)/$($pin.name)" -OutFile $archive
+        & "$env:WINDOWS_TOOLS/setup-voice-windows.ps1" -Target $env:TARGET -SnapshotArchive $archive
+        if (-not $env:SystemRoot) { throw "Windows SystemRoot is required" }
+        "VOICE_WINDOWS_SYSTEM_ROOT=$env:SystemRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+        $hostArch = $env:PROCESSOR_ARCHITEW6432
+        if (-not $hostArch) { $hostArch = $env:PROCESSOR_ARCHITECTURE }
+        if (-not $hostArch) { throw "Windows host architecture is required" }
+        "VOICE_WINDOWS_HOST_ARCH=$hostArch" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append

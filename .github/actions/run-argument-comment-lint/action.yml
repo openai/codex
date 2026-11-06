@@ -22,7 +22,7 @@ runs:
 
     - name: Prepare native Windows audio dependencies
       if: ${{ runner.os == 'Windows' }}
-      uses: ./third_party/voice/cargo-ci/windows-setup
+      uses: ./.github/actions/setup-bazel-windows
       with:
         target: x86_64-pc-windows-msvc
 
