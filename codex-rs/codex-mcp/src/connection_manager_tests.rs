@@ -181,13 +181,7 @@ impl McpConnectionSet {
     }
 
     fn shares_test_connection_with(&self, other: &Self, name: &str) -> bool {
-        let Some(left) = self.servers.get(name) else {
-            return false;
-        };
-        let Some(right) = other.servers.get(name) else {
-            return false;
-        };
-        Arc::ptr_eq(&left.connection, &right.connection)
+        self.shares_server_connection(other, name)
     }
 }
 

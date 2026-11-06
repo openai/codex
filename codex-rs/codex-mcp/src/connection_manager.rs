@@ -1195,6 +1195,13 @@ impl McpConnectionSet {
         self.servers.contains_key(server_name)
     }
 
+    pub(crate) fn shares_server_connection(&self, other: &Self, server: &str) -> bool {
+        self.servers
+            .get(server)
+            .zip(other.servers.get(server))
+            .is_some_and(|(left, right)| Arc::ptr_eq(&left.connection, &right.connection))
+    }
+
     pub(crate) async fn authentication_failed_servers(&self) -> Vec<String> {
         let mut failed_servers = Vec::new();
         for (server_name, view) in &self.servers {

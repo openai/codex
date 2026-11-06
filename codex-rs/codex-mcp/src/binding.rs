@@ -284,6 +284,12 @@ impl PreparedMcpCall {
         self.tool_info.get()
     }
 
+    /// Whether the server connection that issued the step's tools still owns this call.
+    pub fn uses_connection_from(&self, binding: &McpBinding) -> bool {
+        self.connections
+            .shares_server_connection(&binding.connections, &self.server_name)
+    }
+
     /// Returns the configuration and approval authority captured with this client.
     pub fn config(&self) -> &McpConfig {
         &self.config
