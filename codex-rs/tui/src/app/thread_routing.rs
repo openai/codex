@@ -1845,32 +1845,10 @@ impl App {
             self.chat_widget
                 .remember_realtime_delegated_reasoning_turn(turn_id);
         }
-        let confirmed_message_ids = snapshot
-            .turns
-            .iter()
-            .flat_map(Turn::item_payloads)
-            .chain(snapshot.events.iter().filter_map(|event| {
-                let ThreadBufferedEvent::Notification(notification) = event else {
-                    return None;
-                };
-                if let ServerNotification::ItemStarted(notification) = notification.as_ref() {
-                    Some(&notification.item.payload)
-                } else if let ServerNotification::ItemCompleted(notification) =
-                    notification.as_ref()
-                {
-                    Some(&notification.item.payload)
-                } else {
-                    None
-                }
-            }))
-            .filter_map(|item| {
-                if let ThreadItemPayload::UserMessage { client_id, .. } = item {
-                    client_id.clone()
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
+        let confirmed_message_ids = super::thread_events::confirmed_user_message_ids(
+            &snapshot.turns,
+            snapshot.events.iter(),
+        );
         let recovered_input = snapshot
             .input_state
             .as_ref()

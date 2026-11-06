@@ -26,6 +26,10 @@ type ReplyStream = BoxStream<'static, Result<cloud::Event, cloud::Error>>;
 #[error("{0}")]
 struct PreflightRejection(&'static str);
 
+#[derive(Debug, thiserror::Error)]
+#[error("Cloud stream is not connected. Reopen the conversation before sending.")]
+struct MissingReplyAttachment;
+
 struct Attachment {
     thread_id: String,
     stream: ReplyStream,
@@ -124,7 +128,7 @@ impl Replies {
         &mut self,
         id: &str,
         output: &mpsc::UnboundedSender<AppServerEvent>,
-    ) -> Result<(), PreflightRejection> {
+    ) -> Result<(), MissingReplyAttachment> {
         // Notice a ready disconnect before sending. A continuous stream of events
         // must still allow commands to make progress.
         let _ = tokio::task::unconstrained(self.forward_next(output)).now_or_never();
@@ -133,9 +137,7 @@ impl Replies {
             .as_ref()
             .is_none_or(|active| active.thread_id != id)
         {
-            return Err(PreflightRejection(
-                "Cloud stream is not connected. Reopen the conversation before sending.",
-            ));
+            return Err(MissingReplyAttachment);
         }
         Ok(())
     }
@@ -204,12 +206,13 @@ async fn run_worker(
                 .is_some()
             {
                 -32601
-            } else if user_message_submission
-                && (error.is::<PreflightRejection>()
-                    || matches!(
-                        error.downcast_ref::<cloud::MutationError>(),
-                        Some(cloud::MutationError::InvalidRequest)
-                    ))
+            } else if error.is::<PreflightRejection>()
+                || user_message_submission
+                    && (error.is::<MissingReplyAttachment>()
+                        || matches!(
+                            error.downcast_ref::<cloud::MutationError>(),
+                            Some(cloud::MutationError::InvalidRequest)
+                        ))
             {
                 -32602
             } else {

@@ -118,6 +118,25 @@ async fn native_submission_uses_one_admission_and_keeps_preflight_guards() -> Re
         };
         assert_eq!(source.code, -32602);
     }
+    let queued = handle
+        .request(protocol::ClientRequest::TurnStart {
+            request_id: protocol::RequestId::Integer(3),
+            params: protocol::TurnStartParams {
+                input: vec![protocol::UserInput::LocalImage {
+                    path: "queued.png".into(),
+                    detail: None,
+                }],
+                ..submission("queued-image")
+            },
+        })
+        .await?
+        .expect_err("a queued attachment must fail before admission");
+    assert_eq!(queued.code, -32602);
+    assert_eq!(
+        queued.message,
+        "Cloud conversations currently accept plain text only."
+    );
+
     drop(reply_sender);
     let Err(crate::TypedRequestError::Server { source, .. }) =
         cloud_handle.submit_user_message(submission("closed")).await

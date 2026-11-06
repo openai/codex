@@ -79,7 +79,12 @@ impl ChatWidget {
                     self.reasoning_header = None;
                     self.reasoning_summary_parts.clear();
                     self.set_status_header(String::from("Working"));
-                    self.submit_user_message(user_message);
+                    self.submit_user_message_with_history_and_shell_escape_policy(
+                        user_message,
+                        UserMessageHistoryRecord::UserMessageText,
+                        ShellEscapePolicy::Allow,
+                        UserMessageSource::DirectEnter,
+                    );
                 } else {
                     self.queue_user_message(user_message);
                 }
@@ -261,8 +266,13 @@ impl ChatWidget {
         }
         let mut submitted_follow_up = false;
         while !self.is_user_turn_pending_or_running() {
-            let Some((queued_message, history_record)) = self.pop_next_queued_user_message() else {
+            let Some((mut queued_message, history_record)) = self.pop_next_queued_user_message()
+            else {
                 break;
+            };
+            queued_message.source = match queued_message.source {
+                UserMessageSource::DirectEnter => UserMessageSource::Prompt,
+                source => source,
             };
             match queued_message.action {
                 QueuedInputAction::Plain => {
@@ -348,7 +358,7 @@ impl ChatWidget {
     pub(crate) fn is_user_turn_pending_or_running(&self) -> bool {
         self.pending_image_submission.is_some()
             || self.input_queue.user_turn_pending_start
-            || self.turn_lifecycle.agent_turn_running
+            || self.turn_lifecycle.is_running_or_admitted()
             || self.review.is_review_mode
             || (self.bottom_pane.is_task_running() && self.mcp_startup_status.is_none())
     }

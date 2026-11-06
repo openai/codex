@@ -34,6 +34,7 @@ pub(super) struct InputQueueState {
     /// A user turn has been submitted to core, but `TurnStarted` has not arrived yet.
     pub(super) user_turn_pending_start: bool,
     pub(super) pending_user_message_client_id: Option<String>,
+    pub(super) pending_user_message_history_record: Option<UserMessageHistoryRecord>,
     /// User messages that tried to steer a non-regular turn and must be retried first.
     pub(super) rejected_steers_queue: VecDeque<UserMessage>,
     /// The origin of each rejected steer, kept in lockstep with its message.
@@ -57,6 +58,14 @@ pub(super) struct InputQueueState {
 }
 
 impl InputQueueState {
+    pub(super) fn take_pending_steer(&mut self, client_id: &str) -> Option<PendingSteer> {
+        let index = self
+            .pending_steers
+            .iter()
+            .position(|pending| pending.client_id == client_id)?;
+        self.pending_steers.remove(index)
+    }
+
     pub(super) fn submissions_paused(&self) -> bool {
         self.suppress_queue_autosend || self.transcript_copy.strong_count() > 0
     }
@@ -78,6 +87,7 @@ impl InputQueueState {
         self.queued_user_message_history_records.clear();
         self.user_turn_pending_start = false;
         self.pending_user_message_client_id = None;
+        self.pending_user_message_history_record = None;
         self.rejected_steers_queue.clear();
         self.rejected_steer_sources.clear();
         self.rejected_steer_history_records.clear();
@@ -139,6 +149,8 @@ mod tests {
             .push_back(UserMessage::from("rejected"));
         state.pending_steers.push_back(PendingSteer {
             client_id: "test-submission".to_string(),
+            admitted_turn_id: None,
+            optimistically_rendered: false,
             user_message: UserMessage::from("pending"),
             history_record: UserMessageHistoryRecord::UserMessageText,
             source: UserMessageSource::Prompt,

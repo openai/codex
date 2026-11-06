@@ -126,19 +126,11 @@ impl ChatWidget {
     }
 
     pub(super) fn reconcile_recovered_messages(&mut self, confirmed_message_ids: &[String]) {
-        let mut index = 0;
-        self.input_queue.queued_user_messages.retain(|message| {
-            let confirmed = matches!(&message.delivery,
-                MessageDelivery::Unconfirmed(Some(id)) if confirmed_message_ids.contains(id));
-            if confirmed {
-                self.input_queue
-                    .queued_user_message_history_records
-                    .remove(index);
-            } else {
-                index += 1;
-            }
-            !confirmed
-        });
+        super::user_messages::remove_confirmed_queued_messages(
+            &mut self.input_queue.queued_user_messages,
+            &mut self.input_queue.queued_user_message_history_records,
+            confirmed_message_ids,
+        );
         self.refresh_pending_input_preview();
     }
 

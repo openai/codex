@@ -129,6 +129,9 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_backtrack::nth_user_position;
 use crate::app_backtrack::user_count;
 use crate::app_event::HistoryBatchEntryResponse;
+use crate::app_server_session::user_message_submission::ActiveTurnSteerRace;
+use crate::app_server_session::user_message_submission::active_turn_not_steerable_turn_error;
+use crate::app_server_session::user_message_submission::active_turn_steer_race;
 use crate::test_support::boxed_future;
 use codex_app_server_protocol::ThreadItem;
 

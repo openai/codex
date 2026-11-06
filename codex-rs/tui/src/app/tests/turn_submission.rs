@@ -12,6 +12,70 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn cloud_admission_keeps_tab_input_queued_until_the_admitted_turn_finishes() {
+    use crate::app_command::CloudSubmissionIntent;
+    use crate::app_server_session::user_message_submission::UserMessageAdmission;
+
+    for receipt in [
+        UserMessageAdmission::Started("next".into()),
+        UserMessageAdmission::Steered("next".into()),
+    ] {
+        let (mut app, _events, mut ops) = make_test_app_with_channels().await;
+        let id = ThreadId::new();
+        let session = test_thread_session(id, app.config.cwd.to_path_buf());
+        let chat = &mut app.chat_widget;
+        chat.handle_thread_session_quiet(session);
+        chat.handle_server_notification(
+            turn_started_notification(id, "previous"),
+            /*replay_kind*/ None,
+        );
+        chat.apply_external_edit("queued draft".into());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        chat.apply_external_edit("enter input".into());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        let mut turns = std::iter::from_fn(|| ops.try_recv().ok())
+            .filter(|op| matches!(op, Op::UserTurn { .. }));
+        let op = turns.next().expect("expected Enter submission");
+        let Op::UserTurn {
+            client_user_message_id,
+            ..
+        } = &op
+        else {
+            unreachable!();
+        };
+        chat.user_message_admitted(receipt, &op, client_user_message_id);
+        chat.handle_server_notification(
+            turn_completed_notification(id, "previous", TurnStatus::Completed),
+            /*replay_kind*/ None,
+        );
+        assert_eq!(chat.queued_user_message_texts(), ["queued draft"]);
+        assert!(turns.next().is_none());
+        chat.apply_external_edit("another draft".into());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(
+            chat.queued_user_message_texts(),
+            ["queued draft", "another draft"]
+        );
+        chat.handle_server_notification(
+            turn_started_notification(id, "next"),
+            /*replay_kind*/ None,
+        );
+        assert!(turns.next().is_none());
+        chat.handle_server_notification(
+            turn_completed_notification(id, "next", TurnStatus::Completed),
+            /*replay_kind*/ None,
+        );
+        assert!(matches!(
+            turns.next(),
+            Some(Op::UserTurn { cloud_submission: CloudSubmissionIntent::StartIfIdle, items, .. })
+                if matches!(items.as_slice(), [UserInput::Text { text, .. }] if text == "queued draft")
+        ));
+        assert_eq!(chat.queued_user_message_texts(), ["another draft"]);
+        assert!(turns.next().is_none());
+    }
+}
+
+#[tokio::test]
 async fn worktree_creation_rejects_untrusted_source_before_allocation() -> Result<()> {
     use crate::app_event::ManagedWorktreeMode;
 

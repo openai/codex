@@ -1895,6 +1895,51 @@ async fn pending_steer_interrupt_uses_remapped_binding() {
 }
 
 #[tokio::test]
+async fn resumed_steers_reconcile_by_client_id_and_hold_unmatched_admissions() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    // Both messages have the same text; only one has a receipt in the resumed history.
+    chat.input_queue.pending_steers = VecDeque::from([
+        PendingSteer {
+            client_id: "confirmed".into(),
+            admitted_turn_id: Some("finished".into()),
+            ..pending_steer("same text")
+        },
+        PendingSteer {
+            client_id: "unmatched".into(),
+            admitted_turn_id: Some("finished".into()),
+            ..pending_steer("same text")
+        },
+    ]);
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("next draft").into());
+    chat.input_queue
+        .queued_user_message_history_records
+        .push_back(UserMessageHistoryRecord::UserMessageText);
+    let mut input = chat
+        .capture_thread_input_state()
+        .expect("saved session input");
+    input.reconcile_confirmed_messages(&["confirmed".into()]);
+    chat.restore_thread_input_state(
+        Some(input),
+        ThreadInputStateRestoreMode {
+            preserve_in_flight_turn: false,
+        },
+    );
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["same text", "next draft"]
+    );
+    assert_eq!(
+        chat.input_queue.queued_user_messages[0].delivery,
+        MessageDelivery::Unconfirmed(Some("unmatched".into()))
+    );
+    assert!(!chat.maybe_send_next_queued_input());
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn restore_thread_input_state_applies_running_state_policy() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

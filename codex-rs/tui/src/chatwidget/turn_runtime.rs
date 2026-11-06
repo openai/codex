@@ -44,7 +44,7 @@ impl ChatWidget {
     /// both the agent turn lifecycle and MCP startup lifecycle.
     pub(super) fn update_task_running_state(&mut self) {
         self.bottom_pane.set_task_running(
-            self.turn_lifecycle.agent_turn_running
+            self.turn_lifecycle.is_running_or_admitted()
                 || self.review.is_review_mode
                 || self.mcp_startup_status.is_some(),
         );

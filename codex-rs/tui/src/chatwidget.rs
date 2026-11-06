@@ -286,6 +286,7 @@ mod reconnect;
 use self::input_queue::InputQueueState;
 mod image_submission;
 mod input_flow;
+mod input_receipts;
 mod input_restore;
 mod input_submission;
 mod interrupts;
@@ -1370,44 +1371,46 @@ impl ChatWidget {
         }
 
         // Servers may omit media from receipts, so prefer the submission identity.
-        if client_id.is_some() && self.last_rendered_user_message_client_id.as_deref() == client_id
-        {
-            return;
-        }
-
-        if self
-            .input_queue
-            .pending_steers
-            .front()
-            .is_some_and(|pending| match client_id {
-                Some(client_id) => pending.client_id == client_id,
-                // Older app servers do not echo submission IDs.
-                None => pending.compare_key == Self::pending_steer_compare_key_from_items(items),
-            })
-        {
-            if let Some(pending) = self.input_queue.pending_steers.pop_front() {
-                self.refresh_pending_input_preview();
-                let pending_display =
-                    user_message_display_for_history(pending.user_message, &pending.history_record);
-                self.on_user_message_display(pending_display);
+        let already_rendered = client_id.is_some()
+            && self.last_rendered_user_message_client_id.as_deref() == client_id;
+        let steers = &mut self.input_queue.pending_steers;
+        let matching = match client_id {
+            Some(id) => steers.iter().enumerate().position(|(index, pending)| {
+                pending.client_id == id
+                    && (pending.admitted_turn_id.is_some() || (index == 0 && !already_rendered))
+            }),
+            // Older app servers do not echo submission IDs.
+            None => steers.front().and_then(|pending| {
+                (pending.compare_key == Self::pending_steer_compare_key_from_items(items))
+                    .then_some(0)
+            }),
+        };
+        if let Some(pending) = matching.and_then(|index| steers.remove(index)) {
+            self.refresh_pending_input_preview();
+            if !already_rendered {
+                if !pending.optimistically_rendered {
+                    let pending_display = user_message_display_for_history(
+                        pending.user_message,
+                        &pending.history_record,
+                    );
+                    self.on_user_message_display(pending_display);
+                }
                 // Later receipts carry the wire media, which may differ from the local attachment.
                 self.last_rendered_user_message_display = Some(display);
                 self.last_rendered_user_message_client_id = Some(pending.client_id);
-            } else if self.last_rendered_user_message_display.as_ref() != Some(&display) {
-                tracing::warn!(
-                    "pending steer matched receipt but queue was empty when rendering committed user message"
-                );
-                self.on_user_message_display(display);
             }
-        } else if !self.review.is_review_mode
+        } else if !already_rendered
+            && !self.review.is_review_mode
             && self.last_rendered_user_message_display.as_ref() != Some(&display)
         {
             self.on_user_message_display(display);
         }
         if let Some(client_id) = client_id
-            && self.input_queue.queued_user_messages.iter().any(|message| {
-                matches!(&message.delivery, MessageDelivery::Unconfirmed(Some(id)) if id == client_id)
-            })
+            && self
+                .input_queue
+                .queued_user_messages
+                .iter()
+                .any(|message| message.unconfirmed_user_message_id() == Some(client_id))
         {
             self.reconcile_recovered_messages(&[client_id.to_string()]);
             self.maybe_send_next_queued_input();

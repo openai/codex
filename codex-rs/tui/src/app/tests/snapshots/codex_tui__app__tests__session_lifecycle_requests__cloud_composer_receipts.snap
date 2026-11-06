@@ -1,0 +1,52 @@
+---
+source: tui/src/app/tests/session_lifecycle_requests.rs
+expression: "rendered_receipts.join(\"\\n\\n\")"
+---
+── Started ──
+
+› follow up
+
+■ Conversation interrupted - use /feedback if something went wrong
+• Working (0s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+
+── Steered ──
+■ Conversation interrupted - use /feedback if something went wrong
+■ Conversation interrupted - use /feedback if something went wrong
+› follow up
+
+  gpt-test default · /tmp/project
+
+── Unconfirmed ──
+■ Cloud submission could not be confirmed: cloud/submitUserMessage transport error: cloud backend dropped its response
+■ Conversation interrupted - use /feedback if something went wrong
+• Queued follow-up inputs
+  ↳ follow up
+    ⇧← edit last queued message
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+
+── Rejected ──
+■ reply stream closed before submission
+• Working (0s • esc to interrupt)
+
+
+› follow up
+
+  tab to queue message                                       100% context left
+
+── Duplicate ──
+■ Conversation interrupted - use /feedback if something went wrong
+• Queued follow-up inputs
+  ↳ follow up
+    ⇧← edit last queued message
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project

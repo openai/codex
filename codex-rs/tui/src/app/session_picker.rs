@@ -19,6 +19,21 @@ impl App {
         }
     }
 
+    pub(super) async fn reconcile_saved_session_input(
+        &self,
+        thread_id: ThreadId,
+        input: &mut ThreadInputState,
+    ) {
+        if (!input.pending_steers.is_empty() || input.has_unconfirmed_messages())
+            && let Some(channel) = self.thread_event_channels.get(&thread_id)
+        {
+            let store = channel.store.lock().await;
+            let confirmed =
+                super::thread_events::confirmed_user_message_ids(&store.turns, store.buffer.iter());
+            input.reconcile_confirmed_messages(&confirmed);
+        }
+    }
+
     pub(super) async fn open_resume_picker_for_backends(
         &mut self,
         tui: &mut tui::Tui,
@@ -93,6 +108,8 @@ impl App {
                 {
                     // The resumed widget already reflects the latest server result.
                     input_state.provider_error = None;
+                    self.reconcile_saved_session_input(thread_id, &mut input_state)
+                        .await;
                     let preserve_in_flight_turn =
                         self.active_turn_id_for_thread(thread_id).await.is_some();
                     self.chat_widget.restore_thread_input_state(

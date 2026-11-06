@@ -21,6 +21,7 @@ mod rollout_history;
 pub(crate) use read_state::unread_revision;
 mod startup_launch;
 mod thread_list;
+pub(crate) mod user_message_submission;
 mod web_search;
 
 #[cfg(test)]

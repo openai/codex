@@ -114,6 +114,10 @@ impl ChatWidget {
                         self.on_replayed_task_started(notification.turn.started_at);
                     } else {
                         self.on_task_started();
+                        if self.turn_lifecycle.admitted_turn_id == self.turn_lifecycle.last_turn_id
+                        {
+                            self.turn_lifecycle.admitted_turn_id = None;
+                        }
                     }
                 }
             }
@@ -447,6 +451,13 @@ impl ChatWidget {
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        if replay_kind.is_none()
+            && notification.turn.status != TurnStatus::InProgress
+            && self.turn_lifecycle.admitted_turn_id.as_deref()
+                == Some(notification.turn.id.as_str())
+        {
+            self.turn_lifecycle.admitted_turn_id = None;
+        }
         // User-message dedupe only suppresses the app-server echo of a prompt
         // this TUI already rendered locally. Once that turn ends, another
         // client can submit the same text and it still needs its own user cell.
@@ -506,7 +517,7 @@ impl ChatWidget {
                 } else {
                     TurnAbortReason::Interrupted
                 };
-                self.on_interrupted_turn(reason);
+                self.on_interrupted_server_turn(reason, &notification.turn.id);
             }
             TurnStatus::Failed => {
                 if replay_kind.is_none() {
