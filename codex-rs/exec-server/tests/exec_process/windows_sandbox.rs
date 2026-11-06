@@ -12,6 +12,70 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
+#[cfg(windows)]
+#[test_case::test_case(false; "invalid_disabled_proxy")]
+#[test_case::test_case(true; "valid_enabled_proxy")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(remote_exec_server)]
+async fn native_windows_skips_owned_proxy_before_brokering(proxy_enabled: bool) -> Result<()> {
+    use codex_network_proxy::NetworkProxyConfig;
+    use codex_network_proxy::RemoteNetworkProxyConfig;
+    use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
+
+    const API_KEY: &str = "sk-proj-executor-only-0000000000000000000000000000000000";
+    let context = create_process_context(/*use_remote*/ true).await?;
+    let mut proxy = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+        enabled: proxy_enabled,
+        ..NetworkProxyConfig::default()
+    })?;
+    proxy.enable_credential_masking(Default::default());
+    let started = context
+        .backend
+        .start(ExecParams {
+            metadata: None,
+            process_id: ProcessId::from("native-windows-owned-proxy"),
+            argv: vec![
+                std::env::var("ComSpec")?,
+                "/d".into(),
+                "/c".into(),
+                "if defined HTTP_PROXY (exit /b 1) else if defined CODEX_NETWORK_PROXY_ACTIVE (exit /b 2) else (echo %CALLER_VALUE% %OPENAI_API_KEY%)".into(),
+            ],
+            cwd: PathUri::from_host_native_path(std::env::current_dir()?)?,
+            env: HashMap::from([
+                ("HTTP_PROXY".into(), "http://127.0.0.1:1".into()),
+                ("SystemRoot".into(), std::env::var("SystemRoot")?),
+                ("CODEX_NETWORK_PROXY_ACTIVE".into(), "1".into()),
+                ("OPENAI_API_KEY".into(), API_KEY.into()),
+                ("CALLER_VALUE".into(), "preserved".into()),
+            ]),
+            env_policy: None,
+            shell_snapshot: None,
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+            sandbox: None,
+            enforce_managed_network: false,
+            managed_network: None,
+            network_proxy: Some(RemoteNetworkProxyLaunchConfig::new(proxy)),
+        })
+        .await?;
+    let (stdout, stderr, code, exited) = collect_process_output_from_events_with_timeout(
+        started.process,
+        Duration::from_secs(/*secs*/ 30),
+    )
+    .await?;
+    assert_eq!(
+        (stdout.trim(), stderr, code, exited),
+        (
+            format!("preserved {API_KEY}").as_str(),
+            String::new(),
+            Some(0),
+            true
+        )
+    );
+    Ok(())
+}
+
 /// Windows alias casing must not prevent fallback when the primary runtime is absent from PATH.
 #[test_case::test_case("pwsh.exe"; "lowercase_pwsh")]
 #[test_case::test_case("PWSH.exe"; "uppercase_pwsh")]

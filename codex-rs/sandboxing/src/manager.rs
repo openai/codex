@@ -373,23 +373,24 @@ impl SandboxManager {
                 "managed networking requires the elevated Windows sandbox backend".into(),
             ));
         }
+        let backend = request.sandbox;
         let command = request.command;
+        let managed_network = command
+            .managed_network
+            .filter(|_| request.enforce_managed_network || backend == SandboxType::MacosSeatbelt);
+        let managed_mitm_ca_trust_bundle_path = request
+            .network
+            .and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
         let permissions = effective_permission_profile(
             request.permissions,
             command.additional_permissions.as_ref(),
         );
-        let managed_mitm_ca_trust_bundle_path = request
-            .network
-            .and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
         let policy = PreparedLaunchPolicy::resolve(
             permissions,
             request.sandbox_policy_cwd,
             request.workspace_roots,
         )
         .map_err(SandboxTransformError::InvalidPolicy)?;
-        let backend = request.sandbox;
-        let enforce_managed_network = request.enforce_managed_network;
-        let mut managed_network = command.managed_network;
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program.to_string_lossy().into_owned());
         argv.extend(command.args);
@@ -423,23 +424,23 @@ impl SandboxManager {
                         "native MXC is unavailable on this executor".into(),
                     ));
                 }
-                if enforce_managed_network && managed_network.is_none() {
-                    let network = request.network.ok_or_else(|| {
-                        SandboxTransformError::WindowsMxcPreparation(
-                            "managed networking requires an executor-local proxy".to_string(),
-                        )
-                    })?;
-                    let prepared = network
-                        .prepare_for_optional_environment(
-                            std::mem::take(&mut exec.env),
-                            request.environment_id,
-                        )
-                        .map_err(|err| {
-                            SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
+                let route = match managed_network {
+                    None if request.enforce_managed_network => {
+                        let proxy = request.network.ok_or_else(|| {
+                            SandboxTransformError::WindowsMxcPreparation(
+                                "managed networking requires an executor-local proxy".to_string(),
+                            )
                         })?;
-                    exec.env = prepared.env;
-                    managed_network = Some(prepared.sandbox_context);
-                }
+                        let prepared = proxy
+                            .prepare_for_optional_environment(exec.env, request.environment_id)
+                            .map_err(|err| {
+                                SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
+                            })?;
+                        exec.env = prepared.env;
+                        Some(prepared.sandbox_context)
+                    }
+                    route => route,
+                };
                 let pending = pending?;
                 exec.permission_profile = pending.effective_permission_profile;
                 let exe = request.sandbox_exe.ok_or_else(|| {
@@ -447,7 +448,6 @@ impl SandboxManager {
                         "missing Codex executable path".into(),
                     )
                 })?;
-                let route = managed_network.filter(|_| enforce_managed_network);
                 let args = codex_mxc_sandbox::create_command_args(
                     codex_mxc_sandbox::CreateMxcCommandArgsParams {
                         command: std::mem::take(&mut exec.command),
@@ -479,10 +479,10 @@ impl SandboxManager {
                         file_system_sandbox_policy: &file_system_sandbox_policy,
                         network_sandbox_policy,
                         sandbox_policy_cwd: &pending.native_sandbox_policy_cwd,
-                        enforce_managed_network,
+                        enforce_managed_network: request.enforce_managed_network,
                         managed_network: managed_network.as_ref(),
-                        environment_id: exec.network_environment_id.as_deref(),
-                        network: exec.network.as_ref(),
+                        environment_id: request.environment_id,
+                        network: request.network,
                         extra_allow_unix_sockets: &[],
                     },
                     self.seatbelt_profile,
@@ -508,22 +508,23 @@ impl SandboxManager {
                 let exe = request
                     .sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                if enforce_managed_network
-                    && managed_network.is_none()
-                    && let Some(network) = request.network
-                {
-                    let prepared = network
-                        .prepare_for_optional_environment(
-                            std::mem::take(&mut exec.env),
-                            request.environment_id,
-                        )
-                        .map_err(|err| {
-                            SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
-                        })?;
-                    exec.env = prepared.env;
-                    managed_network = Some(prepared.sandbox_context);
-                }
-                let route = enforce_managed_network.then(|| managed_network.unwrap_or_default());
+                let route = match (
+                    request.enforce_managed_network,
+                    managed_network,
+                    request.network,
+                ) {
+                    (false, _, _) => None,
+                    (true, None, Some(proxy)) => {
+                        let prepared = proxy
+                            .prepare_for_optional_environment(exec.env, request.environment_id)
+                            .map_err(|err| {
+                                SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
+                            })?;
+                        exec.env = prepared.env;
+                        Some(prepared.sandbox_context)
+                    }
+                    (true, context, _) => Some(context.unwrap_or_default()),
+                };
                 self.wrap_linux(
                     &mut exec,
                     (
