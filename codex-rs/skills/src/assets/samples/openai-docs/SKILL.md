@@ -9,7 +9,9 @@ Use this skill for Codex and ChatGPT Work capabilities and behavior, first OpenA
 
 Identify the product and surface the user means. If they ask what you can do in this chat, check the tools and settings available here before making a claim about their access.
 
-For product behavior, look up the current Codex guide at developers.openai.com/codex or the ChatGPT Work guide at learn.chatgpt.com. Open the page for the surface the user is asking about.
+For broad questions about Codex setup or team customization, first read [Codex self-knowledge](references/codex-self-knowledge.md) for guidance on choosing and combining configuration options.
+
+For other questions about product behavior, look up the current Codex guide at developers.openai.com/codex or the ChatGPT Work guide at learn.chatgpt.com. Open the page for the surface the user is asking about.
 
 For a recent change, or when a source explains only the underlying mechanism, find the feature by name in the [ChatGPT and Codex changelog](https://learn.chatgpt.com/docs/changelog). Use the entry for the relevant surface and version. For Codex client behavior, follow the linked change or tests to verify what the client actually does. Cite what establishes the answer and say which details remain uncertain.
 
