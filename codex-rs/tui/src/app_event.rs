@@ -466,10 +466,11 @@ pub(crate) enum AppEvent {
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 
-    /// Fork the current thread into a transient side conversation.
+    /// Open a transient side conversation for the current thread.
     StartSide {
         parent_thread_id: ThreadId,
         user_message: Option<UserMessage>,
+        mode: SideStartMode,
     },
 
     SideCreated {
@@ -1941,4 +1942,10 @@ pub(crate) enum FeedbackCategory {
     Bug,
     SafetyCheck,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SideStartMode {
+    Reuse,
+    New,
 }

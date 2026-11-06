@@ -1259,6 +1259,14 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
             assert_eq!(app.conversation_frame.chooser_area().unwrap().width, 20);
         }
     }
+    let first_prompt = crate::chatwidget::UserMessage {
+        remote_image_urls: vec!["https://example.com/image.png".into()],
+        .."first prompt".into()
+    };
+    let sibling = ThreadId::new();
+    app.sidebar_mut().chat_ready(sibling);
+    app.side_threads
+        .insert(sibling, crate::app::side::SideThreadState::new(parent));
     let request = uuid::Uuid::new_v4();
     app.sidebar_mut().creation = Some(crate::app::sidebar::SideCreation {
         owner: server.backend_id(),
@@ -1266,7 +1274,7 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
             request,
             started: std::time::Instant::now(),
         },
-        message: Some("first prompt".into()),
+        message: Some(first_prompt.clone()),
     });
     app.finish_side_creation(
         &mut tui,
@@ -1276,14 +1284,28 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
         Err("The side conversation could not be prepared.".into()),
     )
     .await;
-    app.handle_start_side(&mut tui, &mut server, parent, Some("second prompt".into()))
-        .await?;
+    app.sidebar_mut().show(
+        crate::app::sidebar::SidebarContent::Chooser,
+        crate::app::sidebar::PaneFocus::Main,
+    );
+    app.handle_start_side(
+        &mut tui,
+        &mut server,
+        parent,
+        Some("second prompt".into()),
+        crate::app_event::SideStartMode::New,
+    )
+    .await?;
     let narrow = super::side_frame(&mut app, &mut tui, ratatui::layout::Size::new(30, 8))?;
     insta::assert_snapshot!("sidebar_failed_creation", narrow);
     Box::pin(press(&mut app, &mut tui, &mut server, KeyCode::Esc.into())).await?;
     assert!(
         super::side_frame(&mut app, &mut tui, ratatui::layout::Size::new(30, 8))?
             .contains("Open in sidebar")
+    );
+    assert_eq!(
+        app.chat_widget.composer_draft_snapshot().remote_image_urls,
+        first_prompt.remote_image_urls
     );
     let draft = app.chat_widget.composer_text_with_pending();
     assert!(

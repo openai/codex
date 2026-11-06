@@ -5,7 +5,15 @@ use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
 use super::*;
 use crate::activation_key_guard::ActivationKeySuppression;
+use crate::app_event::SideStartMode;
+use crate::sidebar_tab_strip::TabTarget;
 use crate::transcript_view::TranscriptView;
+
+enum ChooserAction {
+    Open(usize),
+    Back,
+    Hide,
+}
 
 impl App {
     pub(super) fn sidebar_chooser_available(&self) -> bool {
@@ -45,18 +53,45 @@ impl App {
         }
         if let TuiEvent::Mouse(mouse) = event
             && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-            && let Some(strip) = self.conversation_frame.chat_strip
+            && [
+                self.conversation_frame.chat_strip,
+                self.conversation_frame.chooser_area(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|area| area.contains((mouse.column, mouse.row).into()))
+            && self.conversation_frame.sidebar_input
+                != self.sidebar().map(sidebar::SidebarPane::input_state)
+        {
+            // A tab may have closed or the chooser scrolled since this frame was painted.
+            tui.frame_requester().schedule_frame();
+            return true;
+        }
+        if let TuiEvent::Mouse(mouse) = event
+            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some(pane) = self.sidebar()
+            && let Some(strip) = self.conversation_frame.chat_strip.or_else(|| {
+                let area = self.conversation_frame.chooser_area()?;
+                pane.creation
+                    .is_none()
+                    .then(|| Rect::new(area.x, area.y, area.width, 1))
+            })
             && strip.contains((mouse.column, mouse.row).into())
         {
             let point = (mouse.column, mouse.row).into();
-            let (tab, add) = crate::sidebar_chooser::strip_targets(strip);
-            let result = if add.contains(point) {
+            let target = pane.chat_tabs().hit(strip, point);
+            let result = if matches!(target, Some(TabTarget::Add)) {
                 self.open_sidebar_tabs(tui, server).await
-            } else if tab.contains(point)
-                && let Some(id) = self.switchable_side_child()
+            } else if let Some(TabTarget::Tab(id)) = target
                 && self.current_displayed_thread_id() != Some(id)
             {
-                self.select_agent_thread(tui, server, id).await
+                let zoomed = self.zoomed_thread.is_some()
+                    && self.zoomed_thread == self.current_displayed_thread_id();
+                let result = self.select_agent_thread(tui, server, id).await;
+                if zoomed && self.current_displayed_thread_id() == Some(id) {
+                    self.zoomed_thread = Some(id);
+                }
+                result
             } else {
                 return true;
             };
@@ -68,8 +103,7 @@ impl App {
         if self.chooser_focus().is_none() {
             return false;
         }
-        let child = self.switchable_side_child();
-        let (open, activation) = match event {
+        let (action, activation) = match event {
             TuiEvent::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
                 tui.frame_requester().schedule_frame();
                 let Some(area) = self
@@ -86,40 +120,52 @@ impl App {
                 if pane.creation.is_some() {
                     return true;
                 }
-                let open = if crate::sidebar_chooser::choice_contains(area, mouse.row)
-                    || (child.is_some()
-                        && crate::sidebar_chooser::strip_targets(area)
-                            .0
-                            .contains((mouse.column, mouse.row).into()))
+                let choice = pane.choice;
+                let count = pane.chat_tabs().ids.len() + 1;
+                let action = if let Some(index) =
+                    crate::sidebar_chooser::choice_at(area, count, choice, mouse.row)
                 {
-                    true
+                    ChooserAction::Open(index)
                 } else if mouse.row == area.bottom() - 1 && mouse.column > area.x {
                     let column = mouse.column - area.x - 1;
                     let hints = crate::sidebar_chooser::footer(&self.keymap, area);
                     match hints.items.iter().position(|range| range.contains(&column)) {
-                        Some(0) => true,            // Open.
-                        Some(1) => child.is_some(), // Back.
-                        Some(3) => false,           // Hide.
+                        Some(0) => ChooserAction::Open(choice),
+                        Some(1) => ChooserAction::Back,
+                        Some(3) => ChooserAction::Hide,
                         _ => return true,
                     }
                 } else {
                     return true;
                 };
-                (open, None)
+                (action, None)
             }
             _ if self.chooser_focus() != Some(PaneFocus::Sidebar) => return false,
             TuiEvent::Key(key) if key.kind == KeyEventKind::Press && key.modifiers.is_empty() => {
-                let open = match key.code {
-                    KeyCode::Enter => true,
-                    KeyCode::Esc => child.is_some(),
-                    KeyCode::Left | KeyCode::Right if child.is_some() => true,
+                let pane = self.sidebar_mut();
+                tui.frame_requester().schedule_frame();
+                let action = match key.code {
+                    KeyCode::Enter => ChooserAction::Open(pane.choice),
+                    KeyCode::Esc => ChooserAction::Back,
+                    KeyCode::Left | KeyCode::Right if pane.selected_chat().is_some() => {
+                        ChooserAction::Back
+                    }
+                    KeyCode::Up => {
+                        pane.choice = pane.choice.saturating_sub(1);
+                        return true;
+                    }
+                    KeyCode::Down => {
+                        pane.choice = (pane.choice + 1).min(pane.chat_tabs().ids.len());
+                        return true;
+                    }
                     _ => return true,
                 };
-                tui.frame_requester().schedule_frame();
-                (open, Some(KeyBinding::from_event(*key)))
+                (action, Some(KeyBinding::from_event(*key)))
             }
             _ => return matches!(event, TuiEvent::Key(_) | TuiEvent::Paste(_)),
         };
+
+        let open = matches!(action, ChooserAction::Open(_));
         let pane = self.sidebar_mut();
         if let Some(creation) = &pane.creation {
             match (&creation.state, open) {
@@ -140,6 +186,7 @@ impl App {
                         self.app_event_tx.send(AppEvent::StartSide {
                             parent_thread_id,
                             user_message: message,
+                            mode: SideStartMode::New,
                         });
                     } else {
                         self.restore_side_user_message(message);
@@ -147,15 +194,26 @@ impl App {
                 }
             }
         } else {
-            if open && let Some(id) = child {
+            let target = match action {
+                ChooserAction::Open(index) => pane.chat_tabs().ids.get(index).copied(),
+                ChooserAction::Back => pane.selected_chat(),
+                ChooserAction::Hide => None,
+            };
+            if let Some(id) = target {
                 if let Err(err) = self.select_agent_thread(tui, server, id).await {
                     self.chat_widget.add_error_message(err.to_string());
                 }
-            } else if open {
-                self.chat_widget
-                    .dispatch_command(crate::slash_command::SlashCommand::Side);
-            }
-            if !open || self.chat_widget.thread_id().is_none() {
+            } else if open && let Some(parent_thread_id) = self.chat_widget.thread_id() {
+                self.app_event_tx.send(AppEvent::StartSide {
+                    parent_thread_id,
+                    user_message: None,
+                    mode: SideStartMode::New,
+                });
+            } else {
+                if open {
+                    self.chat_widget
+                        .dispatch_command(crate::slash_command::SlashCommand::Side);
+                }
                 self.sidebar_mut().hide();
             }
         }

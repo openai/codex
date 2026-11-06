@@ -802,12 +802,14 @@ impl App {
         resume_restored_queue: bool,
     ) -> Result<()> {
         let retain_side_view = self.side_retention_enabled(tui);
+        let side_parent = |id| {
+            self.side_threads
+                .get(&self.side_pair_key(id)?)
+                .map(|side| side.parent_thread_id)
+        };
         let preserve_screen = retain_side_view
-            && self.side_pair_key(thread_id).is_some_and(|pair| {
-                self.chat_widget
-                    .thread_id()
-                    .and_then(|id| self.side_pair_key(id))
-                    == Some(pair)
+            && side_parent(thread_id).is_some_and(|parent| {
+                self.chat_widget.thread_id().and_then(side_parent) == Some(parent)
             });
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,

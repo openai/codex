@@ -3396,6 +3396,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         &mut app_server,
         parent_thread_id,
         Some("Side question".into()),
+        crate::app_event::SideStartMode::Reuse,
     ))
     .await?;
 
@@ -3531,6 +3532,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     app.app_event_tx.send(AppEvent::StartSide {
         parent_thread_id,
         user_message: None,
+        mode: crate::app_event::SideStartMode::Reuse,
     });
     assert!(!app.can_read_terminal_after_thread_switch(&tui, &app_event_rx));
     drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
@@ -3834,7 +3836,8 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
                 &mut tui,
                 &mut app_server,
                 parent_thread_id,
-                /*user_message*/ None
+                /*user_message*/ None,
+                crate::app_event::SideStartMode::Reuse,
             ))
             .await?;
             drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
@@ -4453,6 +4456,53 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     keys!(KeyEvent::new(KeyCode::Insert, KeyModifiers::CONTROL));
     assert!(tui.clipboard.is_busy());
     assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+
+    // Open a sibling from the chooser, then revisit each retained conversation.
+    let chooser_key = KeyEvent::from(KeyCode::Char('t'));
+    let [up, down, enter] = [KeyCode::Up, KeyCode::Down, KeyCode::Enter].map(KeyEvent::from);
+    side_frame(&mut app, &mut tui, even)?;
+    let sidebar_x = app.conversation_frame.chat_strip.unwrap().x;
+    keys!(prefix, chooser_key, down, enter);
+    app.local_settings.tui.keymap = toml::from_str("[global]\nleader = 'f12'")?;
+    enable_side_retention(&mut app)?;
+    app.local_settings.tui.animations = false;
+    while app.current_displayed_thread_id() == Some(parent_thread_id) {
+        let event = time::timeout(Duration::from_secs(5), app_event_rx.recv())
+            .await?
+            .expect("side creation event");
+        boxed_future!(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    }
+    let sibling = app.current_displayed_thread_id().expect("new side chat");
+    assert_ne!(sibling, side_thread_id);
+    drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+    read_side_history(&mut app, &mut tui, "sibling")?;
+    app.chat_widget.insert_str("sibling draft");
+    let frame = side_frame(&mut app, &mut tui, even)?;
+    let header = frame.lines().next().unwrap().split_once('│').unwrap().1;
+    assert_app_snapshot!("side_chat_tabs", header.trim_end());
+    assert_eq!(app.conversation_frame.chat_strip.unwrap().x, sidebar_x);
+
+    keys!(prefix, chooser_key, up, enter);
+    assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+    assert_eq!(app.chat_widget.composer_text_with_pending(), child_draft);
+    assert!(side_frame(&mut app, &mut tui, even)?.contains(child_row));
+    let strip = app.conversation_frame.chat_strip.unwrap();
+    let down = MouseEventKind::Down(MouseButton::Left);
+    let click = mouse(down, strip.x + 12, strip.y);
+    boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, click)).await?;
+    drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(sibling));
+    assert!(!tui.has_deferred_thread_switch_clear());
+    let draft = app.chat_widget.composer_text_with_pending();
+    assert_eq!(draft, "sibling draft");
+    assert!(side_frame(&mut app, &mut tui, even)?.contains("sibling-24"));
+
+    keys!(prefix, main);
+    app.chat_widget
+        .dispatch_command(crate::slash_command::SlashCommand::Side);
+    drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(sibling));
+    assert_eq!(app.side_threads.len(), 2);
 
     app_server.shutdown().await?;
     Ok(())

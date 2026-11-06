@@ -1052,7 +1052,15 @@ impl App {
             AppEvent::ResetTranscriptForThreadSwitchPreservingScreen => {
                 self.reset_transcript_state_after_clear();
                 tui.clear_pending_history_lines();
-                if self.conversation_frame.chooser_area().is_none() && self.chooser_focus().is_none() {
+                let switched_tab = self.conversation_frame.chat_strip.is_some()
+                    && self.active_side_parent_thread_id().is_some()
+                    && self.conversation_frame.sidebar_input.is_some_and(|(_, painted_chat, _)| {
+                        painted_chat != self.current_displayed_thread_id()
+                    });
+                if self.conversation_frame.chooser_area().is_none()
+                    && self.chooser_focus().is_none()
+                    && !switched_tab
+                {
                     tui.defer_thread_switch_clear();
                 }
                 self.pending_thread_switch_resets -= 1;
@@ -3364,8 +3372,9 @@ impl App {
             AppEvent::StartSide {
                 parent_thread_id,
                 user_message,
+                mode,
             } => {
-                return Box::pin(self.handle_start_side(tui, app_server, parent_thread_id, user_message)).await;
+                return Box::pin(self.handle_start_side(tui, app_server, parent_thread_id, user_message, mode)).await;
             }
             AppEvent::SideCreated {
                 backend_id: _,

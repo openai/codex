@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 4182
+expression: header.trim_end()
+---
+ Side 1     Side 2                                                  +

@@ -21,7 +21,7 @@ use crate::keymap::configured_binding_for_action;
 use crate::keymap::keymap_action_ids;
 use crate::motion::MotionMode;
 use crate::pager_overlay::TranscriptHistoryState;
-use crate::sidebar_chooser::TabState;
+use crate::sidebar_tab_strip::TabState;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::transcript_image::ImagePlacement;
 use crate::transcript_view::TranscriptView;
@@ -36,6 +36,7 @@ pub(super) struct ConversationFrame {
     inset: Option<Rect>,
     sidebar: Option<sidebar::SidebarLayout>,
     pub(super) chat_strip: Option<Rect>,
+    pub(super) sidebar_input: Option<(usize, Option<ThreadId>, usize)>,
     pub(super) leader_hud: Option<Rect>,
     /// A dialog can obscure neighboring content in the terminal's completed buffer.
     behind_dialog: Option<ratatui::buffer::Buffer>,
@@ -264,6 +265,8 @@ impl App {
             self.prepare_conversation(screen_size.into(), caller_inset.or(live), &frames);
         self.conversation_frame.sidebar = layout;
         self.conversation_frame.chat_strip = strip;
+        self.conversation_frame.sidebar_input =
+            self.sidebar().map(sidebar::SidebarPane::input_state);
         if self.divider_drag.is_some_and(|drag| {
             !drag.matches(screen_size.into(), self.conversation_frame.side_pane())
                 || !self.conversation_focus_available(tui)
@@ -334,13 +337,14 @@ impl App {
                         ratatui::widgets::Paragraph::new(text)
                             .wrap(ratatui::widgets::Wrap { trim: false })
                             .render(body, frame.buffer);
-                    } else {
+                    } else if let Some(pane) = self.sidebar() {
                         crate::sidebar_chooser::paint(
                             focused,
                             *sidebar,
                             frame.buffer,
                             &self.keymap,
-                            chat,
+                            pane.chat_tabs(),
+                            pane.choice,
                         );
                     }
                     frame
@@ -353,8 +357,16 @@ impl App {
                 }
                 None => None,
             };
-            if let Some(strip) = strip {
-                crate::sidebar_chooser::tab_strip(strip, TabState::Absent, chat, frame.buffer);
+            if let Some(strip) = strip
+                && let Some(pane) = self.sidebar()
+            {
+                crate::sidebar_chooser::tab_strip(
+                    strip,
+                    TabState::Absent,
+                    chat,
+                    pane.chat_tabs(),
+                    frame.buffer,
+                );
             }
             if let Some(x) = divider {
                 side_pane::paint_divider(frame, x, self.divider_drag, highlight_divider);

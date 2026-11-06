@@ -8,6 +8,7 @@
 //! for them.
 
 use super::*;
+use crate::app_event::SideStartMode;
 use crate::chatwidget::InterruptedTurnNoticeMode;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
@@ -356,9 +357,14 @@ impl App {
     }
 
     pub(super) fn side_thread_for_parent(&self, parent_thread_id: ThreadId) -> Option<ThreadId> {
-        self.side_threads.iter().find_map(|(thread_id, state)| {
-            (state.parent_thread_id == parent_thread_id).then_some(*thread_id)
-        })
+        self.sidebars
+            .get(&Some(parent_thread_id))
+            .and_then(sidebar::SidebarPane::selected_chat)
+            .or_else(|| {
+                self.side_threads.iter().find_map(|(thread_id, state)| {
+                    (state.parent_thread_id == parent_thread_id).then_some(*thread_id)
+                })
+            })
     }
 
     pub(super) fn set_side_parent_status(
@@ -612,12 +618,9 @@ impl App {
         self.agents_overview.activity.remove(&thread_id);
         self.sidebars.remove(&Some(thread_id));
         if let Some(side) = self.side_threads.remove(&thread_id)
-            && self
-                .sidebars
-                .get(&Some(side.parent_thread_id))
-                .is_some_and(|pane| pane.contains_chat(thread_id))
+            && let Some(pane) = self.sidebars.get_mut(&Some(side.parent_thread_id))
         {
-            self.sidebars.remove(&Some(side.parent_thread_id));
+            pane.remove_chat(thread_id);
         }
         self.side_companions.remove(&thread_id);
         self.agent_navigation.remove(thread_id);
@@ -796,7 +799,12 @@ impl App {
         app_server: &mut AppServerSession,
         parent_thread_id: ThreadId,
         mut user_message: Option<crate::chatwidget::UserMessage>,
+        mode: SideStartMode,
     ) -> Result<AppRunControl> {
+        let workspace = self.side_retention_enabled(tui);
+        let existing = (mode == SideStartMode::Reuse || !workspace)
+            .then(|| self.side_thread_for_parent(parent_thread_id))
+            .flatten();
         if let Some(pane) = self.sidebars.get_mut(&Some(parent_thread_id))
             && pane.creation.is_some()
         {
@@ -809,6 +817,7 @@ impl App {
             self.restore_side_user_message(user_message);
             return Ok(AppRunControl::Continue);
         }
+
         if let Some(message) = self.side_start_block_message() {
             self.restore_side_user_message(user_message.take());
             self.sync_side_thread_ui();
@@ -823,7 +832,7 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
-        if let Some(side_thread_id) = self.side_thread_for_parent(parent_thread_id) {
+        if let Some(side_thread_id) = existing {
             self.select_agent_thread(tui, app_server, side_thread_id)
                 .await?;
             if self.active_thread_id == Some(side_thread_id) {
@@ -843,7 +852,6 @@ impl App {
             /*inc*/ 1,
             &[("source", "slash_command")],
         );
-        let workspace = self.side_retention_enabled(tui);
         let request = uuid::Uuid::new_v4();
         if workspace {
             let pane = self.sidebars.entry(Some(parent_thread_id)).or_default();
@@ -1008,6 +1016,10 @@ impl App {
                     Self::install_side_thread_snapshot(&mut store, forked.session, forked.turns);
                 }
                 let mut child = SideThreadState::new(parent_thread_id);
+                child.parent_status = self
+                    .side_thread_for_parent(parent_thread_id)
+                    .and_then(|id| self.side_threads.get(&id))
+                    .and_then(|side| side.parent_status);
                 if !enter {
                     child.opening_message = user_message.take();
                 }
@@ -1021,9 +1033,10 @@ impl App {
                     /*is_closed*/ false,
                 );
                 self.sync_agent_picker_thread(child_thread_id);
-                if let Some(pane) = self.sidebars.get_mut(&Some(parent_thread_id)) {
-                    pane.chat_ready(child_thread_id);
-                }
+                self.sidebars
+                    .entry(Some(parent_thread_id))
+                    .or_default()
+                    .chat_ready(child_thread_id);
                 if !enter {
                     self.sync_side_thread_ui();
                     return;

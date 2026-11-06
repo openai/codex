@@ -5,6 +5,7 @@ use super::App;
 use super::pane_motion::PaneMotion;
 use super::side_pane;
 use super::side_pane::SidePaneLayout;
+use crate::sidebar_tab_strip::TabStrip;
 use crate::tui::Tui;
 use codex_protocol::ThreadId;
 use ratatui::layout::Rect;
@@ -52,27 +53,86 @@ impl SideCreation {
 pub(super) struct SidebarPane {
     pub(super) creation: Option<SideCreation>,
     content: SidebarContent,
+    tabs: Vec<ThreadId>,
+    // Visit order is independent of the order in which tabs appear.
+    visits: Vec<ThreadId>,
+    pub(super) choice: usize,
+    tabs_revision: usize,
     focus: Option<PaneFocus>,
     motion: PaneMotion,
 }
 
 impl SidebarPane {
     pub(super) fn show(&mut self, content: SidebarContent, focus: PaneFocus) {
+        match content {
+            SidebarContent::Chat(id) => {
+                if !self.tabs.contains(&id) {
+                    self.tabs.push(id);
+                    self.tabs_revision += 1;
+                }
+                self.visits.retain(|visited| *visited != id);
+                self.visits.push(id);
+            }
+            SidebarContent::Chooser if self.content != content || self.focus.is_none() => {
+                self.choice = self.chat_tabs().selected_index().unwrap_or(self.tabs.len());
+            }
+            SidebarContent::Chooser => {}
+        }
         self.content = content;
         self.focus = Some(focus);
     }
 
+    pub(super) fn chat_tabs(&self) -> TabStrip<'_, ThreadId> {
+        crate::sidebar_chooser::chat_tabs(&self.tabs, self.selected_chat())
+    }
+
+    pub(super) fn selected_chat(&self) -> Option<ThreadId> {
+        self.visits.last().copied()
+    }
+
+    pub(super) fn input_state(&self) -> (usize, Option<ThreadId>, usize) {
+        (self.tabs_revision, self.selected_chat(), self.choice)
+    }
+
     pub(super) fn chat_ready(&mut self, child: ThreadId) {
         self.creation = None;
-        self.content = SidebarContent::Chat(child);
+        if !self.tabs.contains(&child) {
+            self.tabs.push(child);
+            self.tabs_revision += 1;
+            // A completed background fork must not replace the user's selection.
+            self.visits.insert(0, child);
+        }
+        if self.content == SidebarContent::Chooser
+            && let Some(selected) = self.selected_chat()
+        {
+            self.content = SidebarContent::Chat(selected);
+        }
     }
 
     pub(super) fn hide(&mut self) {
         self.focus = None;
     }
 
-    pub(super) fn contains_chat(&self, id: ThreadId) -> bool {
-        self.content == SidebarContent::Chat(id)
+    pub(super) fn remove_chat(&mut self, id: ThreadId) {
+        let Some(index) = self.tabs.iter().position(|tab| *tab == id) else {
+            return;
+        };
+        self.tabs.remove(index);
+        self.tabs_revision += 1;
+        self.visits.retain(|visited| *visited != id);
+        if index < self.choice || (index == self.choice && index == self.tabs.len()) {
+            self.choice = self.choice.saturating_sub(1);
+        }
+        if self.content == SidebarContent::Chat(id) {
+            self.content = match self.selected_chat() {
+                Some(child) => SidebarContent::Chat(child),
+                None => {
+                    self.hide();
+                    self.motion = PaneMotion::default();
+                    SidebarContent::Chooser
+                }
+            };
+        }
     }
 
     pub(super) fn visible_content(&self) -> Option<SidebarContent> {
