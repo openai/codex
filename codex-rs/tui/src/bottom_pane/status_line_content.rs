@@ -54,7 +54,7 @@ impl StatusLineRenderer {
             children.push(Some(node));
         }
         let tree = UiNode::Row {
-            props: RowProps { gap: 0 },
+            props: RowProps::default(),
             children,
         };
         Some(FooterContent::Extension {

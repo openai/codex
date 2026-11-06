@@ -88,6 +88,12 @@ pub(crate) fn truncate_line_with_ellipsis_if_overflow(
         return line;
     }
 
+    truncate_line_with_ellipsis(line, max_width)
+}
+
+/// Fit an already overflowing line into a nonempty area, including the ellipsis.
+pub(crate) fn truncate_line_with_ellipsis(line: Line<'static>, max_width: usize) -> Line<'static> {
+    debug_assert!(max_width > 0);
     let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
     let Line {
         style,

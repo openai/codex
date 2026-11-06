@@ -56,7 +56,14 @@ fn rejects_invalid_gaps_and_elements() {
 fn deserialization_checks_limits_across_the_whole_tree() {
     let parent = |children: Vec<Value>| json!({"type":"text","children":children});
     assert!(parse(parent(vec![Value::Null; 257])).is_ok());
-    let nested = (0..16).fold(json!("X"), |child, _| parent(vec![child]));
+    let nested = ["text", "bold", "italic", "underline"]
+        .into_iter()
+        .cycle()
+        .take(16)
+        .fold(
+            json!("X"),
+            |child, kind| json!({"type":kind,"children":[child]}),
+        );
     assert!(parse(nested.clone()).is_ok());
     assert!(parse(parent(vec![nested])).is_err());
     let mut leaves = vec![json!(""); 255];
@@ -158,4 +165,94 @@ fn directly_constructed_text_keeps_a_bounded_utf8_prefix() {
     let prefix = "x".repeat(MAX_TEXT_BYTES - 1);
     let text = UiTree(Some(UiNode::String(format!("{prefix}界tail"))));
     assert_eq!(text.render_line(u16::MAX).line.to_string(), prefix);
+}
+
+#[test]
+fn text_and_row_share_the_literal_color_contract() {
+    for color in ["red", "white", "#ab12f0"] {
+        let value = json!({"type":"row","props":{"gap":0,"background":color},"children":[
+            {"type":"text","props":{"color":color,"weight":"bold","italic":true,"underline":false},"children":["ok"]}
+        ]});
+        assert_eq!(serde_json::to_value(tree(value.clone())).unwrap(), value);
+    }
+    for props in [
+        json!({"weight":"semibold"}),
+        json!({"weight":{"bold":null}}),
+        json!({"color":{"red":null}}),
+        json!({"color":"#abcdef00"}),
+        json!({"color":"#+12345"}),
+        json!({"color":"#123"}),
+        json!({"color":"teal"}),
+        json!({"underline":"dotted"}),
+    ] {
+        assert!(
+            serde_json::from_value::<UiNode>(json!({"type":"text","props":props,"children":[]}))
+                .is_err(),
+            "{props}"
+        );
+    }
+    assert!(
+        serde_json::from_value::<UiNode>(json!({"type":"italic","props":{},"children":[]}))
+            .is_err()
+    );
+}
+
+#[test]
+fn inline_modifiers_and_row_surfaces_follow_the_tree() {
+    let node = tree(json!({
+        "type":"row", "props":{"gap":1,"background":"white"}, "children":[
+            {"type":"bold","children":[{"type":"italic","children":[
+                {"type":"underline","children":["a"]},
+                {"type":"text","props":{"weight":"normal","italic":false,"color":"cyan"},"children":["b"]},
+                "c"
+            ]}]},
+            {"type":"row","props":{"gap":1,"background":"blue"},"children":["d","e"]},
+            {"type":"link","props":{"href":"https://example.com"},"children":["f"]}
+        ]
+    }));
+    let clipped = node.render_line(/*width*/ 6);
+    assert_eq!(
+        clipped.line.spans.last().unwrap(),
+        &ratatui::text::Span::styled(
+            "…",
+            ratatui::style::Style::default().bg(ratatui::style::Color::Blue),
+        )
+    );
+    let line = node.render_line(/*width*/ 12);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 12, /*height*/ 1,
+    );
+    let mut buffer = Buffer::empty(area);
+    line.render_fitted(area, &mut buffer);
+    insta::assert_snapshot!(format!("{buffer:?}"));
+}
+
+#[test]
+fn hex_colors_use_the_terminal_palette_for_both_channels() {
+    let tree = tree(json!({
+        "type":"row", "props":{"gap":1,"background":"#1020F0"}, "children":[
+            {"type":"text","props":{"color":"#AB12f0"},"children":["a"]}, "b"
+        ]
+    }));
+    crate::terminal_palette::with_test_default_colors(
+        crate::terminal_probe::DefaultColors {
+            fg: (255, 255, 255),
+            bg: (0, 0, 0),
+        },
+        || {
+            let line = tree.render_line(/*width*/ 3);
+            let colors: Vec<_> = line
+                .line
+                .spans
+                .iter()
+                .map(|s| (s.style.fg, s.style.bg))
+                .collect();
+            let surface = Some(crate::terminal_palette::rgb_color((16, 32, 240)));
+            let foreground = Some(crate::terminal_palette::rgb_color((171, 18, 240)));
+            assert_eq!(
+                colors,
+                [(foreground, surface), (None, surface), (None, surface)]
+            );
+        },
+    );
 }

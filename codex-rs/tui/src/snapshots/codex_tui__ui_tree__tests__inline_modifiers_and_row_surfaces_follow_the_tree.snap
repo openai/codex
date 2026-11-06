@@ -1,0 +1,20 @@
+---
+source: tui/src/ui_tree_tests.rs
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 12, height: 1 },
+    content: [
+        "abc d e ]8;;https://example.comf]8;;   ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Gray, underline: Reset, modifier: BOLD | ITALIC | UNDERLINED,
+        x: 1, y: 0, fg: Cyan, bg: Gray, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Reset, bg: Gray, underline: Reset, modifier: BOLD | ITALIC,
+        x: 3, y: 0, fg: Reset, bg: Gray, underline: Reset, modifier: NONE,
+        x: 4, y: 0, fg: Reset, bg: Blue, underline: Reset, modifier: NONE,
+        x: 7, y: 0, fg: Reset, bg: Gray, underline: Reset, modifier: NONE,
+        x: 8, y: 0, fg: Reset, bg: Gray, underline: Reset, modifier: UNDERLINED,
+        x: 9, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

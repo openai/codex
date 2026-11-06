@@ -6,7 +6,9 @@ use super::UiNode;
 use super::UiTree;
 use serde::Deserialize;
 use serde::Deserializer;
+use serde::de::DeserializeOwned;
 use serde::de::Error;
+use serde::de::IntoDeserializer;
 
 impl std::str::FromStr for UiTree {
     type Err = serde_json::Error;
@@ -35,6 +37,9 @@ impl std::str::FromStr for UiTree {
                     }
                 }
                 UiNode::Text { children, .. }
+                | UiNode::Bold { children }
+                | UiNode::Italic { children }
+                | UiNode::Underline { children }
                 | UiNode::Link { children, .. }
                 | UiNode::Row { children, .. } => {
                     pending.extend(children.iter().flatten().map(|child| (child, depth + 1)));
@@ -43,6 +48,14 @@ impl std::str::FromStr for UiTree {
         }
         Ok(Self(root))
     }
+}
+
+pub(super) fn optional_token<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    Option::<String>::deserialize(d)?
+        .map(|s| T::deserialize(s.into_deserializer()))
+        .transpose()
 }
 
 pub(super) fn gap<'de, D: Deserializer<'de>>(de: D) -> Result<u64, D::Error> {

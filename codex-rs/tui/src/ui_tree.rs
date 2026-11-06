@@ -2,6 +2,10 @@
 
 mod decode;
 mod render;
+mod theme;
+
+use theme::Color;
+use theme::TextWeight;
 
 #[cfg(test)]
 #[path = "ui_tree_tests.rs"]
@@ -21,7 +25,7 @@ pub(crate) struct UiTree(pub(crate) Option<UiNode>);
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum UiNode {
     Text {
-        #[serde(default, skip_serializing)]
+        #[serde(default, skip_serializing_if = "is_default")]
         props: TextProps,
         children: Vec<Option<UiNode>>,
     },
@@ -33,13 +37,37 @@ pub(crate) enum UiNode {
         props: RowProps,
         children: Vec<Option<UiNode>>,
     },
+    Bold {
+        children: Vec<Option<UiNode>>,
+    },
+    Italic {
+        children: Vec<Option<UiNode>>,
+    },
+    Underline {
+        children: Vec<Option<UiNode>>,
+    },
     #[serde(untagged)]
     String(String),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TextProps {}
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct TextProps {
+    #[serde(
+        deserialize_with = "decode::optional_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    color: Option<Color>,
+    #[serde(
+        deserialize_with = "decode::optional_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    weight: Option<TextWeight>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    italic: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    underline: Option<bool>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,4 +107,14 @@ pub(crate) struct RowProps {
     /// Horizontal spacing in terminal columns, expressed as a non-negative JavaScript-safe integer.
     #[serde(deserialize_with = "decode::gap")]
     pub(crate) gap: u64,
+    #[serde(
+        default,
+        deserialize_with = "decode::optional_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    background: Option<Color>,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
