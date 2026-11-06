@@ -162,6 +162,7 @@ mod thread_store_builder;
 pub use agent::host::AgentMcpMetadataRecipient;
 pub use agent::host::AgentRef;
 pub use agent::host::AgentRuntimeOwnership;
+pub use agent::host::AgentServiceTier;
 pub use agent::host::AgentSessionReader;
 pub use agent::host::AgentTurnAdmission;
 pub use agent::host::AgentTurnAdmissionRequest;

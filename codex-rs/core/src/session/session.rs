@@ -1092,6 +1092,8 @@ impl Session {
                 }
             }
         }
+        let has_provided_agent_control =
+            matches!(&agent_control, AgentControlInit::Provided { .. });
         let (agent_control, local_agent_runtime): (Arc<dyn AgentControl>, _) = match agent_control {
             AgentControlInit::Local(control) => {
                 let control = control.with_session_id(
@@ -1877,6 +1879,13 @@ impl Session {
                     Ok(runtime) => (runtime, None),
                     // This placeholder is used only for teardown, before the session is published.
                     Err(err) => (AgentRuntimeServices::Controller, Some(err)),
+                };
+            state.shared_service_tier_pending = parent_thread_id.is_none()
+                && match &agent_runtime {
+                    AgentRuntimeServices::Controller => has_provided_agent_control,
+                    AgentRuntimeServices::Host(services) => {
+                        session_id == SessionId::from(thread_id) && services.service_tier.is_some()
+                    }
                 };
             let executed_tool_calls =
                 crate::state::ExecutedToolCalls::new(&config.features, &initial_history);

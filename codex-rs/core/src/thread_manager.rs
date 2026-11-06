@@ -13,7 +13,6 @@ use crate::CodexAppsToolsCache;
 use crate::CodexThreadSettingsOverrides;
 use crate::agent::AgentStatus;
 use crate::agent::LocalAgentControl;
-use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentControl;
 use crate::agent::control::AgentControlInit;
 use crate::agent::host::InheritedSessionId;
@@ -2513,11 +2512,6 @@ impl ThreadManagerState {
                 }) => Some(*parent_thread_id),
                 _ => None,
             });
-        // Host controllers can already be shared with live threads. Publish root settings
-        // only after registration succeeds, so a failed start cannot update their tree.
-        let initial_host_config = (self.agent_control_factory.is_some()
-            && parent_thread_id.is_none())
-        .then(|| AgentConfigUpdate::ServiceTier(config.service_tier.clone()));
         // Both resume entry points must restore identities before children can be loaded lazily.
         if let InitialHistory::Resumed(resumed) = &initial_history
             && initial_history.get_multi_agent_version() == Some(MultiAgentVersion::V2)
@@ -2798,7 +2792,7 @@ impl ThreadManagerState {
             }
         }
         let finalize_result = self
-            .finalize_thread_spawn(session, io, tracked_session_source, initial_host_config)
+            .finalize_thread_spawn(session, io, tracked_session_source)
             .await;
         let new_thread = match finalize_result {
             Ok(new_thread) => new_thread,
@@ -2830,7 +2824,6 @@ impl ThreadManagerState {
         session: Arc<Session>,
         io: SessionIo,
         session_source: SessionSource,
-        initial_host_config: Option<AgentConfigUpdate>,
     ) -> CodexResult<NewThread> {
         let thread_id = session.thread_id();
         let event = io.next_event().await?;
@@ -2851,23 +2844,31 @@ impl ThreadManagerState {
             .mcp_ema_cancellation()
             .clone();
         {
+            let pending_service_tier = if self.agent_control_factory.is_some()
+                || matches!(
+                    &session.agent_runtime,
+                    crate::agent::host::AgentRuntimeServices::Host(services)
+                        if services.service_tier.is_some()
+                ) {
+                session.lock_pending_service_tier().await
+            } else {
+                None
+            };
             let mut threads = self.threads.write().await;
             if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
-                if let Some(update) = initial_host_config {
-                    session
-                        .services
-                        .agent_control
-                        .propagate_config_update(update);
-                }
                 ema_cancellation.publish();
                 let thread = Arc::new(CodexThread::new(
-                    session,
+                    Arc::clone(&session),
                     io,
                     ThreadStartupMetadata::from(&session_configured),
                     session_configured.rollout_path.clone(),
                     session_source,
                 ));
                 e.insert(thread.clone());
+                if let Some((mut state, update)) = pending_service_tier {
+                    crate::agent::host::propagate_config_update(&session, update);
+                    state.shared_service_tier_pending = false;
+                }
                 return Ok(NewThread {
                     thread_id,
                     thread,

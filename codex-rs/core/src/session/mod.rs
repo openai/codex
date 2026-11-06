@@ -204,6 +204,7 @@ use futures::prelude::*;
 use rmcp::model::RequestId;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::MutexGuard;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -2206,8 +2207,9 @@ impl Session {
                     .update_configured_selections(&updated.environments);
             }
             state.session_configuration = updated;
-            if root_service_tier_changed {
-                self.services.agent_control.propagate_config_update(
+            if root_service_tier_changed && !state.shared_service_tier_pending {
+                crate::agent::host::propagate_config_update(
+                    self,
                     AgentConfigUpdate::ServiceTier(
                         state
                             .session_configuration
@@ -2310,6 +2312,25 @@ impl Session {
         state
             .session_configuration
             .thread_settings_snapshot(&state.session_configuration.environments)
+    }
+
+    /// Keep this guard through registration and publication to order the initial tier
+    /// with settings commits from the already-running submission loop.
+    pub(crate) async fn lock_pending_service_tier(
+        &self,
+    ) -> Option<(MutexGuard<'_, SessionState>, AgentConfigUpdate)> {
+        let state = self.state.lock().await;
+        if !state.shared_service_tier_pending {
+            return None;
+        }
+        let update = AgentConfigUpdate::ServiceTier(
+            state
+                .session_configuration
+                .step_settings
+                .service_tier
+                .clone(),
+        );
+        Some((state, update))
     }
 
     pub(crate) async fn restorable_thread_settings(&self) -> CodexThreadSettingsOverrides {
@@ -4248,6 +4269,18 @@ impl Session {
         .await
     }
 
+    fn inherits_root_service_tier(&self, session_source: &SessionSource) -> bool {
+        match &self.agent_runtime {
+            crate::agent::host::AgentRuntimeServices::Controller => matches!(
+                session_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            ),
+            crate::agent::host::AgentRuntimeServices::Host(_) => {
+                crate::agent::host::host_child_uses_shared_service_tier(self)
+            }
+        }
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "step settings and both environment snapshots must be captured under active_turn then state"
@@ -4278,11 +4311,9 @@ impl Session {
                     .then(|| self.services.turn_environments.configured_snapshot_now()),
             )
         };
-        if matches!(
-            turn_context.session_source,
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-        ) {
-            let root_service_tier = self.services.agent_control.service_tier();
+        if self.inherits_root_service_tier(&turn_context.session_source) {
+            let root_service_tier =
+                crate::agent::host::service_tier(self, settings.selected().service_tier.clone());
             if settings.selected().service_tier != root_service_tier {
                 let mut selected = settings.selected().clone();
                 selected.service_tier = root_service_tier;

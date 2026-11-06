@@ -1,28 +1,45 @@
+use super::agent_control::HostRuntime;
 use anyhow::Result;
+use codex_core::AgentRuntimeOwnership;
+use codex_core::AgentServiceTier;
+use codex_core::AgentTurnAdmission;
+use codex_core::InheritedSessionId;
 use codex_core::TurnInputRequest;
+use codex_core::TurnStartOptions;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_exec_command_call;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_successful_turn;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -156,6 +173,186 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
     );
     assert_eq!(server.handshakes().len(), 2);
     child.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
+#[derive(Default)]
+struct HostTier(Mutex<Option<String>>);
+
+impl AgentServiceTier for HostTier {
+    fn current(&self) -> Option<String> {
+        self.0.lock().expect("host tier").clone()
+    }
+
+    fn update(&self, value: Option<String>) {
+        *self.0.lock().expect("host tier") = value;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn detached_host_child_inherits_root_service_tier_at_prewarm_and_each_step() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![vec![
+            ev_response_created("fixture-warm"),
+            ev_completed("fixture-warm"),
+        ]],
+        vec![
+            vec![
+                ev_response_created("child-warm"),
+                ev_completed("child-warm"),
+            ],
+            vec![
+                ev_response_created("child-tool"),
+                ev_function_call("hold", "hold_turn", "{}"),
+                ev_completed("child-tool"),
+            ],
+            vec![
+                ev_response_created("child-done"),
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("child-done"),
+            ],
+        ],
+    ])
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("gpt-5.4", |model| {
+            model.service_tiers.push(ModelServiceTier {
+                id: "priority".into(),
+                name: "Fast".into(),
+                description: "Priority processing".into(),
+            });
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::FastMode)
+                .expect("fast mode");
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?;
+
+    let tier = Arc::new(HostTier::default());
+    let mut options = test.start_thread_options().await;
+    options.config.service_tier = Some("priority".into());
+    // The host root only changes settings. Keep WebSocket traffic on the child.
+    options.config.model_provider.supports_websockets = false;
+    options
+        .thread_extension_init
+        .insert(AgentRuntimeOwnership::Host);
+    options
+        .thread_extension_init
+        .insert(Arc::new(HostRuntime) as Arc<dyn AgentTurnAdmission>);
+    options
+        .thread_extension_init
+        .insert(tier.clone() as Arc<dyn AgentServiceTier>);
+    let thread_extension_init = options.thread_extension_init.clone();
+    let root = test.thread_manager.start_thread(options).await?;
+
+    let mut options = test.start_thread_options().await;
+    options.session_source = Some(SessionSource::Custom("host".into()));
+    options.config.service_tier = None;
+    options.dynamic_tools = vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: "hold_turn".into(),
+        description: "Wait for the client to release this turn.".into(),
+        input_schema: json!({"type": "object", "properties": {}}),
+        defer_loading: false,
+    })];
+    options.thread_extension_init = thread_extension_init;
+    options
+        .thread_extension_init
+        .insert(InheritedSessionId(root.session_configured.session_id));
+    let child = test.thread_manager.start_thread(options).await?;
+
+    let warmup = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
+    )
+    .await?
+    .body_json();
+    assert_eq!(
+        server.handshakes()[1].header(X_CODEX_ROUTING_HINT_HEADER),
+        Some("model=gpt-5.4;tier=priority".into())
+    );
+    assert_eq!(warmup["generate"], false);
+    assert_eq!(warmup["service_tier"], "priority");
+
+    submit_thread_settings(
+        &child.thread,
+        ThreadSettingsOverrides {
+            service_tier: Some(None),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(tier.current().as_deref(), Some("priority"));
+
+    let request = TurnInputRequest::user_input(vec![UserInput::Text {
+        text: "Wait for the tier change.".into(),
+        text_elements: Vec::new(),
+    }]);
+    let error = child
+        .thread
+        .start_or_steer_turn(request.clone().on_start(TurnStartOptions {
+            service_tier: Some("default".into()),
+            ..Default::default()
+        }))
+        .await
+        .expect_err("child uses the shared tier");
+    assert!(
+        matches!(error.details(), CodexErrorDetails::InvalidRequest(message) if message.contains("shared service tier")),
+        "{error:?}"
+    );
+
+    child.thread.start_or_steer_turn(request).await?;
+    wait_for_event(
+        &child.thread,
+        |event| matches!(event, EventMsg::DynamicToolCallRequest(call) if call.call_id == "hold"),
+    )
+    .await;
+    submit_thread_settings(
+        &root.thread,
+        ThreadSettingsOverrides {
+            service_tier: Some(Some("flex".into())),
+            ..Default::default()
+        },
+    )
+    .await?;
+    child
+        .thread
+        .submit(Op::DynamicToolResponse {
+            id: "hold".into(),
+            response: DynamicToolResponse {
+                content_items: vec![],
+                success: true,
+            },
+        })
+        .await?;
+    wait_for_successful_turn(&child.thread).await;
+
+    let connections = server.connections();
+    let [_, first, second] = connections[1].as_slice() else {
+        panic!("expected child warmup and two inference requests");
+    };
+    assert_eq!(
+        [
+            first.body_json()["service_tier"].clone(),
+            second.body_json()["service_tier"].clone(),
+        ],
+        [json!("priority"), json!("flex")]
+    );
+    child.thread.shutdown_and_wait().await?;
+    root.thread.shutdown_and_wait().await?;
     test.codex.shutdown_and_wait().await?;
     server.shutdown().await;
     Ok(())

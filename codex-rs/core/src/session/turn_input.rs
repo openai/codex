@@ -245,6 +245,14 @@ pub(super) async fn handle(
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
     let request = request.into();
+    if request.request.start.service_tier.is_some()
+        && crate::agent::host::host_child_uses_shared_service_tier(session)
+    {
+        return Err(CodexErr::InvalidRequest(
+            "per-turn service tier overrides are unavailable for a child using the shared service tier"
+                .into(),
+        ));
+    }
     if let SubmittedTurnInput::ResponseItem(item)
     | SubmittedTurnInput::AnnotatedResponseItem(AnnotatedResponseItem { item, .. }) =
         &request.request.input

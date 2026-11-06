@@ -1,5 +1,6 @@
 //! Captures coordination providers once, after the thread's startup contributors finish.
 
+use super::AgentServiceTier;
 use super::AgentSessionReader;
 use super::AgentTurnAdmission;
 use super::AgentUsageAccounting;
@@ -17,6 +18,7 @@ pub enum AgentRuntimeOwnership {
     /// Requires an [`AgentTurnAdmission`] provider. Core skips controller rollout-budget
     /// accounting and budget reminders. Install an [`AgentUsageAccounting`] provider
     /// to receive usage reports and an [`AgentSessionReader`] to render the V2 subagent roster.
+    /// An optional [`AgentServiceTier`] shares the root's committed tier with its children.
     Host,
 }
 
@@ -29,6 +31,7 @@ pub(crate) struct HostAgentServices {
     pub(crate) session_reader: Option<Arc<dyn AgentSessionReader>>,
     pub(crate) turn_admission: Arc<dyn AgentTurnAdmission>,
     pub(crate) usage_accounting: Option<Arc<dyn AgentUsageAccounting>>,
+    pub(crate) service_tier: Option<Arc<dyn AgentServiceTier>>,
 }
 
 impl AgentRuntimeServices {
@@ -51,6 +54,7 @@ impl AgentRuntimeServices {
                 .get::<Arc<dyn AgentUsageAccounting>>()
                 .as_deref()
                 .cloned(),
+            service_tier: data.get::<Arc<dyn AgentServiceTier>>().as_deref().cloned(),
         }))
     }
 }

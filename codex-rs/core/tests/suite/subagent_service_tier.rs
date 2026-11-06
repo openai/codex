@@ -1,9 +1,12 @@
 //! Verifies that root service-tier changes reach existing child turns and future work.
 
+use super::agent_control::HostRuntime;
 use anyhow::Result;
+use codex_core::AgentRuntimeOwnership;
 use codex_core::TurnInputRequest;
 use codex_core::config::AgentRoleConfig;
 use codex_core::config::Config;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::protocol::EventMsg;
@@ -24,6 +27,7 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
 use test_case::test_case;
 
 const ROOT_PROMPT: &str = "spawn the service-tier worker";
@@ -304,13 +308,26 @@ async fn root_service_tier_change_updates_existing_subagent(
     Ok(())
 }
 
+#[test_case(AgentRuntimeOwnership::Controller, None; "controller")]
+#[test_case(AgentRuntimeOwnership::Host, Some("priority"); "host without a tier provider")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn evicted_role_subagent_uses_root_service_tier_after_reload() -> Result<()> {
+async fn evicted_role_subagent_uses_owned_service_tier_after_reload(
+    owner: AgentRuntimeOwnership,
+    expected: Option<&str>,
+) -> Result<()> {
     let server = start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    if owner == AgentRuntimeOwnership::Host {
+        extensions.thread_lifecycle_contributor(Arc::new(HostRuntime));
+    }
     let mut builder = test_codex()
         .with_model("gpt-5.6-sol")
-        .with_config(|config| {
-            config.service_tier = Some("priority".to_string());
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            config.service_tier = Some(match owner {
+                AgentRuntimeOwnership::Controller => "priority".to_string(),
+                AgentRuntimeOwnership::Host => SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string(),
+            });
             config.multi_agent_v2.max_concurrent_threads_per_session = 2;
             configure_priority_role(config);
         });
@@ -375,10 +392,13 @@ async fn evicted_role_subagent_uses_root_service_tier_after_reload() -> Result<(
         .ensure_multi_agent_v2_child_loaded(original_thread_id)
         .await?;
     let reloaded_thread = test.thread_manager.get_thread(original_thread_id).await?;
+    let expected_configured_tier = match owner {
+        AgentRuntimeOwnership::Controller => test.codex.config_snapshot().await.service_tier,
+        AgentRuntimeOwnership::Host => expected.map(str::to_string),
+    };
     assert_eq!(
         reloaded_thread.config_snapshot().await.service_tier,
-        test.codex.config_snapshot().await.service_tier,
-        "reload ignores the role tier and preserves the root-owned preference"
+        expected_configured_tier,
     );
 
     let reloaded_request = mount_completed_child(&server, FOLLOWUP_PROMPT, ROOT_PROMPT).await;
@@ -389,7 +409,7 @@ async fn evicted_role_subagent_uses_root_service_tier_after_reload() -> Result<(
         }]))
         .await?;
     wait_for_turn_complete(&reloaded_thread).await;
-    assert_request_service_tier(&reloaded_request, /*expected*/ None);
+    assert_request_service_tier(&reloaded_request, expected);
     reloaded_thread.shutdown_and_wait().await?;
     test.codex.shutdown_and_wait().await?;
 

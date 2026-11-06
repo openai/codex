@@ -13,6 +13,7 @@ use codex_core::SpawnAgentForkMode;
 use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadCreateRequest;
 use codex_core::ThreadSpawnError;
+use codex_core::TurnStartOptions;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::Instructions;
 use codex_extension_api::ThreadInstructionsProvider;
@@ -109,7 +110,7 @@ async fn host_spawn_invocation(
     server: &MockServer,
     parent: &Arc<CodexThread>,
     call_id: &str,
-    message: &str,
+    input: TurnInputRequest,
 ) -> Result<DynamicToolCallRequest> {
     responses::mount_sse_once(
         server,
@@ -119,9 +120,7 @@ async fn host_spawn_invocation(
         ]),
     )
     .await;
-    parent
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(message)]))
-        .await?;
+    parent.start_or_steer_turn(input).await?;
     Ok(wait_for_event_match(parent, |event| match event {
         EventMsg::DynamicToolCallRequest(call) => Some(call.clone()),
         _ => None,
@@ -190,7 +189,14 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
                 ));
                 Arc::new(extensions.build())
             })
-            .with_config(|config| config.allow_persistent_dynamic_tool_updates = true),
+            .with_config(|config| {
+                config.allow_persistent_dynamic_tool_updates = true;
+                config.service_tier = Some("flex".into());
+                config
+                    .features
+                    .enable(Feature::FastMode)
+                    .expect("test config should allow fast mode");
+            }),
         network_policy.clone(),
         Some(provider.clone()),
     )
@@ -198,8 +204,16 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
     let root_id = test.session_configured.thread_id;
     let captured = parent.config_snapshot().await;
     let parent_message = "Start the worker.";
-    let invocation =
-        host_spawn_invocation(&server, &parent, "spawn-worker", parent_message).await?;
+    let invocation = host_spawn_invocation(
+        &server,
+        &parent,
+        "spawn-worker",
+        TurnInputRequest::user_input(vec![text(parent_message)]).on_start(TurnStartOptions {
+            service_tier: Some("priority".into()),
+            ..Default::default()
+        }),
+    )
+    .await?;
     let context = parent.tool_invocation(&invocation.turn_id, &invocation.call_id)?;
     test.thread_store
         .add_thread_attachment(AddThreadAttachmentParams {
@@ -253,6 +267,7 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
     let spawned = parent
         .create_child(&context, request(), reservation())
         .await?;
+    assert_eq!(spawned.config.service_tier.as_deref(), Some("flex"));
     assert_eq!(spawned.config.approval_policy, captured.approval_policy);
     assert_eq!(spawned.config.environments, captured.environments);
     assert_eq!(
@@ -299,6 +314,7 @@ async fn same_manager_creation_preserves_live_bindings_and_attachments(
             && report.usage.total_tokens == 42
     ));
     let child_request = child_request.single_request();
+    assert_eq!(child_request.body_json()["service_tier"], "flex");
     assert!(child_request.body_contains_text(UPDATED_RULE));
     assert!(!child_request.body_contains_text("only as direct tool calls"));
     assert_eq!(
@@ -362,8 +378,13 @@ async fn cancelled_creation_cleans_registered_child() -> Result<()> {
         /*thread_instructions_provider*/ None,
     )
     .await?;
-    let invocation =
-        host_spawn_invocation(&server, &parent, "cancel-spawn", "Start a worker.").await?;
+    let invocation = host_spawn_invocation(
+        &server,
+        &parent,
+        "cancel-spawn",
+        TurnInputRequest::user_input(vec![text("Start a worker.")]),
+    )
+    .await?;
     let context = parent.tool_invocation(&invocation.turn_id, &invocation.call_id)?;
     let spawn = tokio::spawn({
         let parent = Arc::clone(&parent);

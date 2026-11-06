@@ -286,6 +286,10 @@ impl LocalAgentControl {
         let mut environment_selections = evicted_environments
             .as_ref()
             .map(|environments| environments.selections.clone());
+        let independent_service_tier = evicted_environments
+            .as_ref()
+            .filter(|evicted| evicted.has_independent_service_tier)
+            .map(|evicted| evicted.config.service_tier.clone());
         let evicted_environments = evicted_environments.map(|environments| environments.bindings);
 
         let stored_thread = state
@@ -384,7 +388,7 @@ impl LocalAgentControl {
                     CodexErr::InvalidRequest(format!("permission_profile is invalid: {err}"))
                 })?;
         }
-        config.service_tier = self.root_service_tier();
+        config.service_tier = independent_service_tier.unwrap_or_else(|| self.root_service_tier());
         if let Some(model) = stored_model {
             config.model = Some(model);
         }

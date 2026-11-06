@@ -3,6 +3,7 @@
 //! Spawn and reload share live runtime policy; role and model precedence, full-history
 //! inheritance, and validation messages remain the same for each multi-agent version.
 
+use crate::agent::host::AgentRuntimeServices;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::config::Config;
@@ -69,6 +70,14 @@ pub(crate) async fn prepare_agent_spawn_config(
         options.reasoning_effort,
     )
     .await?;
+    let shares_service_tier = match &session.agent_runtime {
+        AgentRuntimeServices::Controller => true,
+        AgentRuntimeServices::Host(services) => services.service_tier.is_some(),
+    };
+    if !shares_service_tier {
+        // Inherit the parent's thread preference before applying child role overrides.
+        config.service_tier = session.thread_settings_snapshot().await.service_tier;
+    }
     if !options.full_history_fork
         || (options.version == SpawnConfigVersion::V2 && options.role_name.is_some())
     {
@@ -82,7 +91,9 @@ pub(crate) async fn prepare_agent_spawn_config(
                 .clone_from(&turn.developer_instructions);
         }
     }
-    apply_spawn_agent_service_tier(session, &mut config).await?;
+    if shares_service_tier {
+        apply_spawn_agent_service_tier(session, &mut config).await?;
+    }
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
     // Remember an applied configured default so cold reload reapplies its restrictions.
@@ -271,7 +282,8 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
 ) -> Result<(), String> {
-    let Some(service_tier) = session.services.agent_control.service_tier() else {
+    let Some(service_tier) = crate::agent::host::service_tier(session, config.service_tier.clone())
+    else {
         config.service_tier = None;
         return Ok(());
     };

@@ -4,6 +4,7 @@ use super::LocalAgentControl;
 use super::LocalAgentRuntime;
 use super::runtime::AgentTreeMembership;
 use crate::agent::AgentStatus;
+use crate::agent::host::AgentRuntimeServices;
 use crate::agent::registry::EvictedEnvironments;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -84,6 +85,10 @@ impl ThreadManagerState {
             // Raw bindings keep the original pending owner configuration alive.
             let environments = EvictedEnvironments {
                 config: Arc::new(config),
+                has_independent_service_tier: matches!(
+                    &thread.session.agent_runtime,
+                    AgentRuntimeServices::Host(services) if services.service_tier.is_none()
+                ),
                 selections: thread.environment_selections().await,
                 bindings: thread
                     .session

@@ -33,6 +33,7 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErrKind;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
@@ -178,6 +179,94 @@ async fn startup_fixture() -> (tempfile::TempDir, Config, ThreadManager) {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
     (home, config, manager)
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "hold startup before registration while the submission loop applies settings"
+)]
+async fn shared_service_tier_is_published_by_registered_startup() {
+    let (_home, mut config, manager) = startup_fixture().await;
+    config.ephemeral = true;
+    let thread_id = ThreadId::new();
+    let controller = Arc::new(LocalAgentControl::default().with_session_id(
+        codex_protocol::SessionId::from(thread_id),
+        /*max_threads*/ usize::MAX,
+    ));
+    let manager = manager.with_agent_control_factory({
+        let controller: Arc<dyn AgentControl> = controller.clone();
+        move |_| {
+            let controller = Arc::clone(&controller);
+            async move { Ok(controller) }
+        }
+    });
+
+    for (initial_tier, updated_tier, previous_shared_tier) in [
+        ("flex", None, None),
+        ("default", Some("flex".into()), Some("default")),
+    ] {
+        config.service_tier = Some(initial_tier.into());
+        let startup = Arc::new(SessionStartup::default());
+        // An ephemeral startup skips persistence until the submission loop is live.
+        let persistence = startup.persistence.lock().await;
+        let mut start = std::pin::pin!(manager.start_thread_inner(
+            StartThreadOptions {
+                reserved_thread_id: Some(thread_id),
+                ..StartThreadOptions::new(config.clone())
+            },
+            /*forked_from_thread_id*/ None,
+            Some(Arc::clone(&startup)),
+        ));
+        let io = std::future::poll_fn(|cx| {
+            assert!(start.as_mut().poll(cx).is_pending());
+            startup
+                .io
+                .get()
+                .map_or(std::task::Poll::Pending, std::task::Poll::Ready)
+        })
+        .await;
+        let (reply, applied) = tokio::sync::oneshot::channel();
+        io.submit(Op::ThreadSettings {
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                service_tier: Some(updated_tier),
+                ..Default::default()
+            },
+            reply: Some(reply),
+        })
+        .await
+        .expect("submit settings before registration");
+        applied
+            .await
+            .expect("receive settings reply")
+            .expect("apply settings");
+        assert_eq!(
+            controller.root_service_tier().as_deref(),
+            previous_shared_tier
+        );
+
+        drop(persistence);
+        let started = start.await;
+        if previous_shared_tier.is_some() {
+            let error = started.err().expect("reject the duplicate runtime");
+            assert!(
+                matches!(error.details(), CodexErrorDetails::InvalidRequest(message)
+                if *message == format!("thread {thread_id} is already running"))
+            );
+            startup.cleanup().await;
+        } else {
+            started.expect("register the first runtime");
+        }
+        assert_eq!(controller.root_service_tier().as_deref(), Some("default"));
+    }
+
+    manager
+        .get_thread(thread_id)
+        .await
+        .expect("find registered thread")
+        .shutdown_and_wait()
+        .await
+        .expect("stop registered thread");
 }
 
 fn managed_stack(requirements: Option<RequirementsExecPolicy>) -> ConfigLayerStack {
