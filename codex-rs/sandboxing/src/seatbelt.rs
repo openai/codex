@@ -6,7 +6,6 @@ use codex_network_proxy::proxy_url_env_value;
 use codex_protocol::permissions::FileSystemPolicyProjection;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -788,31 +787,6 @@ fn seatbelt_regex_for_glob(pattern: &str, glob_match: GlobMatch) -> Option<Strin
     }
     regex.push('$');
     Some(regex)
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn create_seatbelt_command_args_for_legacy_policy(
-    command: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
-    sandbox_policy_cwd: &Path,
-    enforce_managed_network: bool,
-    network: Option<&NetworkProxy>,
-) -> Result<Vec<String>, String> {
-    let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-        sandbox_policy,
-        sandbox_policy_cwd,
-    );
-    create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
-        command,
-        file_system_sandbox_policy: &file_system_sandbox_policy,
-        network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
-        sandbox_policy_cwd,
-        enforce_managed_network,
-        managed_network: None,
-        environment_id: None,
-        network,
-        extra_allow_unix_sockets: &[],
-    })
 }
 
 #[derive(Debug)]

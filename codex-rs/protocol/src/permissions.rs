@@ -2051,14 +2051,7 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
         match value {
             SandboxPolicy::DangerFullAccess => FileSystemSandboxPolicy::unrestricted(),
             SandboxPolicy::ExternalSandbox { .. } => FileSystemSandboxPolicy::external_sandbox(),
-            SandboxPolicy::ReadOnly { .. } => {
-                FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
-                    FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root,
-                    },
-                    FileSystemAccessMode::Read,
-                )])
-            }
+            SandboxPolicy::ReadOnly { .. } => FileSystemSandboxPolicy::read_only(),
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 exclude_tmpdir_env_var,
