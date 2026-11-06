@@ -1,10 +1,12 @@
-//! Single-line fields and asynchronous setup completion shared by cloud provider wizards.
+//! Single-line fields shared by provider settings and the cloud setup wizards.
 
 use super::auth::AuthModeWidget;
 use super::auth::SignInState;
 use crate::bottom_pane::TextArea;
 use codex_app_server_protocol::RequestId;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -18,9 +20,9 @@ use unicode_segmentation::UnicodeSegmentation;
 // The sign-in state is shared with request tasks. Each field owns its editing history,
 // including killed text, so yanking in another field cannot reveal a credential.
 #[derive(Clone)]
-pub(super) struct ProviderInput(Arc<Mutex<TextArea>>);
+pub(crate) struct ProviderInput(Arc<Mutex<TextArea>>);
 
-pub(super) enum FieldDisplay {
+pub(crate) enum FieldDisplay {
     Focused,
     Unfocused,
     FocusedSecret,
@@ -42,26 +44,26 @@ impl From<&str> for ProviderInput {
 }
 
 impl ProviderInput {
-    fn editor(&self) -> MutexGuard<'_, TextArea> {
+    pub(crate) fn editor(&self) -> MutexGuard<'_, TextArea> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(super) fn input(&mut self, event: KeyEvent) {
+    pub(crate) fn input(&mut self, event: KeyEvent) {
         self.editor().input(event);
     }
 
-    pub(super) fn paste(&mut self, pasted: &str) {
+    pub(crate) fn paste(&mut self, pasted: &str) {
         let text: String = pasted.chars().filter(|c| !c.is_control()).collect();
         self.editor().insert_str(&text);
     }
 
-    pub(super) fn value(&self) -> Option<String> {
+    pub(crate) fn value(&self) -> Option<String> {
         let editor = self.editor();
         let text = editor.text().trim();
         (!text.is_empty()).then(|| text.to_owned())
     }
 
-    pub(super) fn line(
+    pub(crate) fn line(
         &self,
         label: &str,
         placeholder: &str,
@@ -111,6 +113,17 @@ impl ProviderInput {
         }
         line
     }
+}
+
+/// Cycle focus among the inputs and actions in a provider form.
+pub(crate) fn move_provider_field(key: KeyEvent, selected: &mut usize, count: usize) -> bool {
+    *selected = match (key.code, key.modifiers) {
+        (KeyCode::Up | KeyCode::BackTab, KeyModifiers::NONE)
+        | (KeyCode::Tab | KeyCode::BackTab, KeyModifiers::SHIFT) => (*selected + count - 1) % count,
+        (KeyCode::Down | KeyCode::Tab, KeyModifiers::NONE) => (*selected + 1) % count,
+        _ => return false,
+    };
+    true
 }
 
 impl AuthModeWidget {

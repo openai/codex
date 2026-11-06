@@ -7,13 +7,19 @@ use super::BackendId;
 use super::Event;
 use super::LIST_VIEW;
 use super::LOADING_VIEW;
+use super::edit_view;
+use super::editor;
 use super::loading_with_notice;
 use super::progress;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::ModelProviderConfigWriteParams;
+use codex_app_server_protocol::ModelProviderConfigWriteResponse;
+use codex_app_server_protocol::ProviderSettingsPatch;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WriteStatus;
 use tokio::sync::watch;
@@ -21,74 +27,133 @@ use uuid::Uuid;
 
 const SAVING_VIEW: &str = "model_provider_saving";
 
+#[derive(derive_more::Debug, Clone)]
+pub(crate) enum Write {
+    Default(String),
+    #[debug("Settings(..)")]
+    Settings(Box<(editor::Draft, ModelProviderConfigWriteParams)>),
+}
+
 #[derive(Debug)]
 pub(crate) struct Completion {
     backend: BackendId,
     dismissed: watch::Receiver<()>,
-    provider_id: String,
-    result: Result<ConfigWriteResponse, String>,
+    write: Write,
+    result: Result<SaveNotice, String>,
 }
 
-pub(super) fn start(app: &mut App, server: &AppServerSession, provider_id: String) {
-    let backend = server.backend_id();
-    let write = app
-        .provider_writes
-        .entry(backend)
-        .or_insert_with(|| app.model_catalog.provider_write.clone());
-    let Ok(mut provider_changed) = write.clone().try_lock_owned() else {
-        app.chat_widget
-            .add_error_message("A provider change is already saving.".into());
-        return;
-    };
-    let (view, dismissed) = progress(SAVING_VIEW, "Saving model provider…");
-    if !app
-        .chat_widget
-        .replace_selection_view_if_present(LIST_VIEW, view)
-    {
-        return;
-    }
-    let handle = server.request_handle();
-    let tx = app.app_event_tx.clone();
-    let offline = app.reconnect.offline;
-    tokio::spawn(async move {
-        let result: Result<ConfigWriteResponse, String> = if offline {
-            Err("Could not save provider: Reconnect to the app server and try again.".into())
-        } else {
-            handle
-                .request_typed(ClientRequest::ConfigValueWrite {
-                    request_id: RequestId::String(Uuid::new_v4().to_string()),
-                    params: ConfigValueWriteParams {
-                        key_path: "model_provider".into(),
-                        value: provider_id.clone().into(),
-                        merge_strategy: MergeStrategy::Replace,
-                        file_path: None,
-                        expected_version: None,
-                    },
-                })
-                .await
-                .map_err(|error| match error {
-                    TypedRequestError::Server { .. } => format!("Could not save provider: {error}"),
-                    TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. } => {
-                        // The server may have committed the write before its reply was lost.
-                        *provider_changed = true;
-                        format!("Could not confirm whether {provider_id} was saved: {error}")
-                    }
-                })
+#[derive(Debug)]
+enum SaveNotice {
+    Saved(String),
+    UnconfirmedCreate,
+}
+
+impl Write {
+    pub(super) fn start(self, app: &mut App, server: &AppServerSession) {
+        let backend = server.backend_id();
+        let write = app
+            .provider_writes
+            .entry(backend)
+            .or_insert_with(|| app.model_catalog.provider_write.clone());
+        let Ok(mut provider_changed) = write.clone().try_lock_owned() else {
+            app.chat_widget
+                .add_error_message("A provider change is already saving.".into());
+            return;
         };
-        if result
-            .as_ref()
-            .is_ok_and(|response| response.status == WriteStatus::Ok)
+        let (view, dismissed) = progress(SAVING_VIEW, "Saving model provider…");
+        let source = match self {
+            Self::Default(_) => LIST_VIEW,
+            Self::Settings(_) => editor::VIEW_ID,
+        };
+        if !app
+            .chat_widget
+            .replace_selection_view_if_present(source, view)
         {
-            *provider_changed = true;
+            return;
         }
-        drop(provider_changed);
-        tx.send(AppEvent::Provider(Event::Written(Completion {
-            backend,
-            dismissed,
-            provider_id,
-            result,
-        })));
-    });
+        let handle = server.request_handle();
+        let tx = app.app_event_tx.clone();
+        let offline = app.reconnect.offline;
+        tokio::spawn(async move {
+            let result = if offline {
+                Err("Could not save provider: Reconnect to the app server and try again.".into())
+            } else {
+                self.run(&handle, &mut provider_changed).await
+            };
+            drop(provider_changed);
+            tx.send(AppEvent::Provider(Event::Written(Completion {
+                backend,
+                dismissed,
+                write: self,
+                result,
+            })));
+        });
+    }
+
+    async fn run(
+        &self,
+        handle: &AppServerRequestHandle,
+        provider_changed: &mut bool,
+    ) -> Result<SaveNotice, String> {
+        match self {
+            Self::Settings(settings) => handle
+                .request_typed::<ModelProviderConfigWriteResponse>(
+                    ClientRequest::ModelProviderConfigWrite {
+                        request_id: RequestId::String(Uuid::new_v4().to_string()),
+                        params: settings.1.clone(),
+                    },
+                )
+                .await
+                .map(|_| SaveNotice::Saved("Saved provider configuration.".into()))
+                .or_else(|error| {
+                    let create = matches!(&settings.1.settings,
+                        ProviderSettingsPatch::CustomGateway(gateway) if gateway.provider_id.is_none());
+                    // The server can report an internal error reading back a committed provider.
+                    let uncertain = match &error {
+                        TypedRequestError::Server { source, .. } => source.code == -32603,
+                        TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. } => true,
+                    };
+                    if create && uncertain {
+                        Ok(SaveNotice::UnconfirmedCreate)
+                    } else {
+                        Err(error.to_string())
+                    }
+                }),
+            Self::Default(id) => {
+                let response: ConfigWriteResponse = handle
+                    .request_typed(ClientRequest::ConfigValueWrite {
+                        request_id: RequestId::String(Uuid::new_v4().to_string()),
+                        params: ConfigValueWriteParams {
+                            key_path: "model_provider".into(),
+                            value: id.clone().into(),
+                            merge_strategy: MergeStrategy::Replace,
+                            file_path: None,
+                            expected_version: None,
+                        },
+                    })
+                    .await
+                    .map_err(|error| match error {
+                        TypedRequestError::Server { .. } => format!("Could not save provider: {error}"),
+                        TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. } => {
+                            // The server may have committed the write before its reply was lost.
+                            *provider_changed = true;
+                            format!("Could not confirm whether {id} was saved: {error}")
+                        }
+                    })?;
+                match response.status {
+                    WriteStatus::Ok => {
+                        *provider_changed = true;
+                        Ok(SaveNotice::Saved(format!("/new now uses {id}. Restart the app server and TUI to refresh /model.")))
+                    }
+                    WriteStatus::OkOverridden => {
+                        let reason = response.overridden_metadata.map(|metadata| metadata.message)
+                            .unwrap_or_else(|| "A higher-priority setting overrides this choice.".into());
+                        Ok(SaveNotice::Saved(format!("Saved {id}. {reason}")))
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Completion {
@@ -100,38 +165,47 @@ impl Completion {
         if app.model_catalog.provider_may_have_changed() {
             app.chat_widget.dismiss_stale_model_picker();
         }
-        let provider_id = self.provider_id;
-        let message = match self.result {
-            Ok(response) => match response.status {
-                WriteStatus::Ok => format!(
-                    "/new now uses {provider_id}. Restart the app server and TUI to refresh /model."
-                ),
-                WriteStatus::OkOverridden => {
-                    let reason = response
-                        .overridden_metadata
-                        .map(|metadata| metadata.message)
-                        .unwrap_or_else(|| {
-                            "A higher-priority setting overrides this choice.".into()
-                        });
-                    format!("Saved {provider_id}. {reason}")
-                }
-            },
-            Err(message) => {
-                app.chat_widget.add_error_message(message.clone());
+        match self.result {
+            Ok(notice) => {
+                let message = match notice {
+                    SaveNotice::Saved(message) => {
+                        if !present {
+                            app.chat_widget
+                                .add_info_message(message.clone(), /*hint*/ None);
+                        }
+                        message
+                    }
+                    SaveNotice::UnconfirmedCreate => {
+                        let message = "Could not confirm the save. Check the provider list before adding it again.".to_string();
+                        app.chat_widget.add_error_message(message.clone());
+                        message
+                    }
+                };
                 if present {
-                    reload(app, SAVING_VIEW, Some(message));
+                    let view = match self.write {
+                        Write::Default(_) => SAVING_VIEW,
+                        Write::Settings(_) => {
+                            app.chat_widget.dismiss_provider_view(SAVING_VIEW);
+                            LIST_VIEW
+                        }
+                    };
+                    reload(app, view, Some(message));
+                } else if !reload(app, LIST_VIEW, /*notice*/ None) {
+                    // A reopened picker may have started reading before this write committed.
+                    reload(app, LOADING_VIEW, /*notice*/ None);
                 }
-                return;
             }
-        };
-        if present {
-            reload(app, SAVING_VIEW, Some(message));
-        } else {
-            app.chat_widget.add_info_message(message, /*hint*/ None);
-            // A reopened picker may have started reading before this write committed.
-            if !reload(app, LIST_VIEW, /*notice*/ None) {
-                reload(app, LOADING_VIEW, /*notice*/ None);
+            Err(error) if present => {
+                if let Write::Settings(settings) = self.write {
+                    let view = edit_view(app, backend, settings.0, Some(error));
+                    app.chat_widget
+                        .replace_bottom_pane_view_if_present(SAVING_VIEW, view);
+                    return;
+                }
+                app.chat_widget.add_error_message(error.clone());
+                reload(app, SAVING_VIEW, Some(error));
             }
+            Err(error) => app.chat_widget.add_error_message(error),
         }
     }
 }

@@ -1,0 +1,16 @@
+---
+source: tui/src/app/provider_tests.rs
+expression: terminal.backend()
+---
+"/ Model provider details/ / / / / / / / / / / / / / / / / / / / / / / / "
+"Existing                                                                "
+"                                                                        "
+"Provider ID  seed                                                       "
+"Name  Existing                                                          "
+"Base URL  Not reported                                                  "
+"API key variable  CATALOG_KEY                                           "
+"~                                                                       "
+"───────────────────────────────────────────────────────────────── 100% ─"
+" ↑/↓ to scroll · pgup/pgdn to page · home/end to jump                   "
+" q close · enter Edit configuration                                     "
+"                                                                        "

@@ -6,6 +6,7 @@ use super::auth::onboarding_request_id;
 use super::keys;
 use super::provider_setup::FieldDisplay;
 use super::provider_setup::ProviderInput;
+use super::provider_setup::move_provider_field;
 use crate::key_hint::KeyBindingListExt;
 use crate::wrapping::word_wrap_lines;
 use codex_app_server_client::AppServerRequestHandle;
@@ -286,15 +287,9 @@ impl BedrockState {
             values,
             selected_field,
         } = &mut self.view
+            && move_provider_field(*key_event, selected_field, values.len())
         {
-            if key_event.code == KeyCode::Up || key_event.code == KeyCode::BackTab {
-                *selected_field = (*selected_field + values.len() - 1) % values.len();
-                return None;
-            }
-            if key_event.code == KeyCode::Down || key_event.code == KeyCode::Tab {
-                *selected_field = (*selected_field + 1) % values.len();
-                return None;
-            }
+            return None;
         }
 
         if keys::CONFIRM.is_pressed(*key_event) {

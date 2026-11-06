@@ -1,4 +1,4 @@
-//! Browse the connected server's providers and choose a default for new chats.
+//! Browse and edit the connected server's providers and choose a default for new chats.
 
 use super::App;
 use crate::app_event::AppEvent;
@@ -11,6 +11,8 @@ use crate::key_hint;
 use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
 use crate::pager_overlay::Overlay;
+use crate::pager_overlay::PagerAction;
+use crate::pager_overlay::StaticOverlay;
 use crate::tui::Tui;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
@@ -26,6 +28,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use uuid::Uuid;
 
+mod editor;
 mod fields;
 mod write;
 use fields::Field;
@@ -51,10 +54,15 @@ pub(crate) enum Event {
         index: usize,
         dismissed: watch::Receiver<()>,
     },
+    Edit {
+        catalog: Arc<Catalog>,
+        index: Option<usize>,
+        dismissed: watch::Receiver<()>,
+    },
     Write {
         backend: BackendId,
         dismissed: watch::Receiver<()>,
-        provider_id: String,
+        write: write::Write,
     },
     Written(write::Completion),
 }
@@ -168,22 +176,56 @@ pub(super) fn handle(app: &mut App, tui: &mut Tui, server: &AppServerSession, ev
                 && app.overlay.is_none()
                 && app.chat_widget.active_view_is(LIST_VIEW)
             {
-                let _ = tui.enter_alt_screen();
-                app.overlay = Some(Overlay::new_static_with_lines(
-                    details(&catalog.page.data[index]),
+                let provider = &catalog.page.data[index];
+                let mut pager = StaticOverlay::with_title(
+                    details(provider),
                     "Model provider details".into(),
                     app.keymap.pager.clone(),
-                ));
+                );
+                if provider.can_edit && !matches!(provider.settings, ProviderSettings::OpenAi) {
+                    let tx = app.app_event_tx.clone();
+                    pager.action = Some(PagerAction {
+                        key: key_hint::plain(KeyCode::Enter),
+                        label: "Edit configuration",
+                        run: Box::new(move || {
+                            tx.send(AppEvent::Provider(Event::Edit {
+                                catalog,
+                                index: Some(index),
+                                dismissed,
+                            }));
+                        }),
+                    });
+                }
+                let _ = tui.enter_alt_screen();
+                app.overlay = Some(Overlay::Static(pager));
                 tui.frame_requester().schedule_frame();
+            }
+        }
+        Event::Edit {
+            catalog,
+            index,
+            dismissed,
+        } => {
+            if backend == catalog.backend
+                && matches!(dismissed.has_changed(), Ok(false))
+                && app.overlay.is_none()
+                && app.chat_widget.active_view_is(LIST_VIEW)
+            {
+                let draft = editor::Draft::new(
+                    index.map(|i| catalog.page.data[i].clone()),
+                    &catalog.page.data,
+                );
+                let view = edit_view(app, backend, draft, /*error*/ None);
+                app.chat_widget.show_bottom_pane_view(view);
             }
         }
         Event::Write {
             backend,
             dismissed,
-            provider_id,
+            write,
         } => {
             if backend == server.backend_id() && matches!(dismissed.has_changed(), Ok(false)) {
-                write::start(app, server, provider_id);
+                write.start(app, server);
             }
         }
         Event::Written(completion) => completion.finish(app, backend),
@@ -236,7 +278,7 @@ fn list(
         None => "Use /new to start a chat with the selected provider.".into(),
     };
     let (dismiss, dismissed) = watch::channel(());
-    let items = page
+    let mut items: Vec<_> = page
         .data
         .iter()
         .enumerate()
@@ -253,7 +295,7 @@ fn list(
                         tx.send(AppEvent::Provider(Event::Write {
                             backend,
                             dismissed: dismissed.clone(),
-                            provider_id: id.clone(),
+                            write: write::Write::Default(id.clone()),
                         }))
                     }),
                 }
@@ -281,6 +323,21 @@ fn list(
             }
         })
         .collect();
+    items.push(SelectionItem {
+        name: "Add custom provider".into(),
+        footer_hint: Some(crate::bottom_pane::popup_consts::picker_hint_line_for_keymap(keymap)),
+        actions: vec![Box::new({
+            let catalog = Arc::clone(&catalog);
+            move |tx| {
+                tx.send(AppEvent::Provider(Event::Edit {
+                    catalog: Arc::clone(&catalog),
+                    index: None,
+                    dismissed: dismissed.clone(),
+                }));
+            }
+        })],
+        ..Default::default()
+    });
     SelectionViewParams {
         view_id: Some(LIST_VIEW),
         title: Some("Model providers".into()),
@@ -297,6 +354,23 @@ fn list(
         allow_input_when_disconnected: true,
         ..Default::default()
     }
+}
+
+fn edit_view(
+    app: &App,
+    backend: BackendId,
+    draft: editor::Draft,
+    error: Option<String>,
+) -> Box<dyn crate::bottom_pane::BottomPaneView> {
+    let tx = app.app_event_tx.clone();
+    let (owner, _) = watch::channel(());
+    editor::view(app, draft, error, move |draft, params| {
+        tx.send(AppEvent::Provider(Event::Write {
+            backend,
+            dismissed: owner.subscribe(),
+            write: write::Write::Settings(Box::new((draft, params))),
+        }));
+    })
 }
 
 fn provider_hint(keymap: &ListKeymap, select: bool) -> Line<'static> {
