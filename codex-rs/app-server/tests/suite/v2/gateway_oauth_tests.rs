@@ -401,7 +401,7 @@ async fn read_and_cancel_without_gateway_oauth() -> Result<()> {
     .await??;
     assert_eq!(
         error.error.message,
-        "The current provider does not use gateway OAuth"
+        "The selected provider does not use gateway OAuth"
     );
     Ok(())
 }
@@ -684,5 +684,56 @@ async fn initialization_selects_legacy_or_explicit_gateway_login() -> Result<()>
         );
         assert!(oauth.received_requests().await.unwrap().is_empty());
     }
+    Ok(())
+}
+
+/// Non-default grants are readable and notify every configured alias without starting login.
+#[tokio::test]
+async fn selected_gateway_read_notifies_matching_providers() -> Result<()> {
+    let home = TempDir::new()?;
+    let oauth = MockServer::start().await;
+    let config = gateway_config(&oauth).replace(
+        "model_provider = \"gateway\"",
+        "model_provider = \"openai\"",
+    );
+    let alias = config[config.find("[model_providers.gateway]").unwrap()..]
+        .replace("model_providers.gateway", "model_providers.alias");
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!("{config}\n{alias}"),
+    )?;
+    let mut server = gateway_server(home.path()).await?;
+    assert!(!read_gateway(&mut server).await?.required);
+    let id = server
+        .send_raw_request(
+            "account/gatewayOAuth/read",
+            Some(serde_json::json!({"modelProvider": "gateway"})),
+        )
+        .await?;
+    let state: GatewayOAuthReadResponse = server.read_response(id).await?;
+    assert_eq!(
+        state,
+        GatewayOAuthReadResponse {
+            provider_id: "gateway".into(),
+            provider_name: "Test gateway".into(),
+            required: true,
+            status: Some(GatewayOAuthStatus::NotReady),
+            error: None,
+        }
+    );
+    let mut providers = Vec::new();
+    for _ in 0..2 {
+        let change: GatewayOAuthChangedNotification = timeout(
+            TIMEOUT,
+            server.read_notification("account/gatewayOAuth/changed"),
+        )
+        .await??;
+        assert_eq!(change.status, GatewayOAuthStatus::NotReady);
+        assert_eq!(change.auth_url, None);
+        providers.push(change.provider_id);
+    }
+    providers.sort();
+    assert_eq!(providers, ["alias", "gateway"]);
+    assert!(oauth.received_requests().await.unwrap().is_empty());
     Ok(())
 }

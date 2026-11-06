@@ -1850,7 +1850,14 @@
               "type": "string"
             },
             "params": {
-              "type": "null"
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/v2/GatewayOAuthReadParams"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -1873,7 +1880,14 @@
               "type": "string"
             },
             "params": {
-              "type": "null"
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/v2/GatewayOAuthLoginParams"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -13177,9 +13191,35 @@
         "title": "GatewayOAuthChangedNotification",
         "type": "object"
       },
+      "GatewayOAuthLoginParams": {
+        "description": "Authorize a configured provider without changing the default or any thread's provider.",
+        "properties": {
+          "modelProvider": {
+            "description": "Defaults to the current provider when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "GatewayOAuthLoginResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "GatewayOAuthLoginResponse",
+        "type": "object"
+      },
+      "GatewayOAuthReadParams": {
+        "description": "Read credential readiness for a configured provider without starting browser login.",
+        "properties": {
+          "modelProvider": {
+            "description": "Defaults to the current provider when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "GatewayOAuthReadResponse": {
@@ -16885,6 +16925,30 @@
           "compact"
         ],
         "type": "string"
+      },
+      "NullableGatewayOAuthLoginParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "anyOf": [
+          {
+            "$ref": "#/definitions/v2/GatewayOAuthLoginParams"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Nullable_GatewayOAuthLoginParams"
+      },
+      "NullableGatewayOAuthReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "anyOf": [
+          {
+            "$ref": "#/definitions/v2/GatewayOAuthReadParams"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Nullable_GatewayOAuthReadParams"
       },
       "NullableGetAccountRateLimitsParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

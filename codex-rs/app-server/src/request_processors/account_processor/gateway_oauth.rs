@@ -30,14 +30,25 @@ impl Drop for LoginGuard {
 impl AccountRequestProcessor {
     async fn gateway_client(
         &self,
-    ) -> Result<(Config, Option<Arc<OAuthSessionManager>>), JSONRPCErrorError> {
-        let config = self
-            .config_manager
-            .load_latest_config(/*fallback_cwd*/ None)
-            .await
-            .map_err(|err| {
-                internal_error(format!("failed to load gateway configuration: {err}"))
-            })?;
+        model_provider: Option<String>,
+    ) -> Result<(Arc<Config>, Option<Arc<OAuthSessionManager>>), JSONRPCErrorError> {
+        let config = match model_provider.as_deref() {
+            Some(provider_id) => {
+                let config = config_for_provider(&self.config, provider_id)?;
+                // Explicit selectors use startup definitions, so validate against current policy.
+                self.config_manager
+                    .check_thread_model_provider(&config)
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                config
+            }
+            None => Arc::new(
+                self.config_manager
+                    .load_latest_config(/*fallback_cwd*/ None)
+                    .await
+                    .map_err(|err| config_load_error(&err))?,
+            ),
+        };
         let manager = codex_model_provider::create_model_provider(
             config.model_provider.clone(),
             Some(Arc::clone(&self.auth_manager)),
@@ -47,17 +58,21 @@ impl AccountRequestProcessor {
         let session = manager
             .as_deref()
             .and_then(GatewayAuthManager::oauth_session);
-        *self
-            .gateway_client
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = manager;
+        // Keep sign-in status alive when clients alternate between providers.
+        if let Some(manager) = &manager {
+            self.gateway_clients
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(config.model_provider_id.clone(), Arc::clone(manager));
+        }
         Ok((config, session))
     }
 
     pub(crate) async fn gateway_oauth_read(
         &self,
+        params: codex_app_server_protocol::GatewayOAuthReadParams,
     ) -> Result<GatewayOAuthReadResponse, JSONRPCErrorError> {
-        let (config, client) = self.gateway_client().await?;
+        let (config, client) = self.gateway_client(params.model_provider).await?;
         let state = if let Some(client) = client {
             Some(status_fields(
                 client
@@ -69,8 +84,8 @@ impl AccountRequestProcessor {
             None
         };
         Ok(GatewayOAuthReadResponse {
-            provider_id: config.model_provider_id,
-            provider_name: config.model_provider.name,
+            provider_id: config.model_provider_id.clone(),
+            provider_name: config.model_provider.name.clone(),
             required: state.is_some(),
             status: state.as_ref().map(|state| state.0),
             error: state.and_then(|state| state.1),
@@ -79,6 +94,7 @@ impl AccountRequestProcessor {
 
     pub(crate) async fn gateway_oauth_login(
         &self,
+        params: codex_app_server_protocol::GatewayOAuthLoginParams,
         owner: ConnectionId,
         connection_gate: &crate::connection_rpc_gate::ConnectionRpcGate,
     ) -> Result<GatewayOAuthLoginResponse, JSONRPCErrorError> {
@@ -101,9 +117,9 @@ impl AccountRequestProcessor {
             });
             LoginGuard(Arc::clone(&self.gateway_login))
         };
-        let (config, client) = self.gateway_client().await?;
+        let (config, client) = self.gateway_client(params.model_provider).await?;
         let client = client
-            .ok_or_else(|| invalid_request("The current provider does not use gateway OAuth"))?;
+            .ok_or_else(|| invalid_request("The selected provider does not use gateway OAuth"))?;
         if config.model_provider.requires_openai_auth
             && config.model_provider.env_key.is_none()
             && config.model_provider.experimental_bearer_token.is_none()

@@ -648,7 +648,7 @@ cannot open a browser before initialization. Explicit opt-in is shared by gatewa
 managers using the same home and network configuration within the process and
 cannot be undone by a later connection that omits the capability.
 
-- `account/gatewayOAuth/read` returns the current effective `providerId`,
+- `account/gatewayOAuth/read` returns the selected `providerId`,
   `providerName`, `required`, `status`, and `error`. `required` indicates that this
   provider uses gateway OAuth, including when already signed in. With a credential
   exporter, `required` is false and `status` is null. This read does not refresh
@@ -668,14 +668,21 @@ cannot be undone by a later connection that omits the capability.
   start another login. Closing that connection also cancels its login and releases
   the callback listener. Cancellation makes the pending login request fail.
 - `account/gatewayOAuth/changed` reports `notReady`, `started`, `succeeded`, or
-  `failed`, with an optional `error`. Notifications apply to the current effective
-  gateway configuration. Clients can read readiness when connecting and after
+  `failed`, with an optional `error`. Notifications identify each configured
+  provider sharing the changed gateway credential, even when it is not the current
+  default. Clients can read readiness when connecting and after
   changing configuration. Notifications follow the standard per-connection
   `optOutNotificationMethods` setting.
   These payloads never contain credentials.
 
-Read, login, and cancel take no params. Read and login use the app's current
-provider, reloading configuration and returning an error if it cannot be loaded.
+Read and login accept an optional `modelProvider`, for example
+`{"modelProvider": "my_gateway"}`. Omitted params, null params, and an omitted or
+null selector use the current provider. An explicit selector uses the provider definitions
+loaded at startup and is checked against current managed provider policy before
+credentials are read. Unknown or forbidden providers return an error instead of
+falling back to the current provider. Login keeps the selected provider for the
+entire attempt, even if the default changes. Cancel takes no params and cancels
+the calling connection's active login, regardless of its provider.
 Status notifications include `providerId`. During browser sign-in, inference
 requests fail promptly and can be retried when sign-in succeeds.
 

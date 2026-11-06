@@ -24,6 +24,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -47,8 +48,10 @@ async fn send_request(
         .await;
 }
 
+#[test_case(false; "default provider")]
+#[test_case(true; "explicit non-default provider")]
 #[tokio::test]
-async fn gateway_oauth_login_updates_existing_requests() -> Result<()> {
+async fn gateway_oauth_login_updates_existing_requests(selected: bool) -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
@@ -121,10 +124,23 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
     )
     .await;
     let _: InitializeResponse = read_response(&mut outgoing, /*request_id*/ 1).await;
+    // Existing request consumers retain the gateway when the default changes.
+    if selected {
+        let path = home.path().join("config.toml");
+        let text = std::fs::read_to_string(&path)?;
+        std::fs::write(
+            path,
+            text.replace(
+                "model_provider = \"gateway\"",
+                "model_provider = \"openai\"",
+            ),
+        )?;
+    }
+    let params = selected.then(|| json!({"modelProvider": "gateway"}));
     send_request(
         &processor,
         &session,
-        json!({"id": 2, "method": "account/gatewayOAuth/login"}),
+        json!({"id": 2, "method": "account/gatewayOAuth/login", "params": params}),
     )
     .await;
     let authorization_url = timeout(Duration::from_secs(/*secs*/ 10), async {
@@ -166,7 +182,7 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
     send_request(
         &processor,
         &session,
-        json!({"id": 3, "method": "account/gatewayOAuth/read"}),
+        json!({"id": 3, "method": "account/gatewayOAuth/read", "params": params}),
     )
     .await;
     let response: GatewayOAuthReadResponse = read_response(&mut outgoing, /*request_id*/ 3).await;
@@ -286,5 +302,63 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
     assert!(server.received_requests().await.unwrap().is_empty());
     processor.shutdown_threads().await;
     processor.drain_background_tasks().await;
+    Ok(())
+}
+
+/// Checking another provider must not recreate the first provider's readiness state.
+#[tokio::test]
+async fn gateway_oauth_read_retains_each_provider_status() -> Result<()> {
+    let home = TempDir::new()?;
+    let mut text = String::from("[features]\nsecret_auth_storage = true\n");
+    for id in ["first", "second"] {
+        text.push_str(&format!(
+            r#"
+[model_providers.{id}]
+name = "{id}"
+base_url = "https://{id}.example/v1"
+wire_api = "responses"
+[model_providers.{id}.gateway_oauth]
+authorization_url = "https://{id}.example/authorize"
+token_url = "https://{id}.example/token"
+client_id = "{id}"
+delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
+"#
+        ));
+    }
+    std::fs::write(home.path().join("config.toml"), text)?;
+    let config = Arc::new(
+        ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?,
+    );
+    let auth = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("primary"),
+        home.path().to_path_buf(),
+    );
+    let mut changes = codex_login::subscribe_gateway_auth_status(&auth.runtime_config());
+    let (processor, _outgoing) = build_test_processor(config, auth).await;
+    for (id, changed) in [("first", true), ("second", true), ("first", false)] {
+        let state = processor
+            .account_processor
+            .gateway_oauth_read(codex_app_server_protocol::GatewayOAuthReadParams {
+                model_provider: Some(id.into()),
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("{}", err.message))?;
+        assert_eq!(state.provider_id, id);
+        assert_eq!(state.status, Some(GatewayOAuthStatus::NotReady));
+        if changed {
+            assert_eq!(
+                changes.try_recv()?.status,
+                codex_login::GatewayAuthStatus::NotReady
+            );
+        } else {
+            assert!(matches!(
+                changes.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ));
+        }
+    }
     Ok(())
 }

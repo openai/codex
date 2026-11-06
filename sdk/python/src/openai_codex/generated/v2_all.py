@@ -1842,10 +1842,30 @@ class GatewayOAuthCancelResponse(BaseModel):
     )
 
 
+class GatewayOAuthLoginParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    model_provider: Annotated[
+        str | None,
+        Field(alias="modelProvider", description="Defaults to the current provider when omitted."),
+    ] = None
+
+
 class GatewayOAuthLoginResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+
+
+class GatewayOAuthReadParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    model_provider: Annotated[
+        str | None,
+        Field(alias="modelProvider", description="Defaults to the current provider when omitted."),
+    ] = None
 
 
 class GatewayOAuthStatus(Enum):
@@ -3084,6 +3104,14 @@ class NetworkUnixSocketPermission(Enum):
 class NonSteerableTurnKind(Enum):
     review = "review"
     compact = "compact"
+
+
+class NullableGatewayOAuthLoginParams(RootModel[GatewayOAuthLoginParams | None]):
+    root: Annotated[GatewayOAuthLoginParams | None, Field(title="Nullable_GatewayOAuthLoginParams")]
+
+
+class NullableGatewayOAuthReadParams(RootModel[GatewayOAuthReadParams | None]):
+    root: Annotated[GatewayOAuthReadParams | None, Field(title="Nullable_GatewayOAuthReadParams")]
 
 
 class NullableGetAccountRateLimitsParams(RootModel[GetAccountRateLimitsParams | None]):
@@ -7956,7 +7984,7 @@ class AccountGatewayOAuthReadRequest(BaseModel):
     method: Annotated[
         Literal["account/gatewayOAuth/read"], Field(title="Account/gatewayOAuth/readRequestMethod")
     ]
-    params: Annotated[None, Field(None)] = None
+    params: GatewayOAuthReadParams | None = None
 
 
 class AccountGatewayOAuthLoginRequest(BaseModel):
@@ -7968,7 +7996,7 @@ class AccountGatewayOAuthLoginRequest(BaseModel):
         Literal["account/gatewayOAuth/login"],
         Field(title="Account/gatewayOAuth/loginRequestMethod"),
     ]
-    params: Annotated[None, Field(None)] = None
+    params: GatewayOAuthLoginParams | None = None
 
 
 class AccountGatewayOAuthCancelRequest(BaseModel):

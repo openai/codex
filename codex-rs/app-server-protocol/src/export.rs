@@ -2206,6 +2206,16 @@ mod tests {
             "params?: GetAccountRateLimitsParams | undefined, }"
         );
         assert!(client_request_ts.contains(LEGACY_ACCOUNT_RATE_LIMITS_REQUEST));
+        const LEGACY_GATEWAY_READ_REQUEST: &str = concat!(
+            "{ \"method\": \"account/gatewayOAuth/read\", id: RequestId, ",
+            "params?: GatewayOAuthReadParams | null | undefined, }"
+        );
+        assert!(client_request_ts.contains(LEGACY_GATEWAY_READ_REQUEST));
+        const LEGACY_GATEWAY_LOGIN_REQUEST: &str = concat!(
+            "{ \"method\": \"account/gatewayOAuth/login\", id: RequestId, ",
+            "params?: GatewayOAuthLoginParams | null | undefined, }"
+        );
+        assert!(client_request_ts.contains(LEGACY_GATEWAY_LOGIN_REQUEST));
         let account_usage_response_ts = std::str::from_utf8(
             fixture_tree
                 .get(Path::new("v2/GetAccountTokenUsageResponse.ts"))
@@ -2290,18 +2300,22 @@ mod tests {
                 });
 
             let contents = std::str::from_utf8(contents)?;
-            // Both stable usage RPCs originally required `params: undefined`. Preserve that
+            // These existing RPCs originally required `params: undefined`. Preserve that
             // source compatibility only for these exact envelopes, not arbitrary new fields.
             let checked_contents = if path == Path::new("ClientRequest.ts") {
                 contents
                     .replace(LEGACY_ACCOUNT_USAGE_REQUEST, "")
                     .replace(LEGACY_ACCOUNT_RATE_LIMITS_REQUEST, "")
+                    .replace(LEGACY_GATEWAY_READ_REQUEST, "")
+                    .replace(LEGACY_GATEWAY_LOGIN_REQUEST, "")
             } else {
                 contents.to_owned()
             };
             if checked_contents.contains("| undefined") {
                 undefined_offenders.push(path.clone());
             }
+            // The exact gateway envelopes above also accept legacy null params.
+            let contents = checked_contents.as_str();
 
             const SKIP_PREFIXES: &[&str] = &[
                 "const ",
