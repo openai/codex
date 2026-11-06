@@ -123,6 +123,9 @@ pub struct ToolCall {
     pub model_visible_call_id: Option<ModelVisibleCallId>,
     /// Code-mode runtime's internal tool invocation ID, if this call came from JS.
     pub code_mode_runtime_tool_id: Option<CodeModeRuntimeToolId>,
+    /// Cell started by this outer exec dispatch, if a matching cell was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_code_cell_id: Option<CodeCellId>,
     pub thread_id: AgentThreadId,
     /// Runtime activation that started the tool. Background work may outlive this turn.
     pub started_by_codex_turn_id: Option<CodexTurnId>,

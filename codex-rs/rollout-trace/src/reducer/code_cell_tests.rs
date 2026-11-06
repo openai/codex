@@ -14,6 +14,7 @@ use crate::raw_event::RawToolCallRequester;
 use crate::raw_event::RawTraceEventPayload;
 use crate::reducer::test_support::append_inference_request;
 use crate::reducer::test_support::create_started_writer;
+use crate::reducer::test_support::generic_summary;
 use crate::reducer::test_support::message;
 use crate::reducer::test_support::start_turn;
 use crate::reducer::test_support::start_turn_for_thread;
@@ -221,6 +222,22 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
     let mut input: Vec<_> = (0..7)
         .map(|index| message("user", &format!("context {index}")))
         .collect();
+    for (dispatch_id, call_id) in [("outer", "call-code"), ("no-cell", "other-exec")] {
+        writer.append_with_context(
+            trace_context("turn-1"),
+            RawTraceEventPayload::ToolCallStarted {
+                tool_call_id: dispatch_id.into(),
+                model_visible_call_id: Some(call_id.into()),
+                code_mode_runtime_tool_id: None,
+                requester: RawToolCallRequester::Model,
+                kind: ToolCallKind::Other {
+                    name: "exec".into(),
+                },
+                summary: generic_summary("exec"),
+                invocation_payload: None,
+            },
+        )?;
+    }
     append_inference_request(
         &writer,
         "thread-root",
@@ -306,6 +323,11 @@ fn fast_code_cell_lifecycle_waits_for_source_item() -> anyhow::Result<()> {
     let code_cell_id = test_reduced_code_cell_id("call-code");
     let cell = &rollout.code_cells[&code_cell_id];
 
+    assert_eq!(
+        rollout.tool_calls["outer"].started_code_cell_id.as_ref(),
+        Some(&cell.code_cell_id)
+    );
+    assert_eq!(rollout.tool_calls["no-cell"].started_code_cell_id, None);
     assert_eq!(
         cell.output_item_ids,
         vec!["conversation_item:9", "conversation_item:12"]

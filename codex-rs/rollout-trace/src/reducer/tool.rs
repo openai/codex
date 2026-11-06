@@ -135,6 +135,7 @@ impl TraceReducer {
                 mcp_call_id: None,
                 model_visible_call_id,
                 code_mode_runtime_tool_id: started.code_mode_runtime_tool_id,
+                started_code_cell_id: None,
                 thread_id,
                 started_by_codex_turn_id: codex_turn_id,
                 execution: ExecutionWindow {

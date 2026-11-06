@@ -440,6 +440,8 @@ impl TraceReducer {
             ConversationItem {
                 item_id: item_id.clone(),
                 responses_item_id: item.responses_item_id,
+                accepted_at_unix_ms: None,
+                accepted_seq: None,
                 thread_id: thread_id.to_string(),
                 codex_turn_id,
                 first_seen_at_unix_ms,

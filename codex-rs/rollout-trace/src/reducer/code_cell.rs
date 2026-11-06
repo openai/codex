@@ -553,7 +553,7 @@ impl TraceReducer {
         // when a later inference request carries the custom-tool result back to
         // the model. Add the reverse ProducerRef at that later observation
         // point instead of copying runtime bytes into the conversation model.
-        let code_cell_id = self.reduced_code_cell_id_for_model_visible_call(call_id);
+        let code_cell_id = Self::reduced_code_cell_id_for_model_visible_call(call_id);
         if !self.rollout.code_cells.contains_key(&code_cell_id) {
             return Ok(());
         }
@@ -591,7 +591,6 @@ impl TraceReducer {
 
     /// Derives the stable reduced code-cell id from the model-visible exec call id.
     pub(super) fn reduced_code_cell_id_for_model_visible_call(
-        &self,
         model_visible_call_id: &str,
     ) -> CodeCellId {
         // The model-visible `exec` call is the durable source identity. The
