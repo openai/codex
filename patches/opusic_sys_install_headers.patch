@@ -1,0 +1,26 @@
+--- a/opus/CMakeLists.txt
++++ b/opus/CMakeLists.txt
+@@ -301,13 +301,22 @@
+ get_library_version(OPUS_LIBRARY_VERSION OPUS_LIBRARY_VERSION_MAJOR)
+ message(DEBUG "Opus library version: ${OPUS_LIBRARY_VERSION}")
+
++# Build-script inputs can be relative symlinks. Materialize public headers so
++# CMake does not preserve links that become dangling in the install prefix.
++foreach(header IN LISTS Opus_PUBLIC_HEADER)
++  get_filename_component(header_name "${header}" NAME)
++  set(install_header "${CMAKE_CURRENT_BINARY_DIR}/public_headers/${header_name}")
++  configure_file("${header}" "${install_header}" COPYONLY)
++  list(APPEND Opus_INSTALL_HEADERS "${install_header}")
++endforeach()
++
+ set_target_properties(opus
+                       PROPERTIES SOVERSION
+                                  ${OPUS_LIBRARY_VERSION_MAJOR}
+                                  VERSION
+                                  ${OPUS_LIBRARY_VERSION}
+                                  PUBLIC_HEADER
+-                                 "${Opus_PUBLIC_HEADER}")
++                                 "${Opus_INSTALL_HEADERS}")
+
+ target_include_directories(
+   opus

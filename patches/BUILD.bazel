@@ -1,4 +1,5 @@
 exports_files([
+    "opusic_sys_install_headers.patch",
     "rules_cc_windows_native_llvm.patch",
     "abseil_windows_gnullvm_thread_identity.patch",
     "bzip2_windows_stack_args.patch",
