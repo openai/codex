@@ -426,10 +426,9 @@ impl ChatWidget {
                         &output,
                     )
                 {
-                    self.add_to_history(history_cell::PrefixedWrappedHistoryCell::new(
-                        format!("Sent by Codex from task {source_thread_id}\n{prompt}"),
-                        "• ".dim(),
-                        "  ",
+                    self.add_to_history(history_cell::DelegatedMessageCell::new(
+                        &source_thread_id,
+                        prompt,
                     ));
                 }
             }

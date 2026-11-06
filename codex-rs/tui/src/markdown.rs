@@ -39,14 +39,23 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 /// Render Markdown for a widget that measures its height in terminal rows.
 /// Split overwide tokens (such as URLs) while retaining their full hyperlink destinations.
 pub(crate) fn render_markdown_for_viewport(input: &str, width: u16) -> Vec<HyperlinkLine> {
+    render_markdown_for_viewport_with_list_spacing(input, width, ListSpacing::AfterMultiline)
+}
+
+/// Render physical viewport rows with the list spacing policy of the enclosing view.
+pub(crate) fn render_markdown_for_viewport_with_list_spacing(
+    input: &str,
+    width: u16,
+    list_spacing: ListSpacing,
+) -> Vec<HyperlinkLine> {
     let width = usize::from(width.max(1));
-    let lines =
-        crate::markdown_render::render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
-            input,
-            Some(width),
-            /*cwd*/ None,
-            &crate::markdown_render::hide_web_link_destination,
-        );
+    let lines = crate::markdown_render::render_markdown_lines_with_list_spacing(
+        input,
+        Some(width),
+        /*cwd*/ None,
+        &crate::markdown_render::hide_web_link_destination,
+        list_spacing,
+    );
     let mut rows = Vec::with_capacity(lines.len());
     for line in lines {
         if line.width() <= width {

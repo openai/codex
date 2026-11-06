@@ -8,9 +8,9 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::HistoryHydrationScope;
 use crate::git_action_directives::parse_assistant_markdown;
 use crate::history_cell::AgentMarkdownCell;
+use crate::history_cell::DelegatedMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
-use crate::history_cell::PrefixedWrappedHistoryCell;
 use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::split_reasoning_summary_parts;
 use crate::inline_visualization::InlineVisualizationContext;
@@ -302,10 +302,9 @@ fn item_to_cells(
                     &output,
                 )
             {
-                cells.push(Arc::new(PrefixedWrappedHistoryCell::new(
-                    format!("Sent by Codex from task {source_thread_id}\n{prompt}"),
-                    "• ".dim(),
-                    "  ",
+                cells.push(Arc::new(DelegatedMessageCell::new(
+                    &source_thread_id,
+                    prompt,
                 )));
             }
         }

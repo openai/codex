@@ -649,7 +649,9 @@ impl AgentMarkdownCell {
     }
 }
 
-fn normalize_whitespace_only_hyperlink_lines(mut lines: Vec<HyperlinkLine>) -> Vec<HyperlinkLine> {
+pub(super) fn normalize_whitespace_only_hyperlink_lines(
+    mut lines: Vec<HyperlinkLine>,
+) -> Vec<HyperlinkLine> {
     for line in &mut lines {
         if line
             .line

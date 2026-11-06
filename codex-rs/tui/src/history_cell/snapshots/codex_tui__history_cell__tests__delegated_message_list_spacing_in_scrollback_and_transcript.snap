@@ -1,0 +1,19 @@
+---
+source: tui/src/history_cell/tests.rs
+---
+Scrollback
+• Sent by Codex from task other
+  • One
+  • This item has enough words
+    to wrap
+
+  • Three
+
+Redrawable transcript
+• Sent by Codex from task other
+  • One
+
+  • This item has enough words
+    to wrap
+
+  • Three

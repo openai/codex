@@ -3,4 +3,7 @@ source: tui/src/chatwidget/tests/history_replay.rs
 expression: "lines_to_single_string(&cells[0])"
 ---
 • Sent by Codex from task source-task
-  Follow <up> & report
+  Follow up on the PR (https://example.com/pr).
+
+  • Review <up> & report.
+  • Share the result.
