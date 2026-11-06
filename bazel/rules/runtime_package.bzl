@@ -71,7 +71,7 @@ def _release_profile_impl(settings, attr):
         # Match the Cargo release linker for x86-64 static PIEs.
         profile[_RUSTC_FLAGS] += [
             "-Cllvm-args=--addrsig",
-            "-Clink-arg=-Wl,--icf=safe",
+            "-Clink-arg=-Wl,--icf=safe,-z,pack-relative-relocs",
         ]
     return profile
 
