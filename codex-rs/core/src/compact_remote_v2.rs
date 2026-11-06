@@ -1,3 +1,4 @@
+use codex_login::AuthOwner;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -102,7 +103,7 @@ enum CompactionRequestKind<'a> {
 
 enum CompactionRequestTransport<'a> {
     Foreground(&'a mut ModelClientSession),
-    Background(Option<String>, Option<u64>),
+    Background(Option<String>, Option<AuthOwner>),
 }
 
 /// The caller decides whether a declined prepared result needs a foreground request.
@@ -297,7 +298,7 @@ async fn run_remote_compaction_request_v2(
 ) -> CodexResult<RemoteCompactionV2Output> {
     let turn_context = &step_context.turn;
     let client_session = match transport {
-        CompactionRequestTransport::Background(turn_state, auth_owner_generation) => {
+        CompactionRequestTransport::Background(turn_state, auth_owner) => {
             let settings = &step_context.settings;
             let cancellation = crate::session::async_compaction::shutdown_cancellation(sess).await;
             let effort = sess
@@ -311,7 +312,7 @@ async fn run_remote_compaction_request_v2(
                 biased;
                 _ = cancellation.cancelled() => return Err(CodexErr::TurnAborted),
                 stream = http_executor.stream_responses_http(
-                    &turn_state, *auth_owner_generation, /*event_sender*/ None, prompt, &settings.model_info, &step_context.session_telemetry, effort,
+                    &turn_state, auth_owner.clone(), /*event_sender*/ None, prompt, &settings.model_info, &step_context.session_telemetry, effort,
                     settings.reasoning_summary, settings.service_tier.clone(), responses_metadata,
                     &trace,
                 ) => stream?,

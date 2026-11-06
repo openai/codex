@@ -25,6 +25,7 @@
 //! WebSocket prewarm is treated as the first websocket connection attempt for a turn. If it
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
+use codex_login::AuthOwner;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -368,7 +369,7 @@ struct WebsocketSession {
     parent_routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
     runtime_id: Option<String>,
     /// Owner of the cached state, including before a connection is opened.
-    auth_owner_generation: Option<u64>,
+    auth_owner: Option<AuthOwner>,
     connection_key: Option<ResponsesConnectionKey>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
@@ -524,7 +525,7 @@ impl WebsocketSession {
             .continuation_reset_reason
             .or_else(|| self.last_request.as_ref().and(reason));
         *self = Self {
-            auth_owner_generation: self.auth_owner_generation,
+            auth_owner: self.auth_owner.clone(),
             continuation_reset_reason,
             last_connected_auth_revision: self.last_connected_auth_revision,
             ..Default::default()
@@ -754,12 +755,12 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
-        let auth_owner_generation = self.auth_owner_generation();
+        let auth_owner = self.auth_owner();
         let mut websocket_session = self.take_cached_websocket_session();
-        if websocket_session.auth_owner_generation != auth_owner_generation {
+        if websocket_session.auth_owner != auth_owner {
             // Drop the old owner's cache before this turn can establish fresh routing state.
             websocket_session.reset(Some("other"));
-            websocket_session.auth_owner_generation = auth_owner_generation;
+            websocket_session.auth_owner = auth_owner;
         }
         ModelClientSession {
             client: self.clone(),
@@ -772,13 +773,8 @@ impl ModelClient {
         self.state.provider.auth_manager()
     }
 
-    pub(crate) fn auth_owner_generation(&self) -> Option<u64> {
-        self.auth_manager().map(|manager| {
-            manager
-                .auth_change_state_receiver()
-                .borrow()
-                .owner_generation
-        })
+    pub(crate) fn auth_owner(&self) -> Option<AuthOwner> {
+        codex_model_provider::request_auth_owner(self.state.provider.as_ref())
     }
 
     fn take_cached_websocket_session(&self) -> WebsocketSession {
@@ -1545,9 +1541,11 @@ impl<'a> ResponsesHttpExecutor<'a> {
 }
 
 impl ModelClientSession {
-    pub(crate) fn turn_state_with_auth_owner(&self) -> (Option<String>, Option<u64>) {
-        let owner = self.client.auth_owner_generation();
-        let turn_state = (self.websocket_session.auth_owner_generation == owner)
+    pub(crate) fn turn_state_with_auth_owner(&self) -> (Option<String>, Option<AuthOwner>) {
+        let owner = self.websocket_session.auth_owner.clone();
+        let turn_state = owner
+            .as_ref()
+            .is_none_or(AuthOwner::is_current)
             .then(|| self.turn_state.get().cloned())
             .flatten();
         (turn_state, owner)
@@ -1671,7 +1669,7 @@ impl ModelClientSession {
                     auth_revision: client_setup.auth_revision,
                     api_auth: client_setup.api_auth,
                     http_client_factory: client_setup.http_client_factory,
-                    auth_owner_generation: client_setup.auth_owner_generation,
+                    auth_owner: client_setup.auth_owner,
                     responses_metadata: &websocket_metadata,
                     auth_context,
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint("/responses"),
@@ -1731,7 +1729,7 @@ impl ModelClientSession {
             auth_revision,
             api_auth,
             http_client_factory,
-            auth_owner_generation,
+            auth_owner,
             responses_metadata,
             auth_context,
             request_route_telemetry,
@@ -1759,8 +1757,8 @@ impl ModelClientSession {
         };
         let needs_new = self.websocket_session.connection.is_none() || reset_reason.is_some();
         // Resolving an external auth provider can change ownership during client setup.
-        let owner_changed = self.websocket_session.auth_owner_generation != auth_owner_generation
-            || self.client.auth_owner_generation() != auth_owner_generation;
+        let owner_changed = self.websocket_session.auth_owner != auth_owner
+            || auth_owner.as_ref().is_some_and(|owner| !owner.is_current());
         if owner_changed {
             self.turn_state = Arc::new(OnceLock::new());
         }
@@ -1795,7 +1793,7 @@ impl ModelClientSession {
             self.websocket_session.parent_routing_affinity = parent_routing_affinity;
             self.websocket_session.responses_headers = responses_headers.clone();
             self.websocket_session.runtime_id = runtime_id;
-            self.websocket_session.auth_owner_generation = auth_owner_generation;
+            self.websocket_session.auth_owner = auth_owner;
             self.websocket_session.connection_key = Some(connection_key);
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
@@ -1845,7 +1843,7 @@ impl ResponsesHttpExecutor<'_> {
     pub(crate) async fn stream_responses_http(
         &self,
         turn_state: &Arc<OnceLock<String>>,
-        expected_auth_owner: Option<u64>,
+        expected_auth_owner: Option<AuthOwner>,
         event_sender: Option<&Sender<ProtocolEvent>>,
         prompt: &Prompt,
         model_info: &ModelInfo,
@@ -1867,9 +1865,8 @@ impl ResponsesHttpExecutor<'_> {
                 .client
                 .current_client_setup(ClientRouting::Workspace)
                 .await?;
-            if expected_auth_owner.is_some_and(|owner| {
-                Some(owner) != client_setup.auth_owner_generation
-                    || Some(owner) != self.client.auth_owner_generation()
+            if expected_auth_owner.as_ref().is_some_and(|owner| {
+                Some(owner) != client_setup.auth_owner.as_ref() || !owner.is_current()
             }) {
                 return Err(CodexErr::TurnAborted);
             }
@@ -2141,7 +2138,7 @@ impl ModelClientSession {
                     auth_revision: client_setup.auth_revision,
                     api_auth: client_setup.api_auth,
                     http_client_factory: client_setup.http_client_factory,
-                    auth_owner_generation: client_setup.auth_owner_generation,
+                    auth_owner: client_setup.auth_owner,
                     runtime_id: client_setup.runtime_id,
                     responses_metadata: &websocket_metadata,
                     auth_context: request_auth_context,
@@ -2889,7 +2886,7 @@ struct WebsocketConnectParams<'a> {
     auth_revision: Option<u64>,
     api_auth: SharedAuthProvider,
     http_client_factory: HttpClientFactory,
-    auth_owner_generation: Option<u64>,
+    auth_owner: Option<AuthOwner>,
     responses_metadata: &'a CodexResponsesMetadata,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,

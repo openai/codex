@@ -28,6 +28,7 @@ use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::NetworkPolicy;
 use codex_login::AuthChangeState;
+use codex_login::AuthOwner;
 use codex_login::CodexAuth;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::add_originator_header;
@@ -92,6 +93,7 @@ pub(super) struct PooledConnection {
     auth_changes: Option<tokio::sync::watch::Receiver<AuthChangeState>>,
     key: ResponsesConnectionKey,
     runtime_id: Option<String>,
+    auth_owner: Option<AuthOwner>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -99,6 +101,7 @@ struct ClientSetup {
     provider: Provider,
     http_client_factory: HttpClientFactory,
     runtime_id: Option<String>,
+    auth_owner: Option<AuthOwner>,
     request_kind: RequestMode,
     auth: SharedAuthProvider,
     redirect_policy: ClientRedirectPolicy,
@@ -114,6 +117,7 @@ enum Connection {
 pub(super) struct ConnectionLease {
     pub(super) thread_id: String,
     pub(super) request_kind: RequestMode,
+    pub(super) auth_owner: Option<AuthOwner>,
     connection: Connection,
     pool: Arc<ConnectionPool>,
     _permit: OwnedSemaphorePermit,
@@ -227,6 +231,7 @@ impl ConnectionPool {
             auth,
             http_client_factory,
             runtime_id,
+            auth_owner,
             request_kind,
             redirect_policy,
             key,
@@ -243,6 +248,7 @@ impl ConnectionPool {
                 Some(connection)
                     if connection.key == key
                         && connection.runtime_id == runtime_id
+                        && connection.auth_owner == auth_owner
                         && connection
                             .auth_changes
                             .as_ref()
@@ -356,6 +362,7 @@ impl ConnectionPool {
             }
         }
         Ok(ConnectionLease {
+            auth_owner,
             thread_id,
             request_kind,
             connection,
@@ -377,11 +384,7 @@ impl ConnectionPool {
         )
         .await
         .map_err(LunaSamplerError::Provider)?;
-        let mut auth_changes = self
-            .config
-            .provider
-            .auth_manager()
-            .map(|manager| manager.auth_change_state_receiver());
+        let mut auth_changes = setup.auth_owner.as_ref().map(AuthOwner::changes);
         if auth_changes
             .as_mut()
             .map(|auth| auth.borrow_and_update().generation)
@@ -399,6 +402,7 @@ impl ConnectionPool {
             redirect_policy: setup.redirect_policy,
             http_client_factory: setup.http_client_factory,
             runtime_id: setup.runtime_id,
+            auth_owner: setup.auth_owner,
             request_kind,
             key,
             auth_changes,
@@ -463,6 +467,7 @@ impl ConnectionPool {
             auth,
             http_client_factory,
             runtime_id,
+            auth_owner,
             request_kind,
             redirect_policy: _,
             key,
@@ -545,6 +550,7 @@ impl ConnectionPool {
             auth_changes,
             key,
             runtime_id,
+            auth_owner,
             _permit: permit,
         })
     }

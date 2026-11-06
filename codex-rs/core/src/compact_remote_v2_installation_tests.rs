@@ -96,13 +96,19 @@ async fn prepared_prefix_rejection_respects_caller_intent(
     sess.replace_history(vec![original.clone()], /*reference_context_item*/ None)
         .await;
     let history = sess.clone_history().await;
-    let auth = sess.services.model_client.auth_owner_generation();
+    let auth = sess.services.model_client.auth_owner();
     let prefix = CompactionPrefix {
         generation: history.history_version(),
         len: history.annotated_items().len(),
-        auth_owner_generation: match change {
+        auth_owner: match change {
             HistoryChange::Replacement => auth,
-            HistoryChange::Account => Some(auth.unwrap_or_default().wrapping_add(1)),
+            HistoryChange::Account => Some(
+                codex_login::AuthManager::from_auth_for_testing_with_home(
+                    CodexAuth::from_api_key("other-account"),
+                    std::path::PathBuf::from("unused"),
+                )
+                .auth_owner(),
+            ),
         },
     };
     let roster = Arc::new(FailingRosterRead::default());
@@ -119,7 +125,7 @@ async fn prepared_prefix_rejection_respects_caller_intent(
         cutoff_world_state.host_roster_reader = Some(roster.clone());
     }
     let candidate = BackgroundCompactionCandidate {
-        prefix,
+        prefix: prefix.clone(),
         model_info: Arc::clone(&step.settings.model_info),
         cutoff_world_state: Arc::new(cutoff_world_state),
         attempt: RemoteCompactV2Attempt {

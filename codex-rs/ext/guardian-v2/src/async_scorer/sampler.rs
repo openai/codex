@@ -10,6 +10,7 @@ pub(super) use telemetry::SampledScore;
 
 use super::request::PreparedRequest;
 use super::score::PendingScore;
+use codex_login::AuthOwner;
 use connection_pool::ConnectionPool;
 use std::sync::Arc;
 
@@ -162,17 +163,13 @@ impl LunaSampler {
         self.connections.prewarm().await;
     }
 
-    fn auth_owner_generation(&self) -> Option<u64> {
-        self.config
-            .provider
-            .auth_manager()
-            .filter(|_| self.config.provider.info().auth.is_none())
-            .map(|manager| {
-                manager
-                    .auth_change_state_receiver()
-                    .borrow()
-                    .owner_generation
-            })
+    fn auth_owner(&self) -> Option<AuthOwner> {
+        let provider = &self.config.provider;
+        if provider.info().auth.is_none() {
+            codex_model_provider::request_auth_owner(provider.as_ref())
+        } else {
+            None
+        }
     }
 
     // Normalize new evidence while preserving the retained prefix and its item IDs.
@@ -228,7 +225,7 @@ impl LunaSampler {
         &self,
         request: &LunaSamplingRequest,
         input: Vec<ResponseItem>,
-        auth_owner_generation: Option<u64>,
+        auth_owner: Option<AuthOwner>,
     ) -> execution::SamplingExecution {
         let api_request = ResponsesApiRequest {
             model: MODEL.to_owned(),
@@ -253,7 +250,7 @@ impl LunaSampler {
             access_programs: None,
         };
         execution::SamplingExecution {
-            auth_owner_generation,
+            auth_owner,
             cyber_access_program: codex_guardian_reviewer::guardian_cyber_access_program(
                 request
                     .cyber_access_program
@@ -284,7 +281,7 @@ impl LunaSampler {
             input: review_request,
             sampling,
         } = sample;
-        let auth_owner_generation = self.auth_owner_generation();
+        let auth_owner = self.auth_owner();
         let mut completion = execution::RetainedCompletion {
             ready: Some(ready),
             output: Some(Vec::new()),
@@ -301,7 +298,7 @@ impl LunaSampler {
             .into_iter()
             .map(|envelope| (envelope.item, envelope.metadata))
             .unzip();
-        let mut execution = self.execution(&sampling, input, auth_owner_generation);
+        let mut execution = self.execution(&sampling, input, auth_owner);
         execution.request.include = vec!["reasoning.encrypted_content".to_owned()];
         let mut telemetry = telemetry::SamplingTelemetry::new(
             self.config.metrics.clone(),

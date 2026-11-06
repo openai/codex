@@ -400,7 +400,7 @@ async fn client_setup_accepts_command_credential_refresh() {
                 refreshed_revision
             ),
         );
-        assert_ne!(setup.auth_owner_generation, client.auth_owner_generation());
+        assert_ne!(setup.auth_owner, client.auth_owner());
     }
 }
 
@@ -454,8 +454,11 @@ async fn client_setup_rebuilds_chatgpt_refresh_but_rejects_account_switches() {
             );
             assert_eq!(setup.auth.unwrap().get_token().unwrap(), refreshed_token);
             assert_eq!(
-                (setup.auth_revision, setup.auth_owner_generation),
-                (Some(*manager.auth_change_receiver().borrow()), Some(0))
+                (setup.auth_revision, setup.auth_owner),
+                (
+                    Some(*manager.auth_change_receiver().borrow()),
+                    Some(manager.auth_owner())
+                )
             );
         } else {
             assert_eq!(

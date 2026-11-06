@@ -1,6 +1,7 @@
 //! Builds and sends foreground and speculative remote V2 compaction attempts.
 
 use crate::context::UserGoalUpdate;
+use codex_login::AuthOwner;
 use codex_protocol::ResponseItemId;
 use codex_protocol::openai_models::CatalogModel;
 use std::collections::BTreeSet;
@@ -165,10 +166,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             input.base_instructions,
             input.input,
             input.metadata,
-            CompactionRequestTransport::Background(
-                input.turn_state,
-                input.prefix.auth_owner_generation,
-            ),
+            CompactionRequestTransport::Background(input.turn_state, input.prefix.auth_owner),
             Some(input.window),
         ),
     };
@@ -283,7 +281,7 @@ pub(crate) async fn capture_background_input(
     mut snapshot: ContextManager,
     base_instructions: BaseInstructions,
     turn_state: Option<String>,
-    auth_owner_generation: Option<u64>,
+    auth_owner: Option<AuthOwner>,
     window: (String, u64, codex_protocol::ContextWindowId),
 ) -> BackgroundCompactionInput {
     let base_instructions = if step_context.settings.model_info.use_responses_lite
@@ -301,7 +299,7 @@ pub(crate) async fn capture_background_input(
     let prefix = CompactionPrefix {
         generation: snapshot.history_version(),
         len: snapshot.annotated_items().len(),
-        auth_owner_generation,
+        auth_owner,
     };
     trim_function_call_history_to_fit_context_window(
         &mut snapshot,
@@ -344,7 +342,7 @@ pub(crate) async fn run_background_compaction(
             sess.services.image_store.as_ref(),
         ) => {},
     }
-    let prefix = prepared_input.prefix;
+    let prefix = prepared_input.prefix.clone();
     let metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Auto,
         CompactionReason::ContextLimit,

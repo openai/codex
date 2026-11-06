@@ -124,6 +124,99 @@ fn api_key_replacement_and_logout_retire_the_previous_source() {
 }
 
 #[tokio::test]
+async fn explicit_api_key_never_reloads_an_ambient_credential() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    login_with_api_key(
+        home.path(),
+        "ambient-key",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::Direct,
+    )?;
+    let runtime = AuthRuntimeConfig {
+        codex_home: home.path().to_path_buf(),
+        auth_route_config: crate::test_support::transport_default_auth_route_config(),
+    };
+    let manager = AuthManager::from_api_key("selected-key", runtime.clone());
+    for _ in 0..2 {
+        manager.reload().await;
+        assert_eq!(
+            manager.auth().await.expect("selected key").api_key(),
+            Some("selected-key")
+        );
+        assert_eq!(manager.runtime_config(), runtime);
+    }
+    let stored = create_auth_storage(
+        home.path().to_path_buf(),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::Direct,
+    )
+    .load()?
+    .expect("ambient login remains stored");
+    assert_eq!(stored.openai_api_key.as_deref(), Some("ambient-key"));
+    Ok(())
+}
+
+struct RecoverableExternalAuth {
+    current: RwLock<Option<CodexAuth>>,
+}
+
+impl ExternalAuth for RecoverableExternalAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async {
+            self.current
+                .read()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| std::io::Error::other("credential source unavailable"))
+        })
+    }
+
+    fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        self.resolve()
+    }
+}
+
+#[tokio::test]
+async fn external_source_outage_keeps_cached_credentials_and_identity() {
+    let initial_auth = oauth("login-a", "token-1");
+    let manager = AuthManager::from_auth_for_testing(initial_auth.clone());
+    let source = Arc::new(RecoverableExternalAuth {
+        current: RwLock::new(Some(initial_auth.clone())),
+    });
+    manager.set_external_auth(source.clone()).await.unwrap();
+    let initial = manager.auth_change_state_for(&initial_auth).unwrap();
+    *source.current.write().unwrap() = None;
+    assert_eq!(manager.auth().await, Some(initial_auth.clone()));
+    let (cached_auth, _) = manager.auth_with_http_client_factory().await.unwrap();
+    assert_eq!(cached_auth, initial_auth);
+    assert!(!manager.reload().await);
+    assert_eq!(manager.auth_change_state_for(&initial_auth), Some(initial));
+
+    let refreshed = oauth("login-a", "token-2");
+    *source.current.write().unwrap() = Some(refreshed.clone());
+    assert_eq!(manager.auth().await, Some(refreshed));
+    assert_eq!(
+        initial.source_generation,
+        manager
+            .auth_change_state_for(&initial_auth)
+            .unwrap()
+            .source_generation
+    );
+
+    manager.clear_external_auth();
+    assert!(manager.auth_change_state_for(&initial_auth).is_none());
+    *source.current.write().unwrap() = Some(initial_auth.clone());
+    manager.set_external_auth(source).await.unwrap();
+    assert_ne!(
+        initial.source_generation,
+        manager
+            .auth_change_state_for(&initial_auth)
+            .unwrap()
+            .source_generation
+    );
+}
+
+#[tokio::test]
 #[serial_test::serial(codex_auth_env)]
 async fn legacy_identity_persistence_does_not_reload_credentials() -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;

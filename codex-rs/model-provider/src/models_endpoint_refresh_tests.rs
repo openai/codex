@@ -199,12 +199,16 @@ async fn check_timeout_preserves_refreshed_tokens(caller: Caller) {
                     .auth_change_state_receiver()
                     .borrow()
                     .source_generation;
-                let runtime = &runtime_auth.as_ref().unwrap().0;
+                let runtime = runtime_auth
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .bind(Arc::clone(&credentials));
                 assert!(
                     timeout(
                         MODELS_REFRESH_TIMEOUT,
                         crate::select_runtime_auth_for_source(
-                            runtime,
+                            &runtime,
                             generation,
                             &http::HeaderMap::new()
                         )

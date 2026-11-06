@@ -206,6 +206,87 @@ async fn model_requests_keep_the_selected_project_while_reusing_one_runtime() {
 }
 
 #[tokio::test]
+async fn runtime_registration_environment_matches_inference_and_catalog() {
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        for (registration_base, destination, matching_destination) in [
+            (
+                "https://chatgpt.com",
+                Some("https://api.openai-staging.com/v1"),
+                "https://eu.api.openai.com/v1",
+            ),
+            (
+                "https://chatgpt-staging.com",
+                Some("https://api.openai.com/v1"),
+                "https://api.openai-staging.com/v1",
+            ),
+            (
+                "https://chatgpt-staging.com",
+                None,
+                "https://chatgpt-staging.com/backend-api/codex",
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            // Keep external network access disabled even if destination validation regresses.
+            let controller = codex_http_client::NetworkPolicyController::default();
+            let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+                .with_network_policy(controller.policy());
+            let credentials = AuthManager::from_api_key(
+                "ambient-key",
+                codex_login::AuthRuntimeConfig {
+                    codex_home: home.path().to_path_buf(),
+                    auth_route_config: codex_login::AuthRouteConfig::from_http_client_factory(
+                        factory.clone(),
+                    ),
+                },
+            );
+            let runtime = Arc::new(RuntimeAuthManager::for_chatgpt(
+                Arc::clone(&credentials),
+                "00000000-0000-0000-0000-000000000000".into(),
+                registration_base.into(),
+                RuntimeRegistrationMetadata {
+                    harness: None,
+                    harness_version: None,
+                    role: RuntimeRole::Orchestrator,
+                },
+            ));
+            crate::validate_runtime_environment(&runtime, Some(matching_destination)).unwrap();
+            let info = ModelProviderInfo {
+                experimental_bearer_token: Some("provider-key".into()),
+                env_http_headers: None,
+                ..ModelProviderInfo::create_openai_provider(destination.map(str::to_owned))
+            };
+            let provider = crate::provider::create_model_provider_with_runtime(
+                info.clone(),
+                Some(Arc::clone(&credentials)),
+                Some((Arc::clone(&runtime), mode)),
+            );
+            let error = provider.request_auth(/*scope*/ None).await.err().unwrap();
+            assert!(matches!(
+                error.details(),
+                codex_protocol::error::CodexErrorDetails::InvalidRequest(_)
+            ));
+
+            let mut catalog_info = info;
+            if let Some(destination) = destination {
+                catalog_info.base_url = Some(matching_destination.into());
+                catalog_info.model_catalog_url = Some(format!("{destination}/models").into());
+            }
+            let catalog = OpenAiModelsEndpoint::new(
+                catalog_info,
+                Some(credentials),
+                /*gateway_auth_manager*/ None,
+            )
+            .with_runtime_auth(Some((runtime, mode)));
+            let error = catalog.list_models("0.0.0", factory).await.unwrap_err();
+            assert!(matches!(
+                error.details(),
+                codex_protocol::error::CodexErrorDetails::InvalidRequest(_)
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn unsupported_openai_destinations_do_not_fall_back_to_bearer_auth() {
     for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
         let server = MockServer::start().await;

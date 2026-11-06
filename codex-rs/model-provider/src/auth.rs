@@ -318,16 +318,22 @@ pub(crate) fn auth_manager_for_provider(
 ) -> Option<Arc<AuthManager>> {
     match provider.auth.clone() {
         Some(config) => {
-            let mut env = HashMap::new();
-            if provider.is_gcp()
-                && let Some(credential_file) = &provider.credential_file
-            {
-                env.insert(
-                    "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
-                    credential_file.as_os_str().to_os_string(),
-                );
+            if provider.is_gcp() {
+                let mut env = HashMap::new();
+                if let Some(credential_file) = &provider.credential_file {
+                    env.insert(
+                        "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
+                        credential_file.as_os_str().to_os_string(),
+                    );
+                }
+                Some(AuthManager::external_bearer_only_with_env(config, env))
+            } else {
+                Some(match auth_manager {
+                    Some(manager) => crate::shared_state::process_shared_state()
+                        .command_credentials(&config, &manager.runtime_config()),
+                    None => AuthManager::external_bearer_only(config),
+                })
             }
-            Some(AuthManager::external_bearer_only_with_env(config, env))
         }
         None => auth_manager,
     }
@@ -428,7 +434,7 @@ fn should_bootstrap_chatgpt_agent_identity(
         && matches!(auth, Some(CodexAuth::Chatgpt(_)))
 }
 
-fn bearer_auth_for_provider(
+pub(crate) fn bearer_auth_for_provider(
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<Option<BearerAuthProvider>> {
     if let Some(api_key) = provider.api_key()? {

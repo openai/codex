@@ -3,6 +3,7 @@ pub(crate) mod startup;
 use crate::PromptCacheKey;
 use crate::WithTurnExtensionData;
 use crate::runtime_auth::RuntimeAuthSlot;
+use codex_login::AuthOwner;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -477,11 +478,11 @@ pub(crate) enum ForkPersistence {
 }
 
 /// Normal appends keep this generation; compaction and rollback start a new one.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct CompactionPrefix {
     pub(crate) generation: u64,
     pub(crate) len: usize,
-    pub(crate) auth_owner_generation: Option<u64>,
+    pub(crate) auth_owner: Option<AuthOwner>,
 }
 
 pub(crate) enum CompactedHistoryInstallation<'a> {
@@ -4778,8 +4779,7 @@ impl Session {
                     // Validate immediately before slicing and replacing the captured prefix.
                     if state.history.history_version() != prefix.generation
                         || state.history.annotated_items().len() < prefix.len
-                        || self.services.model_client.auth_owner_generation()
-                            != prefix.auth_owner_generation
+                        || self.services.model_client.auth_owner() != prefix.auth_owner
                     {
                         return false;
                     }

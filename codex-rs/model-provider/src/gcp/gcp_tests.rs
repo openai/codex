@@ -204,8 +204,9 @@ async fn credential_files_scope_token_caches_and_refreshes() {
     first_info.credential_file = Some(first_file.clone());
     let mut second_info = first_info.clone();
     second_info.credential_file = Some(second_file);
-    let first = GcpModelProvider::new(first_info, /*auth_manager*/ None);
-    let second = GcpModelProvider::new(second_info, /*auth_manager*/ None);
+    let primary = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("openai-key"));
+    let first = GcpModelProvider::new(first_info, Some(Arc::clone(&primary)));
+    let second = GcpModelProvider::new(second_info, Some(primary));
 
     assert_eq!(
         (first.auth().await, second.auth().await),

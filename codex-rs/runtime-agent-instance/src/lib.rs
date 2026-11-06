@@ -2,6 +2,7 @@
 
 mod actor;
 mod auth;
+mod binding;
 mod bootstrap;
 mod manager;
 mod registration;
@@ -20,7 +21,8 @@ pub use bootstrap::RuntimeRole;
 pub use codex_http_client::is_openai_api_url;
 
 pub use auth::RuntimeAuth;
-pub use manager::RuntimeAuthError;
+pub use binding::RuntimeAuthBinding;
+pub use binding::RuntimeAuthError;
 pub use manager::RuntimeAuthManager;
 pub use registration::DEFAULT_REGISTRATION_URL;
 pub use registration::RegistrationError;

@@ -14,6 +14,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_runtime_agent_instance::ActorInfo;
 use codex_runtime_agent_instance::PlatformResourceSelection;
 use codex_runtime_agent_instance::RuntimeAuth;
+use codex_runtime_agent_instance::RuntimeAuthBinding;
 use codex_runtime_agent_instance::RuntimeAuthError;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 use http::HeaderMap;
@@ -21,7 +22,7 @@ use std::sync::Arc;
 
 /// Select the runtime for the resource scope carried by the model request.
 pub(crate) async fn select_runtime_auth(
-    manager: &RuntimeAuthManager,
+    manager: &Arc<RuntimeAuthBinding>,
     headers: &HeaderMap,
 ) -> Result<RuntimeAuth, AuthError> {
     manager
@@ -32,7 +33,7 @@ pub(crate) async fn select_runtime_auth(
 
 /// Select fresh request auth without allowing a reusable client's source to change.
 pub(crate) async fn select_runtime_auth_for_source(
-    manager: &Arc<RuntimeAuthManager>,
+    manager: &Arc<RuntimeAuthBinding>,
     source_generation: u64,
     headers: &HeaderMap,
 ) -> Result<RuntimeAuth, AuthError> {
@@ -74,24 +75,29 @@ pub(crate) fn resource_selection(
     })
 }
 
-/// A runtime may not replace an independently selected provider credential.
-pub fn validate_runtime_provider(
+/// Use the credential selected by provider configuration, never an ambient actor's proof.
+pub fn select_runtime_provider(
     info: &ModelProviderInfo,
     credentials: Option<&Arc<AuthManager>>,
-    runtime: &RuntimeAuthManager,
-) -> CodexResult<()> {
-    if !info.requires_openai_auth
-        || info.env_key.is_some()
-        || info.experimental_bearer_token.is_some()
-        || info.auth.is_some()
-        || info.aws.is_some()
-        || !credentials.is_some_and(|auth| runtime.uses_credentials(auth))
-    {
-        return Err(CodexErr::UnsupportedOperation(
+    runtime: &Arc<RuntimeAuthManager>,
+) -> CodexResult<Arc<RuntimeAuthBinding>> {
+    let unsupported = || {
+        CodexErr::UnsupportedOperation(
             "runtime auth requires the model provider's selected OpenAI credential".to_string(),
-        ));
+        )
+    };
+    if info.aws.is_some() {
+        return Err(unsupported());
     }
-    Ok(())
+    let credentials = credentials.ok_or_else(unsupported)?;
+    if let Some(bearer) = crate::auth::bearer_auth_for_provider(info)? {
+        let token = bearer.token.ok_or_else(unsupported)?;
+        return Ok(runtime.bind_api_key(&token, &credentials.runtime_config()));
+    }
+    if !info.requires_openai_auth && info.auth.is_none() {
+        return Err(unsupported());
+    }
+    Ok(runtime.bind(Arc::clone(credentials)))
 }
 
 /// An unrecognized OpenAI origin must not silently fall back to legacy auth.
@@ -105,6 +111,48 @@ pub fn validate_runtime_destination(destination: Option<&str>) -> CodexResult<()
     Ok(())
 }
 
+/// Do not send a provider's credentials to registration in another OpenAI environment.
+pub fn validate_runtime_environment(
+    runtime: &RuntimeAuthManager,
+    destination: Option<&str>,
+) -> CodexResult<()> {
+    let registration_url = runtime
+        .registration_url()
+        .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+    let registration_is_staging = match registration_url
+        .host_str()
+        .map(|host| host.trim_end_matches('.'))
+    {
+        Some("auth.openai.com") => false,
+        Some("auth.api.openai.org") => true,
+        // Explicit registration targets also support local test servers.
+        _ => return Ok(()),
+    };
+    let destination_is_staging = match destination {
+        Some(destination) => {
+            let destination = url::Url::parse(destination)
+                .map_err(|_| CodexErr::InvalidRequest("invalid runtime auth destination".into()))?;
+            let host = destination
+                .host_str()
+                .unwrap_or_default()
+                .trim_end_matches('.');
+            matches!(
+                host,
+                "api.openai.org" | "api.openai-staging.com" | "chatgpt-staging.com"
+            ) || host.ends_with(".chatgpt-staging.com")
+        }
+        // Both implicit model-provider defaults use production.
+        None => false,
+    };
+    if registration_is_staging != destination_is_staging {
+        return Err(CodexErr::InvalidRequest(
+            "Requests must use the same production or staging environment as runtime registration"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Select runtime auth for supported OpenAI URLs; reject unsupported OpenAI URLs.
 pub fn runtime_auth_for_url<'a>(
     runtime: Option<&'a (Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
@@ -113,7 +161,11 @@ pub fn runtime_auth_for_url<'a>(
     if runtime.is_some() {
         validate_runtime_destination(Some(url))?;
     }
-    Ok(runtime.filter(|_| classify_openai_api_url(url) == OpenAiDestination::Supported))
+    let runtime = runtime.filter(|_| classify_openai_api_url(url) == OpenAiDestination::Supported);
+    if let Some((manager, _)) = runtime {
+        validate_runtime_environment(manager, Some(url))?;
+    }
+    Ok(runtime)
 }
 
 /// Account and organization selectors must agree with the registered actor.
@@ -143,3 +195,7 @@ pub fn validate_runtime_selectors(headers: &HeaderMap, actor: &ActorInfo) -> Cod
         }
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_auth_tests.rs"]
+mod tests;

@@ -387,6 +387,69 @@ async fn logout_account_removes_auth_and_notifies(enterprise_cleanup_failure: bo
 }
 
 #[tokio::test]
+async fn logout_account_requires_a_successful_auth_reload() -> Result<()> {
+    let oauth_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .and(wiremock::matchers::body_partial_json(
+            json!({"token": "refresh-b"}),
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&oauth_server)
+        .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-a").refresh_token("refresh-a"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let refresh_url = format!("{}/oauth/token", oauth_server.uri());
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
+            ("OPENAI_API_KEY", None),
+            (REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, Some(&refresh_url)),
+        ])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let auth_file = codex_home.path().join("auth.json");
+    let unreadable = "{";
+    std::fs::write(&auth_file, unreadable)?;
+    let id = mcp.send_logout_account_request().await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32603);
+    assert_eq!(std::fs::read_to_string(&auth_file)?, unreadable);
+    assert!(
+        oauth_server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.url.path() != "/oauth/revoke"),
+    );
+
+    // Once storage is readable, logout must revoke the newly loaded account.
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-b").refresh_token("refresh-b"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let id = mcp.send_logout_account_request().await?;
+    let _: LogoutAccountResponse = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(id)).await??;
+    assert!(!auth_file.exists());
+    oauth_server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn logout_account_succeeds_when_config_reload_fails() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;

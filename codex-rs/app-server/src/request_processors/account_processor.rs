@@ -1553,7 +1553,10 @@ pub(crate) async fn logout_configured_account(
 ) -> Result<Config, JSONRPCErrorError> {
     // Another process may have changed the persisted workspace. Reload both
     // account authority and its policy before selecting a grant to remove.
-    auth_manager.reload().await;
+    auth_manager
+        .reload_with_cached_auth()
+        .await
+        .map_err(|err| internal_error(format!("logout failed: {err}")))?;
     config_manager.update_managed_config_loader(Arc::clone(auth_manager), fallback_config);
     let config = config_manager
         .load_latest_config(/*fallback_cwd*/ None)
