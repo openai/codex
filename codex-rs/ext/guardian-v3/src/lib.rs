@@ -31,10 +31,12 @@ pub use sampling::OperationResult;
 pub use selection::CHANNEL_SELECTION_INSTRUCTIONS;
 pub use selection::ReviewerSubscriptions;
 
+const GUARDIAN_BOARD_NAMESPACE: &str = "guardian";
+
 /// Storage selected by the Guardian consumer for setup, opening and cleanup.
 pub fn local_board_options() -> LocalBoardOptions {
     LocalBoardOptions {
-        storage_namespace: "guardian".into(),
+        storage_namespace: GUARDIAN_BOARD_NAMESPACE.into(),
     }
 }
 

@@ -4,6 +4,7 @@
 
 use codex_guardian_v3::RetrievalBinding;
 use codex_guardian_v3::local_board;
+use codex_message_board::AgentMessageBoard;
 use codex_message_board::AppendRequest;
 use codex_message_board::PageRequest;
 use codex_message_board::PostDestination;
@@ -102,7 +103,8 @@ async fn searches_unsubscribed_guardian_posts_only_through_the_review_cutoff() -
             },
         )
         .await?;
-    let binding = RetrievalBinding::new(board.read_view(owner).await?, owner, AgentPath::root())?;
+    let view = board.read_view(owner).await?;
+    let binding = RetrievalBinding::new(view.as_ref(), owner, AgentPath::root())?;
     board
         .append(
             owner,
@@ -122,6 +124,20 @@ async fn searches_unsubscribed_guardian_posts_only_through_the_review_cutoff() -
     );
 
     let tools = binding.tools();
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.tool_name())
+            .collect::<Vec<_>>(),
+        [
+            "get_channels",
+            "list_threads",
+            "search_posts",
+            "read_thread",
+            "read_post"
+        ]
+        .map(|name| ToolName::namespaced("guardian_board", name))
+    );
     let tool_name = ToolName::namespaced("guardian_board", "search_posts");
     let search = tools
         .iter()

@@ -5,6 +5,7 @@ use crate::evidence_board::routed_original;
 use anyhow::Context;
 use codex_guardian_v3::DeliveryPlan;
 use codex_guardian_v3::DeliveryState;
+use codex_message_board::AgentMessageBoard;
 use codex_message_board::PageRequest;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
@@ -38,7 +39,7 @@ async fn plans_unique_originals_in_source_order_from_a_fixed_view() -> anyhow::R
     let selected = BTreeSet::from(["a".into(), "b".into()]);
     let mut state = DeliveryState::new(reviewer, owner.into());
     let reads = board.host.agent_path_calls.load(Ordering::SeqCst);
-    let mut plan = state.plan(&view, &selected, cutoff).await?;
+    let mut plan = state.plan(view.as_ref(), &selected, cutoff).await?;
     // One short ID page per selected channel completes the scan.
     assert_eq!(
         board.host.agent_path_calls.load(Ordering::SeqCst) - reads,
@@ -52,7 +53,7 @@ async fn plans_unique_originals_in_source_order_from_a_fixed_view() -> anyhow::R
         ]}),
     );
     let later = board.writer.read_view(reviewer).await?;
-    assert!(state.plan(&later, &selected, cutoff).await.is_err());
+    assert!(state.plan(later.as_ref(), &selected, cutoff).await.is_err());
     Ok(())
 }
 
@@ -73,7 +74,7 @@ async fn plans_across_storage_pages_in_reverse_insertion_order() -> anyhow::Resu
         end_byte_offset: 64 * 1024,
     };
     let mut state = DeliveryState::new(reviewer, owner.into());
-    let mut plan = state.plan(&view, &selected, cutoff).await?;
+    let mut plan = state.plan(view.as_ref(), &selected, cutoff).await?;
     let reads = board.host.agent_path_calls.load(Ordering::SeqCst);
     let expected: Vec<_> = (0..count)
         .map(|ordinal| routed_original(ordinal, "next review"))

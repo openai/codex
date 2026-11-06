@@ -1,11 +1,11 @@
 //! Read-only reviewer tools bound to one captured Guardian board.
+use crate::GUARDIAN_BOARD_NAMESPACE;
 use anyhow::ensure;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ToolContributor;
-use codex_message_board::LocalBoardReadView;
-use codex_message_board::MessageBoardTool;
-use codex_message_board::message_board_tools;
+use codex_message_board::BoardReadView;
+use codex_message_board::message_board_read_tools;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_tools::ToolCall;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// the same ownership that protects the reviewer's retained conversation.
 #[derive(Clone)]
 pub struct RetrievalBinding {
-    board: LocalBoardReadView,
+    view: Arc<dyn BoardReadView>,
     caller: ThreadId,
     caller_path: AgentPath,
 }
@@ -43,32 +43,24 @@ pub fn install_retrieval_tools<C: Sync>(registry: &mut ExtensionRegistryBuilder<
 
 impl RetrievalBinding {
     pub fn new(
-        board: LocalBoardReadView,
+        view: &dyn BoardReadView,
         caller: ThreadId,
         caller_path: AgentPath,
     ) -> anyhow::Result<Self> {
         ensure!(
-            board.uses_storage_namespace(&crate::local_board_options())?,
+            view.storage_namespace() == GUARDIAN_BOARD_NAMESPACE,
             "reviewer retrieval requires a Guardian board"
         );
         Ok(Self {
-            board,
+            view: view.with_json_search("/original/payload/arguments"),
             caller,
             caller_path,
         })
     }
 
     pub fn tools(&self) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        message_board_tools(
-            &[
-                MessageBoardTool::GetChannels,
-                MessageBoardTool::ListThreads,
-                MessageBoardTool::SearchPosts,
-                MessageBoardTool::ReadThread,
-                MessageBoardTool::ReadPost,
-            ],
-            self.board
-                .board_with_json_search("/original/payload/arguments"),
+        message_board_read_tools(
+            Arc::clone(&self.view),
             self.caller,
             self.caller_path.clone(),
             Some("guardian_board"),

@@ -43,7 +43,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub(crate) mod catalog;
+mod catalog;
 pub(crate) mod connection;
 mod json_search;
 mod lifecycle;
@@ -90,6 +90,7 @@ impl BoardMode {
 #[derive(Clone)]
 pub struct LocalAgentMessageBoard {
     identity: SessionId,
+    storage_namespace: Arc<str>,
     pool: Arc<SqlitePool>,
     host: Arc<dyn MessageBoardHost>,
     mode: BoardMode,
@@ -115,24 +116,11 @@ impl LocalAgentMessageBoard {
         Ok(Self {
             identity,
             pool: pool::open(sqlite, options).await?,
+            storage_namespace: Arc::from(options.storage_namespace.as_str()),
             host,
             mode: BoardMode::Live { access: None },
             nested_json_pointer: None,
         })
-    }
-
-    /// Whether this already-open handle uses the requested storage namespace.
-    pub fn uses_storage_namespace(&self, options: &LocalBoardOptions) -> Result<bool> {
-        let filename = options.database_file()?;
-        Ok(self.pool.connect_options().get_filename().file_name()
-            == Some(std::ffi::OsStr::new(&filename)))
-    }
-
-    /// Captures a read-only catalog and post boundary without retaining a SQLite transaction.
-    /// Later appends and metadata edits are excluded; deletion may make captured posts unavailable.
-    pub async fn read_view(&self, caller: ThreadId) -> Result<catalog::LocalBoardReadView> {
-        self.host.agent_path(caller).await?;
-        catalog::capture(self).await
     }
 
     pub async fn create_channel(
@@ -381,9 +369,6 @@ impl LocalAgentMessageBoard {
         caller: ThreadId,
         request: SubscriptionRequest,
     ) -> Result<SubscriptionState> {
-        if self.mode.view().is_some() {
-            Access::ReadOnly.require_write(self.identity, "board.manage_subscriptions")?;
-        }
         let caller_path = self.host.agent_path(caller).await?;
         let target_path = request.target_agent.unwrap_or(caller_path);
         let target_agent = self.host.resolve_agent(target_path.clone()).await?;

@@ -16,6 +16,7 @@ use super::validate_channel;
 use crate::AgentMessageBoard;
 use crate::AppendRequest;
 use crate::BoardPermissions;
+use crate::BoardReadView;
 use crate::ChannelPage;
 use crate::ChannelQuery;
 use crate::ChannelSummary;
@@ -29,6 +30,7 @@ use crate::PostQuery;
 use crate::PostRequest;
 use crate::ReadPostRequest;
 use crate::ReadThreadRequest;
+use crate::SubscriptionChange;
 use crate::SubscriptionRequest;
 use crate::SubscriptionState;
 use crate::ThreadPage;
@@ -43,6 +45,8 @@ use codex_protocol::error::Result;
 use futures::future::BoxFuture;
 use sqlx::QueryBuilder;
 use sqlx::SqliteConnection;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 impl LocalAgentMessageBoard {
@@ -163,6 +167,17 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
         self.identity
     }
 
+    fn storage_namespace(&self) -> Option<&str> {
+        Some(&self.storage_namespace)
+    }
+
+    fn read_view(&self, caller: ThreadId) -> BoxFuture<'_, Result<Arc<dyn BoardReadView>>> {
+        Box::pin(async move {
+            self.host.agent_path(caller).await?;
+            catalog::capture(self).await
+        })
+    }
+
     fn upsert_channel(
         &self,
         caller: ThreadId,
@@ -203,6 +218,24 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
         Box::pin(LocalAgentMessageBoard::set_subscription(
             self, caller, request,
         ))
+    }
+
+    fn subscribed_channels(
+        &self,
+        caller: ThreadId,
+        page: PageRequest,
+    ) -> BoxFuture<'_, Result<Page<String>>> {
+        Box::pin(LocalAgentMessageBoard::subscribed_channels(
+            self, caller, page,
+        ))
+    }
+
+    fn set_subscriptions<'a>(
+        &'a self,
+        caller: ThreadId,
+        channels: &'a BTreeMap<&str, SubscriptionChange>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(self.apply_subscriptions(caller, channels))
     }
 
     fn read_post(

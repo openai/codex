@@ -5,6 +5,7 @@ use codex_core::guardian_review::prepare_review_prewarm;
 use codex_extension_api::SessionIsolation;
 use codex_extension_api::ToolPolicy;
 use codex_guardian_v3::DeliveryState;
+use codex_message_board::AgentMessageBoard;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -81,7 +82,7 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
     let mut state = DeliveryState::new(reviewer, owner.into());
     let before_admission = state.clone();
     let selected = BTreeSet::from(["a".into(), "b".into()]);
-    let mut plan = state.plan(&evidence, &selected, cutoff).await?;
+    let mut plan = state.plan(evidence.as_ref(), &selected, cutoff).await?;
     let small = TruncationPolicy::Bytes(160);
     assert!(
         plan.deliver(small, |_| async { anyhow::bail!("admission unavailable") })
@@ -90,7 +91,7 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
     );
     drop(plan);
     assert_eq!(state, before_admission);
-    let mut plan = state.plan(&evidence, &selected, cutoff).await?;
+    let mut plan = state.plan(evidence.as_ref(), &selected, cutoff).await?;
     let response = mount_sse_once(
         &server,
         sse(vec![
@@ -145,7 +146,7 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
     "###);
     // A later subscription can add an older source without resetting delivered progress.
     let mut older = state
-        .plan(&evidence, &BTreeSet::from(["older".into()]), cutoff)
+        .plan(evidence.as_ref(), &BTreeSet::from(["older".into()]), cutoff)
         .await?;
     assert_eq!(
         older
@@ -158,7 +159,7 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
     let checkpoint = state.clone();
     // A whole source larger than the admission budget can be retried with more room.
     let mut long = state
-        .plan(&evidence, &BTreeSet::from(["large".into()]), cutoff)
+        .plan(evidence.as_ref(), &BTreeSet::from(["large".into()]), cutoff)
         .await?;
     assert!(
         long.deliver(small, |_| async {
@@ -170,7 +171,7 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
     drop(long);
     assert_eq!(state, checkpoint);
     let mut long = state
-        .plan(&evidence, &BTreeSet::from(["large".into()]), cutoff)
+        .plan(evidence.as_ref(), &BTreeSet::from(["large".into()]), cutoff)
         .await?;
     assert_eq!(
         long.deliver(TruncationPolicy::Bytes(64 * 1024), |items| async {
@@ -184,7 +185,7 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
     for (ordinal, channel, output) in [(5, "a", "late"), (3, "b", "two")] {
         board.append(ordinal, channel, output).await?;
     }
-    let mut repeated = state.plan(&evidence, &selected, cutoff).await?;
+    let mut repeated = state.plan(evidence.as_ref(), &selected, cutoff).await?;
     assert_eq!(
         repeated
             .deliver(small, |_| async {
@@ -194,7 +195,7 @@ async fn delivers_ordered_originals_once_after_admission_and_keeps_older_channel
         0
     );
     let changed = board.writer.read_view(reviewer).await?;
-    let mut fresh = state.plan(&changed, &selected, cutoff).await?;
+    let mut fresh = state.plan(changed.as_ref(), &selected, cutoff).await?;
     assert_eq!(
         fresh
             .deliver(small, |items| async {

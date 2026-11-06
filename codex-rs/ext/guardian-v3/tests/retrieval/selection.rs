@@ -7,8 +7,11 @@ use codex_extension_api::ToolPolicy;
 use codex_guardian_reviewer::ReviewDeadline;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_guardian_v3::CHANNEL_SELECTION_INSTRUCTIONS;
+use codex_guardian_v3::DeliveryState;
+use codex_guardian_v3::RetrievalBinding;
 use codex_guardian_v3::ReviewerSubscriptions;
 use codex_guardian_v3::local_board;
+use codex_message_board::AgentMessageBoard;
 use codex_message_board::AppendRequest;
 use codex_message_board::LocalBoard;
 use codex_message_board::PostDestination;
@@ -21,6 +24,7 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_state::SqliteConfig;
@@ -59,6 +63,20 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
         .read_only()
         .open(host.clone())
         .await?;
+    // All three reviewer entry points must reject the ordinary board, even for the same root.
+    let agent_view = agent_board.read_view(reviewer).await?;
+    assert!(RetrievalBinding::new(agent_view.as_ref(), reviewer, path.clone()).is_err());
+    let cutoff = HistoryPosition {
+        thread_id: owner,
+        end_ordinal_exclusive: 0,
+        end_byte_offset: 0,
+    };
+    assert!(
+        DeliveryState::new(reviewer, owner.into())
+            .plan(agent_view.as_ref(), &BTreeSet::new(), cutoff)
+            .await
+            .is_err()
+    );
     assert!(
         ReviewerSubscriptions::capture(Arc::new(agent_board), reviewer, path.clone())
             .await
@@ -76,7 +94,7 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
             },
         )
         .await?;
-    let board = Arc::new(storage.read_only().open(host.clone()).await?);
+    let board: Arc<dyn AgentMessageBoard> = Arc::new(storage.read_only().open(host.clone()).await?);
     board
         .set_subscription(
             owner,
@@ -243,7 +261,7 @@ async fn preparation_commits_only_valid_selections_from_the_captured_catalog() -
             )
             .await?;
     }
-    let board = Arc::new(storage.read_only().open(host.clone()).await?);
+    let board: Arc<dyn AgentMessageBoard> = Arc::new(storage.read_only().open(host.clone()).await?);
     writer
         .set_subscriptions(owner, &BTreeMap::from([("release", Subscribe)]))
         .await?;

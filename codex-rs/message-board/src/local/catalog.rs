@@ -5,116 +5,161 @@ use super::BoardMode;
 use super::LocalAgentMessageBoard;
 use super::connection::Access;
 use super::invalid;
-use super::options::LocalBoardOptions;
 use super::paging::Window;
 use super::storage_error;
 use crate::AgentMessageBoard;
 use crate::BoardPermissions;
+use crate::BoardReadView;
 use crate::ChannelPage;
 use crate::ChannelPermissions;
 use crate::ChannelQuery;
 use crate::ChannelSummary;
+use crate::Page;
+use crate::PostContent;
+use crate::PostPreview;
+use crate::PostQuery;
+use crate::ReadPostRequest;
+use crate::ReadThreadRequest;
 use crate::SortDirection;
+use crate::ThreadPage;
+use crate::ThreadQuery;
+use crate::ThreadSummary;
 use caseless::default_case_fold_str;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::AgentPath;
+use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::Result;
+use futures::future::BoxFuture;
 use sqlx::Row;
 use sqlx::SqliteConnection;
 use sqlx::sqlite::SqliteRow;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// An owned, fixed read boundary. It does not retain deleted evidence or hold a
-/// transaction open. Clones share the catalog, cutoff and underlying connection pool.
-#[derive(Clone)]
-pub struct LocalBoardReadView {
-    board: Arc<LocalAgentMessageBoard>,
+/// The captured catalog and the read-only SQLite handle that enforces its post boundary.
+struct LocalBoardReadView {
+    board: LocalAgentMessageBoard,
     view: Arc<ReadView>,
 }
 
-impl LocalBoardReadView {
-    /// Reads use the captured boundary; every mutation, including subscriptions, is denied.
-    pub fn board(&self) -> Arc<dyn AgentMessageBoard> {
-        self.board.clone()
+impl BoardReadView for LocalBoardReadView {
+    fn identity(&self) -> SessionId {
+        self.board.identity
     }
 
-    /// Reads this capture with literal search over JSON posts and a string-encoded JSON field.
-    /// The JSON Pointer identifies the field to decode.
-    pub fn board_with_json_search(&self, pointer: &'static str) -> Arc<dyn AgentMessageBoard> {
-        let mut board = self.board.as_ref().clone();
+    fn with_json_search(&self, pointer: &'static str) -> Arc<dyn BoardReadView> {
+        let mut board = self.board.clone();
         board.nested_json_pointer = Some(pointer);
-        Arc::new(board)
+        Arc::new(Self {
+            board,
+            view: Arc::clone(&self.view),
+        })
     }
 
-    /// Whether the captured database belongs to the caller's requested storage namespace.
-    pub fn uses_storage_namespace(&self, options: &LocalBoardOptions) -> Result<bool> {
-        self.board.uses_storage_namespace(options)
+    fn storage_namespace(&self) -> &str {
+        &self.board.storage_namespace
     }
 
-    /// Complete catalog captured with the post boundary, ordered by newest activity first.
-    pub fn channels(&self) -> &[ChannelSummary] {
+    fn channels(&self) -> &[ChannelSummary] {
         &self.view.channels
     }
 
-    /// A page of insertion sequences and request IDs for this channel. Start with
-    /// sequence zero and resume after the last returned sequence, even across captures.
-    /// A page shorter than the default board page size exhausts the captured channel.
-    /// Board timestamps can be supplied by the host and are unsuitable for this cursor.
-    pub async fn appended_request_ids(
+    fn list_channels(
         &self,
         caller: ThreadId,
-        channel: &str,
-        after_sequence: i64,
-    ) -> Result<Vec<(i64, String)>> {
-        self.board.host.agent_path(caller).await?;
-        if after_sequence < 0 || after_sequence > self.view.post_cutoff {
-            return Err(invalid("post cursor is outside the captured board view"));
-        }
-        // The persisted retry key prefixes the caller-supplied request ID with "{caller}:".
-        sqlx::query_as(
-            "SELECT seq, substr(request_id, instr(request_id, ':') + 1) FROM posts
-             WHERE board=? AND channel=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?",
-        )
-        .bind(self.board.identity.to_string())
-        .bind(channel)
-        .bind(after_sequence)
-        .bind(self.view.post_cutoff)
-        .bind(i64::from(crate::PageRequest::default().limit.get()))
-        .fetch_all(self.board.pool.as_ref())
-        .await
-        .map_err(storage_error)
+        query: ChannelQuery,
+    ) -> BoxFuture<'_, Result<ChannelPage>> {
+        self.board.list_channels(caller, query)
     }
 
-    /// Reads one page of whole posts in the requested sequence order. Every post must
-    /// belong to this board and fall within the captured boundary.
-    pub async fn read_post_texts(
+    fn list_threads(
         &self,
         caller: ThreadId,
-        sequences: &[i64],
-    ) -> Result<Vec<String>> {
-        self.board.host.agent_path(caller).await?;
-        if sequences.len() > crate::PageRequest::default().limit.get() as usize {
-            return Err(invalid("requested posts exceed one board page"));
-        }
-        // Drive primary-key lookups from the requested page, not from all posts on the board.
-        let texts = sqlx::query_scalar::<_, String>(
-            "SELECT json_extract(p.payload, '$.text') FROM json_each(?) AS requested
-             CROSS JOIN posts AS p
-             WHERE p.seq=requested.value AND p.board=? AND p.seq<=? ORDER BY requested.key",
-        )
-        .bind(serde_json::to_string(sequences).map_err(storage_error)?)
-        .bind(self.board.identity.to_string())
-        .bind(self.view.post_cutoff)
-        .fetch_all(self.board.pool.as_ref())
-        .await
-        .map_err(storage_error)?;
-        if texts.len() != sequences.len() {
-            return Err(invalid("post not found in this board view"));
-        }
-        Ok(texts)
+        query: ThreadQuery,
+    ) -> BoxFuture<'_, Result<Page<ThreadSummary>>> {
+        self.board.list_threads(caller, query)
+    }
+
+    fn search_posts(
+        &self,
+        caller: ThreadId,
+        query: PostQuery,
+    ) -> BoxFuture<'_, Result<Page<PostPreview>>> {
+        self.board.search_posts(caller, query)
+    }
+
+    fn read_thread(
+        &self,
+        caller: ThreadId,
+        request: ReadThreadRequest,
+    ) -> BoxFuture<'_, Result<ThreadPage>> {
+        self.board.read_thread(caller, request)
+    }
+
+    fn read_post(
+        &self,
+        caller: ThreadId,
+        request: ReadPostRequest,
+    ) -> BoxFuture<'_, Result<PostContent>> {
+        AgentMessageBoard::read_post(&self.board, caller, request)
+    }
+
+    fn appended_request_ids<'a>(
+        &'a self,
+        caller: ThreadId,
+        channel: &'a str,
+        after: i64,
+    ) -> BoxFuture<'a, Result<Vec<(i64, String)>>> {
+        Box::pin(async move {
+            self.board.host.agent_path(caller).await?;
+            if after < 0 || after > self.view.post_cutoff {
+                return Err(invalid("post cursor is outside the captured board view"));
+            }
+            // The persisted retry key prefixes the caller-supplied request ID with "{caller}:".
+            sqlx::query_as(
+                "SELECT seq, substr(request_id, instr(request_id, ':') + 1) FROM posts
+                 WHERE board=? AND channel=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?",
+            )
+            .bind(self.board.identity.to_string())
+            .bind(channel)
+            .bind(after)
+            .bind(self.view.post_cutoff)
+            .bind(i64::from(crate::PageRequest::default().limit.get()))
+            .fetch_all(self.board.pool.as_ref())
+            .await
+            .map_err(storage_error)
+        })
+    }
+
+    fn read_post_texts<'a>(
+        &'a self,
+        caller: ThreadId,
+        positions: &'a [i64],
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        Box::pin(async move {
+            self.board.host.agent_path(caller).await?;
+            if positions.len() > crate::PageRequest::default().limit.get() as usize {
+                return Err(invalid("requested posts exceed one board page"));
+            }
+            // Drive primary-key lookups from the requested page, not from all posts on the board.
+            let texts = sqlx::query_scalar::<_, String>(
+                "SELECT json_extract(p.payload, '$.text') FROM json_each(?) AS requested
+                 CROSS JOIN posts AS p
+                 WHERE p.seq=requested.value AND p.board=? AND p.seq<=? ORDER BY requested.key",
+            )
+            .bind(serde_json::to_string(positions).map_err(storage_error)?)
+            .bind(self.board.identity.to_string())
+            .bind(self.view.post_cutoff)
+            .fetch_all(self.board.pool.as_ref())
+            .await
+            .map_err(storage_error)?;
+            if texts.len() != positions.len() {
+                return Err(invalid("post not found in this board view"));
+            }
+            Ok(texts)
+        })
     }
 }
 
@@ -148,7 +193,7 @@ impl ReadView {
     }
 }
 
-pub(super) async fn capture(board: &LocalAgentMessageBoard) -> Result<LocalBoardReadView> {
+pub(super) async fn capture(board: &LocalAgentMessageBoard) -> Result<Arc<dyn BoardReadView>> {
     let mut tx = board.pool.begin().await.map_err(storage_error)?;
     // seq is the database-wide AUTOINCREMENT key. Every future board append is above it.
     let post_cutoff = sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq),0) FROM posts")
@@ -183,10 +228,7 @@ pub(super) async fn capture(board: &LocalAgentMessageBoard) -> Result<LocalBoard
         },
         ..board.clone()
     };
-    Ok(LocalBoardReadView {
-        board: Arc::new(board),
-        view,
-    })
+    Ok(Arc::new(LocalBoardReadView { board, view }))
 }
 
 pub(super) async fn channel_summary(

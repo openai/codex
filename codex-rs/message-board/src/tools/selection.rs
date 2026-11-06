@@ -21,6 +21,14 @@ pub enum MessageBoardTool {
 }
 
 impl MessageBoardTool {
+    pub(super) const READ_ONLY: [Self; 5] = [
+        Self::GetChannels,
+        Self::ListThreads,
+        Self::SearchPosts,
+        Self::ReadThread,
+        Self::ReadPost,
+    ];
+
     /// Existing agent discussion tools, in their original registration order.
     pub const DISCUSSION: [Self; 9] = [
         Self::CreateChannel,

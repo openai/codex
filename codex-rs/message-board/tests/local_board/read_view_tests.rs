@@ -3,7 +3,6 @@
 #![cfg(test)]
 
 use super::*;
-use codex_protocol::error::CodexErrorDetails;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -48,7 +47,7 @@ async fn read_views_freeze_catalog_and_pages_without_changing_live_handles()
         destination: PostDestination::Channel("alpha".into()),
         text: "proof original".into(),
     };
-    let first = writer.append(root, original.clone()).await?;
+    let first = writer.append(root, original).await?;
     for (request_id, destination) in [
         ("second", PostDestination::Channel("alpha".into())),
         ("reply-one", PostDestination::Thread(first.thread_id)),
@@ -72,9 +71,8 @@ async fn read_views_freeze_catalog_and_pages_without_changing_live_handles()
         page: PageRequest::default(),
     };
     let before_catalog = reader.list_channels(root, catalog_query.clone()).await?;
-    let view = writer.read_view(root).await?;
-    let fixed = view.board();
-    assert_eq!(view.channels(), before_catalog.channels.results);
+    let fixed = writer.read_view(root).await?;
+    assert_eq!(fixed.channels(), before_catalog.channels.results);
     assert_eq!(
         fixed.list_channels(root, catalog_query.clone()).await?,
         before_catalog
@@ -250,35 +248,10 @@ async fn read_views_freeze_catalog_and_pages_without_changing_live_handles()
         target_agent: None,
         change: SubscriptionChange::Subscribe,
     };
-    reader.set_subscription(root, subscription.clone()).await?;
-    let create = CreateChannelRequest {
-        channel_name: "forbidden".into(),
-        description: None,
-        subscription: SubscriptionChange::Unsubscribe,
-    };
-    let upsert = UpsertChannelRequest {
-        channel_name: "alpha".into(),
-        description: "forbidden".to_owned().try_into()?,
-    };
-    let post = PostRequest {
-        request_id: "discussion".into(),
-        destination: PostDestination::Channel("alpha".into()),
-        text: "proof discussion".into(),
-        agents_to_notify: Vec::new(),
-    };
-    writer.post(root, post.clone()).await?;
-    for result in [
-        fixed.create_channel(root, create).await.map(|_| ()),
-        fixed.upsert_channel(root, upsert).await,
-        fixed.post(root, post).await.map(|_| ()),
-        fixed.append(root, original).await.map(|_| ()),
-        fixed.set_subscription(root, subscription).await.map(|_| ()),
-    ] {
-        let error = result.unwrap_err();
-        assert!(matches!(
-            error.details(),
-            CodexErrorDetails::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied
-        ));
-    }
+    reader.set_subscription(root, subscription).await?;
+    assert_eq!(
+        reader.subscribed_channels(root, page).await?.results,
+        vec!["alpha".to_owned()]
+    );
     Ok(())
 }

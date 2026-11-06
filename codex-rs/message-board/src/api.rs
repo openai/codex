@@ -1,6 +1,7 @@
 //! Operations on one board. Requests describe intent independently of tool schemas.
 //! Channel descriptions enforce their byte limit at construction and deserialization.
 
+use crate::BoardReadView;
 use crate::ChannelPage;
 use crate::ChannelSummary;
 use crate::Page;
@@ -18,7 +19,9 @@ use codex_protocol::error::Result;
 use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use uuid::Uuid;
 
 // Local and remote implementations must remain usable through the same handle.
@@ -38,6 +41,16 @@ const _: Option<&dyn AgentMessageBoard> = None;
 /// Boxed Send futures support an Arc<dyn AgentMessageBoard>, like AgentControl.
 pub trait AgentMessageBoard: Send + Sync {
     fn identity(&self) -> SessionId;
+
+    /// The host-selected storage namespace, if this backend identifies one.
+    fn storage_namespace(&self) -> Option<&str> {
+        None
+    }
+
+    /// Capture a live board's channel summaries and post boundary together for read-only access.
+    fn read_view(&self, _caller: ThreadId) -> BoxFuture<'_, Result<Arc<dyn BoardReadView>>> {
+        unsupported("capturing a board read view")
+    }
 
     fn create_channel(
         &self,
@@ -108,6 +121,29 @@ pub trait AgentMessageBoard: Send + Sync {
         caller: ThreadId,
         request: SubscriptionRequest,
     ) -> BoxFuture<'_, Result<SubscriptionState>>;
+
+    /// List a caller's current channel subscriptions on a live board.
+    fn subscribed_channels(
+        &self,
+        _caller: ThreadId,
+        _page: PageRequest,
+    ) -> BoxFuture<'_, Result<Page<String>>> {
+        unsupported("listing channel subscriptions")
+    }
+
+    /// Set the caller's membership in the supplied channels as one atomic change.
+    /// Other channels and thread subscriptions retain their current membership.
+    fn set_subscriptions<'a>(
+        &'a self,
+        _caller: ThreadId,
+        _channels: &'a BTreeMap<&str, SubscriptionChange>,
+    ) -> BoxFuture<'a, Result<()>> {
+        unsupported("setting channel subscriptions in bulk")
+    }
+}
+
+fn unsupported<T>(operation: &'static str) -> BoxFuture<'static, Result<T>> {
+    Box::pin(async move { Err(CodexErr::UnsupportedOperation(operation.into())) })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,10 +2,10 @@
 //! A plan fetches bodies one board page at a time; only IDs and positions survive the plan.
 
 use crate::EvidenceId;
-use crate::local_board_options;
+use crate::GUARDIAN_BOARD_NAMESPACE;
 use crate::sampling::context_input;
 use anyhow::ensure;
-use codex_message_board::LocalBoardReadView;
+use codex_message_board::BoardReadView;
 use codex_message_board::PageRequest;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -34,7 +34,7 @@ pub struct DeliveryState {
 /// successful admissions. A subsequent plan resumes from the last completed channel ranges.
 pub struct DeliveryPlan<'a> {
     state: &'a mut DeliveryState,
-    board: &'a LocalBoardReadView,
+    board: &'a dyn BoardReadView,
     /// Source ordinal -> one immutable housekeeper post.
     pending: BTreeMap<u64, i64>,
     /// Texts for the leading pending ordinals, including any that did not fit in the last batch.
@@ -68,17 +68,16 @@ impl DeliveryState {
     /// Collects the positions of undelivered originals within the board and source cutoffs.
     pub async fn plan<'a>(
         &'a mut self,
-        board: &'a LocalBoardReadView,
+        board: &'a dyn BoardReadView,
         selected: &BTreeSet<String>,
         cutoff: HistoryPosition,
     ) -> anyhow::Result<DeliveryPlan<'a>> {
         ensure!(
-            self.board == board.board().identity()
-                && self.board == SessionId::from(cutoff.thread_id),
+            self.board == board.identity() && self.board == SessionId::from(cutoff.thread_id),
             "delivery board and source cutoff must belong to the reviewer's root"
         );
         ensure!(
-            board.uses_storage_namespace(&local_board_options())?,
+            board.storage_namespace() == GUARDIAN_BOARD_NAMESPACE,
             "delivery requires the Guardian board"
         );
         ensure!(
@@ -109,16 +108,16 @@ impl DeliveryState {
                     .appended_request_ids(self.reviewer, channel, position)
                     .await?;
                 let last_page = page.len() < page_size;
-                for (sequence, request_id) in page {
+                for (post_position, request_id) in page {
                     let ordinal = EvidenceId::from_request_id(&request_id, channel)?.ordinal;
                     ensure!(
                         ordinal < cutoff.end_ordinal_exclusive,
                         "board source exceeds review cutoff"
                     );
                     if !self.delivered.contains(&ordinal) {
-                        pending.entry(ordinal).or_insert(sequence);
+                        pending.entry(ordinal).or_insert(post_position);
                     }
-                    position = sequence;
+                    position = post_position;
                 }
                 if last_page {
                     break;
@@ -159,10 +158,10 @@ impl DeliveryPlan<'_> {
         let mut count = 0;
         while count < self.pending.len() {
             if count == self.prefetched.len() {
-                let sequences: Vec<_> = unread.by_ref().take(page_size).copied().collect();
+                let positions: Vec<_> = unread.by_ref().take(page_size).copied().collect();
                 self.prefetched.extend(
                     self.board
-                        .read_post_texts(self.state.reviewer, &sequences)
+                        .read_post_texts(self.state.reviewer, &positions)
                         .await?,
                 );
             }

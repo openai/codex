@@ -1,8 +1,8 @@
 //! Selects discovery channels for one reviewer against a fixed board capture.
 //! Selection changes only this caller's subscriptions; it never reads new evidence or reviews actions.
 
+use crate::GUARDIAN_BOARD_NAMESPACE;
 use crate::OperationResult;
-use crate::local_board_options;
 use crate::sampling::GuardianOperation;
 use crate::sampling::sample;
 use anyhow::ensure;
@@ -10,8 +10,8 @@ use codex_guardian_reviewer::ReviewDeadline;
 use codex_guardian_reviewer::ReviewerRuntime;
 use codex_guardian_reviewer::SessionDisposition;
 use codex_guardian_reviewer::run_before_review_deadline;
-use codex_message_board::LocalAgentMessageBoard;
-use codex_message_board::LocalBoardReadView;
+use codex_message_board::AgentMessageBoard;
+use codex_message_board::BoardReadView;
 use codex_message_board::PageRequest;
 use codex_message_board::SubscriptionChange;
 use codex_protocol::AgentPath;
@@ -49,8 +49,8 @@ struct SelectionOutput {
 /// The host supplies the authoritative caller/path and a live read-only board connection.
 /// Hosts serialize preparation and review; this type starts no background work.
 pub struct ReviewerSubscriptions {
-    pub(crate) board: Arc<LocalAgentMessageBoard>,
-    pub(crate) view: LocalBoardReadView,
+    pub(crate) board: Arc<dyn AgentMessageBoard>,
+    pub(crate) view: Arc<dyn BoardReadView>,
     pub(crate) caller: ThreadId,
     pub(crate) path: AgentPath,
 }
@@ -59,12 +59,12 @@ impl ReviewerSubscriptions {
     /// Capture once, after housekeeping reaches the cutoff. Use this same view for all
     /// retrieval and delivery in the review.
     pub async fn capture(
-        board: Arc<LocalAgentMessageBoard>,
+        board: Arc<dyn AgentMessageBoard>,
         caller: ThreadId,
         path: AgentPath,
     ) -> anyhow::Result<Self> {
         ensure!(
-            board.uses_storage_namespace(&local_board_options())?,
+            board.storage_namespace() == Some(GUARDIAN_BOARD_NAMESPACE),
             "reviewer subscriptions require the Guardian board"
         );
         let view = board.read_view(caller).await?;
@@ -76,8 +76,8 @@ impl ReviewerSubscriptions {
         })
     }
 
-    pub fn view(&self) -> &LocalBoardReadView {
-        &self.view
+    pub fn view(&self) -> &dyn BoardReadView {
+        self.view.as_ref()
     }
 
     /// Current membership is read from storage so independently invoked tools cannot

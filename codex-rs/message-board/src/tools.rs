@@ -7,6 +7,7 @@ mod spec;
 use self::selection::MessageBoardTool;
 use crate::AgentMessageBoard;
 use crate::AppendRequest;
+use crate::BoardReadView;
 use crate::ChannelQuery;
 use crate::CreateChannelRequest;
 use crate::PageRequest;
@@ -58,10 +59,49 @@ pub fn message_board_tools(
     namespace_description: &str,
     tool_messages: Option<&MultiAgentToolMessages>,
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    bind_tools(
+        tools,
+        ToolTarget::Live(board),
+        caller,
+        caller_path,
+        namespace,
+        namespace_description,
+        tool_messages,
+    )
+}
+
+/// Creates the channel, thread, search and post read tools for one captured view.
+pub fn message_board_read_tools(
+    view: Arc<dyn BoardReadView>,
+    caller: ThreadId,
+    caller_path: AgentPath,
+    namespace: Option<&str>,
+    namespace_description: &str,
+    tool_messages: Option<&MultiAgentToolMessages>,
+) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    bind_tools(
+        &MessageBoardTool::READ_ONLY,
+        ToolTarget::Fixed(view),
+        caller,
+        caller_path,
+        namespace,
+        namespace_description,
+        tool_messages,
+    )
+}
+
+fn bind_tools(
+    tools: &[MessageBoardTool],
+    target: ToolTarget,
+    caller: ThreadId,
+    caller_path: AgentPath,
+    namespace: Option<&str>,
+    namespace_description: &str,
+    tool_messages: Option<&MultiAgentToolMessages>,
+) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
     tools
         .iter()
-        .copied()
-        .map(|tool| {
+        .map(|&tool| {
             let name = tool.name();
             let tool_message = tool_messages.and_then(|tools| tools.by_name(name));
             if tool_message.is_some_and(|tool| tool.parameters.is_some()) {
@@ -71,10 +111,10 @@ pub fn message_board_tools(
                 );
             }
             Arc::new(BoardTool {
-                board: board.clone(),
                 caller,
                 caller_path: caller_path.clone(),
                 tool,
+                target: target.clone(),
                 namespace: namespace.map(str::to_owned),
                 namespace_description: namespace_description.to_owned(),
                 description: tool_message.and_then(|tool| tool.description.clone()),
@@ -83,11 +123,17 @@ pub fn message_board_tools(
         .collect()
 }
 
+#[derive(Clone)]
+enum ToolTarget {
+    Live(Arc<dyn AgentMessageBoard>),
+    Fixed(Arc<dyn BoardReadView>),
+}
+
 struct BoardTool {
-    board: Arc<dyn AgentMessageBoard>,
     caller: ThreadId,
     caller_path: AgentPath,
     tool: MessageBoardTool,
+    target: ToolTarget,
     namespace: Option<String>,
     namespace_description: String,
     description: Option<String>,
@@ -106,14 +152,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
         )
     }
     fn supports_parallel_tool_calls(&self) -> bool {
-        matches!(
-            self.tool,
-            MessageBoardTool::GetChannels
-                | MessageBoardTool::ListThreads
-                | MessageBoardTool::SearchPosts
-                | MessageBoardTool::ReadThread
-                | MessageBoardTool::ReadPost
-        )
+        MessageBoardTool::READ_ONLY.contains(&self.tool)
     }
 
     fn handle<'a>(&'a self, call: ToolCall<'call>) -> ToolExecutorFuture<'a>
@@ -156,7 +195,6 @@ impl BoardTool {
         call: &ToolCall<'_>,
         budget: usize,
     ) -> Result<Value, BoardToolError> {
-        let board = &self.board;
         let caller = self.caller;
         let page_limit = |limit: Option<NonZeroU32>| limit.map_or(20, NonZeroU32::get).min(50);
         let preview_limit =
@@ -172,13 +210,13 @@ impl BoardTool {
                 SortDirection::OldestFirst
             }
         };
-        match self.tool {
-            MessageBoardTool::UpsertChannel => {
+        match (self.tool, &self.target) {
+            (MessageBoardTool::UpsertChannel, ToolTarget::Live(board)) => {
                 let request = serde_json::from_str(raw).map_err(model_error)?;
                 self.check_mutation_budget(budget, /*target_path_bytes*/ 0)?;
                 encode(board.upsert_channel(caller, request).await)
             }
-            MessageBoardTool::CreateChannel => {
+            (MessageBoardTool::CreateChannel, ToolTarget::Live(board)) => {
                 let arguments::CreateChannel {
                     channel_name,
                     description,
@@ -209,7 +247,7 @@ impl BoardTool {
                         .await,
                 )
             }
-            MessageBoardTool::GetChannels => {
+            (MessageBoardTool::GetChannels, target) => {
                 let arguments::GetChannels {
                     query,
                     recent_first,
@@ -218,18 +256,19 @@ impl BoardTool {
                 } = serde_json::from_str(raw).map_err(model_error)?;
                 let limit = page_limit(limit);
                 bounded_read(budget, limit, |scale| {
-                    board.list_channels(
-                        caller,
-                        ChannelQuery {
-                            query: query.clone(),
-                            direction: direction(recent_first),
-                            page: page(limit, cursor.clone(), scale),
-                        },
-                    )
+                    let request = ChannelQuery {
+                        query: query.clone(),
+                        direction: direction(recent_first),
+                        page: page(limit, cursor.clone(), scale),
+                    };
+                    match target {
+                        ToolTarget::Live(board) => board.list_channels(caller, request),
+                        ToolTarget::Fixed(view) => view.list_channels(caller, request),
+                    }
                 })
                 .await
             }
-            MessageBoardTool::ListThreads => {
+            (MessageBoardTool::ListThreads, target) => {
                 let arguments::ListThreads {
                     channel_name,
                     sort,
@@ -241,20 +280,21 @@ impl BoardTool {
                 let limit = page_limit(limit);
                 let max_chars_per_post = preview_limit(max_chars_per_post);
                 bounded_read(budget, limit.max(max_chars_per_post), |scale| {
-                    board.list_threads(
-                        caller,
-                        ThreadQuery {
-                            channel_name: channel_name.clone(),
-                            sort: sort.unwrap_or(ThreadSort::Created),
-                            direction: direction(recent_first),
-                            max_chars_per_post: nonzero(max_chars_per_post / scale),
-                            page: page(limit, cursor.clone(), scale),
-                        },
-                    )
+                    let request = ThreadQuery {
+                        channel_name: channel_name.clone(),
+                        sort: sort.unwrap_or(ThreadSort::Created),
+                        direction: direction(recent_first),
+                        max_chars_per_post: nonzero(max_chars_per_post / scale),
+                        page: page(limit, cursor.clone(), scale),
+                    };
+                    match target {
+                        ToolTarget::Live(board) => board.list_threads(caller, request),
+                        ToolTarget::Fixed(view) => view.list_threads(caller, request),
+                    }
                 })
                 .await
             }
-            MessageBoardTool::SearchPosts => {
+            (MessageBoardTool::SearchPosts, target) => {
                 let arguments::SearchPosts {
                     channel_name,
                     query,
@@ -271,21 +311,22 @@ impl BoardTool {
                 let limit = page_limit(limit);
                 let max_chars_per_post = preview_limit(max_chars_per_post);
                 bounded_read(budget, limit.max(max_chars_per_post), |scale| {
-                    board.search_posts(
-                        caller,
-                        PostQuery {
-                            channel_name: channel_name.clone(),
-                            query: query.clone(),
-                            after_message_id,
-                            author: author.clone(),
-                            max_chars_per_post: nonzero(max_chars_per_post / scale),
-                            page: page(limit, cursor.clone(), scale),
-                        },
-                    )
+                    let request = PostQuery {
+                        channel_name: channel_name.clone(),
+                        query: query.clone(),
+                        after_message_id,
+                        author: author.clone(),
+                        max_chars_per_post: nonzero(max_chars_per_post / scale),
+                        page: page(limit, cursor.clone(), scale),
+                    };
+                    match target {
+                        ToolTarget::Live(board) => board.search_posts(caller, request),
+                        ToolTarget::Fixed(view) => view.search_posts(caller, request),
+                    }
                 })
                 .await
             }
-            MessageBoardTool::ReadThread => {
+            (MessageBoardTool::ReadThread, target) => {
                 let arguments::ReadThread {
                     thread_id,
                     limit,
@@ -295,18 +336,19 @@ impl BoardTool {
                 let limit = page_limit(limit);
                 let max_chars_per_post = preview_limit(max_chars_per_post);
                 bounded_read(budget, limit.max(max_chars_per_post), |scale| {
-                    board.read_thread(
-                        caller,
-                        ReadThreadRequest {
-                            thread_id,
-                            max_chars_per_post: nonzero(max_chars_per_post / scale),
-                            page: page(limit, cursor.clone(), scale),
-                        },
-                    )
+                    let request = ReadThreadRequest {
+                        thread_id,
+                        max_chars_per_post: nonzero(max_chars_per_post / scale),
+                        page: page(limit, cursor.clone(), scale),
+                    };
+                    match target {
+                        ToolTarget::Live(board) => board.read_thread(caller, request),
+                        ToolTarget::Fixed(view) => view.read_thread(caller, request),
+                    }
                 })
                 .await
             }
-            MessageBoardTool::ReadPost => {
+            (MessageBoardTool::ReadPost, target) => {
                 let arguments::ReadPost {
                     message_id,
                     offset_chars,
@@ -314,18 +356,22 @@ impl BoardTool {
                 } = serde_json::from_str(raw).map_err(model_error)?;
                 let limit_chars = limit_chars.map_or(20_000, NonZeroU32::get).min(20_000);
                 bounded_read(budget, limit_chars, |scale| {
-                    board.read_post(
-                        caller,
-                        ReadPostRequest {
-                            message_id,
-                            offset_chars: offset_chars.unwrap_or_default(),
-                            limit_chars: nonzero(limit_chars / scale),
-                        },
-                    )
+                    let request = ReadPostRequest {
+                        message_id,
+                        offset_chars: offset_chars.unwrap_or_default(),
+                        limit_chars: nonzero(limit_chars / scale),
+                    };
+                    match target {
+                        ToolTarget::Live(board) => board.read_post(caller, request),
+                        ToolTarget::Fixed(view) => view.read_post(caller, request),
+                    }
                 })
                 .await
             }
-            MessageBoardTool::Subscribe | MessageBoardTool::Unsubscribe => {
+            (
+                MessageBoardTool::Subscribe | MessageBoardTool::Unsubscribe,
+                ToolTarget::Live(board),
+            ) => {
                 let arguments::Subscription {
                     channel_name,
                     thread_id,
@@ -361,7 +407,7 @@ impl BoardTool {
                         .await,
                 )
             }
-            MessageBoardTool::Post | MessageBoardTool::Append => {
+            (MessageBoardTool::Post | MessageBoardTool::Append, ToolTarget::Live(board)) => {
                 let arguments::Post {
                     text,
                     channel_name,
@@ -430,6 +476,10 @@ impl BoardTool {
                         .await
                 })
             }
+            (_, ToolTarget::Fixed(_)) => Err(FunctionCallError::Fatal(
+                "A board mutation was bound to a read-only view".to_string(),
+            )
+            .into()),
         }
     }
 

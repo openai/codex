@@ -2,7 +2,6 @@
 //! Thread subscriptions and other agents are unaffected; no notifications are emitted.
 
 use super::LocalAgentMessageBoard;
-use super::connection::Access;
 use super::invalid;
 use super::storage_error;
 use super::target_key;
@@ -18,15 +17,12 @@ use std::collections::BTreeMap;
 impl LocalAgentMessageBoard {
     /// Atomically replaces the caller's membership in the supplied channels.
     /// Channels outside this set keep their subscriptions and opt-outs.
-    /// A read-only live connection permits this self-only operation; a fixed view does not.
-    pub async fn set_subscriptions(
+    /// A read-only live connection permits this self-only operation.
+    pub(super) async fn apply_subscriptions(
         &self,
         caller: ThreadId,
         channels: &BTreeMap<&str, SubscriptionChange>,
     ) -> Result<()> {
-        if self.mode.view().is_some() {
-            Access::ReadOnly.require_write(self.identity, "board.manage_subscriptions")?;
-        }
         self.host.agent_path(caller).await?;
         for channel in channels.keys() {
             validate_channel(channel)?;
