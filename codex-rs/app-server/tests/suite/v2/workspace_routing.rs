@@ -159,7 +159,7 @@ async fn saved_workspace_is_discovered_once_and_not_the_default_account(
     );
     let expected = json!({
         "account": {"type": "chatgpt", "email": "user@example.com", "planType": plan_type, "workspaceName": "Selected workspace"},
-        "requiresOpenaiAuth": true, "workspaceRouting": routing("selected", "https://gov.chatgpt.com", "NO_CONSTRAINT")
+        "userId": null, "requiresOpenaiAuth": true, "workspaceRouting": routing("selected", "https://gov.chatgpt.com", "NO_CONSTRAINT")
     });
     assert_eq!(read(&mut server).await?, expected);
     assert_eq!(read(&mut server).await?, expected);
@@ -186,7 +186,7 @@ async fn saved_chatgpt_login_without_selected_workspace_preserves_account() -> R
     assert_eq!(
         read(&mut server).await?,
         json!({"account": {"type": "chatgpt", "email": null, "planType": "pro", "workspaceName": null},
-            "requiresOpenaiAuth": true, "workspaceRouting": null})
+            "userId": null, "requiresOpenaiAuth": true, "workspaceRouting": null})
     );
     backend.verify().await;
     Ok(())
@@ -246,7 +246,7 @@ async fn stable_clients_do_not_treat_failed_workspace_discovery_as_unrestricted(
     assert_eq!(
         read(&mut server).await?,
         json!({"account": {"type": "chatgpt", "email": null, "planType": "pro", "workspaceName": null},
-            "requiresOpenaiAuth": true, "workspaceRouting": routing("selected", "https://chatgpt.com", "NO_CONSTRAINT")})
+            "userId": null, "requiresOpenaiAuth": true, "workspaceRouting": routing("selected", "https://chatgpt.com", "NO_CONSTRAINT")})
     );
     Ok(())
 }
@@ -364,7 +364,7 @@ async fn login_and_workspace_switch_notify_after_routing_is_ready_then_logout_cl
     let _: LogoutAccountResponse = timeout(READ_TIMEOUT, server.read_response(request)).await??;
     assert_eq!(
         read(&mut server).await?,
-        json!({"account": null, "requiresOpenaiAuth": true, "workspaceRouting": null})
+        json!({"account": null, "userId": null, "requiresOpenaiAuth": true, "workspaceRouting": null})
     );
     backend.verify().await;
     Ok(())
@@ -466,7 +466,7 @@ async fn api_only_login_does_not_discover_chatgpt_routing() -> Result<()> {
     let _: LoginAccountResponse = timeout(READ_TIMEOUT, server.read_response(request)).await??;
     assert_eq!(
         read(&mut server).await?,
-        json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": true, "workspaceRouting": null})
+        json!({"account": {"type": "apiKey"}, "userId": null, "requiresOpenaiAuth": true, "workspaceRouting": null})
     );
     backend.verify().await;
     Ok(())

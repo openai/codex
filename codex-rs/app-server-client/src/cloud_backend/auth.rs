@@ -41,6 +41,7 @@ pub async fn connect(config: &Config) -> Result<AppServerClient> {
     Ok(start_worker(
         client,
         protocol::GetAccountResponse {
+            user_id: auth.get_chatgpt_user_id(),
             account: Some(protocol::Account::Chatgpt {
                 email: auth.get_account_email(),
                 plan_type: auth.account_plan_type().unwrap_or(PlanType::Unknown),

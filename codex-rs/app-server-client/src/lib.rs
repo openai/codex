@@ -1477,6 +1477,7 @@ mod tests {
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
                     result: serde_json::to_value(GetAccountResponse {
+                        user_id: None,
                         workspace_routing: None,
                         account: None,
                         requires_openai_auth: false,
@@ -1533,6 +1534,7 @@ mod tests {
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
                     result: serde_json::to_value(GetAccountResponse {
+                        user_id: None,
                         workspace_routing: None,
                         account: None,
                         requires_openai_auth: false,
@@ -1611,6 +1613,7 @@ mod tests {
         assert_eq!(
             response,
             GetAccountResponse {
+                user_id: None,
                 workspace_routing: None,
                 account: None,
                 requires_openai_auth: false,
@@ -1717,6 +1720,7 @@ mod tests {
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
                     result: serde_json::to_value(GetAccountResponse {
+                        user_id: None,
                         workspace_routing: None,
                         account: None,
                         requires_openai_auth: false,
@@ -1771,6 +1775,7 @@ mod tests {
         assert_eq!(
             first_response,
             GetAccountResponse {
+                user_id: None,
                 workspace_routing: None,
                 account: None,
                 requires_openai_auth: false,

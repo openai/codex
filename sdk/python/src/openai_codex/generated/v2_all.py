@@ -8923,6 +8923,13 @@ class GetAccountResponse(BaseModel):
     )
     account: Account | None = None
     requires_openai_auth: Annotated[bool, Field(alias="requiresOpenaiAuth")]
+    user_id: Annotated[
+        str | None,
+        Field(
+            alias="userId",
+            description="ChatGPT user ID belonging to this account response, when available.",
+        ),
+    ] = None
 
 
 class GuardianApprovalReview(BaseModel):

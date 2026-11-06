@@ -141,6 +141,7 @@ async fn background_routing_call_sites_skip_config(api_key: Option<&str>) -> any
     assert_eq!(
         response,
         GetAccountResponse {
+            user_id: None,
             account: api_key.map(|_| codex_app_server_protocol::Account::ApiKey {}),
             requires_openai_auth: true,
             workspace_routing: None,

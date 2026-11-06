@@ -159,6 +159,14 @@
     },
     "requiresOpenaiAuth": {
       "type": "boolean"
+    },
+    "userId": {
+      "default": null,
+      "description": "ChatGPT user ID belonging to this account response, when available.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

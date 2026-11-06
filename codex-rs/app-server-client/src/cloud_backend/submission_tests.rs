@@ -38,6 +38,7 @@ async fn native_submission_uses_one_admission_and_keeps_preflight_guards() -> Re
         cloud::Credentials::new("synthetic-bearer", "synthetic-account")?,
     )?;
     let account = protocol::GetAccountResponse {
+        user_id: None,
         account: None,
         requires_openai_auth: true,
         workspace_routing: None,

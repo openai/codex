@@ -49,6 +49,7 @@ pub(super) struct CachedWorkspaceRouting {
 
 pub(super) struct AccountRead {
     account_state: ProviderAccountState,
+    user_id: Option<String>,
     pub(super) workspace_routing: Option<WorkspaceRouting>,
     workspace_name: Option<String>,
 }
@@ -274,6 +275,7 @@ impl AccountRequestProcessor {
         Ok(Some(
             GetAccountResponse {
                 account,
+                user_id: read.user_id,
                 requires_openai_auth: read.account_state.requires_openai_auth,
                 workspace_routing: read.workspace_routing.map(|routing| {
                     codex_app_server_protocol::WorkspaceRouting {
@@ -340,6 +342,15 @@ impl AccountRequestProcessor {
             let account_state = provider
                 .account_state()
                 .map_err(AccountReadError::InvalidAccount)?;
+            let user_id = auth
+                .as_ref()
+                .filter(|_| {
+                    matches!(
+                        &account_state.account,
+                        Some(ProviderAccount::Chatgpt { .. })
+                    )
+                })
+                .and_then(CodexAuth::get_chatgpt_user_id);
             let mut workspace_routing = if let Some((auth, account_id)) = auth
                 .as_ref()
                 .filter(|auth| {
@@ -545,6 +556,7 @@ impl AccountRequestProcessor {
                 .unwrap_or_default();
             Ok(AccountRead {
                 account_state,
+                user_id,
                 workspace_routing,
                 workspace_name,
             })

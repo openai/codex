@@ -586,6 +586,9 @@ pub struct GetAccountParams {
 #[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
     pub account: Option<Account>,
+    /// ChatGPT user ID belonging to this account response, when available.
+    #[serde(default)]
+    pub user_id: Option<String>,
     pub requires_openai_auth: bool,
     #[experimental("account/read.workspaceRouting")]
     pub workspace_routing: Option<WorkspaceRouting>,
