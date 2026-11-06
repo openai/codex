@@ -1077,6 +1077,32 @@ impl ThreadManager {
         }
     }
 
+    /// Returns the catalog a root thread will use on start or cold resume.
+    pub async fn models_manager_for_startup(
+        &self,
+        config: &Config,
+        service_name: Option<&str>,
+        history: &InitialHistory,
+    ) -> SharedModelsManager {
+        let originator = self
+            .state
+            .effective_originator(
+                history,
+                service_name,
+                &self.state.session_source,
+                /*parent_thread_id*/ None,
+                /*forked_from_thread_id*/ None,
+                /*parent_originator*/ None,
+            )
+            .await;
+        self.state.models_for_thread(
+            config,
+            &self.state.auth_manager,
+            &self.state.runtime_auth,
+            &originator,
+        )
+    }
+
     pub fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
         self.state
             .model_catalog
@@ -1872,6 +1898,28 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    fn models_for_thread(
+        &self,
+        config: &Config,
+        auth_manager: &Arc<AuthManager>,
+        runtime_auth: &crate::runtime_auth::RuntimeAuthSlot,
+        originator: &str,
+    ) -> SharedModelsManager {
+        let runtime = crate::runtime_auth::runtime_for_config(
+            runtime_auth,
+            config,
+            Arc::clone(auth_manager),
+            &self.installation_id,
+        );
+        let manager = self.model_catalog.for_thread(
+            config,
+            Arc::clone(auth_manager),
+            runtime,
+            Arc::ptr_eq(auth_manager, &self.auth_manager),
+        );
+        manager.for_originator(originator).unwrap_or(manager)
+    }
+
     pub(crate) fn shared_thread_instructions_provider(
         &self,
         root_thread_id: ThreadId,
@@ -2706,21 +2754,12 @@ impl ThreadManagerState {
         } else {
             Arc::new(mcp_manager.for_plugins_manager(Arc::clone(&plugins_manager)))
         };
-        let runtime = crate::runtime_auth::runtime_for_config(
+        let models_manager = self.models_for_thread(
+            &config,
+            &auth_manager,
             &runtime_auth,
-            &config,
-            Arc::clone(&auth_manager),
-            &self.installation_id,
+            &startup_context.originator,
         );
-        let manager = self.model_catalog.for_thread(
-            &config,
-            Arc::clone(&auth_manager),
-            runtime,
-            Arc::ptr_eq(&auth_manager, &self.auth_manager),
-        );
-        let models_manager = manager
-            .for_originator(&startup_context.originator)
-            .unwrap_or(manager);
         let spawn_result = Session::spawn(SessionSpawnArgs {
             attached_thread,
             startup,

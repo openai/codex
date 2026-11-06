@@ -25,6 +25,7 @@ use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -381,5 +382,77 @@ async fn auth_and_provider_switches_do_not_reuse_chatgpt_catalog() -> Result<()>
         vec![model]
     );
     assert_eq!(other_models.requests().len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_model_info_uses_the_thread_catalog() -> Result<()> {
+    let slug = "gpt-5.5";
+    let server = MockServer::start().await;
+    let test = test_codex()
+        .with_auth(header_auth("Bearer catalog-test"))
+        .with_model_info_override(slug, |model| {
+            model.comp_hash = Some("runtime-revision".into());
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let mut options = test.start_thread_options().await;
+    let catalog = options
+        .config
+        .model_catalog
+        .take()
+        .expect("runtime catalog");
+    let mut model = catalog.models.into_iter().find(|m| m.slug == slug).unwrap();
+    model.comp_hash = Some("thread-revision".into());
+    let mut next_model = model.clone();
+    next_model.slug = "after-update".into();
+    Mock::given(method("GET"))
+        .and(path("/provider/models"))
+        .and(header("authorization", "Bearer catalog-test"))
+        .and(header("originator", "codex_work_cca"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ModelsResponse {
+            models: vec![model, next_model],
+        }))
+        .mount(&server)
+        .await;
+
+    options.config.model_provider.base_url = Some(format!("{}/provider", server.uri()));
+    options.config.model_context_window = Some(32_000);
+    options.metrics_service_name = Some("codex_work_cca".into());
+    let overrides = options.config.to_models_manager_config();
+    let default = test.thread_manager.get_models_manager();
+    let default_model = default.get_model_info(slug, &overrides).await;
+    assert_eq!(default_model.comp_hash.as_deref(), Some("runtime-revision"));
+
+    let startup = test
+        .thread_manager
+        .models_manager_for_startup(
+            &options.config,
+            options.metrics_service_name.as_deref(),
+            &options.initial_history,
+        )
+        .await;
+    startup
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            options.config.http_client_factory(),
+        )
+        .await;
+    let selected = startup.get_model_info(slug, &overrides).await;
+    assert_eq!(selected.comp_hash.as_deref(), Some("thread-revision"));
+    assert_eq!(selected.context_window, Some(32_000));
+
+    let thread = test.thread_manager.start_thread(options).await?.thread;
+    assert_eq!(thread.selected_model_info().await, selected.model);
+    thread
+        .update_thread_settings(ThreadSettingsOverrides {
+            model: Some("after-update".into()),
+            ..Default::default()
+        })
+        .await?;
+    let next = thread.selected_model_info().await;
+    assert_eq!(next.slug, "after-update");
+    assert_eq!(next.comp_hash.as_deref(), Some("thread-revision"));
     Ok(())
 }

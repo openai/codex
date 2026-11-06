@@ -41,6 +41,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfig;
@@ -1144,6 +1145,11 @@ impl CodexThread {
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
         self.session.state_db()
+    }
+
+    /// Resolves the model selected for future turns using this thread's catalog and settings.
+    pub async fn selected_model_info(&self) -> Arc<ModelInfo> {
+        self.session.selected_model_info().await
     }
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {

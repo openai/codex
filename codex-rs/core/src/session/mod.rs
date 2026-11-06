@@ -2284,6 +2284,21 @@ impl Session {
             .await)
     }
 
+    pub(crate) async fn selected_model_info(&self) -> Arc<ModelInfo> {
+        let (settings, overrides) = {
+            let state = self.state.lock().await;
+            let config = &state.session_configuration;
+            (
+                Arc::clone(&config.step_settings),
+                config.model_info_overrides.clone(),
+            )
+        };
+        settings
+            .resolve_model_info(self.services.models_manager.as_ref(), &overrides)
+            .await
+            .model
+    }
+
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         self.resume_config_snapshot().await.0
     }
