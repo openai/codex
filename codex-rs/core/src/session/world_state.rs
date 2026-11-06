@@ -40,6 +40,7 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 impl Session {
     pub(super) fn host_roster_reader(
@@ -60,7 +61,7 @@ impl Session {
         &self,
         step_context: &StepContext,
     ) -> bool {
-        if !step_context.settings.model_info.use_responses_lite {
+        if step_context.incremental_tools_feature().is_none() {
             return false;
         }
         let state = self.state.lock().await;
@@ -201,6 +202,11 @@ impl Session {
             !new_window && self.preserve_parent_tool_declarations();
         if incremental_tools && !preserve_parent_tool_declarations {
             let specs = step_context.tool_router.model_visible_specs();
+            let specs = specs
+                .iter()
+                .filter(|tool| !matches!(tool, ToolSpec::WebSearch { .. }))
+                .cloned()
+                .collect::<Vec<_>>();
             let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
             world_state.add_section(TopLevelToolsState::new(
                 model_messages.incremental_tools(),
