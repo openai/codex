@@ -25,6 +25,8 @@ use std::sync::atomic::AtomicUsize;
 
 #[path = "../../../message-board/tests/common/mod.rs"]
 mod board_host;
+#[path = "retrieval/selection.rs"]
+mod selection;
 
 #[tokio::test]
 async fn searches_unsubscribed_guardian_posts_only_through_the_review_cutoff() -> anyhow::Result<()>

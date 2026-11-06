@@ -40,8 +40,10 @@ use serde_json::Value;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-// Includes JSON escaping and metadata; applies equally to direct and Code Mode calls.
-const MAX_RESPONSE_BYTES: usize = 8_000;
+/// Maximum size of a message-board tool's raw JSON arguments, in KiB.
+pub const MAX_TOOL_ARGUMENT_KIB: usize = 128;
+/// Maximum response size including JSON escaping and metadata, for direct and Code Mode calls.
+pub const MAX_TOOL_RESPONSE_BYTES: usize = 8_000;
 
 /// Creates only the selected tools, in the supplied order, without registering them.
 /// The caller and its path must come from the host's authoritative tree metadata.
@@ -120,10 +122,12 @@ impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
     {
         Box::pin(async move {
             let raw = call.function_arguments()?;
-            if raw.len() > 128 * 1024 {
-                return Err(model_error("message-board arguments exceed 128 KiB"));
+            if raw.len() > MAX_TOOL_ARGUMENT_KIB * 1024 {
+                return Err(model_error(format!(
+                    "message-board arguments exceed {MAX_TOOL_ARGUMENT_KIB} KiB"
+                )));
             }
-            let budget = call.response_byte_budget(MAX_RESPONSE_BYTES);
+            let budget = call.response_byte_budget(MAX_TOOL_RESPONSE_BYTES);
             let (result, success) = match self.execute(raw, &call, budget).await {
                 Ok(result) => (result, true),
                 Err(BoardToolError::Model(error)) => return Err(error),

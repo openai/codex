@@ -11,6 +11,8 @@ mod evidence;
 mod housekeeper;
 mod retrieval_tools;
 mod sampling;
+mod selection;
+mod subscription_tools;
 pub use evidence::EvidenceCursor;
 pub use evidence::EvidenceId;
 pub use evidence::EvidenceSnapshot;
@@ -21,6 +23,7 @@ pub use housekeeper::Housekeeper;
 pub use retrieval_tools::RetrievalBinding;
 pub use retrieval_tools::install_retrieval_tools;
 pub use sampling::HousekeeperResult;
+pub use selection::ReviewerSubscriptions;
 
 /// Storage selected by the Guardian consumer for setup, opening and cleanup.
 pub fn local_board_options() -> LocalBoardOptions {

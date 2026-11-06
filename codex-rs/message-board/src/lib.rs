@@ -43,6 +43,8 @@ pub use local::setup::configure_local_board;
 pub use permissions::BoardPermissions;
 pub use permissions::ChannelPermissions;
 pub use permissions::PermissionDenied;
+pub use tools::MAX_TOOL_ARGUMENT_KIB;
+pub use tools::MAX_TOOL_RESPONSE_BYTES;
 pub use tools::message_board_tools;
 pub use tools::selection::MessageBoardTool;
 pub use types::ChannelPage;

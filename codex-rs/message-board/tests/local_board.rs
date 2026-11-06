@@ -179,7 +179,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
             next_offset_chars: 3,
         }
     );
-    resumed
+    let unsubscribed = resumed
         .set_subscription(
             root,
             SubscriptionRequest {
@@ -190,6 +190,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         )
         .await
         .unwrap();
+    assert_eq!(unsubscribed.last_message_id, Some(metadata.message_id));
     // Posting to an existing channel must not re-enable its subscription.
     resumed
         .post(
@@ -1020,15 +1021,17 @@ async fn check_tools_cover_channel_discussions_subscriptions_and_escaped_preview
     // The subscribed author receives no self-notices; the child is unsubscribed.
     assert_eq!(*host.notifications.lock().unwrap(), Vec::new());
     let (last, last_reply) = last.unwrap();
-    assert!(
-        tool("subscribe")
-            .handle(board_tool_call(
-                "subscribe",
-                json!({"channel_name":"Workflow","thread_id":last.thread_id})
-            ))
-            .await
-            .is_err()
-    );
+    for invalid_target in [
+        json!({"channel_name":"Workflow","thread_id":last.thread_id}),
+        json!({"channel_name":"missing"}),
+    ] {
+        assert!(
+            tool("subscribe")
+                .handle(board_tool_call("subscribe", invalid_target))
+                .await
+                .is_err()
+        );
+    }
     let subscribed = tool("subscribe")
         .handle(board_tool_call(
             "subscribe",

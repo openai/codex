@@ -394,8 +394,18 @@ impl LocalAgentMessageBoard {
         let mut tx = self.begin_write().await?;
         let (channel, root, last) = match &request.target {
             SubscriptionTarget::Channel(name) => {
-                let summary = catalog::channel_summary(self, &mut tx, name).await?;
-                (name.clone(), None, summary.last_message_id)
+                let last: Option<String> = sqlx::query_scalar(
+                    "SELECT (SELECT p.id FROM posts p WHERE p.board=c.board AND p.channel=c.name
+                             ORDER BY p.timestamp DESC,p.seq DESC LIMIT 1)
+                     FROM channels c WHERE c.board=? AND c.name=?",
+                )
+                .bind(self.identity.to_string())
+                .bind(name)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(storage_error)?
+                .ok_or_else(|| invalid("channel not found in this board"))?;
+                (name.clone(), None, last)
             }
             SubscriptionTarget::Thread(root) => {
                 let post = self.load_post(&mut tx, *root).await?;
@@ -404,14 +414,14 @@ impl LocalAgentMessageBoard {
                 }
                 let last: String = sqlx::query_scalar("SELECT id FROM posts WHERE board=? AND root=? ORDER BY timestamp DESC, seq DESC LIMIT 1")
                     .bind(self.identity.to_string()).bind(root.to_string()).fetch_one(&mut *tx).await.map_err(storage_error)?;
-                (
-                    post.metadata.channel_name,
-                    Some(*root),
-                    Some(Uuid::parse_str(&last).map_err(storage_error)?),
-                )
+                (post.metadata.channel_name, Some(*root), Some(last))
             }
         };
-        let enabled = request.change == SubscriptionChange::Subscribe;
+        let last_message_id = last
+            .as_deref()
+            .map(Uuid::parse_str)
+            .transpose()
+            .map_err(storage_error)?;
         // Keep active subscriptions readable by older binaries. Opt-outs only
         // prevent implicit subscription when this agent participates again.
         let statements = match request.change {
@@ -438,8 +448,8 @@ impl LocalAgentMessageBoard {
             channel_name: channel,
             thread_id: root,
             target_agent: target_path,
-            enabled,
-            last_message_id: last,
+            enabled: request.change == SubscriptionChange::Subscribe,
+            last_message_id,
         })
     }
 
