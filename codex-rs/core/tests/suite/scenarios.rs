@@ -2156,12 +2156,17 @@ async fn skill_read_recovers_omitted_installation_and_reads_selected_environment
     Ok(())
 }
 
-#[test_case::test_case(false; "native_tools")]
-#[test_case::test_case(true; "host_tools")]
+#[test_case::test_case(false, ReasoningEffort::Low; "native_tools")]
+#[test_case::test_case(true, ReasoningEffort::Low; "host_tools")]
+#[test_case::test_case(true, ReasoningEffort::Ultra; "host_tools_ultra")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_catalog_parameters(disable_native_tools: bool) -> Result<()> {
+async fn multi_agent_catalog_parameters(
+    disable_native_tools: bool,
+    reasoning_effort: ReasoningEffort,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let proactive = reasoning_effort == ReasoningEffort::Ultra;
     let server = start_mock_server().await;
     let test = test_codex()
         .with_config(move |config| {
@@ -2169,7 +2174,8 @@ async fn multi_agent_catalog_parameters(disable_native_tools: bool) -> Result<()
             config.multi_agent_v2.disable_native_tools = disable_native_tools;
             config.workspace_roots = vec![config.cwd.clone()];
         })
-        .with_model_info_override("gpt-6-astra", |model| {
+        .with_model_info_override("gpt-6-astra", move |model| {
+            model.default_reasoning_level = Some(reasoning_effort);
             model.model_messages.as_mut().expect("model messages").tools = Some(
                 serde_json::from_value(json!({"multi_agent": {"list_agents": {
                     "parameters": json!({
@@ -2215,7 +2221,12 @@ async fn multi_agent_catalog_parameters(disable_native_tools: bool) -> Result<()
         test.codex.multi_agent_version(),
         Some(codex_protocol::protocol::MultiAgentVersion::V2)
     );
-    let (name, description) = if disable_native_tools {
+    let (name, description) = if proactive {
+        (
+            "multi_agent_native_tools_hidden_proactive",
+            "Ultra reasoning provides proactive guidance when native tools are disabled.",
+        )
+    } else if disable_native_tools {
         (
             "multi_agent_native_tools_hidden",
             "Native tools and native usage guidance are unavailable.",

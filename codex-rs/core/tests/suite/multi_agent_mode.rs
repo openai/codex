@@ -164,10 +164,15 @@ async fn ultra_reasoning_uses_highest_non_ultra_and_proactive_mode() -> Result<(
     Ok(())
 }
 
-#[test_case(ModeHintSource::ConfiguredHint; "configured hint overrides catalog")]
-#[test_case(ModeHintSource::CatalogHint; "catalog hint overrides reasoning effort")]
+#[test_case(ModeHintSource::ConfiguredHint, false; "configured hint overrides catalog")]
+#[test_case(ModeHintSource::ConfiguredHint, true; "configured hint overrides hosted default")]
+#[test_case(ModeHintSource::CatalogHint, false; "catalog hint overrides reasoning effort")]
+#[test_case(ModeHintSource::CatalogHint, true; "hosted default overrides catalog")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mode_hints_override_reasoning_effort(source: ModeHintSource) -> Result<()> {
+async fn mode_hints_override_reasoning_effort(
+    source: ModeHintSource,
+    disable_native_tools: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -194,9 +199,12 @@ async fn mode_hints_override_reasoning_effort(source: ModeHintSource) -> Result<
                 /*root_role*/ None,
             );
         })
-        .with_config(move |config| match source {
-            ModeHintSource::ConfiguredHint => configure_custom_mode_hint(config),
-            ModeHintSource::CatalogHint => configure_multi_agent_v2(config),
+        .with_config(move |config| {
+            match source {
+                ModeHintSource::ConfiguredHint => configure_custom_mode_hint(config),
+                ModeHintSource::CatalogHint => configure_multi_agent_v2(config),
+            }
+            config.multi_agent_v2.disable_native_tools = disable_native_tools;
         })
         .build(&server)
         .await?;
@@ -210,17 +218,32 @@ async fn mode_hints_override_reasoning_effort(source: ModeHintSource) -> Result<
     let second_texts = developer_texts(&second_input);
     let (expected_hint, suppressed_hint) = match source {
         ModeHintSource::ConfiguredHint => (CUSTOM_MODE_HINT_TEXT, CATALOG_MODE_HINT_TEXT),
+        ModeHintSource::CatalogHint if disable_native_tools => (
+            "read the full multi-agent skill using its listed package locator",
+            CATALOG_MODE_HINT_TEXT,
+        ),
         ModeHintSource::CatalogHint => (CATALOG_MODE_HINT_TEXT, CATALOG_EXPLICIT_TEXT),
     };
-    for texts in [&first_texts, &second_texts] {
+    let hosted_default = disable_native_tools && matches!(source, ModeHintSource::CatalogHint);
+    for (index, texts) in [&first_texts, &second_texts].into_iter().enumerate() {
+        let proactive = usize::from(hosted_default && index == 1);
         assert_eq!(
             (
                 count_containing(texts, expected_hint),
                 count_containing(texts, NO_SPAWN_TEXT),
                 count_containing(texts, PROACTIVE_TEXT),
+                count_containing(texts, "using multi-agent tools"),
+                count_containing(texts, "using collaboration tools"),
                 count_containing(texts, CATALOG_PROACTIVE_TEXT),
             ),
-            (1, 0, 0, 0)
+            (
+                1 + proactive,
+                usize::from(hosted_default),
+                proactive,
+                proactive,
+                0,
+                0
+            )
         );
         assert_eq!(count_containing(texts, suppressed_hint), 0);
     }
@@ -614,6 +637,73 @@ async fn leaving_ultra_after_cold_resume_emits_explicit_mode() -> Result<()> {
         ),
         (2, 1, 1)
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disabling_hosted_multi_agent_after_cold_resume_resets_proactive_mode() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        (1..=2)
+            .map(|index| {
+                sse(vec![
+                    ev_response_created(&format!("resp-{index}")),
+                    ev_completed(&format!("resp-{index}")),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+    let initial = test_codex()
+        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_config(|config| {
+            configure_ultra(config);
+            config.multi_agent_v2.disable_native_tools = true;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    submit_turn(&initial.codex, "before resume", /*effort*/ None).await?;
+
+    let mut resume_builder = test_codex()
+        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::Ultra);
+            config.multi_agent_v2.disable_native_tools = true;
+            config.agents_enabled = false;
+            config
+                .features
+                .disable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+        });
+    let resumed = resume_builder
+        .restart_with_auto_env(&server, &initial)
+        .await?;
+    drop(initial);
+    submit_turn(&resumed.codex, "after resume", /*effort*/ None).await?;
+
+    let requests = responses.requests();
+    let first_input = requests[0].input();
+    let first_texts = developer_texts(&first_input);
+    assert_eq!(count_containing(&first_texts, PROACTIVE_TEXT), 1);
+    assert_eq!(count_containing(&first_texts, "using multi-agent tools"), 1);
+
+    let resumed_input = requests[1].input();
+    let resumed_texts = developer_texts(&resumed_input);
+    let mut modes = resumed_texts
+        .into_iter()
+        .filter(|text| text.contains(MULTI_AGENT_MODE_OPEN_TAG));
+    assert!(
+        modes
+            .next()
+            .expect("retained mode")
+            .contains(PROACTIVE_TEXT)
+    );
+    assert!(modes.next().expect("reset mode").contains(NO_SPAWN_TEXT));
+    assert_eq!(modes.next(), None);
 
     Ok(())
 }

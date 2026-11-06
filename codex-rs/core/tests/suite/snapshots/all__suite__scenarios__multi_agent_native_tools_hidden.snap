@@ -64,7 +64,11 @@ Settings:
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
         </collaboration_mode>
 03:message/developer:
-    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+    <multi_agent_mode>
+    Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-ag...k for sub-agents, delegation, or parallel agent work. [hash=6e1e1baf5a87faf5]
+
+    Before calling any multi-agent tool, read the full multi-agent skill using its listed package locator. S...context. If the read fails, make note of the blocker. [hash=104096cdd6a881da]
+    </multi_agent_mode>
 04:message/user:
     <environment_context>
       <cwd><CWD></cwd>
