@@ -4,7 +4,7 @@
 use super::*;
 use crate::clipboard_copy::worker::CopyResult;
 
-pub(super) const IMAGE_PASTE_REPEAT_WINDOW: Duration = Duration::from_millis(/*millis*/ 250);
+const IMAGE_PASTE_REPEAT_WINDOW: Duration = Duration::from_millis(/*millis*/ 250);
 
 pub(super) enum PendingCopy {
     Message(u64, String),
@@ -12,6 +12,35 @@ pub(super) enum PendingCopy {
 }
 
 impl ChatWidget {
+    /// Recognize image paste shortcuts, including presses consumed by repeat suppression.
+    pub(super) fn image_paste_key_action(&mut self, key: KeyEvent) -> Option<KeyEventAction> {
+        let shift_insert = cfg!(windows) && key_hint::shift(KeyCode::Insert).is_press(key);
+        let image_paste = key.kind == KeyEventKind::Press
+            && ((matches!(key.code, KeyCode::Char(c) if c.eq_ignore_ascii_case(&'v'))
+                && key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT))
+                || shift_insert);
+        if !image_paste {
+            if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Release) {
+                self.suppress_image_paste_until = Instant::now();
+            }
+            return None;
+        }
+        if Instant::now() < self.suppress_image_paste_until {
+            self.suppress_image_paste_until = Instant::now() + IMAGE_PASTE_REPEAT_WINDOW;
+            return Some(KeyEventAction::None);
+        }
+        self.suppress_image_paste_until = Instant::now() + IMAGE_PASTE_REPEAT_WINDOW;
+        let text_fallback = (cfg!(windows)
+            && (key.modifiers == KeyModifiers::CONTROL || shift_insert))
+            .then_some(key.code);
+        if text_fallback.is_some() {
+            self.bottom_pane.prepare_composer_clipboard_paste();
+        }
+        Some(KeyEventAction::PasteImage { text_fallback })
+    }
+
     pub(crate) fn paste_image(&mut self) -> Result<(), crate::clipboard_paste::PasteImageError> {
         let result = paste_image_to_temp_png();
         self.suppress_image_paste_until = Instant::now() + IMAGE_PASTE_REPEAT_WINDOW;

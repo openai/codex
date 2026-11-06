@@ -119,8 +119,15 @@ impl ChatComposer {
 
     /// Integrate already-classified buffered typing before another answer takes over this editor.
     pub(crate) fn flush_pending_input(&mut self) {
+        self.flush_pending_input_with_shell_prefix(ShellPrefixHandling::Interpret);
+    }
+
+    pub(in crate::bottom_pane) fn flush_pending_input_with_shell_prefix(
+        &mut self,
+        shell_prefix: ShellPrefixHandling,
+    ) {
         if let Some(text) = self.draft.paste_burst.flush_before_modified_input() {
-            self.apply_paste(text);
+            self.apply_paste_with_shell_prefix(text, shell_prefix);
         }
         self.draft.paste_burst.clear_after_explicit_paste();
     }

@@ -852,6 +852,19 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
+    fn is_composer_activity_key(key: KeyEvent) -> bool {
+        matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && !key_hint::has_ctrl_or_alt(key.modifiers)
+            && matches!(
+                key.code,
+                KeyCode::Char(_)
+                    | KeyCode::Backspace
+                    | KeyCode::Delete
+                    | KeyCode::Enter
+                    | KeyCode::Tab
+            )
+    }
+
     /// Preserve restricted drafts, allowing recovery commands only for connected unavailable threads.
     pub(crate) fn handle_restricted_key(
         &mut self,
@@ -896,17 +909,7 @@ impl BottomPane {
                 view.observe_key_event_while_covered(key_event, routed_key);
             }
         }
-        let records_composer_activity =
-            matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-                && !key_hint::has_ctrl_or_alt(key_event.modifiers)
-                && matches!(
-                    key_event.code,
-                    KeyCode::Char(_)
-                        | KeyCode::Backspace
-                        | KeyCode::Delete
-                        | KeyCode::Enter
-                        | KeyCode::Tab
-                );
+        let records_composer_activity = Self::is_composer_activity_key(key_event);
         if self.warnings_active() {
             if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                 self.record_composer_activity_at(Instant::now());

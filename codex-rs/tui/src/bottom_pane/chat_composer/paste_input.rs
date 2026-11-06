@@ -13,10 +13,19 @@ use crate::bottom_pane::textarea::EditTarget;
 
 impl ChatComposer {
     pub(crate) fn insert_str(&mut self, text: &str) {
-        self.insert_str_at_target(self.draft.textarea.edit_target(), text);
+        self.insert_str_at_target(
+            self.draft.textarea.edit_target(),
+            text,
+            ShellPrefixHandling::Interpret,
+        );
     }
 
-    fn insert_str_at_target(&mut self, target: EditTarget, text: &str) {
+    fn insert_str_at_target(
+        &mut self,
+        target: EditTarget,
+        text: &str,
+        shell_prefix: ShellPrefixHandling,
+    ) {
         if !text.is_empty() && self.sparkle.draft.get() == sparkle::SparkleDraft::Untouched {
             self.dismiss_sparkle();
         }
@@ -24,7 +33,9 @@ impl ChatComposer {
         let elements_before = target
             .replaces_text()
             .then(|| self.draft.textarea.element_payloads());
-        let inserts_shell_prefix = target.start() == 0 && text.starts_with('!');
+        let inserts_shell_prefix = matches!(shell_prefix, ShellPrefixHandling::Interpret)
+            && target.start() == 0
+            && text.starts_with('!');
         self.draft.textarea.insert_str_at_target(target, text);
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
@@ -153,6 +164,14 @@ impl ChatComposer {
     ///
     /// Composer edits clear paste-burst Enter suppression and sync popups.
     pub(super) fn apply_paste(&mut self, pasted: String) -> bool {
+        self.apply_paste_with_shell_prefix(pasted, ShellPrefixHandling::Interpret)
+    }
+
+    pub(super) fn apply_paste_with_shell_prefix(
+        &mut self,
+        pasted: String,
+        shell_prefix: ShellPrefixHandling,
+    ) -> bool {
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let pasted = sanitize_user_text(pasted.into());
         if self.history_search.is_some() {
@@ -200,7 +219,7 @@ impl ChatComposer {
             let cursor = self.draft.textarea.cursor();
             self.draft.textarea.insert_str_at(cursor, " ");
         } else {
-            self.insert_str_at_target(target, &pasted);
+            self.insert_str_at_target(target, &pasted, shell_prefix);
         }
         if is_blockquote {
             let textarea = &mut self.draft.textarea;
