@@ -113,6 +113,11 @@ pub(super) async fn apply_projection(
     // Write the projected rows and advance the JSONL offset and ordinal in one transaction. If
     // SQLite fails, it stays behind the durable rollout instead of claiming data it did not
     // materialize.
+    let _writer = store
+        .thread_history_writer
+        .acquire()
+        .await
+        .map_err(thread_history_error)?;
     let mut transaction = pool.begin_immediate().await.map_err(thread_history_error)?;
     let thread_id = thread_id.to_string();
     let projection_state = sqlx::query_as::<_, (i64, i64)>(
@@ -252,6 +257,11 @@ pub(super) async fn delete_thread(
     }
 
     let pool = store.thread_history_db().await?;
+    let _writer = store
+        .thread_history_writer
+        .acquire()
+        .await
+        .map_err(thread_history_delete_error)?;
     let mut transaction = pool
         .begin_immediate()
         .await

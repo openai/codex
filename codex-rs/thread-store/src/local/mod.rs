@@ -61,6 +61,7 @@ use tokio::sync::OwnedMutexGuard;
 use tokio::sync::OwnedRwLockReadGuard;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 
 use crate::AddThreadAttachmentOutcome;
 use crate::AddThreadAttachmentParams;
@@ -153,6 +154,9 @@ pub struct LocalThreadStore {
     writer_lock_coordinator: Arc<WriterLockCoordinator>,
     state_db: Option<StateDbHandle>,
     thread_history_db: Arc<OnceCell<sqlx::SqlitePool>>,
+    /// Queue local history writers before they take a pool connection so readers
+    /// can use the other connections while SQLite's single writer is busy.
+    thread_history_writer: Arc<Semaphore>,
     thread_data_cleanup: Option<Arc<ThreadDataCleanup>>,
     #[cfg(test)]
     startup_migration_retry_gate: Option<Arc<StartupMigrationRetryGate>>,
@@ -281,6 +285,7 @@ impl LocalThreadStore {
             writer_lock_coordinator,
             state_db,
             thread_history_db: Arc::new(OnceCell::new()),
+            thread_history_writer: Arc::new(Semaphore::new(/* permits */ 1)),
             thread_data_cleanup: None,
             #[cfg(test)]
             startup_migration_retry_gate: None,

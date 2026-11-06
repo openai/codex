@@ -1,13 +1,14 @@
-//! Verifies narrow SQLite timestamp updates preserve metadata and repair fallbacks.
+//! Verifies narrow SQLite activity updates preserve metadata and repair fallbacks.
 
 use super::test_support::test_config;
 use super::test_support::write_session_file_with_history_mode;
 use super::*;
 use chrono::Utc;
+use codex_protocol::protocol::TokenUsage;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn timestamp_updates_repair_missing_rows_then_touch_only_timestamp_columns() {
+async fn activity_updates_repair_missing_rows_then_touch_only_activity_columns() {
     for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
         let home = tempfile::TempDir::new().expect("temp dir");
         let config = test_config(home.path());
@@ -32,7 +33,7 @@ async fn timestamp_updates_repair_missing_rows_then_touch_only_timestamp_columns
             history_mode,
         )
         .expect("write canonical history");
-        let params = UpdateThreadMetadataParams {
+        let mut params = UpdateThreadMetadataParams {
             thread_id,
             patch: ThreadMetadataPatch {
                 updated_at: Some(Utc::now()),
@@ -86,6 +87,24 @@ async fn timestamp_updates_repair_missing_rows_then_touch_only_timestamp_columns
                 .expect("read write counters");
         assert_eq!(writes, vec!["timestamp"]);
 
+        params.patch.token_usage = Some(TokenUsage {
+            total_tokens: 123,
+            ..Default::default()
+        });
+        store
+            .update_thread_metadata(params.clone())
+            .await
+            .expect("update token usage");
+        let actual = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("read token usage")
+            .expect("updated row");
+        assert!(actual.updated_at > expected.updated_at);
+        expected.updated_at = actual.updated_at;
+        expected.tokens_used = 123;
+        assert_eq!(actual, expected);
+
         store
             .stage_pending_thread_metadata(
                 thread_id,
@@ -97,7 +116,7 @@ async fn timestamp_updates_repair_missing_rows_then_touch_only_timestamp_columns
             .await
             .expect("stage metadata");
         store
-            .update_thread_metadata(params)
+            .update_thread_metadata(params.clone())
             .await
             .expect("apply staged metadata");
         let actual = runtime
@@ -120,7 +139,65 @@ async fn timestamp_updates_repair_missing_rows_then_touch_only_timestamp_columns
             .await
             .expect("read write counters");
         writes.sort();
-        assert_eq!(writes, vec!["full", "timestamp", "timestamp"]);
+        assert_eq!(writes, vec!["full", "timestamp", "timestamp", "timestamp"]);
+
+        sqlx::query(
+            "UPDATE threads SET preview = '', first_user_message = 'older message' WHERE id = ?",
+        )
+        .bind(thread_id.to_string())
+        .execute(&pool)
+        .await
+        .expect("prepare legacy preview");
+        store
+            .update_thread_metadata(params.clone())
+            .await
+            .expect("backfill preview");
+        let repaired = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("read preview")
+            .expect("thread");
+        assert_eq!(repaired.preview.as_deref(), Some("older message"));
+
+        let parent = ThreadId::new();
+        let source = serde_json::json!({
+            "subagent": { "thread_spawn": { "parent_thread_id": parent, "depth": 1 } }
+        });
+        sqlx::query("UPDATE threads SET source = ? WHERE id = ?")
+            .bind(source.to_string())
+            .bind(thread_id.to_string())
+            .execute(&pool)
+            .await
+            .expect("prepare child missing its spawn edge");
+        sqlx::raw_sql(
+            "DELETE FROM timestamp_writes;
+             CREATE TRIGGER count_edge_attempts BEFORE INSERT ON thread_spawn_edges
+             BEGIN INSERT INTO timestamp_writes VALUES ('edge'); END;",
+        )
+        .execute(&pool)
+        .await
+        .expect("track spawn-edge writes");
+        store
+            .update_thread_metadata(params.clone())
+            .await
+            .expect("repair missing edge");
+        assert_eq!(
+            runtime
+                .list_thread_spawn_children(parent)
+                .await
+                .expect("children"),
+            vec![thread_id]
+        );
+        store
+            .update_thread_metadata(params)
+            .await
+            .expect("update indexed child");
+        let writes: Vec<String> =
+            sqlx::query_scalar("SELECT kind FROM timestamp_writes ORDER BY kind")
+                .fetch_all(&pool)
+                .await
+                .expect("read child write counters");
+        assert_eq!(writes, vec!["edge", "full", "timestamp", "timestamp"]);
         pool.close().await;
     }
 }

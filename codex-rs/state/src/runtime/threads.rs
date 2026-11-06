@@ -817,6 +817,31 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
+    /// Record a token count when the thread still matches its observed source and any
+    /// required spawn edge exists. Otherwise the caller must use normal metadata repair.
+    pub async fn update_thread_token_usage(
+        &self,
+        metadata: &crate::ThreadMetadata,
+        updated_at: DateTime<Utc>,
+        total_tokens: i64,
+    ) -> anyhow::Result<bool> {
+        let updated_at = self.allocate_thread_updated_at(updated_at)?;
+        let result = sqlx::query(
+            "UPDATE threads SET updated_at = ?, updated_at_ms = ?, tokens_used = ?
+             WHERE id = ? AND source = ?
+               AND (? OR EXISTS (SELECT 1 FROM thread_spawn_edges WHERE child_thread_id = threads.id))",
+        )
+        .bind(datetime_to_epoch_seconds(updated_at))
+        .bind(datetime_to_epoch_millis(updated_at))
+        .bind(total_tokens.max(0))
+        .bind(metadata.id.to_string())
+        .bind(metadata.source.as_str())
+        .bind(thread_spawn_parent_thread_id_from_source_str(&metadata.source).is_none())
+        .execute_with_busy_retry(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn touch_thread_recency_at(
         &self,
         thread_id: ThreadId,
@@ -3452,6 +3477,56 @@ mod tests {
             Some("first-user-message")
         );
         assert_eq!(persisted.preview.as_deref(), Some("first-user-message"));
+    }
+
+    #[tokio::test]
+    async fn token_usage_preserves_concurrent_edits_and_requires_current_spawn_metadata()
+    -> Result<()> {
+        let home = tempfile::tempdir()?;
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(home.path().abs()),
+            "test-provider".to_string(),
+        )
+        .await?;
+        let thread_id = ThreadId::new();
+        let parent = ThreadId::new();
+        let mut metadata = test_thread_metadata(home.path(), thread_id, home.path().to_path_buf());
+        metadata.tokens_used = 42;
+        metadata.source = serde_json::json!({
+            "subagent": { "thread_spawn": { "parent_thread_id": parent, "depth": 1 } }
+        })
+        .to_string();
+        runtime.upsert_thread(&metadata).await?;
+        runtime.update_thread_title(thread_id, "new title").await?;
+        let mut expected = runtime.get_thread(thread_id).await?.expect("thread");
+        let updated_at = expected.updated_at + chrono::Duration::seconds(2);
+        assert!(
+            runtime
+                .update_thread_token_usage(&metadata, updated_at, /*total_tokens*/ -1)
+                .await?
+        );
+        expected.updated_at = updated_at;
+        expected.tokens_used = 0;
+        assert_eq!(runtime.get_thread(thread_id).await?, Some(expected.clone()));
+
+        sqlx::query("DELETE FROM thread_spawn_edges WHERE child_thread_id = ?")
+            .bind(thread_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await?;
+        assert!(
+            !runtime
+                .update_thread_token_usage(&metadata, updated_at, /*total_tokens*/ 123)
+                .await?
+        );
+        metadata.source = "cli".to_string();
+        assert!(
+            !runtime
+                .update_thread_token_usage(&metadata, updated_at, /*total_tokens*/ 123)
+                .await?
+        );
+        assert_eq!(runtime.get_thread(thread_id).await?, Some(expected));
+        assert!(runtime.list_thread_spawn_children(parent).await?.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
