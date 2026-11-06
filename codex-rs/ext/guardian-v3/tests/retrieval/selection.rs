@@ -39,25 +39,9 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::AtomicUsize;
 use tokio_util::sync::CancellationToken;
 
-use crate::board_host;
-
-fn host(owner: ThreadId, reviewer: ThreadId, path: &AgentPath) -> Arc<board_host::Host> {
-    Arc::new(board_host::Host {
-        clock: AtomicI64::default(),
-        fail_clock: AtomicBool::new(false),
-        agent_path_calls: AtomicUsize::default(),
-        members: [(owner, AgentPath::root()), (reviewer, path.clone())].into(),
-        active: AtomicBool::new(true),
-        fail_notifications: AtomicBool::new(false),
-        notifications: Mutex::default(),
-    })
-}
+use crate::retrieval_host;
 
 #[tokio::test]
 async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids()
@@ -68,7 +52,7 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
     let path = AgentPath::root()
         .join("reviewer")
         .map_err(anyhow::Error::msg)?;
-    let host = host(owner, reviewer, &path);
+    let host = retrieval_host([(owner, AgentPath::root()), (reviewer, path.clone())]);
     let dir = tempfile::tempdir()?;
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into()?);
     let agent_board = LocalBoard::new(sqlite.clone(), owner.into())
@@ -243,7 +227,7 @@ async fn preparation_commits_only_valid_selections_from_the_captured_catalog() -
     let path = AgentPath::root()
         .join("reviewer")
         .map_err(anyhow::Error::msg)?;
-    let host = host(owner, reviewer, &path);
+    let host = retrieval_host([(owner, AgentPath::root()), (reviewer, path.clone())]);
     let dir = tempfile::tempdir()?;
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into()?);
     let storage = local_board(sqlite, owner.into());

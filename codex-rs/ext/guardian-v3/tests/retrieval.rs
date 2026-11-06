@@ -25,23 +25,33 @@ use std::sync::atomic::AtomicUsize;
 
 #[path = "../../../message-board/tests/common/mod.rs"]
 mod board_host;
+#[path = "retrieval/evidence_board.rs"]
+mod evidence_board;
+#[path = "retrieval/planning.rs"]
+mod planning;
 #[path = "retrieval/selection.rs"]
 mod selection;
+
+fn retrieval_host(
+    members: impl IntoIterator<Item = (ThreadId, AgentPath)>,
+) -> Arc<board_host::Host> {
+    Arc::new(board_host::Host {
+        clock: AtomicI64::default(),
+        fail_clock: AtomicBool::default(),
+        agent_path_calls: AtomicUsize::default(),
+        members: members.into_iter().collect(),
+        active: AtomicBool::new(true),
+        fail_notifications: AtomicBool::default(),
+        notifications: Mutex::default(),
+    })
+}
 
 #[tokio::test]
 async fn searches_unsubscribed_guardian_posts_only_through_the_review_cutoff() -> anyhow::Result<()>
 {
     let owner = ThreadId::new();
     let dir = tempfile::tempdir()?;
-    let host = Arc::new(board_host::Host {
-        clock: AtomicI64::default(),
-        fail_clock: AtomicBool::default(),
-        agent_path_calls: AtomicUsize::default(),
-        members: [(owner, AgentPath::root())].into(),
-        active: AtomicBool::new(true),
-        fail_notifications: AtomicBool::default(),
-        notifications: Mutex::default(),
-    });
+    let host = retrieval_host([(owner, AgentPath::root())]);
     let board = local_board(
         SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into()?),
         owner.into(),

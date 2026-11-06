@@ -19,6 +19,7 @@ use caseless::default_case_fold_str;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
 use codex_protocol::error::Result;
 use sqlx::Row;
 use sqlx::SqliteConnection;
@@ -56,6 +57,35 @@ impl LocalBoardReadView {
     /// Complete catalog captured with the post boundary, ordered by newest activity first.
     pub fn channels(&self) -> &[ChannelSummary] {
         &self.view.channels
+    }
+
+    /// A page of insertion sequences and request IDs for this channel. Start with
+    /// sequence zero and resume after the last returned sequence, even across captures.
+    /// A page shorter than the default board page size exhausts the captured channel.
+    /// Board timestamps can be supplied by the host and are unsuitable for this cursor.
+    pub async fn appended_request_ids(
+        &self,
+        caller: ThreadId,
+        channel: &str,
+        after_sequence: i64,
+    ) -> Result<Vec<(i64, String)>> {
+        self.board.host.agent_path(caller).await?;
+        if after_sequence < 0 || after_sequence > self.view.post_cutoff {
+            return Err(invalid("post cursor is outside the captured board view"));
+        }
+        // The persisted retry key prefixes the caller-supplied request ID with "{caller}:".
+        sqlx::query_as(
+            "SELECT seq, substr(request_id, instr(request_id, ':') + 1) FROM posts
+             WHERE board=? AND channel=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?",
+        )
+        .bind(self.board.identity.to_string())
+        .bind(channel)
+        .bind(after_sequence)
+        .bind(self.view.post_cutoff)
+        .bind(i64::from(crate::PageRequest::default().limit.get()))
+        .fetch_all(self.board.pool.as_ref())
+        .await
+        .map_err(storage_error)
     }
 }
 

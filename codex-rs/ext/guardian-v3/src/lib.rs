@@ -1,5 +1,6 @@
 //! Guardian's durable evidence storage, owned by the main thread.
-//! Reviewer tools search a fixed board view. The host owns review scheduling and the lifetime of each view.
+//! Reviewer tools search a fixed board view and plan delivery of the originals routed by the housekeeper.
+//! The host owns review scheduling and the lifetime of each view.
 //! Hosts invoke permanent-deletion cleanup only when Guardian V3 is enabled.
 
 use codex_message_board::LocalBoard;
@@ -7,12 +8,14 @@ use codex_message_board::LocalBoardOptions;
 use codex_protocol::SessionId;
 use codex_state::SqliteConfig;
 
+mod delivery;
 mod evidence;
 mod housekeeper;
 mod retrieval_tools;
 mod sampling;
 mod selection;
 mod subscription_tools;
+pub use delivery::DeliveryState;
 pub use evidence::EvidenceCursor;
 pub use evidence::EvidenceId;
 pub use evidence::EvidenceSnapshot;

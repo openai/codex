@@ -13,13 +13,35 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
 use codex_thread_store::OriginalHistoryRequest;
 use codex_thread_store::ThreadStore;
+use codex_utils_string::to_json_string_bounded;
+use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
 
 /// Position in the containing snapshot's root history, independent of channel routing.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceId {
     pub ordinal: u64,
+}
+
+impl EvidenceId {
+    /// Stable board idempotency key shared by the housekeeper and delivery.
+    pub(crate) fn request_id(self, channel: &str) -> anyhow::Result<String> {
+        Ok(to_json_string_bounded(
+            &(self.ordinal, channel),
+            /*max_bytes*/ 512,
+        )?)
+    }
+
+    pub(crate) fn from_request_id(request: &str, channel: &str) -> anyhow::Result<Self> {
+        let (ordinal, destination): (u64, String) = serde_json::from_str(request)?;
+        ensure!(
+            destination == channel,
+            "evidence request ID channel mismatch"
+        );
+        Ok(Self { ordinal })
+    }
 }
 
 /// Original model-visible evidence, with roles, call IDs and verified source order.
@@ -45,6 +67,11 @@ pub struct EvidenceSnapshot {
 impl EvidenceSnapshot {
     pub fn thread_id(&self) -> ThreadId {
         self.thread_id
+    }
+
+    /// Exclusive durable source boundary to bind later retrieval to this capture.
+    pub fn cutoff(&self) -> HistoryPosition {
+        self.end
     }
 
     pub fn records(&self) -> &[OriginalEvidence] {
@@ -244,7 +271,7 @@ fn selected(envelope: &ResponseItemEnvelope) -> anyhow::Result<bool> {
     })
 }
 
-/// Apply the same admission and model-visible projection at intake and canonical verification.
+/// Select original evidence at intake and strip host-only metadata before routing.
 fn review_original(mut item: RolloutItem) -> anyhow::Result<Option<RolloutItem>> {
     let include = match &item {
         RolloutItem::ResponseItem(envelope) => selected(envelope)?,

@@ -236,10 +236,7 @@ impl Housekeeper {
                         .append(
                             self.owner,
                             AppendRequest {
-                                request_id: to_json_string_bounded(
-                                    &("gv3-original", source.id, channel),
-                                    /*max_bytes*/ 512,
-                                )?,
+                                request_id: source.id.request_id(channel)?,
                                 destination: PostDestination::Channel(channel.clone()),
                                 // Multiple destinations need copies; the last one can take ownership.
                                 text: if index + 1 == destinations.len() {
