@@ -144,7 +144,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                         .inspect_err(|_| outcome = "invalid_arguments")?;
                 }
 
-                let matches = self.context.matching_packages(&args.package);
+                let matches = self
+                    .context
+                    .matching_packages(&args.package)
+                    .inspect_err(|_| outcome = "ambiguous_name")?;
                 let (skill_entry, selected_source, output_authority) = matches
                     .iter()
                     .find_map(|(entry, matched_source)| {

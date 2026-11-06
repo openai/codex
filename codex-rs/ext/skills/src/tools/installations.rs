@@ -92,7 +92,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for InstallationsTool {
                         .validate()
                         .inspect_err(|_| outcome = "invalid_source")?;
                 }
-                let matches = self.context.matching_packages(&args.package);
+                let matches = self
+                    .context
+                    .matching_packages(&args.package)
+                    .inspect_err(|_| outcome = "ambiguous_name")?;
                 let (entry, _) = matches.first().ok_or_else(|| {
                     outcome = if args.package.alias_source().is_some()
                         && self
