@@ -1,5 +1,6 @@
 //! Renders a borrowed, bounded host snapshot of completed REPL responses.
 //! Collection shares immutable response records; preparation owns request selection.
+//! Elastic selection bounds protected provenance before allocating response bodies.
 //! Capture, storage eviction and the sync delivery cursor stay in core. Rendering
 //! preserves the existing text/multimodal layouts, omission markers and image order.
 
@@ -13,6 +14,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::input_text;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_protocol::user_input::UserInput::Image;
 use codex_protocol::user_input::UserInput::Text;
@@ -145,7 +147,7 @@ impl NodeReplContext<'_> {
                     "[REPL response {} {}]\n",
                     response.sequence, response.provenance
                 );
-                let mut bytes = response.items.iter().fold(header.len(), |bytes, item| {
+                let mut bytes = response.items.iter().fold(0_usize, |bytes, item| {
                     bytes.saturating_add(match item {
                         Text { text, .. } => text.len().saturating_add(/*rhs*/ 1),
                         _ => 0,
@@ -154,12 +156,11 @@ impl NodeReplContext<'_> {
                 if response.items.is_empty() {
                     bytes = bytes.saturating_add("<completed without visible text>\n".len());
                 }
-                bytes
+                response_selection_bytes(header, bytes, self.budgeting)
             }),
             intro.len().saturating_add(closing.len()),
             NodeReplLayout::Multimodal,
             self.omitted_responses,
-            self.budgeting,
         );
         let omitted_responses = selected.omitted_responses;
 
@@ -251,11 +252,12 @@ impl ContextualUserFragment for NodeReplContext<'_> {
                     .map(str::len)
                     .reduce(|bytes, next| bytes.saturating_add(/*rhs*/ 1).saturating_add(next))
                     .unwrap_or_default();
-                header.len().saturating_add(if text_bytes == 0 {
+                let body_bytes = if text_bytes == 0 {
                     "<completed without visible text>\n".len()
                 } else {
                     text_bytes.saturating_add(/*rhs*/ 1)
-                })
+                };
+                response_selection_bytes(header, body_bytes, self.budgeting)
             }),
             start
                 .len()
@@ -263,7 +265,6 @@ impl ContextualUserFragment for NodeReplContext<'_> {
                 .saturating_add(body.len()),
             NodeReplLayout::Text,
             self.omitted_responses,
-            self.budgeting,
         );
         let omitted_responses = selected.omitted_responses;
 
@@ -300,8 +301,24 @@ impl ContextualUserFragment for NodeReplContext<'_> {
     }
 }
 
-/// Maximum rendered REPL text, including framing and omission notices.
+/// Maximum fixed text or elastic provenance cost, including framing and omission notices.
 const MAX_NODE_REPL_RENDERED_BYTES: usize = 32_000;
+
+fn response_selection_bytes(
+    header: String,
+    body_bytes: usize,
+    budgeting: crate::ContextBudgeting,
+) -> usize {
+    match budgeting {
+        crate::ContextBudgeting::Fixed => header.len().saturating_add(body_bytes),
+        crate::ContextBudgeting::Elastic => {
+            // Headers stay protected during body allocation. Bound their wire cost,
+            // including separators, by selecting complete newest responses first.
+            let tokens = crate::budget::content_tokens(&input_text(header)).saturating_add(1);
+            TruncationPolicy::Tokens(tokens).byte_budget()
+        }
+    }
+}
 
 enum NodeReplLayout {
     Text,
@@ -319,14 +336,7 @@ fn select_node_repl_responses(
     framing_bytes: usize,
     layout: NodeReplLayout,
     mut omitted_responses: u64,
-    budgeting: crate::ContextBudgeting,
 ) -> NodeReplSelection {
-    if budgeting == crate::ContextBudgeting::Elastic {
-        return NodeReplSelection {
-            first: 0,
-            omitted_responses,
-        };
-    }
     let notice_bytes = match layout {
         NodeReplLayout::Text => 64,
         NodeReplLayout::Multimodal => 160,

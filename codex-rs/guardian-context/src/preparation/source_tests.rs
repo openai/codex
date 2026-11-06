@@ -111,6 +111,114 @@ fn elastic_repl_rendering_keeps_stored_text_images_and_omissions() {
             mode == NodeReplReviewEvidenceMode::Multimodal
         );
     }
+
+    // A fresh reviewer can receive the entire retained store after compaction.
+    // Many small results must not consume its budget with protected headers alone.
+    const RESPONSE_COUNT: u64 = 10_000;
+    let responses = (1..=RESPONSE_COUNT)
+        .map(|sequence| {
+            let mut items = vec![UserInput::Text {
+                text: format!("record {sequence}"),
+                text_elements: Vec::new(),
+            }];
+            if sequence == RESPONSE_COUNT {
+                items.push(image.clone());
+            }
+            Arc::new(NodeReplResponse {
+                sequence,
+                provenance: format!("tool=node_repl.js cell=cell-{sequence} call=call-{sequence}"),
+                items,
+            })
+        })
+        .collect::<Vec<_>>();
+    let config =
+        crate::budget::tests::complete_minimum_budget(crate::ElasticBudgetConfig::default());
+    for mode in [
+        NodeReplReviewEvidenceMode::TextOnly,
+        NodeReplReviewEvidenceMode::Multimodal,
+    ] {
+        let context = prepare_sync_context(
+            CollectedContext {
+                sections: vec![ContextSection::NodeReplEvidence(
+                    crate::RenderedNodeReplEvidence {
+                        content: repl::NodeReplEvidenceContent::Collected {
+                            responses: responses.clone(),
+                            omitted_responses: STORAGE_OMISSIONS,
+                            mode,
+                        },
+                    },
+                )],
+            },
+            &ContextProfile::synchronous(),
+            /*entry_number_offset*/ 0,
+            ContextPresentation::SyncFull {
+                session_id: "review",
+            },
+            ContextBudgeting::Elastic,
+        )
+        .unwrap();
+        let expected = context.clone().into_user_inputs().unwrap();
+        let admitted = context
+            .prepare_elastic_entries(&config)
+            .unwrap()
+            .enforce_budget(
+                crate::RequestBudget {
+                    max_input_tokens: crate::DEFAULT_MAX_INPUT_TOKENS,
+                    existing_context_tokens: 0,
+                },
+                "Evidence omitted.".to_owned(),
+            )
+            .unwrap()
+            .into_user_inputs()
+            .unwrap();
+        assert_eq!(admitted, expected);
+        let sequences = admitted
+            .iter()
+            .filter_map(|item| {
+                let UserInput::Text { text, .. } = item else {
+                    return None;
+                };
+                text.strip_prefix("[REPL response ")?
+                    .split_once(' ')?
+                    .0
+                    .parse::<u64>()
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        let first = sequences[0];
+        assert!(first > 1);
+        assert_eq!(sequences, (first..=RESPONSE_COUNT).collect::<Vec<_>>());
+        let mut expected_records = Vec::new();
+        for response in &responses[usize::try_from(first - 1).unwrap()..] {
+            for text in [
+                format!(
+                    "[REPL response {} {}]\n",
+                    response.sequence, response.provenance
+                ),
+                format!("record {}\n", response.sequence),
+            ] {
+                expected_records.push(UserInput::Text {
+                    text,
+                    text_elements: Vec::new(),
+                });
+            }
+        }
+        if mode == NodeReplReviewEvidenceMode::Multimodal {
+            expected_records.push(image.clone());
+        }
+        assert!(
+            admitted
+                .windows(expected_records.len())
+                .any(|items| items == expected_records)
+        );
+        let omitted = STORAGE_OMISSIONS + first - 1;
+        assert!(admitted.contains(&UserInput::Text {
+            text: format!(
+                "<omitted node_repl_responses=\"{omitted}\" reason=\"resource_bounds\" />\n"
+            ),
+            text_elements: Vec::new(),
+        }));
+    }
 }
 
 #[test]
