@@ -260,20 +260,13 @@ impl LocalAgentControl {
         &self,
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
-        mut communication: InterAgentCommunication,
+        communication: InterAgentCommunication,
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
         let observers = state.extensions.message_lifecycle_contributors();
-        let delivery = (!observers.is_empty()).then(|| {
-            let message_id = communication
-                .id
-                .take()
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| (self.runtime.item_id_generator)("amsg"));
-            communication.id = Some(message_id.clone());
-            MessageDelivery::publish(context.sender_thread_id, message_id, observers)
-        });
+        let delivery = (!observers.is_empty())
+            .then(|| MessageDelivery::publish(context.sender_thread_id, observers));
         let log_content = crate::agent_communication::send_log_content(&communication);
         {
             // Keep unloaded delivery atomic with publication of a reloaded session.

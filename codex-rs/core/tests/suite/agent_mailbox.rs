@@ -7,7 +7,6 @@ use codex_core::config::Config;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::MessageLifecycleContributor;
 use codex_extension_api::MessageLifecycleInput;
-use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::Op;
@@ -20,15 +19,18 @@ use std::sync::mpsc;
 use tokio::sync::oneshot;
 
 #[derive(Default)]
-struct Messages(Mutex<HashSet<ResponseItemId>>);
+struct Messages(Mutex<HashSet<uuid::Uuid>>);
 impl MessageLifecycleContributor for Messages {
     fn on_publish(&self, input: &MessageLifecycleInput) {
         let mut pending = self.0.lock().expect("messages lock");
-        assert!(pending.insert(input.message_id.clone()));
+        let token = uuid::Uuid::new_v4();
+        input.data.insert(token);
+        assert!(pending.insert(token));
     }
     fn on_consumed(&self, input: &MessageLifecycleInput, _recipient: ThreadId) {
         let mut pending = self.0.lock().expect("messages lock");
-        assert!(pending.remove(&input.message_id));
+        let token = input.data.remove::<uuid::Uuid>().expect("published token");
+        assert!(pending.remove(token.as_ref()));
     }
 }
 
