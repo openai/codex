@@ -1763,57 +1763,13 @@ jobs:
           mv dist/x86_64-pc-windows-msvc/install.ps1 dist/install.ps1
 
       - name: Create GitHub Release
-        id: github_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_NAME: ${{ steps.release_name.outputs.name }}
           RELEASE_NOTES: ${{ steps.release_notes.outputs.path }}
           MAKE_LATEST: ${{ steps.release_name.outputs.make_latest }}
           PRERELEASE: ${{ steps.release_name.outputs.prerelease }}
-        run: |
-          set -euo pipefail
-
-          # Look up this tag, including drafts, without listing release history.
-          # API errors must fail the step rather than look like an absent release.
-          # shellcheck disable=SC2016
-          exists="$(gh api graphql \
-            -f query='query($owner:String!,$repo:String!,$tag:String!){repository(owner:$owner,name:$repo){release(tagName:$tag){databaseId}}}' \
-            -f owner="$GITHUB_REPOSITORY_OWNER" \
-            -f repo="${GITHUB_REPOSITORY#*/}" \
-            -f tag="$GITHUB_REF_NAME" \
-            --jq '.data.repository.release != null')"
-          release_args=(
-            --repo "$GITHUB_REPOSITORY"
-            --title "$RELEASE_NAME"
-            --notes-file "$RELEASE_NOTES"
-            --prerelease="$PRERELEASE"
-          )
-          if [[ "$exists" == false ]]; then
-            # Prereleases must be created directly to keep prereleased events.
-            draft=true
-            if [[ "$PRERELEASE" == true ]]; then
-              draft=false
-            fi
-            gh release create "$GITHUB_REF_NAME" "${release_args[@]}" \
-              --draft="$draft" --verify-tag --latest=false
-            if [[ "$PRERELEASE" == true ]]; then
-              echo "created_prerelease=true" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-          mapfile -d '' assets < <(find dist -type f -print0 | sort -z)
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY" --clobber
-          echo "assets_uploaded=true" >> "$GITHUB_OUTPUT"
-          gh release edit "$GITHUB_REF_NAME" "${release_args[@]}" \
-            --draft=false --latest="$MAKE_LATEST"
-
-      - name: Remove incomplete prerelease
-        # Keep the tag so a rerun can recreate the release and its prereleased event.
-        if: ${{ always() && steps.github_release.outputs.created_prerelease == 'true' && steps.github_release.outputs.assets_uploaded != 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes
+        run: bash .github/scripts/publish-github-release.sh
 
   publish-r2-assets:
     name: publish-r2-assets
