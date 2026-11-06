@@ -1,0 +1,87 @@
+---
+source: core/tests/suite/scenarios_incremental_tools.rs
+assertion_line: 644
+expression: "context_snapshot::format_request_history_snapshot(scenario, &requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Removal notices append alone; restoration appends one developer notice before both namespace declarations. Unchanged turns do not repeat updates.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "gpt-5.5"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (1; hash=f359ca6f02a419d6):
+    - web_search; hash=f103e327c6870a46
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=c6476125e1d67bb3):
+        - namespace/functions; hash=6475578c7f948d18
+          - function/exec_command
+          - function/write_stdin
+          - function/list_mcp_resources
+          - function/list_mcp_resource_templates
+          - function/read_mcp_resource
+          - function/request_user_input
+          - custom/apply_patch
+          - function/view_image
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=2327142bda177c50
+          - function/close_agent
+          - function/resume_agent
+          - function/send_input
+          - function/spawn_agent
+          - function/wait_agent
+        - namespace/mcp__echo_service: Echo service instructions.; hash=a5144e5d70d01799
+          - function/cwd
+          - function/echo
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Begin with the echo service.
+-- request 2 (turn) --
+05:message/developer:
+    The following tools are no longer available. Do not call them:
+    - mcp__echo_service.cwd
+06:message/user:
+    Continue after disabling the cwd tool.
+-- request 3 (turn) --
+07:message/user:
+    Continue with the remaining echo tool.
+-- request 4 (turn) --
+08:message/developer:
+    The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:
+    - mcp__echo_service
+
+    The following tools are no longer available. Do not call them:
+    - functions.list_mcp_resource_templates
+    - functions.list_mcp_resources
+    - functions.read_mcp_resource
+09:message/user:
+    Continue after removing the echo service.
+-- request 5 (turn) --
+10:message/user:
+    Continue without the echo service.
+-- request 6 (turn) --
+11:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+12:additional_tools/developer (2; hash=ba0bceb82aa883e0):
+        - namespace/functions; hash=88d1efdc7cb932a8
+          - function/list_mcp_resources
+          - function/list_mcp_resource_templates
+          - function/read_mcp_resource
+        - namespace/mcp__echo_service: Echo service instructions.; hash=a5144e5d70d01799
+          - function/cwd
+          - function/echo
+13:message/user:
+    Continue with the restored echo service.
+-- request 7 (turn) --
+14:message/user:
+    Continue with the same restored tools.

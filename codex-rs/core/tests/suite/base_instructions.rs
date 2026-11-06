@@ -142,6 +142,10 @@ async fn catalog_and_model_changes_preserve_the_window_base(
                     .features
                     .disable(Feature::IncrementalTools)
                     .expect("disable incremental tools");
+                config
+                    .features
+                    .enable(Feature::IncrementalToolsLegacy)
+                    .expect("enable only the regular Responses flag");
             }
         })
         .build_with_auto_env(&server)
