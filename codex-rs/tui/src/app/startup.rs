@@ -16,6 +16,7 @@ use crate::session_start::SessionStartOutcome;
 use crate::session_start::cancel_session_start;
 use crate::session_start::complete_session_start;
 use crate::unarchive_prompt::run_unarchive_prompt;
+use color_eyre::eyre::ContextCompat;
 
 fn spawn_startup_thread_start(
     app_server: &AppServerSession,
@@ -61,7 +62,7 @@ pub(super) async fn prepare_fresh_startup_config(
 ) -> Result<crate::projectless::AppliedDefaults> {
     let defaults_cwd = match app_server_target {
         AppServerTarget::Embedded | AppServerTarget::LocalDaemon { .. } => config.cwd.as_path(),
-        AppServerTarget::Remote { .. } => {
+        AppServerTarget::Remote { .. } | AppServerTarget::Cloud => {
             app_server.remote_cwd_override().unwrap_or(Path::new("."))
         }
     };
@@ -96,22 +97,26 @@ pub(super) fn startup_model(
     config: &Config,
     bootstrap: &AppServerBootstrap,
     server_defaults_read: bool,
-) -> String {
-    config.model.clone().unwrap_or_else(|| {
-        if server_defaults_read {
-            // Legacy bootstrap paths may be seeded with local config, which can differ from a
-            // cleared server model. Use the server catalog when config/read returned model: null.
-            bootstrap
-                .available_models
-                .iter()
-                .find(|model| model.is_default)
-                .or_else(|| bootstrap.available_models.first())
-                .map(|model| model.model.clone())
-                .unwrap_or_else(|| bootstrap.default_model.clone())
-        } else {
-            bootstrap.default_model.clone()
-        }
-    })
+) -> Result<String> {
+    config
+        .model
+        .clone()
+        .or_else(|| {
+            if server_defaults_read {
+                // Legacy bootstrap paths may be seeded with local config, which can differ from a
+                // cleared server model. Use the server catalog when config/read returned model: null.
+                bootstrap
+                    .available_models
+                    .iter()
+                    .find(|model| model.is_default)
+                    .or_else(|| bootstrap.available_models.first())
+                    .map(|model| model.model.clone())
+                    .or_else(|| bootstrap.default_model.clone())
+            } else {
+                bootstrap.default_model.clone()
+            }
+        })
+        .wrap_err("The initial app-server connection did not provide a startup model.")
 }
 
 impl App {
@@ -299,7 +304,7 @@ impl App {
             exit_info
         }
 
-        let (mut app_server, mut other_backends) = initial_backends.into_parts();
+        let (mut app_server, mut other_backends, backend_settings) = initial_backends.into_parts();
         // Preserve singleton error propagation while releasing all sessions on multi-backend exits.
         macro_rules! startup_try {
             ($result:expr) => {
@@ -447,7 +452,7 @@ impl App {
                 &harness_overrides,
             );
         }
-        let mut model = startup_model(&config, &bootstrap, fresh_start);
+        let mut model = startup_try!(startup_model(&config, &bootstrap, fresh_start));
         let available_models = bootstrap.available_models;
         let mut remote_connection =
             crate::status::remote_connection::remote_connection_status_value(
@@ -1310,6 +1315,12 @@ See the Codex keymap documentation for supported actions and examples."
         ) {
             backends.set_preference_key(backends.displayed_owner(), "local");
         }
+        for (&owner, settings) in &backend_settings {
+            if settings.target == AppServerTarget::Cloud {
+                backends.set_preference_key(owner, "cloud");
+            }
+        }
+        backends.settings = backend_settings;
 
         let mut parked_side_completions = HashMap::<_, Vec<AppEvent>>::new();
         let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
@@ -1330,7 +1341,8 @@ See the Codex keymap documentation for supported actions and examples."
                 } else {
                     None
                 };
-                let current_label = next_backend.and_then(|_| backends.displayed_name());
+                let current_label =
+                    next_backend.and_then(|_| backends.displayed_name(&app.app_server_target));
                 app.chat_widget.set_new_backend_control(current_label);
                 if !backends.is_listening(displayed_owner)
                     && !app.pending_startup_thread_start

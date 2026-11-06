@@ -665,7 +665,10 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
             AppServerTarget::Embedded
         };
         let bootstrap = server.bootstrap(&config).await?;
-        assert_eq!(bootstrap.default_model, "stale-client-model");
+        assert_eq!(
+            bootstrap.default_model.as_deref(),
+            Some("stale-client-model")
+        );
         let defaults_read = prepare_fresh_startup_config(
             &mut config,
             &server,
@@ -677,7 +680,8 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         .await?;
         assert!(!defaults_read.prompt_windows_sandbox);
         assert_eq!(config.model, None);
-        let selected_model = startup_model(&config, &bootstrap, /*server_defaults_read*/ true);
+        let selected_model =
+            startup_model(&config, &bootstrap, /*server_defaults_read*/ true)?;
         assert_ne!(selected_model, "stale-client-model");
         let started = crate::app_server_session::start_thread_with_request_handle(
             server.request_handle(),
@@ -921,11 +925,18 @@ async fn startup_failure_shuts_down_every_initial_backend() -> Result<()> {
             crate::app_server_session::ThreadParamsMode::Embedded,
         )
     });
+    let mut initial_backends = InitialBackendSessions::singleton(first);
+    initial_backends.register(
+        second,
+        AppServerTarget::Embedded,
+        app.config.clone(),
+        app.local_settings.clone(),
+    );
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let (result, ()) = tokio::join!(
         run_startup_for_test(
             &mut tui,
-            InitialBackendSessions::multiple(first, vec![second]),
+            initial_backends,
             app.config.clone(),
             /*bootstrap*/ None,
             SessionSelection::StartFresh,

@@ -48,8 +48,11 @@ async fn discovery_preserves_pagination_and_order_on_each_request() {
 
 #[tokio::test]
 async fn discovery_preserves_native_snapshots_and_read_state() {
-    // Independent native Thread encodings: modern future field (99) and legacy empty metadata.
-    let thread = Bytes::from_static(b"\x22\x01v\x28\x01\x32\x01/\x48\x00\x72\x01t\x82\x01\x01p\xaa\x01\x00\xda\x01\x01s\xe2\x01\x02\x08\x63\xea\x01\x02\x12\x00\xfa\x01\x00\x80\x02\x02\x98\x06\x01");
+    // Independent native Thread encodings: Git metadata and future field (99), and a legacy row.
+    let thread = Bytes::from_static(
+        b"\x22\x01v\x28\x01\x32\x01/\x48\x00\x62\x28\x0a\x04main\x12\x18https://example.com/repo\x1a\x06abc123\
+          \x72\x01t\x82\x01\x01p\xaa\x01\x00\xda\x01\x01s\xe2\x01\x02\x08\x63\xea\x01\x02\x12\x00\xfa\x01\x00\x80\x02\x02\x98\x06\x01",
+    );
     let legacy = Bytes::from_static(b"\x22\x00\x28\x00\x32\x01/\x48\x00\x72\x06legacy\x82\x01\x00\xaa\x01\x00\xda\x01\x00\xe2\x01\x02\x08\x01\xea\x01\x02\x12\x00\xfa\x01\x00\x80\x02\x00");
     let mut data = Vec::new();
     for row in [&thread, &legacy, &thread] {
@@ -81,6 +84,12 @@ async fn discovery_preserves_native_snapshots_and_read_state() {
         ),
         ("legacy", "", "", "")
     );
+    let page_json = serde_json::to_value(&page).unwrap();
+    assert_eq!(
+        page_json["data"][0]["gitInfo"],
+        serde_json::json!({"branch": "main", "originUrl": "https://example.com/repo", "sha": "abc123"})
+    );
+    assert!(page.data[1].git_info.is_none());
     assert_eq!(page.data[0].status, ThreadStatus::Idle);
     assert_eq!(
         page.read_states,

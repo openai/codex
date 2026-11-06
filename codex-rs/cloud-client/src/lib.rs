@@ -24,6 +24,7 @@ pub use activation::ApprovalPolicy;
 pub use activation::ApprovalsReviewer;
 pub use activation::CollaborationMode;
 pub use activation::CollaborationSettings;
+pub use activation::GitInfo;
 pub use activation::NetworkAccess;
 pub use activation::SandboxPolicy;
 pub use activation::SessionSource;

@@ -79,12 +79,22 @@ pub struct ThreadSnapshot {
     pub thread_source: Option<String>,
     pub agent_nickname: Option<String>,
     pub agent_role: Option<String>,
+    pub git_info: Option<GitInfo>,
     pub name: Option<String>,
     pub environments: Option<Vec<ThreadEnvironment>>,
     /// Activation deliberately excludes turns; callers page history separately.
     pub turns: [(); 0],
     #[serde(skip)]
     raw_protobuf: Bytes,
+}
+
+/// Optional repository metadata associated with a cloud conversation.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitInfo {
+    pub branch: Option<String>,
+    pub origin_url: Option<String>,
+    pub sha: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -343,6 +353,11 @@ impl ThreadSnapshot {
             thread_source: thread.thread_source,
             agent_nickname: thread.agent_nickname,
             agent_role: thread.agent_role,
+            git_info: thread.git_info.map(|git_info| GitInfo {
+                branch: git_info.branch,
+                origin_url: git_info.origin_url,
+                sha: git_info.sha,
+            }),
             name: thread.name,
             environments: thread
                 .environments

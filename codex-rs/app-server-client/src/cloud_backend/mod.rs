@@ -1,6 +1,7 @@
 //! Adapts native Cloud requests and the currently open conversation’s reply stream.
 //! A replacement becomes active only after its native attachment opens successfully.
 
+mod auth;
 mod events;
 mod requests;
 
@@ -18,6 +19,8 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde_json::Value;
 use tokio::sync::mpsc;
+
+pub use auth::connect;
 
 type ReplyStream = BoxStream<'static, Result<cloud::Event, cloud::Error>>;
 
@@ -144,7 +147,7 @@ impl Replies {
 }
 
 /// Opens an app-server client backed by the authenticated native Cloud client.
-pub fn connect(client: cloud::Client, account: protocol::GetAccountResponse) -> AppServerClient {
+fn start_worker(client: cloud::Client, account: protocol::GetAccountResponse) -> AppServerClient {
     let (app_client, commands, output) = CloudClient::channel(/*capacity*/ 32);
     let mut requests = requests::Requests {
         client,

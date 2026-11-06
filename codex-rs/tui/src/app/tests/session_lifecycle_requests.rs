@@ -44,6 +44,44 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::error::ProtocolError;
 
 #[tokio::test]
+async fn cloud_skips_skills_refresh_and_ignores_stale_local_result() -> Result<()> {
+    use futures::FutureExt;
+
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let id = ThreadId::new();
+    let cwd = app.config.cwd.to_path_buf();
+    app.enqueue_primary_thread_session(test_thread_session(id, cwd.clone()), Vec::new())
+        .await?;
+    let refresh = std::iter::from_fn(|| ops.try_recv().ok())
+        .find(|op| matches!(op, Op::ListSkills { .. }))
+        .expect("session configuration queues a skills refresh");
+
+    let (client, mut commands, _events) =
+        codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+    let mut server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        codex_app_server_client::AppServerClient::Cloud(client),
+        crate::ThreadParamsMode::Cloud,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while events.try_recv().is_ok() {}
+    for event in [
+        AppEvent::CodexOp(refresh),
+        AppEvent::SkillsListLoaded {
+            cwd,
+            result: Err("stale local skills refresh".into()),
+        },
+    ] {
+        Box::pin(app.handle_event(&mut tui, &mut server, event))
+            .now_or_never()
+            .expect("Cloud should not wait for a skills response")?;
+    }
+    assert!(events.is_empty());
+    assert!(commands.try_recv().is_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn cloud_enter_recovers_drafts_from_server_receipts() -> Result<()> {
     use codex_app_server_client::CloudOperation;
     use codex_app_server_client::CloudUserMessageReceipt::Duplicate;
@@ -1445,6 +1483,49 @@ async fn make_history_test_app() -> Result<(Box<App>, tempfile::TempDir)> {
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
     Ok((app, codex_home))
+}
+
+#[tokio::test]
+async fn cloud_resume_with_current_directory_needs_no_cwd_override() -> Result<()> {
+    use codex_config::types::ResumeCwdMode;
+
+    let (mut app, codex_home) = make_history_test_app().await?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[tui]\nresume_cwd = 'current'\n",
+    )?;
+    app.launch_cwd = codex_home.path().to_path_buf();
+    let mut backend_settings = app.backend_settings();
+    backend_settings.target = AppServerTarget::Cloud;
+    let (client, _commands, _events) =
+        codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+    let mut server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        codex_app_server_client::AppServerClient::Cloud(client),
+        crate::app_server_session::ThreadParamsMode::Cloud,
+    );
+    let session = SessionTarget {
+        backend_id: server.backend_id(),
+        path: None,
+        thread_id: ThreadId::new(),
+        cwd: Some(test_path_buf("/workspace")),
+        history_mode: None,
+    };
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let (config, local_settings) = Box::pin(app.resume_config_for_target(
+        &mut tui,
+        &mut server,
+        &session,
+        super::super::resume_preparation::ResumeSource::Backend(&backend_settings),
+    ))
+    .await
+    .map_err(|_| color_eyre::eyre::eyre!("Cloud resume should allow its own workspace"))?;
+    assert_eq!(
+        (config.cwd, local_settings.tui.resume_cwd),
+        (app.config.cwd.clone(), Some(ResumeCwdMode::Current))
+    );
+    Ok(())
 }
 
 #[tokio::test]

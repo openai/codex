@@ -73,7 +73,7 @@ async fn collaboration_catalog_is_optional_and_refetched_on_bootstrap() -> Resul
         let initial = session.bootstrap(&config).await?;
         assert_eq!(
             (initial.default_model, initial.collaboration_modes),
-            ("task-model".into(), vec![])
+            (Some("task-model".into()), vec![])
         );
         let refreshed = session.bootstrap(&config).await?;
         assert_eq!(

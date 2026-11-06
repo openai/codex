@@ -25,6 +25,14 @@ pub(crate) fn remote_connection_status_value(
 ) -> Option<RemoteConnectionStatus> {
     let endpoint = match app_server_target {
         AppServerTarget::Embedded => return None,
+        AppServerTarget::Cloud => {
+            return Some(RemoteConnectionStatus {
+                address: "Cloud".into(),
+                version: server_version.unwrap_or("unknown").into(),
+                is_local_daemon: false,
+                is_managed_daemon: false,
+            });
+        }
         AppServerTarget::LocalDaemon { endpoint, .. } | AppServerTarget::Remote { endpoint } => {
             endpoint
         }
@@ -89,7 +97,7 @@ pub(crate) fn server_version_notice_key(
     server_version_notice(client, Some(server))?;
     let mut hasher = Sha256::new();
     let endpoint = match target {
-        AppServerTarget::Embedded => None,
+        AppServerTarget::Embedded | AppServerTarget::Cloud => None,
         AppServerTarget::LocalDaemon { endpoint, .. } | AppServerTarget::Remote { endpoint } => {
             Some(endpoint)
         }

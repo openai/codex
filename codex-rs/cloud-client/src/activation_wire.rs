@@ -203,6 +203,8 @@ pub(super) struct Thread {
     pub ephemeral: Option<bool>,
     #[prost(string, optional, tag = "11")]
     pub forked_from_id: Option<String>,
+    #[prost(message, optional, tag = "12")]
+    pub git_info: Option<GitInfo>,
     #[prost(int32, optional, tag = "13")]
     pub history_mode: Option<i32>,
     #[prost(string, optional, tag = "14")]
@@ -242,6 +244,23 @@ pub(super) struct Thread {
 impl fmt::Debug for Thread {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Thread([redacted])")
+    }
+}
+
+#[derive(Clone, Message)]
+#[prost(skip_debug)]
+pub(super) struct GitInfo {
+    #[prost(string, optional, tag = "1")]
+    pub branch: Option<String>,
+    #[prost(string, optional, tag = "2")]
+    pub origin_url: Option<String>,
+    #[prost(string, optional, tag = "3")]
+    pub sha: Option<String>,
+}
+
+impl fmt::Debug for GitInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("GitInfo([redacted])")
     }
 }
 

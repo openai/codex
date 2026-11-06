@@ -98,6 +98,7 @@ impl App {
         let uses_remote_workspace_or_environment =
             crate::uses_remote_workspace_or_environment(&target, &self.environment_manager);
         if uses_remote_workspace_or_environment
+            && !matches!(target, AppServerTarget::Cloud)
             && self.harness_overrides.cwd.is_none()
             && app_server.remote_cwd_override().is_none()
             && matches!(resume_cwd_mode, Some(ResumeCwdMode::Current))

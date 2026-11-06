@@ -26,7 +26,7 @@ impl App {
         let thread_id = self.chat_widget.thread_id().or(self.primary_thread_id);
         let disconnect_info = thread_id.and_then(|_| {
             let command = match &self.app_server_target {
-                AppServerTarget::Embedded => return None,
+                AppServerTarget::Embedded | AppServerTarget::Cloud => return None,
                 AppServerTarget::LocalDaemon { .. } => vec!["codex".to_string()],
                 AppServerTarget::Remote { endpoint } => {
                     let address = match endpoint {

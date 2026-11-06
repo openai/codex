@@ -38,6 +38,7 @@ use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
 pub use codex_app_server_client::RemoteAppServerEndpoint;
+use codex_app_server_client::cloud_backend;
 use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigWarningNotification;
@@ -331,6 +332,7 @@ async fn start_embedded_app_server(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
     Embedded,
+    Cloud,
     LocalDaemon {
         endpoint: RemoteAppServerEndpoint,
         allow_embedded_fallback: bool,
@@ -355,7 +357,7 @@ impl AppServerTarget {
     }
 
     pub(crate) fn uses_remote_workspace(&self) -> bool {
-        matches!(self, Self::Remote { .. })
+        matches!(self, Self::Remote { .. } | Self::Cloud)
     }
 
     fn uses_embedded_network_policy(&self) -> bool {
@@ -385,12 +387,13 @@ impl AppServerTarget {
                 allow_embedded_fallback: false,
                 ..
             }
-            | Self::Remote { .. } => factory,
+            | Self::Remote { .. }
+            | Self::Cloud => factory,
         }
     }
 
     fn auth_config_for_cloud_loader(&self, mut auth_config: AuthConfig) -> AuthConfig {
-        if self.uses_remote_workspace() {
+        if matches!(self, Self::Remote { .. }) {
             // Remove local auth restrictions before loading credentials for a remote
             // workspace; the remote app server enforces its own authentication policy.
             auth_config.forced_login_method = None;
@@ -401,10 +404,10 @@ impl AppServerTarget {
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
-        if self.uses_remote_workspace() {
-            ThreadParamsMode::Remote
-        } else {
-            ThreadParamsMode::Embedded
+        match self {
+            Self::Embedded | Self::LocalDaemon { .. } => ThreadParamsMode::Embedded,
+            Self::Remote { .. } => ThreadParamsMode::Remote,
+            Self::Cloud => ThreadParamsMode::Cloud,
         }
     }
 }
@@ -419,9 +422,9 @@ async fn init_state_db_for_app_server_target(
                 .unwrap_or_else(|| config.sqlite_config().state_db_path());
             std::io::Error::other(LocalStateDbStartupError::new(database_path, err))
         }),
-        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => {
-            Ok(state_db::get_state_db(config).await)
-        }
+        AppServerTarget::LocalDaemon { .. }
+        | AppServerTarget::Remote { .. }
+        | AppServerTarget::Cloud => Ok(state_db::get_state_db(config).await),
     }
 }
 
@@ -1242,6 +1245,7 @@ async fn run_ratatui_app(
     mut state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
     embedded_network_policy: codex_app_server_client::EmbeddedNetworkPolicy,
+    cloud_preview_available: bool,
     managed_worktree: Option<ManagedTuiWorktree>,
     daemon_startup_warning: Option<String>,
     managed_daemon: bool,
@@ -1331,6 +1335,7 @@ async fn run_ratatui_app(
                 AppServerTarget::Embedded => "in_process",
                 AppServerTarget::LocalDaemon { .. } => "local_daemon",
                 AppServerTarget::Remote { .. } => "remote",
+                AppServerTarget::Cloud => "cloud",
             });
             AppServerSession::new(
                 backend_id,
@@ -2233,11 +2238,42 @@ async fn run_ratatui_app(
         Ok(StartupHooksReviewOutcome::OpenHooksBrowser(data)) => Some(data),
     };
 
+    let mut initial_backends = app::backend_sessions::InitialBackendSessions::singleton(app_server);
+    if cfg!(any(target_os = "macos", target_os = "linux"))
+        && config.features.enabled(Feature::TuiMultiBackend)
+        && cloud_preview_available
+        && !workload_identity_selected
+        && config
+            .config_layer_stack
+            .requirements_toml()
+            .config_server
+            .is_none()
+    {
+        // A daemon-backed resume can rebuild Config without the local transport handle.
+        let mut cloud_config = config.clone();
+        embedded_network_policy.bind_config(&mut cloud_config);
+        match Box::pin(cloud_backend::connect(&cloud_config)).await {
+            Ok(client) => initial_backends.register(
+                AppServerSession::new(
+                    backend_id::BackendId::new(),
+                    client,
+                    ThreadParamsMode::Cloud,
+                ),
+                AppServerTarget::Cloud,
+                cloud_config,
+                local_settings.clone(),
+            ),
+            Err(error) => tui.insert_history_lines(vec![ratatui::text::Line::from(format!(
+                "Could not add the Cloud connection. {error}"
+            ))]),
+        }
+    }
+
     // Keep the large event-loop future out of the enclosing startup futures so session
     // transitions have enough stack headroom to rebuild configuration and the chat widget.
     let app_result = boxed_future!(App::run(
         &mut tui,
-        crate::app::backend_sessions::InitialBackendSessions::singleton(app_server),
+        initial_backends,
         config,
         current_cwd.to_path_buf(),
         backend_preference_context,
@@ -2521,7 +2557,7 @@ fn should_show_provider_setup_wizard(
     let supported_target = match app_server_target {
         AppServerTarget::Embedded => true,
         AppServerTarget::LocalDaemon { .. } => feature == Feature::BedrockSetupWizard,
-        AppServerTarget::Remote { .. } => false,
+        AppServerTarget::Remote { .. } | AppServerTarget::Cloud => false,
     };
     supported_target
         && should_show_login_screen(login_status, requires_openai_auth)

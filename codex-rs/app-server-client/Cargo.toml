@@ -19,6 +19,7 @@ codex-app-server-transport = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-client = { path = "../cloud-client" }
 codex-config = { workspace = true }
+codex-login = { workspace = true }
 codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-feedback = { workspace = true }
