@@ -250,11 +250,19 @@ impl App {
         if self.chooser_focus() == Some(super::sidebar::PaneFocus::Sidebar)
             && self.sidebar_chooser_available()
         {
-            return crate::keymap::KeymapContextSet::focused_sidebar_chooser();
+            let contexts = crate::keymap::KeymapContextSet::focused_sidebar_chooser();
+            return if self.can_nudge_side_width(tui) {
+                contexts.with_sidebar_resize().with_focused_side_pane()
+            } else {
+                contexts
+            };
         }
         let mut contexts = contexts.with_pane_directions();
         if self.open_pane_focus().is_some() {
             contexts = contexts.with_open_pane();
+        }
+        if self.can_resize_sidebar(tui) {
+            contexts = contexts.with_sidebar_resize();
         }
         if self.can_nudge_side_width(tui) {
             contexts = contexts.with_focused_side_pane();

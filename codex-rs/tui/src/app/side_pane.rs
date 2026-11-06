@@ -1,9 +1,12 @@
-//! Lay out the two conversations and resize their divider. Only the displayed thread owns a live composer.
+//! Lay out paired conversations and resize the shared sidebar split.
 
 use super::App;
 use super::agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 use super::side_companion::SideCompanion;
+use super::sidebar;
+use super::sidebar::PaneFocus;
 use super::sidebar::SidebarContent;
+use super::sidebar::SidebarLayout;
 use crate::bottom_pane::render_unfocused_status;
 use crate::custom_terminal::Frame;
 use crate::legacy_core::config::edit::ConfigEdit;
@@ -27,18 +30,25 @@ use ratatui::layout::Rect;
 use ratatui::widgets::StatefulWidgetRef;
 use std::time::Duration;
 
-const GAP: u16 = 1;
+pub(super) const GAP: u16 = 1;
+pub(super) const RESIZE_HINT: &str = "Resize · ←/h →/l · Shift+←/→ 10 cols · Enter/Esc done";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ResizeTarget {
+    displayed: Option<ThreadId>,
+    content: SidebarContent,
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct PaneResize {
-    focused: ThreadId,
-    companion: ThreadId,
+    // Keyboard resize belongs to the parent split, including while a fork replaces the chooser.
+    pub(super) parent: Option<ThreadId>,
     preview_width: Option<u16>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct DividerDrag {
-    passive_thread: ThreadId,
+    target: ResizeTarget,
     screen: Rect,
     press: u16,
     initial_width: u16,
@@ -47,8 +57,8 @@ pub(super) struct DividerDrag {
 }
 
 impl DividerDrag {
-    pub(super) fn matches(&self, screen: Rect, pane: Option<&SidePaneLayout>) -> bool {
-        screen == self.screen && pane.is_some_and(|pane| pane.passive_thread == self.passive_thread)
+    pub(super) fn matches(&self, screen: Rect, app: &App) -> bool {
+        screen == self.screen && app.sidebar_resize_target() == Some(self.target)
     }
 
     fn percent(&self) -> Option<u8> {
@@ -81,25 +91,35 @@ pub(super) struct SidePaneLayout {
     pub(super) tab_strip: Rect,
 }
 
-/// A wide terminal can show a pair once the outgoing conversation has been captured.
-pub(super) fn layout(app: &App, tui: &crate::tui::Tui, area: Rect) -> Option<SidePaneLayout> {
+/// The settled chat split used to check pointer events against the last painted frame.
+pub(super) fn layout(app: &App, tui: &Tui, area: Rect) -> Option<SidePaneLayout> {
+    match visible_split(app, tui, area)? {
+        SidebarLayout::Chat(panes) => Some(panes),
+        SidebarLayout::Chooser { .. } => None,
+    }
+}
+
+fn visible_split(app: &App, tui: &Tui, area: Rect) -> Option<SidebarLayout> {
     if app.zoomed_thread.is_some() && app.zoomed_thread == app.current_displayed_thread_id() {
         return None;
     }
     split_layout(app, tui, area)
 }
 
-pub(super) fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidePaneLayout> {
-    let SidebarContent::Chat(child) = app.sidebar()?.visible_content()? else {
-        return None;
-    };
+pub(super) fn split_layout(app: &App, tui: &Tui, area: Rect) -> Option<SidebarLayout> {
+    let content = app.sidebar()?.visible_content()?;
     if area.width < 100
         || app.conversation_frame.has_caller_inset()
         || !app.side_retention_enabled(tui)
     {
         return None;
     }
-    pair_layout(app, child, sidebar_areas(app, tui, area, /*fraction*/ 1.0)?)
+    sidebar::content_layout(
+        app,
+        content,
+        app.chooser_focus().unwrap_or(PaneFocus::Main),
+        sidebar_areas(app, tui, area, /*fraction*/ 1.0)?,
+    )
 }
 
 pub(super) fn pair_layout(
@@ -140,23 +160,17 @@ pub(super) fn tab_and_body(area: Rect) -> [Rect; 2] {
 }
 
 pub(super) fn sidebar_areas(app: &App, tui: &Tui, area: Rect, fraction: f64) -> Option<[Rect; 2]> {
-    let active = app.current_displayed_thread_id();
-    let passive = app
-        .active_side_parent_thread_id()
-        .or_else(|| active.and_then(|id| app.side_thread_for_parent(id)));
+    let target = app.sidebar_resize_target();
     let preview = app
         .divider_drag
         .filter(|drag| {
-            !drag.guide_only
-                && drag.screen == area
-                && Some(drag.passive_thread) == passive
-                && app.conversation_focus_available(tui)
+            !drag.guide_only && drag.matches(area, app) && app.conversation_focus_available(tui)
         })
         .and_then(|drag| drag.percent());
     let saved = app.local_settings.tui.sidebar_width_percent;
     let keyboard_width = app
         .pane_resize
-        .filter(|mode| Some(mode.focused) == active && Some(mode.companion) == passive)
+        .filter(|mode| mode.parent == app.sidebar_parent())
         .and_then(|mode| mode.preview_width);
     let child_width = match (keyboard_width, preview, app.exact_sidebar_width) {
         (Some(width), _, _) => sidebar_width(i32::from(width), area.width),
@@ -168,7 +182,7 @@ pub(super) fn sidebar_areas(app: &App, tui: &Tui, area: Rect, fraction: f64) -> 
         _ => preferred_width(area.width, preview.or(saved)),
     };
     // A newly focused composer needs a cell even on the first opening frame.
-    let open = app.sidebar()?.visible_content().is_some();
+    let open = target.is_some();
     let child_width = ((f64::from(child_width) * fraction).round() as u16).max(u16::from(open));
     (child_width > 0).then(|| {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(child_width)])
@@ -178,18 +192,22 @@ pub(super) fn sidebar_areas(app: &App, tui: &Tui, area: Rect, fraction: f64) -> 
 }
 
 impl App {
+    fn sidebar_resize_target(&self) -> Option<ResizeTarget> {
+        Some(ResizeTarget {
+            displayed: self.current_displayed_thread_id(),
+            content: self.sidebar()?.visible_content()?,
+        })
+    }
+
     pub(super) fn begin_pane_resize(&mut self, tui: &mut Tui) -> Result<()> {
         let screen = tui.prepare_draw_size()?.into();
-        if let Some(panes) = split_layout(self, tui, screen)
-            && let Some(focused) = self.current_displayed_thread_id()
-        {
+        if split_layout(self, tui, screen).is_some() {
             self.divider_drag = None;
             self.passive_link_drag = None;
             self.pending_right_click_paste = None;
             self.zoomed_thread = None;
             self.pane_resize = Some(PaneResize {
-                focused,
-                companion: panes.passive_thread,
+                parent: self.sidebar_parent(),
                 preview_width: None,
             });
             tui.frame_requester().schedule_frame();
@@ -206,11 +224,11 @@ impl App {
             _ => tui.terminal.last_known_screen_size,
         }
         .into();
-        let Some(panes) = layout(self, tui, screen).filter(|panes| {
+        let divider = visible_split(self, tui, screen).and_then(|layout| layout.divider_area());
+        let Some(divider) = divider.filter(|_| {
             !matches!(event, TuiEvent::FocusLost)
                 && self.conversation_focus_available(tui)
-                && self.current_displayed_thread_id() == Some(mode.focused)
-                && panes.passive_thread == mode.companion
+                && self.sidebar_parent() == mode.parent
         }) else {
             self.pane_resize = None;
             tui.frame_requester().schedule_frame();
@@ -222,7 +240,7 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return true;
         }
-        let current = screen.right() - panes.divider - GAP;
+        let current = screen.right() - divider.right();
         let step = match (key.code, key.modifiers) {
             (KeyCode::Left | KeyCode::Char('h'), KeyModifiers::NONE) => 1,
             (KeyCode::Right | KeyCode::Char('l'), KeyModifiers::NONE) => -1,
@@ -267,7 +285,7 @@ impl App {
         if split_layout(self, tui, screen).is_none() {
             return Ok(());
         }
-        let side_percent = if self.active_side_parent_thread_id().is_some() {
+        let side_percent = if self.sidebar_has_focus() {
             focused_percent
         } else {
             100 - focused_percent
@@ -286,22 +304,32 @@ impl App {
         Ok(())
     }
 
+    pub(super) fn can_resize_sidebar(&self, tui: &Tui) -> bool {
+        split_layout(self, tui, tui.terminal.last_known_screen_size.into()).is_some()
+    }
+
+    pub(super) fn divider_is_settled(&self, tui: &Tui, screen: Rect) -> bool {
+        self.conversation_frame.sidebar.is_some()
+            && visible_split(self, tui, screen) == self.conversation_frame.sidebar
+    }
+
     pub(super) fn can_nudge_side_width(&self, tui: &Tui) -> bool {
-        self.active_side_parent_thread_id().is_some()
-            && layout(self, tui, tui.terminal.last_known_screen_size.into()).is_some()
+        self.sidebar_has_focus()
+            && visible_split(self, tui, tui.terminal.last_known_screen_size.into()).is_some()
     }
 
     pub(super) async fn nudge_side_width(&mut self, tui: &mut Tui, percent: i32) -> Result<()> {
-        if self.active_side_parent_thread_id().is_some() {
+        if self.sidebar_has_focus() {
             let screen: Rect = tui.prepare_draw_size()?.into();
-            if let Some(panes) = layout(self, tui, screen) {
-                let step = (i32::from(screen.width) * percent.abs() + 50) / 100;
-                let current = panes.focused.width;
-                let width =
-                    sidebar_width(i32::from(current) + step * percent.signum(), screen.width);
-                if width != current {
-                    self.save_sidebar_width(width_percent(width, screen.width))
-                        .await;
+            if let Some(divider) =
+                visible_split(self, tui, screen).and_then(|layout| layout.divider_area())
+            {
+                let current = screen.right() - divider.right();
+                let total = screen.width;
+                let step = (i32::from(total) * percent.abs() + 50) / 100;
+                let next = sidebar_width(i32::from(current) + step * percent.signum(), total);
+                if next != current {
+                    self.save_sidebar_width(width_percent(next, total)).await;
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -349,19 +377,24 @@ impl App {
         }
         match mouse.kind {
             Down(Left) => {
-                let Some(painted) = self.conversation_frame.side_pane() else {
+                let Some(divider) = self
+                    .conversation_frame
+                    .divider_area()
+                    .filter(|area| area.contains((mouse.column, mouse.row).into()))
+                else {
                     return Ok(false);
                 };
-                if !painted.divider_contains(*mouse) {
-                    return Ok(false);
-                }
                 let screen = tui.prepare_draw_size()?.into();
-                if layout(self, tui, screen).as_ref() != Some(painted) {
-                    return Ok(false);
+                if !self.divider_is_settled(tui, screen) {
+                    // The painted divider still owns this press while it moves.
+                    return Ok(true);
                 }
-                let width = screen.right() - painted.divider - GAP;
+                let Some(target) = self.sidebar_resize_target() else {
+                    return Ok(false);
+                };
+                let width = screen.right() - divider.right();
                 self.divider_drag = Some(DividerDrag {
-                    passive_thread: painted.passive_thread,
+                    target,
                     screen,
                     press: mouse.column,
                     initial_width: width,
@@ -377,7 +410,7 @@ impl App {
                     return Ok(false);
                 };
                 let screen = tui.prepare_draw_size()?.into();
-                if drag.matches(screen, layout(self, tui, screen).as_ref()) {
+                if drag.matches(screen, self) && visible_split(self, tui, screen).is_some() {
                     let width = i32::from(drag.initial_width) + i32::from(drag.press)
                         - i32::from(mouse.column);
                     drag.width = sidebar_width(width, screen.width);
@@ -396,11 +429,6 @@ impl App {
 }
 
 impl SidePaneLayout {
-    pub(super) fn divider_contains(&self, mouse: crossterm::event::MouseEvent) -> bool {
-        (self.divider..self.divider + GAP).contains(&mouse.column)
-            && (self.focused.y..self.focused.bottom()).contains(&mouse.row)
-    }
-
     /// Paint the divider, retained transcript and draft without claiming the terminal cursor.
     pub(super) fn paint_companion(
         &self,

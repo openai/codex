@@ -175,7 +175,7 @@ impl App {
             })
     }
 
-    fn sidebar_parent(&self) -> Option<ThreadId> {
+    pub(super) fn sidebar_parent(&self) -> Option<ThreadId> {
         self.active_side_parent_thread_id()
             .or_else(|| self.current_displayed_thread_id())
     }
@@ -193,8 +193,14 @@ impl App {
         pane.focus
             .filter(|_| pane.content == SidebarContent::Chooser)
     }
+
+    pub(super) fn sidebar_has_focus(&self) -> bool {
+        self.active_side_parent_thread_id().is_some()
+            || self.chooser_focus() == Some(PaneFocus::Sidebar)
+    }
 }
 
+#[derive(PartialEq)]
 pub(super) enum SidebarLayout {
     Chooser {
         main: Rect,
@@ -202,6 +208,16 @@ pub(super) enum SidebarLayout {
         focus: PaneFocus,
     },
     Chat(SidePaneLayout),
+}
+
+impl SidebarLayout {
+    pub(super) fn divider_area(&self) -> Option<Rect> {
+        let (x, pane) = match self {
+            Self::Chooser { main, .. } => (main.right(), *main),
+            Self::Chat(panes) => (panes.divider, panes.focused.union(panes.tab_strip)),
+        };
+        (!pane.is_empty()).then(|| Rect::new(x, pane.y, side_pane::GAP, pane.height))
+    }
 }
 
 /// Step motion once per frame. Input and saved width calculations use the settled split.
@@ -234,6 +250,15 @@ pub(super) fn paint_layout(app: &mut App, tui: &Tui, area: Rect) -> Option<Sideb
     } else {
         side_pane::sidebar_areas(app, tui, area, fraction)?
     };
+    content_layout(app, content, focus, [main, sidebar])
+}
+
+pub(super) fn content_layout(
+    app: &App,
+    content: SidebarContent,
+    focus: PaneFocus,
+    [main, sidebar]: [Rect; 2],
+) -> Option<SidebarLayout> {
     match content {
         SidebarContent::Chooser => (app.sidebar_chooser_available()
             && (focus == PaneFocus::Main || app.chat_widget.completion_can_yield_focus()))

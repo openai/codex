@@ -114,8 +114,16 @@ impl App {
         } else {
             None
         };
-        if let Some(startup_pane) = self.sidebars.remove(&None) {
-            self.sidebars.entry(Some(thread_id)).or_insert(startup_pane);
+        if let Some(startup_pane) = self.sidebars.remove(&None)
+            && let std::collections::hash_map::Entry::Vacant(entry) =
+                self.sidebars.entry(Some(thread_id))
+        {
+            entry.insert(startup_pane);
+            if let Some(mode) = &mut self.pane_resize
+                && mode.parent.is_none()
+            {
+                mode.parent = Some(thread_id);
+            }
         }
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = receiver;

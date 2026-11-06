@@ -34,7 +34,7 @@ use ratatui::widgets::Widget;
 #[derive(Default)]
 pub(super) struct ConversationFrame {
     inset: Option<Rect>,
-    sidebar: Option<sidebar::SidebarLayout>,
+    pub(super) sidebar: Option<sidebar::SidebarLayout>,
     pub(super) chat_strip: Option<Rect>,
     pub(super) sidebar_input: Option<(usize, Option<ThreadId>, usize)>,
     pub(super) leader_hud: Option<Rect>,
@@ -69,6 +69,10 @@ impl ConversationFrame {
             Some(sidebar::SidebarLayout::Chooser { sidebar, .. }) => Some(sidebar),
             _ => None,
         }
+    }
+
+    pub(super) fn divider_area(&self) -> Option<Rect> {
+        self.sidebar.as_ref()?.divider_area()
     }
 }
 
@@ -267,8 +271,10 @@ impl App {
         self.conversation_frame.chat_strip = strip;
         self.conversation_frame.sidebar_input =
             self.sidebar().map(sidebar::SidebarPane::input_state);
+        let divider = self.conversation_frame.divider_area();
         if self.divider_drag.is_some_and(|drag| {
-            !drag.matches(screen_size.into(), self.conversation_frame.side_pane())
+            divider.is_none()
+                || !drag.matches(screen_size.into(), self)
                 || !self.conversation_focus_available(tui)
         }) {
             self.divider_drag = None;
@@ -304,24 +310,31 @@ impl App {
                 }
             }
             painted = self.paint_conversation(frame, &prepared);
-            let divider = match &self.conversation_frame.sidebar {
+            match &self.conversation_frame.sidebar {
                 Some(sidebar::SidebarLayout::Chat(panes)) => {
                     if let Some(companion) = self.side_companions.get_mut(&panes.passive_thread) {
                         companion.view.image_protocol = self.transcript_view.image_protocol;
                         panes.paint_companion(companion, frame, &frames);
                     }
-                    Some(panes.divider)
                 }
-                Some(sidebar::SidebarLayout::Chooser {
-                    main,
-                    sidebar,
-                    focus,
-                }) => {
+                Some(sidebar::SidebarLayout::Chooser { sidebar, focus, .. }) => {
                     let focused = *focus == PaneFocus::Sidebar;
+                    let resize_hint = self.pane_resize.map(|_| side_pane::RESIZE_HINT);
                     if let Some(creation) = self.sidebar().and_then(|pane| pane.creation.as_ref()) {
                         use sidebar::CreationState;
                         ratatui::widgets::Clear.render(*sidebar, frame.buffer);
-                        let body = sidebar.inner(ratatui::layout::Margin::new(1, 1));
+                        let mut body = sidebar.inner(ratatui::layout::Margin::new(1, 1));
+                        if let Some(hint) = resize_hint {
+                            let footer = Rect::new(
+                                body.x,
+                                body.bottom().saturating_sub(1),
+                                body.width,
+                                body.height.min(1),
+                            );
+                            crate::sidebar_chooser::resize_hint(hint, footer.width)
+                                .render(footer, frame.buffer);
+                            body.height = body.height.saturating_sub(1);
+                        }
                         let text = match &creation.state {
                             CreationState::Waiting { started, .. } => {
                                 let mode = MotionMode::from_animations_enabled(
@@ -331,7 +344,11 @@ impl App {
                                 format!("{glyph} Starting side chat…")
                             }
                             CreationState::Failed { message, .. } => {
-                                format!("{message}\nEnter retry · Esc back")
+                                if resize_hint.is_some() {
+                                    message.clone()
+                                } else {
+                                    format!("{message}\nEnter retry · Esc back")
+                                }
                             }
                         };
                         ratatui::widgets::Paragraph::new(text)
@@ -345,6 +362,7 @@ impl App {
                             &self.keymap,
                             pane.chat_tabs(),
                             pane.choice,
+                            resize_hint,
                         );
                     }
                     frame
@@ -353,10 +371,9 @@ impl App {
                     if focused {
                         frame.cursor_position = None;
                     }
-                    (!main.is_empty()).then_some(main.right())
                 }
-                None => None,
-            };
+                None => {}
+            }
             if let Some(strip) = strip
                 && let Some(pane) = self.sidebar()
             {
@@ -368,8 +385,8 @@ impl App {
                     frame.buffer,
                 );
             }
-            if let Some(x) = divider {
-                side_pane::paint_divider(frame, x, self.divider_drag, highlight_divider);
+            if let Some(divider) = divider {
+                side_pane::paint_divider(frame, divider.x, self.divider_drag, highlight_divider);
             }
             self.paint_centered_dialog(frame);
             self.conversation_frame.leader_hud = hud.map(|hud| {
@@ -475,7 +492,7 @@ impl App {
         .then(crate::bottom_pane::ComposerGap::default);
         let prompt_footer = if self.pane_resize.is_some() {
             Some(crate::bottom_pane::TranscriptFooter {
-                text: "Resize · ←/h →/l · Shift+←/→ 10 cols · Enter/Esc done".into(),
+                text: side_pane::RESIZE_HINT.into(),
                 cursor_column: None,
                 is_interactive: true,
             })

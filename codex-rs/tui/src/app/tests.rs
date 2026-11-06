@@ -3326,7 +3326,7 @@ async fn docked_replay_finishes_while_skills_refresh_is_pending() -> Result<()> 
 
 #[tokio::test]
 async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     // Both pane footers should fit the same way on Unix and Windows.
     std::fs::write(
         &app.local_settings.user_config_path,
@@ -3416,12 +3416,55 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     // Finish in the background, then change the parent's permissions before the first child turn.
     app.sidebar_mut()
         .show(sidebar::SidebarContent::Chooser, sidebar::PaneFocus::Main);
-    while app.side_thread_for_parent(parent_thread_id).is_none() {
+    let resize_size = Size::new(/*width*/ 120, /*height*/ 12);
+    let original_terminal = std::mem::replace(
+        &mut tui.terminal,
+        crate::tui::Terminal::with_screen_size_and_cursor_position_for_test(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+            resize_size,
+            Default::default(),
+        ),
+    );
+    app.chat_widget
+        .apply_external_edit("unsent parent draft".into());
+    side_frame(&mut app, &mut tui, resize_size)?;
+    app.begin_pane_resize(&mut tui)?;
+    assert!(app.pane_resize.is_some());
+    loop {
         let event = time::timeout(Duration::from_secs(5), app_event_rx.recv())
             .await?
             .expect("event stream");
+        let created = matches!(event, AppEvent::SideCreated { .. });
+        boxed_future!(app.handle_event(&mut tui, &mut app_server, event)).await?;
+        if created {
+            assert!(app.side_thread_for_parent(parent_thread_id).is_some());
+            break;
+        }
+    }
+    // SideCreated has just replaced the chooser. Enter still finishes the resize.
+    boxed_future!(app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyCode::Enter.into())
+    ))
+    .await?;
+    assert!(app.pane_resize.is_none());
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "unsent parent draft"
+    );
+    while let Ok(event) = app_event_rx.try_recv() {
+        assert!(!matches!(
+            event,
+            AppEvent::CodexOp(AppCommand::UserTurn { .. })
+        ));
         boxed_future!(app.handle_event(&mut tui, &mut app_server, event)).await?;
     }
+    assert!(
+        !std::iter::from_fn(|| op_rx.try_recv().ok()).any(|op| matches!(op, Op::UserTurn { .. }))
+    );
+    tui.terminal = original_terminal;
+    app.chat_widget.apply_external_edit(String::new());
     let side_thread_id = app.side_thread_for_parent(parent_thread_id).unwrap();
     assert_eq!(app.active_thread_id, Some(parent_thread_id));
     assert_eq!(
@@ -4506,6 +4549,45 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
     assert_eq!(app.current_displayed_thread_id(), Some(sibling));
     assert_eq!(app.side_threads.len(), 2);
+
+    keys!(prefix, chooser_key, prefix, KeyCode::Char('=').into());
+    side_frame(&mut app, &mut tui, even)?;
+    assert_eq!(app.conversation_frame.chooser_area().unwrap().width, 100);
+    keys!(prefix, KeyCode::Char('r').into(), KeyCode::Left.into());
+    let frame = side_frame(&mut app, &mut tui, even)?;
+    let (_, hint) = frame
+        .lines()
+        .last()
+        .and_then(|row| row.split_once('│'))
+        .expect("sidebar footer");
+    insta::assert_snapshot!(hint.trim(), @"Resize · ←/h →/l · Shift+←/→ 10 cols · Enter/Esc done");
+    keys!(KeyCode::Esc.into());
+    side_frame(&mut app, &mut tui, even)?;
+    let divider = divider_at(&tui, 4);
+    // An even sidebar width at 200 columns survives the saved percentage round trip.
+    let target = divider - 11;
+    let left = MouseButton::Left;
+    for (kind, x) in [
+        (MouseEventKind::Down(left), divider),
+        (MouseEventKind::Drag(left), target),
+        (MouseEventKind::Up(left), target),
+    ] {
+        boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, mouse(kind, x, /*row*/ 4)))
+            .await?;
+    }
+    assert!(side_frame(&mut app, &mut tui, even)?.contains("Open in sidebar"));
+    assert_eq!(divider_at(&tui, 4), target);
+    keys!(enter);
+    side_frame(&mut app, &mut tui, even)?;
+    assert!(app.conversation_frame.side_pane().is_some());
+    assert_eq!(divider_at(&tui, 4), target);
+    // A focused child has only its tab strip at this height.
+    let strip = side_pane::split_layout(&app, &tui, Rect::new(0, 0, even.width, 1)).unwrap();
+    assert_eq!(strip.divider_area(), Some(Rect::new(target, 0, 1, 1)));
+    keys!(prefix, chooser_key);
+    side_frame(&mut app, &mut tui, even)?;
+    assert!(app.conversation_frame.chooser_area().is_some());
+    assert_eq!(divider_at(&tui, 4), target);
 
     app_server.shutdown().await?;
     Ok(())

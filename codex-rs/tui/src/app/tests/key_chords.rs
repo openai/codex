@@ -1196,6 +1196,41 @@ async fn pane_direction_without_neighbor_preserves_fresh_typing() -> Result<()> 
 }
 
 #[tokio::test]
+async fn sidebar_chooser_resize_survives_startup_thread_assignment() -> Result<()> {
+    let (mut app, mut tui, mut server) = chord_app().await?;
+    super::enable_side_retention(&mut app)?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.local_settings.tui.animations = false;
+    let size = ratatui::layout::Size::new(/*width*/ 165, /*height*/ 12);
+    tui.terminal = crate::tui::Terminal::with_screen_size_and_cursor_position_for_test(
+        ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+        size,
+        Default::default(),
+    );
+    assert_eq!(app.sidebar_parent(), None);
+    for stroke in [
+        ctrl('x'),
+        KeyCode::Char('t').into(),
+        ctrl('x'),
+        KeyCode::Char('r').into(),
+    ] {
+        Box::pin(press(&mut app, &mut tui, &mut server, stroke)).await?;
+    }
+    app.activate_thread_channel(ThreadId::new()).await;
+    let frame = super::side_frame(&mut app, &mut tui, size)?;
+    assert_eq!(app.conversation_frame.chooser_area().unwrap().width, 55);
+    let (_, footer) = frame.lines().last().unwrap().split_once('│').unwrap();
+    insta::assert_snapshot!(footer.trim(), @"←/→ resize · Enter/Esc done");
+    assert!(
+        app.handle_pane_resize(&tui, &TuiEvent::Key(KeyCode::Enter.into()))
+            .await
+    );
+    assert!(app.pane_resize.is_none());
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let mut server = start_config_write_test_app_server(&app).await?;
@@ -1206,9 +1241,18 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
     app.chat_widget
         .handle_thread_session(test_thread_session(parent, app.config.cwd.to_path_buf()));
     app.chat_widget.local_settings.tui.status_line = Some(vec!["model-with-reasoning".into()]);
+    app.chat_widget.refresh_status_line();
     app.chat_widget.insert_str("parent draft");
 
     let size = ratatui::layout::Size::new(120, 12);
+    let terminal_at = |size| {
+        crate::tui::Terminal::with_screen_size_and_cursor_position_for_test(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+            size,
+            Default::default(),
+        )
+    };
+    tui.terminal = terminal_at(size);
     app.local_settings.tui.animations = true;
     tokio::time::pause();
     let open_chooser = [ctrl('x'), KeyCode::Char('s').into()];
@@ -1221,10 +1265,42 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
             tokio::time::advance(std::time::Duration::from_millis(elapsed)).await;
             super::side_frame(&mut app, &mut tui, size)?;
             assert_eq!(app.conversation_frame.chooser_area().unwrap().width, width);
+            if key == KeyCode::Esc && elapsed == 90 && width == 20 {
+                let divider = app.conversation_frame.divider_area().unwrap();
+                for kind in [
+                    crossterm::event::MouseEventKind::Moved,
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                ] {
+                    let event = TuiEvent::Mouse(crossterm::event::MouseEvent {
+                        kind,
+                        column: divider.x,
+                        row: divider.y,
+                        modifiers: KeyModifiers::NONE,
+                    });
+                    Box::pin(app.handle_tui_event(&mut tui, &mut server, event)).await?;
+                    assert!(tui.link_hover.shape == crate::tui::PointerShape::Default);
+                    assert!(app.divider_drag.is_none());
+                    assert_eq!(
+                        app.chooser_focus(),
+                        Some(crate::app::sidebar::PaneFocus::Sidebar)
+                    );
+                }
+            }
         }
         if key == KeyCode::Esc {
             let frame = super::side_frame(&mut app, &mut tui, size)?;
             insta::assert_snapshot!("sidebar_new_chat", frame);
+            app.begin_pane_resize(&mut tui)?;
+            let resizing = super::side_frame(&mut app, &mut tui, size)?;
+            let footer = resizing.lines().last().unwrap().split_once('│').unwrap().1;
+            insta::assert_snapshot!(footer.trim(), @"←/→ resize · Enter/Esc done");
+            Box::pin(press(
+                &mut app,
+                &mut tui,
+                &mut server,
+                KeyCode::Enter.into(),
+            ))
+            .await?;
             for stroke in [
                 ctrl('x'),
                 KeyCode::Char('c').into(),
@@ -1240,6 +1316,30 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
                 Box::pin(press(&mut app, &mut tui, &mut server, stroke)).await?;
             }
             assert!(super::side_frame(&mut app, &mut tui, size)?.contains("Open in sidebar"));
+            app.keymap = RuntimeKeymap::for_session(
+                &toml::from_str("[global]\nresize_panes = ['8','f12 r']")?,
+                /*workspace*/ true,
+            )
+            .unwrap();
+            let narrow = ratatui::layout::Size::new(/*width*/ 80, /*height*/ 12);
+            // Navigation can request a fresh backend sample between keystrokes.
+            tui.terminal = terminal_at(narrow);
+            super::side_frame(&mut app, &mut tui, narrow)?;
+            assert!(app.conversation_frame.chooser_area().is_none());
+            let prefix = KeyEvent::from(KeyCode::F(12));
+            assert_eq!(app.route_key_chord_event(&mut tui, prefix), Some(prefix));
+            for code in [KeyCode::End, KeyCode::Char('8'), KeyCode::End] {
+                Box::pin(press(&mut app, &mut tui, &mut server, code.into())).await?;
+            }
+            assert_eq!(
+                app.chat_widget.composer_text_with_pending(),
+                "parent draft!8"
+            );
+            assert!(!app.key_chord_matcher.is_pending());
+            app.chat_widget.apply_external_edit("parent draft!".into());
+            super::enable_side_retention(&mut app)?;
+            tui.terminal = terminal_at(size);
+            super::side_frame(&mut app, &mut tui, size)?;
             for stroke in open_chooser {
                 Box::pin(press(&mut app, &mut tui, &mut server, stroke)).await?;
             }
@@ -1298,6 +1398,27 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
     .await?;
     let narrow = super::side_frame(&mut app, &mut tui, ratatui::layout::Size::new(30, 8))?;
     insta::assert_snapshot!("sidebar_failed_creation", narrow);
+    super::side_frame(&mut app, &mut tui, size)?;
+    app.begin_pane_resize(&mut tui)?;
+    assert!(app.pane_resize.is_some());
+    let resizing = super::side_frame(&mut app, &mut tui, size)?;
+    let hints: Vec<_> = resizing
+        .lines()
+        .filter_map(|row| row.split_once('│'))
+        .map(|(_, sidebar)| sidebar.trim())
+        .filter(|row| !row.is_empty())
+        .collect();
+    insta::assert_snapshot!(hints.join("\n"), @"The side conversation could not be
+prepared.
+←/→ resize · Enter/Esc done");
+    Box::pin(press(
+        &mut app,
+        &mut tui,
+        &mut server,
+        KeyCode::Enter.into(),
+    ))
+    .await?;
+    assert!(app.sidebar().unwrap().creation.is_some());
     Box::pin(press(&mut app, &mut tui, &mut server, KeyCode::Esc.into())).await?;
     assert!(
         super::side_frame(&mut app, &mut tui, ratatui::layout::Size::new(30, 8))?

@@ -60,6 +60,7 @@ const PANE_DIRECTION: u32 = 1 << 24;
 const OPEN_PANE: u32 = 1 << 25;
 const FOCUSED_SIDE_PANE: u32 = 1 << 26;
 const SIDEBAR_CHOOSER: u32 = 1 << 27;
+const SIDEBAR_RESIZE: u32 = 1 << 28;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
@@ -174,6 +175,10 @@ impl KeymapContextSet {
         Self(self.0 | OPEN_PANE)
     }
 
+    pub(crate) const fn with_sidebar_resize(self) -> Self {
+        Self(self.0 | SIDEBAR_RESIZE)
+    }
+
     pub(crate) const fn with_focused_side_pane(self) -> Self {
         Self(self.0 | FOCUSED_SIDE_PANE)
     }
@@ -199,11 +204,11 @@ impl KeymapContextSet {
             let required = match action.action {
                 "focus_pane_left" | "focus_pane_right" => PANE_DIRECTION,
                 "move_divider_left" | "move_divider_right" => FOCUSED_SIDE_PANE,
-                "toggle_pane_zoom"
-                | "equalize_pane_widths"
+                "toggle_pane_zoom" => OPEN_PANE,
+                "equalize_pane_widths"
                 | "minimize_pane_width"
                 | "maximize_pane_width"
-                | "resize_panes" => OPEN_PANE,
+                | "resize_panes" => SIDEBAR_RESIZE,
                 "focus_main_composer" => MAIN_COMPOSER_FOCUS,
                 "focus_sidebar_content" | "focus_sidebar_tabs" => SIDE_PANE | SIDEBAR_CHOOSER,
                 _ => SIDE_PANE,

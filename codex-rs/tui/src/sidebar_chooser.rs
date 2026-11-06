@@ -19,6 +19,15 @@ fn body_row(area: Rect, y: u16) -> Rect {
     Rect::new(area.x + 1, y, area.width.saturating_sub(3), 1)
 }
 
+pub(crate) fn resize_hint(full: &str, width: u16) -> Line<'_> {
+    let full = Line::from(full);
+    if full.width() <= usize::from(width) {
+        full.dim()
+    } else {
+        Line::from("←/→ resize · Enter/Esc done").dim()
+    }
+}
+
 pub(crate) fn footer(keymap: &RuntimeKeymap, area: Rect) -> footer_hint::HintLine {
     let hide = keymap
         .primary_hint(KeymapContext::Global, "hide_pane")
@@ -84,6 +93,7 @@ pub(crate) fn paint(
     keymap: &RuntimeKeymap,
     tabs: TabStrip<'_, ThreadId>,
     choice: usize,
+    resize: Option<&str>,
 ) {
     Clear.render(area, buf);
     if area.is_empty() {
@@ -143,6 +153,10 @@ pub(crate) fn paint(
         }
     }
     if footer_y > area.y {
-        footer(keymap, area).line.render(row(footer_y), buf);
+        let line = match resize {
+            Some(hint) => resize_hint(hint, row(footer_y).width),
+            None => footer(keymap, area).line,
+        };
+        line.render(row(footer_y), buf);
     }
 }

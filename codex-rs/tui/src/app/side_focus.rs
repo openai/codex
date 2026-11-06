@@ -249,6 +249,7 @@ impl App {
         } else {
             0
         };
+        let can_resize = self.can_resize_sidebar(tui);
         let focused_percent = [
             (&bindings.equalize_pane_widths, 50),
             (&bindings.minimize_pane_width, 0),
@@ -256,7 +257,7 @@ impl App {
         ]
         .into_iter()
         .find_map(|(binding, percent)| binding.is_pressed(key).then_some(percent))
-        .filter(|_| self.open_pane_focus().is_some());
+        .filter(|_| can_resize);
         let zoom_target = if bindings.toggle_pane_zoom.is_pressed(key) {
             self.open_pane_focus()
         } else {
@@ -265,7 +266,7 @@ impl App {
         if width_change != 0 && !self.can_nudge_side_width(tui) {
             return false;
         }
-        let resize = bindings.resize_panes.is_pressed(key) && self.open_pane_focus().is_some();
+        let resize = bindings.resize_panes.is_pressed(key) && can_resize;
         let resizing = resize || width_change != 0 || focused_percent.is_some();
         if !(tabs || left || right || main || sidebar || hide || zoom_target.is_some() || resizing)
             || !self.conversation_focus_available(tui)

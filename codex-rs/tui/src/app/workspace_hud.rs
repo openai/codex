@@ -24,8 +24,7 @@ impl App {
             tui.frame_requester().schedule_frame_in(wait);
             return None;
         }
-        let side = self.active_side_parent_thread_id().is_some()
-            || self.chooser_focus() == Some(super::sidebar::PaneFocus::Sidebar);
+        let side = self.sidebar_has_focus();
         let can_switch = self.chooser_focus().is_some() || self.switchable_side_child().is_some();
         let can_size = super::side_pane::split_layout(self, tui, area).is_some();
         let can_resize = can_size && side && self.zoomed_thread.is_none();

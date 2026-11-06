@@ -133,21 +133,23 @@ impl App {
             .is_some_and(|mouse| self.conversation_frame.hud_contains(mouse))
             || !tui.is_owned_screen()
             || self.overlay.is_some()
-            || !self.chat_widget.no_modal_or_popup_active()
         {
             PointerShape::Default
-        } else if self.divider_drag.is_some()
-            || tui.link_hover.mouse.is_some_and(|mouse| {
-                self.conversation_frame
-                    .side_pane()
-                    .is_some_and(|panes| panes.divider_contains(mouse))
-            })
+        } else if self.conversation_focus_available(tui)
+            && (self.divider_drag.is_some()
+                || tui.link_hover.mouse.is_some_and(|mouse| {
+                    self.conversation_frame
+                        .divider_area()
+                        .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+                        && self.divider_is_settled(tui, tui.terminal.last_known_screen_size.into())
+                }))
         {
             PointerShape::Resize
-        } else if tui
-            .link_hover
-            .mouse
-            .is_some_and(|mouse| self.transcript_link_at(mouse).is_some())
+        } else if self.chat_widget.no_modal_or_popup_active()
+            && tui
+                .link_hover
+                .mouse
+                .is_some_and(|mouse| self.transcript_link_at(mouse).is_some())
         {
             PointerShape::Link
         } else {
