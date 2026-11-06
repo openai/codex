@@ -33,6 +33,7 @@ impl AppServerSession {
                         cursor: None,
                         limit: None,
                         include_hidden: Some(true),
+                        model_provider: None,
                     },
                 })
                 .await

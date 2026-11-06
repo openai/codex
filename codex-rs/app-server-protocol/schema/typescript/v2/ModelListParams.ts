@@ -4,6 +4,10 @@
 
 export type ModelListParams = {
 /**
+ * List models for this configured provider instead of the app-server default.
+ */
+modelProvider?: string | null,
+/**
  * Opaque pagination cursor returned by a previous call.
  */
 cursor?: string | null,

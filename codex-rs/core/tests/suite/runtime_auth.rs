@@ -12,6 +12,7 @@ use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_login::CodexAuth;
 use codex_model_provider::ProviderAuthContext;
+use codex_models_manager::manager::ModelCatalogSettings;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
@@ -44,6 +45,7 @@ use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
+use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -129,6 +131,14 @@ async fn harness_shares_runtime_and_honors_thread_auth_config() -> Result<()> {
         .and(path("/catalog-isolation"))
         .respond_with(ResponseTemplate::new(200).set_body_json(catalog_fixture()))
         .expect(2)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/selected-catalog"))
+        .and(header_regex("authorization", "^AgentAssertion "))
+        .respond_with(ResponseTemplate::new(200).set_body_json(catalog_fixture()))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -365,6 +375,19 @@ async fn exercise_harness(server_uri: String) -> Result<()> {
         };
         catalog_config.model_provider.model_catalog_url =
             Some(format!("https://api.openai.com/catalog-reload/{label}").into());
+        if mode == RuntimeAuthMode::AssertionOnly {
+            let mut selected = catalog_config.clone();
+            selected.model_provider.base_url = Some(server_uri.clone());
+            selected.model_provider.model_catalog_url =
+                Some("https://api.openai.com/selected-catalog".into());
+            let models = test
+                .thread_manager
+                .temporary_models_manager_for_config(&selected, &ModelCatalogSettings::default());
+            models
+                .raw_model_catalog(RefreshStrategy::Online, selected.http_client_factory())
+                .await;
+            assert_eq!(models.get_remote_models().await, catalog_fixture().models);
+        }
         let catalog_thread = test
             .thread_manager
             .start_thread(StartThreadOptions {

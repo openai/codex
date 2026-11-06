@@ -23,6 +23,13 @@
         "integer",
         "null"
       ]
+    },
+    "modelProvider": {
+      "description": "List models for this configured provider instead of the app-server default.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "ModelListParams",

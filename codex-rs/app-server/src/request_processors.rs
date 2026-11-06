@@ -129,6 +129,7 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ModelProviderError;
 use codex_app_server_protocol::PermissionProfileListParams;
 use codex_app_server_protocol::PermissionProfileListResponse;
 use codex_app_server_protocol::PermissionProfileSummary;
@@ -692,6 +693,25 @@ fn resolve_turn_environment_requests(
     )
     .map_err(environment_selection_error)?;
     Ok(Some(requests))
+}
+
+/// Project-local layers cannot define providers, so explicit selectors can use the startup map.
+fn config_for_provider(
+    startup: &Arc<Config>,
+    provider_id: &str,
+) -> Result<Arc<Config>, JSONRPCErrorError> {
+    if startup.model_provider_id == provider_id {
+        return Ok(Arc::clone(startup));
+    }
+    let provider = startup.model_providers.get(provider_id).ok_or_else(|| {
+        model_provider_error(&ModelProviderError::ModelProviderNotConfigured {
+            model_provider: provider_id.to_owned(),
+        })
+    })?;
+    let mut config = startup.as_ref().clone();
+    config.model_provider_id = provider_id.to_owned();
+    config.model_provider = provider.clone();
+    Ok(Arc::new(config))
 }
 
 fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {

@@ -127,32 +127,30 @@ impl ThreadModelCatalog {
                 .as_ref()
                 .filter(|_| self.provider == config.model_provider)
         });
-        self.for_config(config, models, credentials, runtime, same_owner)
+        let auth = ProviderAuthContext {
+            credentials,
+            runtime_auth: runtime.map(|runtime| (runtime, config.runtime_auth_mode)),
+        };
+        self.for_config(config, models, auth, same_owner)
     }
 
     pub(super) fn for_config(
         &self,
         config: &Config,
         models: Option<&ModelsResponse>,
-        credentials: Arc<AuthManager>,
-        runtime: Option<Arc<RuntimeAuthManager>>,
+        auth: ProviderAuthContext,
         same_owner: bool,
     ) -> SharedModelsManager {
-        let runtime = runtime.map(|runtime| (runtime, config.runtime_auth_mode));
         let api_key_model_discovery_default =
             config.features.enabled(Feature::ApiKeyModelDiscovery);
         if same_owner
-            && self.runtime_mode == runtime.as_ref().map(|(_, mode)| *mode)
+            && self.runtime_mode == auth.runtime_auth.as_ref().map(|(_, mode)| *mode)
             && self.provider == config.model_provider
             && self.catalog.as_ref() == models
             && self.api_key_model_discovery_default == api_key_model_discovery_default
         {
             return Arc::clone(&self.manager);
         }
-        let auth = ProviderAuthContext {
-            credentials,
-            runtime_auth: runtime,
-        };
         self.factory.build(
             auth.model_provider(config.model_provider.clone()),
             models.cloned(),

@@ -121,12 +121,18 @@ denial limit, and interrupted status; neither emits a separate `Error` event.
 
 # Model catalog provider requirements
 
-`model/list` and periodic model catalog refreshes check the startup provider against
-current managed provider requirements before using the catalog. If that provider no longer
+`model/list` accepts an optional `modelProvider` to list models for a configured provider
+other than the startup default. For example, `{"modelProvider": "my_gateway"}` returns that
+provider's models after the user's default changes. Omit it to retain the startup provider
+and caching behavior. Explicit selections use the provider definitions loaded at startup. Restart the server
+to pick up edits to those definitions. An unknown selector returns JSON-RPC error
+`-32600` with `data.type = "modelProviderNotConfigured"` and the requested `modelProvider`.
+
+`model/list` checks its selected provider, and periodic model catalog refreshes check the
+startup provider, against current managed provider requirements. If that provider no longer
 complies, `model/list` returns JSON-RPC error `-32600` asking the client to restart Codex,
 and background refreshes skip the old endpoint. Requirement load failures also block these
-operations. Checks apply even when the catalog is cached. Existing startup provider selection
-and caching behavior remain in effect while the provider satisfies current requirements.
+operations. Checks apply even when the catalog is cached.
 
 # MCP App UI
 

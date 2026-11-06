@@ -72,6 +72,8 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_login::default_client::originator;
+use codex_model_provider::ModelCatalogFactory;
+use codex_model_provider::ProviderAuthContext;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
@@ -1039,6 +1041,29 @@ impl ThreadManager {
 
     /// Select the app-server catalog using the same owner as thread requests.
     pub fn models_manager_for_config(&self, config: &Config) -> SharedModelsManager {
+        self.state.model_catalog.for_config(
+            config,
+            config.model_catalog.as_ref(),
+            self.catalog_auth_context(config),
+            /*same_owner*/ true,
+        )
+    }
+
+    /// Build a separate catalog with the harness's runtime identity and the caller's cache policy.
+    pub fn temporary_models_manager_for_config(
+        &self,
+        config: &Config,
+        factory: &dyn ModelCatalogFactory,
+    ) -> SharedModelsManager {
+        factory.build(
+            self.catalog_auth_context(config)
+                .model_provider(config.model_provider.clone()),
+            config.model_catalog.clone(),
+            config.features.enabled(Feature::ApiKeyModelDiscovery),
+        )
+    }
+
+    fn catalog_auth_context(&self, config: &Config) -> ProviderAuthContext {
         let credentials = self.auth_manager();
         let runtime = crate::runtime_auth::runtime_for_config(
             &self.state.runtime_auth,
@@ -1046,13 +1071,10 @@ impl ThreadManager {
             Arc::clone(&credentials),
             &self.state.installation_id,
         );
-        self.state.model_catalog.for_config(
-            config,
-            config.model_catalog.as_ref(),
+        ProviderAuthContext {
             credentials,
-            runtime,
-            /*same_owner*/ true,
-        )
+            runtime_auth: runtime.map(|runtime| (runtime, config.runtime_auth_mode)),
+        }
     }
 
     pub fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
