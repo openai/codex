@@ -3,12 +3,16 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::Weak;
 
+use crate::gateway_export::GatewayExport;
 use codex_keyring_store::DefaultKeyringStore;
+use codex_login::AuthManager;
 use codex_login::AuthRuntimeConfig;
 use codex_login::GatewayAuthConfig;
-use codex_login::GatewayAuthManager;
-use codex_model_provider_info::GatewayOAuthConfig;
+use codex_login::OAuthSessionManager;
+use codex_model_provider_info::CredentialExportConfig;
+use codex_model_provider_info::GatewayOAuthSettings;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
+use codex_model_provider_info::ModelProviderInfo;
 
 use crate::amazon_bedrock::AwsAuthRecovery;
 use crate::amazon_bedrock::AwsCredentialExport;
@@ -18,13 +22,21 @@ use crate::amazon_bedrock::AwsCredentialExport;
 pub(crate) struct ModelProviderSharedState {
     aws_credential_exports: Mutex<Vec<(ModelProviderAwsAuthInfo, Weak<AwsCredentialExport>)>>,
     aws_auth_recoveries: Mutex<Vec<(ModelProviderAwsAuthInfo, Weak<AwsAuthRecovery>)>>,
-    gateway_managers: Mutex<
+    gateway_exports: Mutex<Vec<GatewayExportEntry>>,
+    oauth_sessions: Mutex<
         Vec<(
             GatewayAuthConfig,
             AuthRuntimeConfig,
-            Weak<GatewayAuthManager>,
+            Weak<OAuthSessionManager>,
         )>,
     >,
+}
+
+#[derive(Debug)]
+struct GatewayExportEntry {
+    owner: Weak<AuthManager>,
+    provider: ModelProviderInfo,
+    export: Weak<GatewayExport>,
 }
 
 pub(crate) fn process_shared_state() -> &'static ModelProviderSharedState {
@@ -33,11 +45,11 @@ pub(crate) fn process_shared_state() -> &'static ModelProviderSharedState {
 }
 
 impl ModelProviderSharedState {
-    pub(crate) fn gateway_auth(
+    pub(crate) fn gateway_oauth_session(
         &self,
-        config: &GatewayOAuthConfig,
+        config: &GatewayOAuthSettings,
         runtime: &AuthRuntimeConfig,
-    ) -> std::io::Result<Arc<GatewayAuthManager>> {
+    ) -> std::io::Result<Arc<OAuthSessionManager>> {
         let oauth = GatewayAuthConfig {
             authorization_url: config.authorization_url.clone(),
             device_authorization_url: None,
@@ -49,7 +61,7 @@ impl ModelProviderSharedState {
             credentials_store: config.credentials_store,
         };
         let mut managers = self
-            .gateway_managers
+            .oauth_sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         managers.retain(|(_, _, manager)| manager.strong_count() != 0);
@@ -62,7 +74,7 @@ impl ModelProviderSharedState {
         {
             return Ok(manager);
         }
-        let manager = Arc::new(GatewayAuthManager::new(
+        let manager = Arc::new(OAuthSessionManager::new(
             oauth.clone(),
             runtime.codex_home.clone(),
             runtime.auth_route_config.http_client_factory(),
@@ -70,6 +82,38 @@ impl ModelProviderSharedState {
         )?);
         managers.push((oauth, runtime.clone(), Arc::downgrade(&manager)));
         Ok(manager)
+    }
+
+    // The catalog preflight and endpoint construct separate providers for the same owner.
+    pub(crate) fn gateway_export(
+        &self,
+        provider: &ModelProviderInfo,
+        command: &CredentialExportConfig,
+        owner: &Arc<AuthManager>,
+    ) -> Arc<GatewayExport> {
+        let owner_key = Arc::downgrade(owner);
+        let mut entries = self
+            .gateway_exports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries.retain(|entry| entry.export.strong_count() != 0 && entry.owner.strong_count() != 0);
+        if let Some(export) = entries
+            .iter()
+            .find(|entry| entry.owner.ptr_eq(&owner_key) && &entry.provider == provider)
+            .and_then(|entry| entry.export.upgrade())
+        {
+            return export;
+        }
+        let export = Arc::new(GatewayExport::new(
+            command.clone(),
+            owner.application_network_policy(),
+        ));
+        entries.push(GatewayExportEntry {
+            owner: owner_key,
+            provider: provider.clone(),
+            export: Arc::downgrade(&export),
+        });
+        export
     }
 
     pub(crate) fn aws_credential_export(

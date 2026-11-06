@@ -216,7 +216,7 @@ impl CatalogRequestProcessor {
                 .check_thread_model_provider(&config)
                 .await
                 .map_err(|err| config_load_error(&err))?;
-            if gateway.resolve_access_token().await.is_err() {
+            if let Err(error) = gateway.resolve_access_token().await {
                 let current = self
                     .config_manager
                     .load_latest_config(/*fallback_cwd*/ None)
@@ -232,9 +232,7 @@ impl CatalogRequestProcessor {
                         "Model provider settings changed. Restart Codex to apply them, then retry fetching the model list",
                     ));
                 }
-                return Err(invalid_request(
-                    "Gateway sign-in required or unavailable. Complete gateway sign-in and retry fetching the model list",
-                ));
+                return Err(invalid_request(error.to_string()));
             }
         }
         self.list_models(params, config, models_manager)

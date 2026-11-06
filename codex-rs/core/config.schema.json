@@ -492,35 +492,6 @@
       ],
       "type": "object"
     },
-    "AwsCredentialExportConfig": {
-      "additionalProperties": false,
-      "description": "Command used to export AWS signing credentials for a model provider.",
-      "properties": {
-        "args": {
-          "default": [],
-          "description": "Arguments passed to the credential export command.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "command": {
-          "description": "Executable to invoke directly, without a shell.",
-          "type": "string"
-        },
-        "timeout_ms": {
-          "default": 30000,
-          "description": "Maximum time to wait for the credential export command to complete.",
-          "format": "uint64",
-          "minimum": 1.0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "command"
-      ],
-      "type": "object"
-    },
     "AwsSigV4Config": {
       "additionalProperties": false,
       "description": "AWS SigV4 action selected by an exact-host, method, and path MITM hook.",
@@ -1652,6 +1623,35 @@
       ],
       "type": "string"
     },
+    "CredentialExportConfig": {
+      "additionalProperties": false,
+      "description": "Command used to export credentials for a model provider.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Arguments passed to the credential export command.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "Executable to invoke directly, without a shell.",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 30000,
+          "description": "Maximum time to wait for the credential export command to complete.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
     "CredentialProviderConfig": {
       "additionalProperties": false,
       "description": "Declarative description of an environment-backed credential family.",
@@ -2016,6 +2016,88 @@
       "type": "string"
     },
     "GatewayOAuthConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/GatewayOAuthSettings"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "credential_export": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CredentialExportConfig"
+                }
+              ],
+              "description": "Command that prints a gateway access token."
+            },
+            "delivery": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/GatewayOAuthDelivery"
+                }
+              ],
+              "default": {
+                "kind": "header",
+                "name": "Authorization",
+                "scheme": "Bearer"
+              }
+            }
+          },
+          "required": [
+            "credential_export"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GatewayOAuthDelivery": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "header"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "scheme": {
+              "default": "Bearer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "cookie"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GatewayOAuthSettings": {
       "additionalProperties": false,
       "properties": {
         "authorization_url": {
@@ -2070,52 +2152,6 @@
         "token_url"
       ],
       "type": "object"
-    },
-    "GatewayOAuthDelivery": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "enum": [
-                "header"
-              ],
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "scheme": {
-              "default": "Bearer",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "name"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "enum": [
-                "cookie"
-              ],
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "name"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "GhostSnapshotToml": {
       "additionalProperties": false,
@@ -3100,7 +3136,7 @@
         "credential_export": {
           "allOf": [
             {
-              "$ref": "#/definitions/AwsCredentialExportConfig"
+              "$ref": "#/definitions/CredentialExportConfig"
             }
           ],
           "description": "Optional command whose exported credentials replace the AWS SDK credential chain."
@@ -3200,7 +3236,7 @@
               "$ref": "#/definitions/GatewayOAuthConfig"
             }
           ],
-          "description": "Secondary OAuth credentials required by the provider's gateway."
+          "description": "Gateway access token from OAuth or a credential export command."
         },
         "http_headers": {
           "additionalProperties": {

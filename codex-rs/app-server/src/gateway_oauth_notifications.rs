@@ -46,7 +46,7 @@ pub(crate) fn spawn(
             .gateway_auth_manager() else {
                 continue;
             };
-            if manager.config() != &change.config {
+            if !matches!(manager.oauth_session(), Some(oauth) if oauth.config() == &change.config) {
                 continue;
             }
             let (status, error) = status_fields(change.status);

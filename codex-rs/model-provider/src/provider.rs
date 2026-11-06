@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::GatewayAuthManager;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
@@ -11,7 +12,6 @@ use codex_api::TransportError;
 use codex_features::RuntimeAuthMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::GatewayAuthManager;
 use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
@@ -484,9 +484,7 @@ impl ConfiguredModelProvider {
             let manager = auth_manager
                 .as_ref()
                 .ok_or_else(|| "gateway_oauth requires auth runtime configuration".to_string())?;
-            crate::shared_state::process_shared_state()
-                .gateway_auth(config, &manager.runtime_config())
-                .map_err(|_| "failed to create provider OAuth HTTP client".to_string())
+            GatewayAuthManager::new(&info, config, manager).map(Arc::new)
         });
         let auth_manager = auth_manager_for_provider(auth_manager, &info);
         let runtime_for_destination = |destination: Option<&str>| {

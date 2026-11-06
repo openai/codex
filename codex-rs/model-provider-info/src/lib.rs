@@ -41,6 +41,7 @@ pub use capabilities::ModelProviderCapabilities;
 pub use capabilities::RemoteCompactionSupport;
 pub use gateway_oauth::GatewayOAuthConfig;
 pub use gateway_oauth::GatewayOAuthDelivery;
+pub use gateway_oauth::GatewayOAuthSettings;
 pub use oauth_session::OAuthCredentialsStore;
 pub use oauth_session::OAuthSessionConfig;
 
@@ -72,7 +73,7 @@ pub fn read_managed_residency_requirement() -> Option<ResidencyRequirement> {
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
-const DEFAULT_AWS_CREDENTIAL_EXPORT_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_CREDENTIAL_EXPORT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_AWS_AUTH_REFRESH_TIMEOUT_MS: u64 = 300_000;
 pub const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
 /// Hard cap for user-configured `stream_max_retries`.
@@ -176,7 +177,7 @@ pub struct ModelProviderInfo {
     pub experimental_bearer_token: Option<RedactedString>,
     /// Command-backed bearer-token configuration for this provider.
     pub auth: Option<ModelProviderAuthInfo>,
-    /// Secondary OAuth credentials required by the provider's gateway.
+    /// Gateway access token from OAuth or a credential export command.
     pub gateway_oauth: Option<GatewayOAuthConfig>,
     /// AWS SigV4 auth configuration for this provider.
     pub aws: Option<ModelProviderAwsAuthInfo>,
@@ -249,30 +250,48 @@ pub struct ModelProviderAwsAuthInfo {
     pub auth_refresh: Option<AwsAuthRefreshConfig>,
 }
 
-/// Command used to export AWS signing credentials for a model provider.
+/// Command used to export credentials for a model provider.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub struct AwsCredentialExportConfig {
+pub struct CredentialExportConfig {
     /// Executable to invoke directly, without a shell.
     pub command: String,
     /// Arguments passed to the credential export command.
     #[serde(default)]
     pub args: Vec<RedactedString>,
     /// Maximum time to wait for the credential export command to complete.
-    #[serde(default = "default_aws_credential_export_timeout_ms")]
+    #[serde(default = "default_credential_export_timeout_ms")]
     pub timeout_ms: NonZeroU64,
 }
 
-impl AwsCredentialExportConfig {
+pub type AwsCredentialExportConfig = CredentialExportConfig;
+
+impl CredentialExportConfig {
+    pub fn validate(&self, field: &str) -> Result<(), String> {
+        if self.command.trim().is_empty() {
+            return Err(format!("provider {field}.command must not be empty"));
+        }
+        let path = Path::new(&self.command);
+        let mut components = path.components();
+        let bare = matches!((components.next(), components.next()),
+            (Some(Component::Normal(name)), None) if name == path.as_os_str());
+        if !path.is_absolute() && !bare {
+            return Err(format!(
+                "provider {field}.command must be an absolute path or a bare executable name"
+            ));
+        }
+        Ok(())
+    }
+
     pub fn timeout(&self) -> Duration {
         Duration::from_millis(self.timeout_ms.get())
     }
 }
 
-fn default_aws_credential_export_timeout_ms() -> NonZeroU64 {
-    match NonZeroU64::new(DEFAULT_AWS_CREDENTIAL_EXPORT_TIMEOUT_MS) {
+fn default_credential_export_timeout_ms() -> NonZeroU64 {
+    match NonZeroU64::new(DEFAULT_CREDENTIAL_EXPORT_TIMEOUT_MS) {
         Some(timeout_ms) => timeout_ms,
-        None => panic!("AWS credential export timeout must be non-zero"),
+        None => panic!("credential export timeout must be non-zero"),
     }
 }
 
@@ -377,23 +396,7 @@ other non-default provider fields are not supported"
                             .to_string(),
                     );
                 }
-                if credential_export.command.trim().is_empty() {
-                    return Err(
-                        "provider aws.credential_export.command must not be empty".to_string()
-                    );
-                }
-                let command = Path::new(&credential_export.command);
-                let mut components = command.components();
-                let is_bare_command = matches!(
-                    (components.next(), components.next()),
-                    (Some(Component::Normal(name)), None) if name == command.as_os_str()
-                );
-                if !command.is_absolute() && !is_bare_command {
-                    return Err(
-                        "provider aws.credential_export.command must be an absolute path or a bare executable name"
-                            .to_string(),
-                    );
-                }
+                credential_export.validate("aws.credential_export")?;
             }
 
             if let Some(auth_refresh) = aws.auth_refresh.as_ref() {

@@ -3,10 +3,6 @@
 //! Exported secrets remain in memory; command output is bounded and never logged.
 
 use std::io;
-use std::ops::Deref;
-use std::path::Component;
-use std::path::Path;
-use std::process::Stdio;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -18,14 +14,11 @@ use codex_aws_auth::AwsAccessKeys;
 use codex_aws_auth::AwsCredentialsProvider;
 use codex_model_provider_info::AwsCredentialExportConfig;
 use serde::Deserialize;
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
 
 const DEFAULT_CREDENTIAL_LIFETIME: Duration = Duration::from_secs(60 * 60);
 const CREDENTIAL_REFRESH_WINDOW: Duration = Duration::from_secs(5 * 60);
-const MAX_CREDENTIAL_OUTPUT_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct AwsCredentialExport {
@@ -158,70 +151,7 @@ impl AwsCredentialExport {
     }
 
     async fn export_credentials(&self) -> io::Result<CachedCredentials> {
-        let program = Path::new(&self.config.command);
-        let mut components = program.components();
-        let is_bare_command = matches!(
-            (components.next(), components.next()),
-            (Some(Component::Normal(name)), None) if name == program.as_os_str()
-        );
-        if self.config.command.trim().is_empty() || (!program.is_absolute() && !is_bare_command) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "AWS credential export command must be an absolute path or a bare executable name",
-            ));
-        }
-
-        let mut command = Command::from(codex_utils_process::background_command(program));
-        command
-            .args(self.config.args.iter().map(Deref::deref))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-
-        let mut child = command.spawn().map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!(
-                    "failed to run AWS credential export command `{}`: {error}",
-                    self.config.command
-                ),
-            )
-        })?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("AWS credential export stdout is unavailable"))?;
-        let output = tokio::time::timeout(self.config.timeout(), async {
-            let mut output = Vec::new();
-            stdout
-                .take(MAX_CREDENTIAL_OUTPUT_BYTES + 1)
-                .read_to_end(&mut output)
-                .await?;
-            if output.len() as u64 > MAX_CREDENTIAL_OUTPUT_BYTES {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "AWS credential export output exceeds 64 KiB",
-                ));
-            }
-            let status = child.wait().await?;
-            if !status.success() {
-                return Err(io::Error::other(format!(
-                    "AWS credential export command exited with {status}"
-                )));
-            }
-            Ok(output)
-        })
-        .await
-        .map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!(
-                    "AWS credential export command timed out after {} ms",
-                    self.config.timeout_ms
-                ),
-            )
-        })??;
+        let output = codex_login::run_credential_export(&self.config, "AWS").await?;
         CachedCredentials::from_output(&output, SystemTime::now())
     }
 }

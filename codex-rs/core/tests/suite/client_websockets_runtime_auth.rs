@@ -8,6 +8,7 @@ use codex_login::ExternalAuthFuture;
 use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider_info::GatewayOAuthConfig;
 use codex_model_provider_info::GatewayOAuthDelivery;
+use codex_model_provider_info::GatewayOAuthSettings;
 use codex_runtime_agent_instance::AgentHostAuthorization;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
@@ -97,7 +98,7 @@ async fn runtime_harness(
 }
 
 fn gateway_config(server: &MockServer, delivery: GatewayOAuthDelivery) -> GatewayOAuthConfig {
-    GatewayOAuthConfig {
+    GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
         authorization_url: format!("{}/authorize", server.uri()),
         token_url: format!("{}/token", server.uri()),
         client_id: "client".into(),
@@ -106,7 +107,7 @@ fn gateway_config(server: &MockServer, delivery: GatewayOAuthDelivery) -> Gatewa
         redirect_port: None,
         credentials_store: Default::default(),
         delivery,
-    }
+    })
 }
 
 fn assertion_payload(

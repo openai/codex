@@ -137,6 +137,71 @@ async fn model_list_requests_restart_after_gateway_provider_changes() -> Result<
     Ok(())
 }
 
+#[tokio::test]
+async fn working_gateway_exporter_allows_model_list_without_an_oauth_session() -> Result<()> {
+    let oauth = MockServer::start().await;
+    let home = TempDir::new()?;
+    let token_file = home.path().join("exported-token");
+    std::fs::write(&token_file, "")?;
+    let file_arg = serde_json::to_string(&token_file)?;
+    let command = if cfg!(windows) {
+        format!("command = 'cmd.exe', args = ['/D', '/C', 'type', {file_arg}]")
+    } else {
+        format!("command = 'cat', args = [{file_arg}]")
+    };
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "gateway"
+[model_providers.gateway]
+name = "Test gateway"
+base_url = "{url}/v1"
+[model_providers.gateway.gateway_oauth]
+credential_export = {{ {command} }}
+"#,
+            url = oauth.uri()
+        ),
+    )?;
+    let mut server = gateway_server(home.path()).await?;
+    let response = read_gateway(&mut server).await?;
+    assert!(!response.required);
+    assert_eq!(response.status, None);
+    // A local list still requires credentials, even when no remote catalog is fetched.
+    let id = server
+        .send_raw_request("model/list", Some(serde_json::json!({})))
+        .await?;
+    let error = server
+        .read_stream_until_error_message(RequestId::Integer(id))
+        .await?;
+    assert!(
+        error
+            .error
+            .message
+            .contains("Gateway credential export must print one access token")
+    );
+    std::fs::write(&token_file, "exported")?;
+    for _ in 0..2 {
+        let _: codex_app_server_protocol::ModelListResponse = server
+            .request(|request_id| ClientRequest::ModelList {
+                request_id,
+                params: codex_app_server_protocol::ModelListParams::default(),
+            })
+            .await?;
+        // The next preflight can use the token cached by the first.
+        std::fs::write(&token_file, "")?;
+    }
+    assert!(
+        oauth
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| !matches!(request.url.path(), "/authorize" | "/token"))
+    );
+    Ok(())
+}
+
 /// Account changes reload the catalog before validating a retained OAuth gateway.
 #[tokio::test]
 async fn model_list_leaves_oauth_gateway_after_account_change() -> Result<()> {

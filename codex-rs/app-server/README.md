@@ -610,8 +610,8 @@ process control and custom output caps do not apply to MXC.
 
 ### Gateway OAuth sign-in
 
-Providers configured with `gateway_oauth` require a secondary OAuth credential in
-addition to their primary authentication. Clients with a gateway sign-in UI set
+A provider can obtain its gateway token through browser OAuth or a credential
+export command. Clients with a gateway sign-in UI set
 `initialize.capabilities.explicitGatewayOauth: true`, complete initialization, and
 successfully call `account/gatewayOAuth/read` before sending authenticated requests,
 including startup `model/list` and inference requests. Repeat this probe on each
@@ -630,6 +630,16 @@ With explicit login enabled, app-server refreshes existing credentials, but only
 `account/gatewayOAuth/login` RPC starts browser authorization. Requests needing
 sign-in fail promptly so the client can offer that flow.
 
+Configure `[model_providers.<id>.gateway_oauth.credential_export]` to obtain the
+gateway access token from a command on first use. Set `command`, optional `args`,
+and optional `timeout_ms` (default 30000). The command prints one access token to
+stdout. Codex caches it in memory and applies the configured gateway header or
+cookie. Choose either `credential_export` or OAuth settings such as
+`authorization_url`, `token_url`, and `client_id`. If the command fails,
+the request returns the export error. Use direct
+inference and catalog URLs because command credentials require same-origin catalog
+access and reject HTTP redirects.
+
 Clients that omit the capability or set it to `false`, including the TUI, retain
 automatic browser authorization after initialization. Startup credential reads
 cannot open a browser before initialization. Explicit opt-in is shared by gateway
@@ -638,8 +648,9 @@ cannot be undone by a later connection that omits the capability.
 
 - `account/gatewayOAuth/read` returns the current effective `providerId`,
   `providerName`, `required`, `status`, and `error`. `required` indicates that this
-  provider uses gateway OAuth, including when already signed in. This operation
-  does not refresh tokens or open a browser; `status` is null for other providers.
+  provider uses gateway OAuth, including when already signed in. With a credential
+  exporter, `required` is false and `status` is null. This read does not refresh
+  tokens or open a browser.
   `notReady` means credentials are not ready. `succeeded` means saved credentials
   are locally usable, not that a gateway request has been verified. Reads observe
   usable replacement credentials saved by another process sharing the same home.

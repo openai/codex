@@ -7,7 +7,8 @@ use crate::transport::ConnectionId;
 use codex_app_server_protocol::GatewayOAuthCancelResponse;
 use codex_app_server_protocol::GatewayOAuthLoginResponse;
 use codex_app_server_protocol::GatewayOAuthReadResponse;
-use codex_login::GatewayAuthManager;
+use codex_login::OAuthSessionManager;
+use codex_model_provider::GatewayAuthManager;
 use std::sync::PoisonError;
 
 pub(super) struct ActiveGatewayLogin {
@@ -29,7 +30,7 @@ impl Drop for LoginGuard {
 impl AccountRequestProcessor {
     async fn gateway_client(
         &self,
-    ) -> Result<(Config, Option<Arc<GatewayAuthManager>>), JSONRPCErrorError> {
+    ) -> Result<(Config, Option<Arc<OAuthSessionManager>>), JSONRPCErrorError> {
         let config = self
             .config_manager
             .load_latest_config(/*fallback_cwd*/ None)
@@ -43,11 +44,14 @@ impl AccountRequestProcessor {
         )
         .gateway_auth_manager()
         .map_err(|error| internal_error(error.to_string()))?;
+        let session = manager
+            .as_deref()
+            .and_then(GatewayAuthManager::oauth_session);
         *self
             .gateway_client
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = manager.clone();
-        Ok((config, manager))
+            .unwrap_or_else(PoisonError::into_inner) = manager;
+        Ok((config, session))
     }
 
     pub(crate) async fn gateway_oauth_read(

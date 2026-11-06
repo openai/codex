@@ -20,8 +20,8 @@ fn parses_header_and_cookie_delivery() {
     let header = provider("delivery = { kind = 'header', name = 'x-gateway-auth' }");
     assert_eq!(header.validate(), Ok(()));
     assert_eq!(
-        header.gateway_oauth.as_ref().unwrap().delivery,
-        GatewayOAuthDelivery::Header {
+        header.gateway_oauth.as_ref().unwrap().delivery(),
+        &GatewayOAuthDelivery::Header {
             name: "x-gateway-auth".into(),
             scheme: "Bearer".into(),
         }
@@ -47,7 +47,10 @@ fn rejects_unsafe_endpoints_and_delivery_collisions() {
         invalid.base_url = Some(url.into());
         assert!(invalid.validate().is_err());
         invalid = valid.clone();
-        invalid.gateway_oauth.as_mut().unwrap().token_url = url.into();
+        let Some(GatewayOAuthConfig::OAuth(settings)) = &mut invalid.gateway_oauth else {
+            unreachable!()
+        };
+        settings.token_url = url.into();
         let error = invalid.validate().unwrap_err();
         assert!(!error.contains(url));
     }
@@ -75,6 +78,26 @@ fn rejects_unsafe_endpoints_and_delivery_collisions() {
         "COOKIE_ENV".into(),
     )]));
     assert!(cookie.validate().is_err());
+}
+
+#[test]
+fn credential_export_rejects_oauth_settings() {
+    for oauth in [
+        "client_id = 'codex'",
+        "scopes = []",
+        "credentials_store = 'keyring'",
+        "authorization_url = 'https://example.test/authorize'\ntoken_url = 'https://example.test/token'\nclient_id = 'codex'",
+    ] {
+        let config =
+            format!("[gateway_oauth]\ncredential_export = {{ command = 'export-token' }}\n{oauth}");
+        let error = toml::from_str::<ModelProviderInfo>(&config).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("choose one gateway credential source"),
+            "{error}"
+        );
+    }
 }
 
 #[test]

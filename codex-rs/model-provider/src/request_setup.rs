@@ -17,6 +17,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::create_client_for_route;
+use codex_model_provider_info::GatewayOAuthConfig;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::Result;
 use codex_runtime_agent_instance::RuntimeAuth;
@@ -158,7 +159,16 @@ pub async fn resolve_request(
                     .map(|state| state.generation)
                     .or(state.map(|state| state.generation)),
                 api_provider,
-                redirect_policy,
+                redirect_policy: if provider
+                    .info()
+                    .gateway_oauth
+                    .as_ref()
+                    .is_some_and(GatewayOAuthConfig::uses_credential_export)
+                {
+                    ClientRedirectPolicy::Reject
+                } else {
+                    redirect_policy
+                },
                 api_auth: resolved_auth.auth,
                 agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
                 runtime_id,

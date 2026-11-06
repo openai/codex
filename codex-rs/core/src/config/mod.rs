@@ -94,6 +94,7 @@ use codex_model_provider::ChatgptBaseUrl;
 use codex_model_provider::DEFAULT_CHATGPT_BASE_URL;
 use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::GCP_PROVIDER_ID;
+use codex_model_provider_info::GatewayOAuthConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -1848,6 +1849,14 @@ impl Config {
         };
         let mut factory = HttpClientFactory::new(outbound_proxy_policy)
             .with_network_policy(self.application_network_policy.clone());
+        if self
+            .model_provider
+            .gateway_oauth
+            .as_ref()
+            .is_some_and(GatewayOAuthConfig::uses_credential_export)
+        {
+            factory = factory.with_sensitive_header_protection();
+        }
         if !self.respect_system_proxy && self.features.enabled(Feature::SystemProxyFallback) {
             factory = factory.with_system_proxy_fallback();
         }

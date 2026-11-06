@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::GatewayAuthManager;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
@@ -20,11 +21,11 @@ use codex_http_client::HttpClientFactory;
 use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::GatewayAuthManager;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
+use codex_model_provider_info::GatewayOAuthConfig;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::ModelCatalogOriginator;
 use codex_models_manager::manager::ModelsEndpointClient;
@@ -65,7 +66,12 @@ impl OpenAiModelsEndpoint {
         auth_manager: Option<Arc<AuthManager>>,
         gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
     ) -> Self {
-        let redirect_policy = if provider_info.model_catalog_url.is_some() {
+        let redirect_policy = if provider_info.model_catalog_url.is_some()
+            || provider_info
+                .gateway_oauth
+                .as_ref()
+                .is_some_and(GatewayOAuthConfig::uses_credential_export)
+        {
             ClientRedirectPolicy::Reject
         } else {
             ClientRedirectPolicy::Default

@@ -9,7 +9,7 @@ use codex_keyring_store::CredentialStoreError;
 use codex_keyring_store::KeyringStore;
 use codex_login::AuthManager;
 use codex_login::GatewayAuthConfig;
-use codex_login::GatewayAuthManager;
+use codex_login::OAuthSessionManager;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OAuthCredentialsStore;
 use codex_secrets::LocalSecretsNamespace;
@@ -64,11 +64,12 @@ pub fn seed_gateway_auth(
     info: &ModelProviderInfo,
     primary: &AuthManager,
     token: serde_json::Value,
-) -> Arc<GatewayAuthManager> {
-    let config = info
-        .gateway_oauth
-        .clone()
-        .expect("gateway test configuration");
+) -> Arc<OAuthSessionManager> {
+    let Some(codex_model_provider_info::GatewayOAuthConfig::OAuth(config)) =
+        info.gateway_oauth.clone()
+    else {
+        panic!("expected gateway OAuth test configuration")
+    };
     let runtime = primary.runtime_config();
     let oauth = GatewayAuthConfig {
         authorization_url: config.authorization_url,
@@ -85,7 +86,7 @@ pub fn seed_gateway_auth(
         "gateway-test-passphrase".to_string(),
     ))));
     let manager = Arc::new(
-        GatewayAuthManager::new(
+        OAuthSessionManager::new(
             oauth.clone(),
             runtime.codex_home.clone(),
             runtime.auth_route_config.http_client_factory(),
@@ -130,7 +131,7 @@ pub fn seed_gateway_auth(
         }
     }
     process_shared_state()
-        .gateway_managers
+        .oauth_sessions
         .lock()
         .expect("gateway test manager registry lock")
         .push((oauth, runtime, Arc::downgrade(&manager)));

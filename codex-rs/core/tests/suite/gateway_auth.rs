@@ -29,6 +29,74 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+fn gateway_export_settings(token_path: &std::path::Path) -> Result<String> {
+    let path_arg = serde_json::to_string(token_path)?;
+    let command = if cfg!(windows) {
+        format!("command = 'cmd.exe'\nargs = ['/D', '/C', 'type', {path_arg}]")
+    } else {
+        format!("command = 'cat'\nargs = [{path_arg}]")
+    };
+    Ok(format!(
+        "delivery = {{ kind = 'cookie', name = 'gateway' }}\n[gateway_oauth.credential_export]\n{command}"
+    ))
+}
+
+async fn command_gateway(server: &MockServer, token_path: &std::path::Path) -> Result<TestCodex> {
+    let provider: ModelProviderInfo = toml::from_str(&format!(
+        r#"
+name = "gateway"
+base_url = "{base}/v1"
+requires_openai_auth = true
+[gateway_oauth]
+{gateway_settings}
+"#,
+        base = server.uri(),
+        gateway_settings = gateway_export_settings(token_path)?
+    ))?;
+    test_codex()
+        .with_auth(CodexAuth::from_api_key("primary"))
+        .with_config(move |config| config.model_provider = provider)
+        .build_with_auto_env(server)
+        .await
+}
+
+#[tokio::test]
+async fn command_gateway_authenticates_without_an_oauth_grant_and_caches_the_token() -> Result<()> {
+    let server = MockServer::start().await;
+    let source = TempDir::new()?;
+    let token_path = source.path().join("access-token");
+    std::fs::write(&token_path, "")?;
+    let test = command_gateway(&server, &token_path).await?;
+    let completed =
+        responses::sse_response(responses::sse(vec![responses::ev_completed("response")]));
+    let requests =
+        responses::mount_response_sequence(&server, vec![completed.clone(), completed]).await;
+    assert_eq!(
+        run_gateway_turn(&test).await?.as_deref(),
+        Some("Gateway credential export must print one access token"),
+    );
+    std::fs::write(&token_path, "opaque,token\n")?;
+    assert_eq!(run_gateway_turn(&test).await?, None);
+    std::fs::remove_file(token_path)?;
+    assert_eq!(run_gateway_turn(&test).await?, None);
+    let headers: Vec<_> = requests
+        .requests()
+        .iter()
+        .map(|r| (r.header("authorization"), r.header("cookie")))
+        .collect();
+    assert_eq!(
+        headers,
+        vec![
+            (
+                Some("Bearer primary".to_string()),
+                Some("gateway=opaque,token".to_string())
+            );
+            2
+        ]
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn inference_sends_chatgpt_and_gateway_credentials_to_the_configured_headers() -> Result<()> {
     sample_with_gateway(

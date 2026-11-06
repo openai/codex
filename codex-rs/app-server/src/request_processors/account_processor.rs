@@ -117,7 +117,7 @@ pub(crate) struct AccountRequestProcessor {
     workspace_routing_fetches: Arc<Mutex<workspace_routing::WorkspaceRoutingFetches>>,
     workspace_routing_shutdown: CancellationToken,
     gateway_login: Arc<std::sync::Mutex<Option<gateway_oauth::ActiveGatewayLogin>>>,
-    gateway_client: Arc<std::sync::Mutex<Option<Arc<codex_login::GatewayAuthManager>>>>,
+    gateway_client: Arc<std::sync::Mutex<Option<Arc<codex_model_provider::GatewayAuthManager>>>>,
     _gateway_notifications: Arc<tokio_util::task::AbortOnDropHandle<()>>,
     pub(super) enterprise_login: Arc<enterprise_login::EnterpriseLoginState>,
 }
