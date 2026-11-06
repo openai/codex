@@ -251,7 +251,7 @@ async fn get_account_rate_limits_returns_snapshot(
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
-            "chatgpt_base_url = {server_url:?}\nruntime_auth_mode = \"assertion_only\"\n[features]\nruntime_agent_instances = true\n",
+            "chatgpt_base_url = {server_url:?}\n[features.runtime_agent_instances]\nenabled = true\nmode = \"assertion_only\"\n",
         ),
     )?;
 

@@ -281,6 +281,8 @@ async fn projects_share_one_runtime_and_organization_changes_replace_it() {
         selection.project_id = project.map(str::to_owned);
         let next = manager.auth_with_selection(&selection).await.unwrap();
         assert!(Arc::ptr_eq(first.runtime(), next.runtime()));
+        let captured = manager.auth_for(first.auth(), &selection).await.unwrap();
+        assert!(Arc::ptr_eq(first.runtime(), captured.runtime()));
     }
     selection.organization_id = Some("org-b".into());
     let other_org = manager.auth_with_selection(&selection).await.unwrap();

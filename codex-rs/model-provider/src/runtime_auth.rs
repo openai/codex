@@ -8,6 +8,7 @@ use codex_http_client::OPENAI_PROJECT_HEADER;
 use codex_http_client::OpenAiDestination;
 use codex_http_client::classify_openai_api_url;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -27,6 +28,18 @@ pub(crate) async fn select_runtime_auth(
 ) -> Result<RuntimeAuth, AuthError> {
     manager
         .auth_with_selection(&resource_selection(headers)?)
+        .await
+        .map_err(AuthError::from)
+}
+
+/// Select the request's resource scope while preserving captured credential ownership.
+pub async fn select_runtime_auth_for(
+    binding: &Arc<RuntimeAuthBinding>,
+    auth: &CodexAuth,
+    headers: &HeaderMap,
+) -> Result<RuntimeAuth, AuthError> {
+    binding
+        .auth_for(auth, &resource_selection(headers)?)
         .await
         .map_err(AuthError::from)
 }

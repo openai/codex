@@ -1,4 +1,4 @@
-//! Exercise selected transport revocation and Realtime compatibility with runtime auth enabled.
+//! Exercise selected transport revocation with runtime auth enabled.
 #![cfg(test)]
 
 use super::*;
@@ -131,92 +131,6 @@ async fn selected_runtime_transport_stays_revoked(mode: RuntimeAuthMode) {
         )))
     ));
     server.verify().await;
-}
-
-#[test_case::test_case(RuntimeAuthMode::DualHeader; "dual_header")]
-#[test_case::test_case(RuntimeAuthMode::AssertionOnly; "assertion_only")]
-#[tokio::test]
-async fn realtime_keeps_provider_auth_until_runtime_integration(mode: RuntimeAuthMode) {
-    let (mut client, _) = model_client_with_counting_attestation(/*include_attestation*/ true);
-    let registration = MockServer::start().await;
-    let manager = client.auth_manager().unwrap();
-    let expected_authorization = format!(
-        "Bearer {}",
-        manager.auth().await.unwrap().get_token().unwrap()
-    );
-    let runtime = Arc::new(RuntimeAuthManager::new(
-        manager.clone(),
-        AgentHostAuthorization::InstallationId {
-            installation_id: uuid::Uuid::nil(),
-        },
-        RuntimeRegistrationMetadata {
-            harness: None,
-            harness_version: None,
-            role: RuntimeRole::OrchestratorAndExecutor,
-        },
-        format!("{}/register", registration.uri()).parse().unwrap(),
-    ));
-    let info = client.state.provider.info().clone();
-    Arc::get_mut(&mut client.state).unwrap().provider = codex_model_provider::ProviderAuthContext {
-        credentials: manager,
-        runtime_auth: Some((runtime, mode)),
-    }
-    .model_provider(info);
-    assert!(client.state.provider.runtime_auth().is_some());
-    let sideband = client
-        .realtime_sideband_headers(http::HeaderMap::new())
-        .await
-        .unwrap();
-    assert_eq!(
-        sideband[http::header::AUTHORIZATION],
-        expected_authorization
-    );
-    assert!(!sideband.contains_key("x-openai-agent-assertion"));
-
-    let server = MockServer::start().await;
-    Mock::given(path("/realtime/calls"))
-        .respond_with(
-            ResponseTemplate::new(201)
-                .insert_header("location", "/realtime/calls/rtc_test")
-                .set_body_string("answer"),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-    let mut provider = client.state.provider.api_provider().await.unwrap();
-    provider.base_url = server.uri();
-    let call = client
-        .create_realtime_call_with_headers(
-            "offer".into(),
-            codex_api::RealtimeSessionConfig {
-                instructions: "hi".into(),
-                initial_items: Vec::new(),
-                delegation_ack_filler: None,
-                model: Some("gpt-realtime".into()),
-                session_id: None,
-                event_parser: codex_api::RealtimeEventParser::V1,
-                session_mode: codex_api::RealtimeSessionMode::Conversational,
-                output_modality: codex_protocol::protocol::RealtimeOutputModality::Audio,
-                voice: codex_protocol::protocol::RealtimeVoice::Cove,
-            },
-            http::HeaderMap::new(),
-            Some(provider),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        (call.call_id.as_str(), call.sdp.as_str()),
-        ("rtc_test", "answer")
-    );
-    assert_eq!(
-        call.sideband_headers[http::header::AUTHORIZATION],
-        expected_authorization
-    );
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].headers["authorization"], expected_authorization);
-    assert!(!requests[0].headers.contains_key("x-openai-agent-assertion"));
-    assert!(registration.received_requests().await.unwrap().is_empty());
 }
 
 #[test_case::test_case(RuntimeAuthMode::DualHeader; "dual_header")]

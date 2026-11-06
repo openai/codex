@@ -15,8 +15,11 @@ use super::realtime_text_from_handoff_request;
 use super::wrap_realtime_delegation_input;
 use crate::context::RealtimeDelegationSource;
 use async_channel::bounded;
+use base64::Engine;
 use codex_api::ApiError;
 use codex_api::RealtimeEventParser;
+use codex_features::Feature;
+use codex_features::RuntimeAuthMode;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::models::MessagePhase;
@@ -28,12 +31,43 @@ use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
+use codex_runtime_agent_instance::AgentHostAuthorization;
+use codex_runtime_agent_instance::RuntimeAuthManager;
+use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
+use codex_runtime_agent_instance::RuntimeRole;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 use test_case::test_case;
 use tokio::sync::Mutex;
+
+fn websocket_start_params() -> ConversationStartParams {
+    ConversationStartParams {
+        client_managed_handoffs: false,
+        delegation_ack_filler: None,
+        flush_transcript_tail_on_session_end: false,
+        codex_responses_as_items: false,
+        codex_response_item_prefix: None,
+        codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
+        backend_reasoning_status: false,
+        codex_response_handoff_channel_prefixes: None,
+        model: None,
+        output_modality: RealtimeOutputModality::Audio,
+        include_startup_context: false,
+        initial_items: Vec::new(),
+        realtime_start_instructions: None,
+        realtime_end_instructions: None,
+        prompt: None,
+        realtime_session_id: None,
+        voice_session_id: None,
+        transport: None,
+        version: Some(RealtimeConversationVersion::V1),
+        voice: None,
+    }
+}
 
 #[tokio::test]
 async fn prepared_realtime_routing_follows_selected_api_key_and_explicit_overrides() {
@@ -82,33 +116,9 @@ async fn prepared_realtime_routing_follows_selected_api_key_and_explicit_overrid
                 },
             )
             .await;
-        let prepared = prepare_realtime_start(
-            &sess,
-            ConversationStartParams {
-                client_managed_handoffs: false,
-                delegation_ack_filler: None,
-                flush_transcript_tail_on_session_end: false,
-                codex_responses_as_items: false,
-                codex_response_item_prefix: None,
-                codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
-                backend_reasoning_status: false,
-                codex_response_handoff_channel_prefixes: None,
-                model: None,
-                output_modality: RealtimeOutputModality::Audio,
-                include_startup_context: false,
-                initial_items: Vec::new(),
-                realtime_start_instructions: None,
-                realtime_end_instructions: None,
-                prompt: None,
-                realtime_session_id: None,
-                voice_session_id: None,
-                transport: None,
-                version: Some(RealtimeConversationVersion::V1),
-                voice: None,
-            },
-        )
-        .await
-        .expect("realtime startup should prepare without connecting");
+        let prepared = prepare_realtime_start(&sess, websocket_start_params())
+            .await
+            .expect("realtime startup should prepare without connecting");
         assert_eq!(prepared.api_provider.base_url, expected_url);
         let headers = prepared.extra_headers.expect("realtime request headers");
         assert_eq!(
@@ -124,6 +134,94 @@ async fn prepared_realtime_routing_follows_selected_api_key_and_explicit_overrid
             expected_fedramp_header
         );
     }
+}
+
+#[test_case(false; "saved_login")]
+#[test_case(true; "explicit_key")]
+#[tokio::test]
+async fn realtime_reuses_only_the_selected_credential_source(explicit_key: bool) {
+    let registration = wiremock::MockServer::start().await;
+    let registrations = AtomicUsize::new(0);
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/register"))
+        .respond_with(move |_: &wiremock::Request| {
+            let id = registrations.fetch_add(1, Ordering::Relaxed);
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "runtime_agent_instance_id": format!("runtime-{id}"),
+                "agent_host_id": "host-a",
+                "actor": {
+                    "kind": "platform",
+                    "user_id": "user-a",
+                    "organization_id": "org-a",
+                    "project_id": null
+                }
+            }))
+        })
+        .expect(if explicit_key { 2 } else { 1 })
+        .mount(&registration)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    let (sess, _turn, _events) =
+        crate::session::tests::make_session_and_context_with_auth_config_home_and_rx(
+            CodexAuth::from_api_key("same-key"),
+            Vec::new(),
+            home.path(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::RuntimeAgentInstances)
+                    .unwrap();
+                config.runtime_auth_mode = RuntimeAuthMode::AssertionOnly;
+                config.model_provider = ModelProviderInfo {
+                    experimental_bearer_token: explicit_key.then(|| "same-key".into()),
+                    env_http_headers: None,
+                    ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+                };
+            },
+        )
+        .await;
+    let runtime = Arc::new(RuntimeAuthManager::new(
+        Arc::clone(&sess.services.auth_manager),
+        AgentHostAuthorization::InstallationId {
+            installation_id: uuid::Uuid::nil(),
+        },
+        RuntimeRegistrationMetadata {
+            harness: None,
+            harness_version: None,
+            role: RuntimeRole::Orchestrator,
+        },
+        format!("{}/register", registration.uri()).parse().unwrap(),
+    ));
+    sess.services
+        .runtime_auth
+        .set(Arc::clone(&runtime))
+        .unwrap();
+    let login = runtime.auth().await.unwrap();
+    let prepared = prepare_realtime_start(&sess, websocket_start_params())
+        .await
+        .unwrap();
+    let headers = prepared
+        .websocket_auth
+        .expect("runtime auth selected")
+        .apply_auth_headers(http::HeaderMap::new())
+        .await
+        .unwrap();
+    let assertion = headers[http::header::AUTHORIZATION]
+        .to_str()
+        .unwrap()
+        .strip_prefix("AgentAssertion ")
+        .unwrap();
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(assertion.split('.').nth(2).unwrap())
+        .unwrap();
+    let claims: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    let selected_runtime = claims["runtime_agent_instance"].as_str().unwrap();
+    if explicit_key {
+        assert_ne!(selected_runtime, login.runtime().id());
+    } else {
+        assert_eq!(selected_runtime, login.runtime().id());
+    }
+    registration.verify().await;
 }
 
 /// Hold old input cleanup open while a successor tries to claim the connection.

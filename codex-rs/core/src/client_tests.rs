@@ -2256,13 +2256,219 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
     assert_eq!(headers["thread-id"], responses_metadata.thread_id);
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RealtimeCredentialChange {
+    None,
+    AccountBeforeConnect,
+    TokenDuringAttestation,
+}
+
+#[test_case::test_case(RealtimeCredentialChange::None; "same account")]
+#[test_case::test_case(RealtimeCredentialChange::AccountBeforeConnect; "account changed before connection")]
+#[test_case::test_case(RealtimeCredentialChange::TokenDuringAttestation; "token changed before sideband setup")]
+#[tokio::test]
+async fn realtime_call_preserves_captured_account_binding(change: RealtimeCredentialChange) {
+    use codex_http_client::DestinationPolicy;
+    use codex_http_client::NetworkPolicyController;
+    use codex_login::AuthCredentialsStoreMode;
+    use codex_login::AuthKeyringBackendKind;
+    use codex_login::AuthRouteConfig;
+    use codex_login::auth::login_with_chatgpt_auth_tokens;
+
+    #[derive(Debug)]
+    struct RefreshDuringAttestation {
+        credentials: Arc<AuthManager>,
+        home: std::path::PathBuf,
+        token: String,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl AttestationProvider for RefreshDuringAttestation {
+        fn header_for_request(
+            &self,
+            _context: AttestationContext,
+        ) -> GenerateAttestationFuture<'_> {
+            Box::pin(async move {
+                login_with_chatgpt_auth_tokens(
+                    &self.home,
+                    &self.token,
+                    "workspace-a",
+                    /*chatgpt_plan_type*/ None,
+                )
+                .unwrap();
+                self.credentials.reload().await;
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                None
+            })
+        }
+    }
+
+    let account_changed = change == RealtimeCredentialChange::AccountBeforeConnect;
+    let home = TempDir::new().unwrap();
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+        .with_network_policy(policy.clone());
+    let token = |workspace: &str, token_id: &str| {
+        let claims = json!({
+            "jti": token_id,
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": "realtime-user",
+                "chatgpt_account_id": workspace,
+            }
+        });
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
+        format!("header.{payload}.signature")
+    };
+    let login = |workspace: &str| {
+        let token = token(workspace, "initial");
+        login_with_chatgpt_auth_tokens(
+            home.path(),
+            &token,
+            workspace,
+            /*chatgpt_plan_type*/ None,
+        )
+        .unwrap();
+        token
+    };
+    let access_token = login("workspace-a");
+    let credentials = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::Ephemeral,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        AuthRouteConfig::from_http_client_factory(factory.clone()),
+    )
+    .await;
+    let captured_factory = credentials.http_client_factory();
+    if account_changed {
+        login("workspace-b");
+        credentials.reload().await;
+        assert_eq!(
+            credentials
+                .auth_cached()
+                .unwrap()
+                .get_account_id()
+                .as_deref(),
+            Some("workspace-b")
+        );
+    }
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/realtime/calls"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("location", "/v1/realtime/calls/rtc_bound")
+                .set_body_string("answer-sdp"),
+        )
+        .expect(usize::from(!account_changed) as u64)
+        .mount(&server)
+        .await;
+    let info = ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
+    let api_provider = info
+        .to_api_provider(Some(AuthMode::ChatgptAuthTokens))
+        .unwrap();
+    let mut model_client = test_model_client(SessionSource::Exec);
+    Arc::get_mut(&mut model_client.state).unwrap().provider =
+        create_model_provider(info, Some(Arc::clone(&credentials)));
+    model_client.http_client_factory = factory;
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let refreshed_token = token("workspace-a", "refreshed");
+    if change == RealtimeCredentialChange::TokenDuringAttestation {
+        let state = Arc::get_mut(&mut model_client.state).unwrap();
+        state.include_attestation = true;
+        state.attestation_provider = Some(Arc::new(RefreshDuringAttestation {
+            credentials: Arc::clone(&credentials),
+            home: home.path().to_path_buf(),
+            token: refreshed_token.clone(),
+            calls: Arc::clone(&refreshes),
+        }));
+    }
+    let context = codex_model_provider::ProviderAuthContext {
+        credentials,
+        runtime_auth: None,
+    };
+    let result = model_client
+        .create_realtime_call_with_headers(
+            "offer-sdp".into(),
+            codex_api::RealtimeSessionConfig {
+                instructions: "hi".into(),
+                initial_items: Vec::new(),
+                delegation_ack_filler: None,
+                model: Some("gpt-realtime".into()),
+                session_id: Some("account-bound".into()),
+                event_parser: codex_api::RealtimeEventParser::V1,
+                session_mode: codex_api::RealtimeSessionMode::Conversational,
+                output_modality: codex_protocol::protocol::RealtimeOutputModality::Audio,
+                voice: codex_protocol::protocol::RealtimeVoice::Cove,
+            },
+            http::HeaderMap::new(),
+            Some(api_provider),
+            &format!("{}/v1", server.uri()),
+            &context,
+            captured_factory,
+        )
+        .await;
+    if account_changed {
+        assert!(
+            result.is_err(),
+            "a captured account cannot be replaced before connecting"
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+    } else {
+        let call = result.unwrap();
+        if change == RealtimeCredentialChange::TokenDuringAttestation {
+            assert_eq!(refreshes.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                context
+                    .credentials
+                    .auth_cached()
+                    .unwrap()
+                    .get_token()
+                    .unwrap(),
+                refreshed_token
+            );
+        }
+        assert_eq!(call.call_id, "rtc_bound");
+        assert_eq!(call.sdp, "answer-sdp");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].headers["authorization"],
+            format!("Bearer {access_token}")
+        );
+        let sideband_headers = call
+            .sideband_auth
+            .apply_auth_headers(call.sideband_headers)
+            .await
+            .unwrap();
+        assert_eq!(
+            sideband_headers["authorization"],
+            format!("Bearer {access_token}")
+        );
+    }
+}
+
 #[tokio::test]
 async fn existing_call_sideband_headers_include_attestation() {
     let (model_client, attestation_calls) =
         model_client_with_counting_attestation(/*include_attestation*/ true);
 
-    let headers = model_client
-        .realtime_sideband_headers(http::HeaderMap::new())
+    let context = codex_model_provider::ProviderAuthContext {
+        credentials: model_client.auth_manager().unwrap(),
+        runtime_auth: None,
+    };
+    let (_, headers, _) = model_client
+        .realtime_sideband_auth(
+            http::HeaderMap::new(),
+            "https://api.openai.com/v1",
+            &context,
+            model_client.http_client_factory.clone(),
+        )
         .await
         .expect("existing call sideband headers should build");
 
@@ -2273,6 +2479,324 @@ async fn existing_call_sideband_headers_include_attestation() {
         Some("v1.header-1"),
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
+}
+
+fn realtime_auth_context(
+    model_client: &ModelClient,
+    registration: &wiremock::MockServer,
+    mode: RuntimeAuthMode,
+) -> codex_model_provider::ProviderAuthContext {
+    let runtime = Arc::new(RuntimeAuthManager::new(
+        model_client.auth_manager().unwrap(),
+        AgentHostAuthorization::InstallationId {
+            installation_id: uuid::Uuid::nil(),
+        },
+        RuntimeRegistrationMetadata {
+            harness: None,
+            harness_version: None,
+            role: RuntimeRole::OrchestratorAndExecutor,
+        },
+        format!("{}/register", registration.uri()).parse().unwrap(),
+    ));
+    codex_model_provider::ProviderAuthContext {
+        credentials: model_client.auth_manager().unwrap(),
+        runtime_auth: Some((runtime, mode)),
+    }
+}
+
+#[test_case::test_case(RuntimeAuthMode::DualHeader, false; "dual_header")]
+#[test_case::test_case(RuntimeAuthMode::AssertionOnly, false; "assertion_only")]
+#[test_case::test_case(RuntimeAuthMode::DualHeader, true; "dual_header_with_gateway")]
+#[test_case::test_case(RuntimeAuthMode::AssertionOnly, true; "assertion_only_with_gateway")]
+#[tokio::test]
+async fn realtime_auth_uses_request_scope_on_reconnect(mode: RuntimeAuthMode, gateway: bool) {
+    let (mut model_client, _) =
+        model_client_with_counting_attestation(/*include_attestation*/ false);
+    let registration = wiremock::MockServer::start().await;
+    let home = TempDir::new().unwrap();
+    let credentials = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("realtime-key"),
+        home.path().to_path_buf(),
+    );
+    let mut info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    if gateway {
+        info.gateway_oauth = Some(codex_model_provider_info::GatewayOAuthConfig::OAuth(
+            codex_model_provider_info::GatewayOAuthSettings {
+                authorization_url: format!("{}/authorize", registration.uri()),
+                device_authorization_url: None,
+                token_url: format!("{}/token", registration.uri()),
+                client_id: "realtime-client".into(),
+                resource: None,
+                scopes: vec![],
+                redirect_port: None,
+                credentials_store: Default::default(),
+                delivery: codex_model_provider_info::GatewayOAuthDelivery::Header {
+                    name: "x-gateway-auth".into(),
+                    scheme: "Bearer".into(),
+                },
+            },
+        ));
+    }
+    let _gateway = gateway.then(|| {
+        codex_model_provider::test_support::seed_gateway_auth(
+            &info,
+            &credentials,
+            json!({"access_token": "gateway-token", "refresh_token": "refresh-secret", "expires_at": i64::MAX}),
+        )
+    });
+    Arc::get_mut(&mut model_client.state).unwrap().provider =
+        create_model_provider(info, Some(credentials));
+    let runtime_id = uuid::Uuid::new_v4().to_string();
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::body_partial_json(serde_json::json!({
+            "actor_auth": {
+                "type": "platform_api_key",
+                "credential": "realtime-key",
+                "project_id": "project-selected"
+            }
+        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "runtime_agent_instance_id": runtime_id,
+                "agent_host_id": "host-a",
+                "actor": {
+                    "kind": "platform",
+                    "user_id": "user-a",
+                    "organization_id": "org-a",
+                    "project_id": "project-selected"
+                }
+            })),
+        )
+        .expect(1)
+        .mount(&registration)
+        .await;
+    let context = realtime_auth_context(&model_client, &registration, mode);
+    let headers = http::HeaderMap::from_iter([(
+        http::HeaderName::from_static("openai-project"),
+        http::HeaderValue::from_static("project-selected"),
+    )]);
+    let setup = model_client
+        .realtime_client_setup(
+            &context,
+            model_client.http_client_factory.clone(),
+            Some("wss://api.openai.com/v1"),
+            Some(&headers),
+            /*call_setup*/ None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(setup.runtime_id.as_deref(), Some(runtime_id.as_str()));
+    let sideband = model_client
+        .realtime_client_setup(
+            &context,
+            setup.http_client_factory.clone(),
+            Some("wss://api.openai.com/v1"),
+            Some(&headers),
+            Some(&setup),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sideband.runtime_id, setup.runtime_id);
+    let mut proofs = std::collections::HashSet::new();
+    for attempt in [&setup, &sideband, &sideband] {
+        let headers = attempt
+            .api_auth
+            .apply_auth_headers(attempt.api_provider.headers.clone())
+            .await
+            .unwrap();
+        assert_eq!(headers["openai-project"], "project-selected");
+        assert_eq!(
+            headers.get("x-gateway-auth"),
+            gateway.then_some(&http::HeaderValue::from_static("Bearer gateway-token"))
+        );
+        let proof = match mode {
+            RuntimeAuthMode::DualHeader => {
+                assert_eq!(headers["authorization"], "Bearer realtime-key");
+                headers["x-openai-agent-assertion"].clone()
+            }
+            RuntimeAuthMode::AssertionOnly => {
+                assert!(!headers.contains_key("x-openai-agent-assertion"));
+                assert!(
+                    headers["authorization"]
+                        .to_str()
+                        .unwrap()
+                        .starts_with("AgentAssertion ")
+                );
+                headers["authorization"].clone()
+            }
+        };
+        assert!(
+            proofs.insert(proof),
+            "each attempt must sign a fresh assertion"
+        );
+    }
+    registration.verify().await;
+}
+
+#[tokio::test]
+async fn realtime_uses_openai_credentials_with_bedrock_inference() {
+    let (mut model_client, _) =
+        model_client_with_counting_attestation(/*include_attestation*/ false);
+    let credentials = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("realtime-key"));
+    let info = ModelProviderInfo::create_amazon_bedrock_provider(Some(
+        codex_model_provider_info::ModelProviderAwsAuthInfo {
+            profile: Some("configured-profile".into()),
+            region: Some("us-east-1".into()),
+            credential_export: None,
+            auth_refresh: None,
+        },
+    ));
+    Arc::get_mut(&mut model_client.state).unwrap().provider =
+        create_model_provider(info, Some(Arc::clone(&credentials)));
+    let context = codex_model_provider::ProviderAuthContext {
+        credentials,
+        runtime_auth: None,
+    };
+
+    let (auth, headers, _) = model_client
+        .realtime_sideband_auth(
+            http::HeaderMap::new(),
+            "https://api.openai.com/v1",
+            &context,
+            model_client.http_client_factory.clone(),
+        )
+        .await
+        .unwrap();
+    let headers = auth.apply_auth_headers(headers).await.unwrap();
+
+    assert_eq!(headers["authorization"], "Bearer realtime-key");
+}
+
+#[test_case::test_case(RuntimeAuthMode::DualHeader; "dual_header")]
+#[test_case::test_case(RuntimeAuthMode::AssertionOnly; "assertion_only")]
+#[tokio::test]
+async fn realtime_custom_call_keeps_selected_key_for_openai_sideband(mode: RuntimeAuthMode) {
+    let (mut model_client, _) =
+        model_client_with_counting_attestation(/*include_attestation*/ false);
+    let home = TempDir::new().unwrap();
+    let credentials = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("saved-key"),
+        home.path().to_path_buf(),
+    );
+    let mut info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    info.experimental_bearer_token = Some("realtime-key".into());
+    Arc::get_mut(&mut model_client.state).unwrap().provider =
+        create_model_provider(info, Some(credentials));
+    let registration = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/register"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "actor_auth": {
+                "type": "platform_api_key",
+                "credential": "realtime-key"
+            }
+        })))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "runtime_agent_instance_id": uuid::Uuid::new_v4().to_string(),
+            "agent_host_id": "host-a",
+            "actor": {
+                "kind": "platform",
+                "user_id": "user-a",
+                "organization_id": "org-a",
+                "project_id": "project-a"
+            }
+        })))
+        .expect(1)
+        .mount(&registration)
+        .await;
+    let context = realtime_auth_context(&model_client, &registration, mode);
+    let calls = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/realtime/calls"))
+        .and(wiremock::matchers::header(
+            "authorization",
+            "Bearer realtime-key",
+        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(201)
+                .insert_header("location", "/v1/realtime/calls/rtc_selected")
+                .set_body_string("answer-sdp"),
+        )
+        .expect(1)
+        .mount(&calls)
+        .await;
+    let call_provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", calls.uri())))
+            .to_api_provider(Some(AuthMode::ApiKey))
+            .unwrap();
+
+    let call = model_client
+        .create_realtime_call_with_headers(
+            "offer-sdp".into(),
+            codex_api::RealtimeSessionConfig {
+                instructions: "hi".into(),
+                initial_items: Vec::new(),
+                delegation_ack_filler: None,
+                model: Some("gpt-realtime".into()),
+                session_id: Some("selected-key".into()),
+                event_parser: codex_api::RealtimeEventParser::V1,
+                session_mode: codex_api::RealtimeSessionMode::Conversational,
+                output_modality: codex_protocol::protocol::RealtimeOutputModality::Audio,
+                voice: codex_protocol::protocol::RealtimeVoice::Cove,
+            },
+            http::HeaderMap::new(),
+            Some(call_provider),
+            "https://api.openai.com/v1",
+            &context,
+            model_client.http_client_factory.clone(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (call.call_id.as_str(), call.sdp.as_str()),
+        ("rtc_selected", "answer-sdp")
+    );
+    let requests = calls.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].headers.contains_key("x-openai-agent-assertion"));
+    let headers = call
+        .sideband_auth
+        .apply_auth_headers(call.sideband_headers)
+        .await
+        .unwrap();
+    match mode {
+        RuntimeAuthMode::DualHeader => {
+            assert_eq!(headers["authorization"], "Bearer realtime-key");
+            assert!(headers.contains_key("x-openai-agent-assertion"));
+        }
+        RuntimeAuthMode::AssertionOnly => {
+            assert!(
+                headers["authorization"]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("AgentAssertion ")
+            );
+            assert!(!headers.contains_key("x-openai-agent-assertion"));
+        }
+    }
+    registration.verify().await;
+    calls.verify().await;
+}
+
+#[tokio::test]
+async fn realtime_registration_failure_does_not_fall_back_to_bearer_auth() {
+    let (model_client, _) =
+        model_client_with_counting_attestation(/*include_attestation*/ true);
+    let registration = wiremock::MockServer::start().await;
+    let context =
+        realtime_auth_context(&model_client, &registration, RuntimeAuthMode::AssertionOnly);
+
+    let result = model_client
+        .realtime_sideband_auth(
+            http::HeaderMap::new(),
+            "https://api.openai.com/v1",
+            &context,
+            model_client.http_client_factory.clone(),
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(registration.received_requests().await.unwrap().len(), 1);
 }
 
 #[tokio::test]

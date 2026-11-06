@@ -31,6 +31,7 @@ use codex_api::build_session_headers;
 use codex_api::map_api_error;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_features::Feature;
 use codex_http_client::HttpClientFactory;
 use codex_login::CodexAuth;
 use codex_login::auth::is_fedramp_api_key;
@@ -551,6 +552,7 @@ struct RealtimeStart {
     http_client_factory: HttpClientFactory,
     realtime_sideband_base_url: Option<String>,
     extra_headers: Option<HeaderMap>,
+    websocket_auth: Option<codex_api::SharedAuthProvider>,
     client_managed_handoffs: bool,
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
@@ -563,6 +565,7 @@ struct RealtimeStart {
     model_client: ModelClient,
     sdp: Option<String>,
     existing_call_id: Option<String>,
+    auth_context: codex_model_provider::ProviderAuthContext,
 }
 
 struct RealtimeStartOutput {
@@ -665,10 +668,12 @@ impl RealtimeConversationManager {
         let session_id = start.session_config.session_id.clone();
         let RealtimeStart {
             sideband,
+            auth_context,
             api_provider,
             http_client_factory,
             realtime_sideband_base_url,
             extra_headers,
+            websocket_auth,
             client_managed_handoffs,
             flush_transcript_tail_on_session_end,
             codex_responses_as_items,
@@ -722,11 +727,10 @@ impl RealtimeConversationManager {
             audio_rx,
         };
 
-        let client = RealtimeWebsocketClient::new(api_provider, http_client_factory);
-        let client = match realtime_sideband_base_url {
-            Some(base_url) => client.with_webrtc_sideband_base_url(base_url),
-            None => client,
-        };
+        let sideband_base_url =
+            realtime_sideband_base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let client = RealtimeWebsocketClient::new(api_provider, http_client_factory.clone())
+            .with_webrtc_sideband_base_url(sideband_base_url.clone());
         let transcript_tail_flush = RealtimeTranscriptTailFlush {
             enabled: flush_transcript_tail_on_session_end,
             event_parser,
@@ -761,10 +765,15 @@ impl RealtimeConversationManager {
                     session_config.clone(),
                     extra_headers.unwrap_or_default(),
                     realtime_call_api_provider,
+                    &sideband_base_url,
+                    &auth_context,
+                    http_client_factory,
                 )
                 .await?;
             let task = spawn_webrtc_sideband_input_task(RealtimeWebrtcSidebandInputTask {
-                client,
+                client: client
+                    .with_http_client_factory(call.sideband_http_client_factory)
+                    .with_auth(call.sideband_auth),
                 session_config,
                 call_id: call.call_id,
                 sideband_headers: call.sideband_headers,
@@ -783,6 +792,9 @@ impl RealtimeConversationManager {
             let task = existing_call::attach(existing_call::ExistingCallAttachment {
                 client,
                 model_client,
+                auth_context,
+                http_client_factory,
+                sideband_base_url,
                 session_config,
                 call_id,
                 extra_headers: extra_headers.unwrap_or_default(),
@@ -798,12 +810,13 @@ impl RealtimeConversationManager {
             .await?;
             (task, None)
         } else {
+            let extra_headers = extra_headers.unwrap_or_default();
+            let client = match websocket_auth {
+                Some(auth) => client.with_auth(auth),
+                None => client,
+            };
             let connection = client
-                .connect(
-                    session_config,
-                    extra_headers.unwrap_or_default(),
-                    default_headers(),
-                )
+                .connect(session_config, extra_headers, default_headers())
                 .await
                 .map_err(map_api_error)?;
             let task = spawn_realtime_input_task(
@@ -1370,6 +1383,7 @@ struct PreparedRealtimeConversationStart {
     http_client_factory: HttpClientFactory,
     realtime_sideband_base_url: Option<String>,
     extra_headers: Option<HeaderMap>,
+    websocket_auth: Option<codex_api::SharedAuthProvider>,
     client_managed_handoffs: bool,
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
@@ -1384,6 +1398,7 @@ struct PreparedRealtimeConversationStart {
     version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
     transport: ConversationStartTransport,
+    auth_context: codex_model_provider::ProviderAuthContext,
 }
 
 #[derive(Clone, Copy)]
@@ -1406,13 +1421,32 @@ async fn prepare_realtime_start(
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
     let config = sess.get_config().await;
-    let (auth, http_client_factory) = match auth_manager.auth_with_http_client_factory().await {
-        Some((auth, captured_factory)) if auth.is_chatgpt_auth() || auth.is_api_key_auth() => (
-            Some(auth),
-            config
-                .http_client_factory()
-                .with_network_policy(captured_factory.network_policy().clone()),
-        ),
+    let auth_context = codex_model_provider::ProviderAuthContext {
+        credentials: Arc::clone(&auth_manager),
+        runtime_auth: if config.features.enabled(Feature::RuntimeAgentInstances) {
+            let runtime = sess.services.runtime_auth.get().ok_or_else(|| {
+                CodexErr::InvalidRequest("runtime authentication is not initialized".to_string())
+            })?;
+            Some((Arc::clone(runtime), config.runtime_auth_mode))
+        } else {
+            None
+        },
+    };
+    let (auth, mut http_client_factory) = match auth_manager.auth_with_http_client_factory().await {
+        Some((auth, captured_factory)) if auth.is_chatgpt_auth() || auth.is_api_key_auth() => {
+            let factory = config.http_client_factory();
+            let policy = factory
+                .network_policy()
+                .clone()
+                .with_account_binding(captured_factory.network_policy())
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(
+                        "realtime credentials and transport must share the application network policy"
+                            .into(),
+                    )
+                })?;
+            (Some(auth), factory.with_network_policy(policy))
+        }
         Some((auth, _)) => (Some(auth), config.http_client_factory()),
         None => (None, config.http_client_factory()),
     };
@@ -1487,6 +1521,7 @@ async fn prepare_realtime_start(
     let requested_realtime_session_id = session_config.session_id.clone();
     let event_parser = session_config.event_parser;
     let originator = sess.originator().await;
+    let mut websocket_auth = None;
     let mut extra_headers = match transport {
         ConversationStartTransport::Websocket => {
             let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
@@ -1495,6 +1530,38 @@ async fn prepare_realtime_start(
                     &provider,
                     Some(&CodexAuth::from_api_key(&realtime_api_key)),
                 )?;
+            }
+            if let Some((manager, mode)) = &auth_context.runtime_auth
+                && crate::runtime_auth::is_openai_realtime_url(&api_provider.base_url)?
+            {
+                codex_model_provider::validate_runtime_environment(
+                    manager,
+                    Some(&api_provider.base_url),
+                )?;
+                // Saved and command-provided keys keep their existing credential lifecycle.
+                let runtime = if provider.env_key.is_none()
+                    && provider.experimental_bearer_token.is_none()
+                    && auth.as_ref().and_then(CodexAuth::api_key).is_some()
+                {
+                    manager.bind(Arc::clone(&auth_manager))
+                } else {
+                    manager.bind_api_key(&realtime_api_key, &auth_manager.runtime_config())
+                };
+                let selected = codex_model_provider::select_runtime_auth_for(
+                    &runtime,
+                    &CodexAuth::from_api_key(&realtime_api_key),
+                    &api_provider.headers,
+                )
+                .await
+                .map_err(|error| codex_api::map_api_error(error.into()))?;
+                codex_model_provider::validate_runtime_selectors(
+                    &api_provider.headers,
+                    selected.runtime().actor().info(),
+                )?;
+                http_client_factory = selected
+                    .bind_http_client_factory(http_client_factory)
+                    .map_err(|error| codex_api::map_api_error(error.into()))?;
+                websocket_auth = Some(selected.into_auth_provider(*mode));
             }
             realtime_request_headers(
                 requested_realtime_session_id.as_deref(),
@@ -1530,10 +1597,12 @@ async fn prepare_realtime_start(
     }
     Ok(PreparedRealtimeConversationStart {
         sideband: None,
+        auth_context,
         api_provider,
         http_client_factory,
         realtime_sideband_base_url,
         extra_headers: Some(extra_headers),
+        websocket_auth,
         client_managed_handoffs: params.client_managed_handoffs,
         flush_transcript_tail_on_session_end: params.flush_transcript_tail_on_session_end,
         codex_responses_as_items: params.codex_responses_as_items,
@@ -1756,10 +1825,12 @@ async fn handle_start_inner(
 ) -> CodexResult<()> {
     let PreparedRealtimeConversationStart {
         sideband,
+        auth_context,
         api_provider,
         http_client_factory,
         realtime_sideband_base_url,
         extra_headers,
+        websocket_auth,
         client_managed_handoffs,
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,
@@ -1788,10 +1859,12 @@ async fn handle_start_inner(
     let event_parser = session_config.event_parser;
     let start = RealtimeStart {
         sideband,
+        auth_context,
         api_provider,
         http_client_factory,
         realtime_sideband_base_url,
         extra_headers,
+        websocket_auth,
         client_managed_handoffs,
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,

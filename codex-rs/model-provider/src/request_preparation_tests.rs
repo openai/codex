@@ -27,7 +27,7 @@ async fn explicit_provider_token_survives_a_workspace_switch_during_setup() {
     let provider = create_model_provider(info, Some(manager.clone()));
 
     let mut attempts = 0;
-    let auth = prepare_provider_request(
+    let resolved = prepare_provider_request(
         provider.as_ref(),
         provider_uses_first_party_auth_path(provider.info()),
         |_| {
@@ -41,7 +41,7 @@ async fn explicit_provider_token_survives_a_workspace_switch_during_setup() {
                     /*chatgpt_plan_type*/ None,
                 )?;
                 manager.reload().await;
-                Ok(resolved.auth)
+                Ok(resolved)
             }
         },
     )
@@ -54,7 +54,11 @@ async fn explicit_provider_token_survives_a_workspace_switch_during_setup() {
     );
     assert_eq!(attempts, 1);
     let mut headers = http::HeaderMap::new();
-    auth.add_auth_headers(&mut headers).unwrap();
+    resolved.auth.add_auth_headers(&mut headers).unwrap();
+    assert_eq!(
+        resolved.credential.as_ref().and_then(CodexAuth::api_key),
+        Some("provider-token")
+    );
     assert_eq!(
         headers[http::header::AUTHORIZATION],
         "Bearer provider-token"

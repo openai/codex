@@ -7,6 +7,7 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
+use codex_core::plugins_manager_for_config;
 use codex_core::plugins_manager_for_config_with_runtime;
 use codex_core_plugins::ConfiguredMarketplace;
 use codex_core_plugins::OPENAI_BUNDLED_MARKETPLACE_NAME;
@@ -140,13 +141,13 @@ pub async fn run_plugin_add(
     overrides: Vec<(String, toml::Value)>,
     args: AddPluginArgs,
 ) -> Result<()> {
-    let context = load_plugin_command_context(overrides).await?;
     let AddPluginArgs {
         plugin,
         marketplace_name,
         json,
     } = args;
     let selection = parse_plugin_selection(plugin, marketplace_name)?;
+    let context = load_plugin_command_context(overrides, Some(&selection.marketplace_name)).await?;
     let outcome = if selection.marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME {
         let mut listing = fetch_remote_marketplaces(
             &context,
@@ -247,7 +248,7 @@ pub async fn run_plugin_list(
     overrides: Vec<(String, toml::Value)>,
     args: ListPluginsArgs,
 ) -> Result<()> {
-    let context = load_plugin_command_context(overrides).await?;
+    let context = load_plugin_command_context(overrides, args.marketplace_name.as_deref()).await?;
     let remote_listing = fetch_remote_marketplaces(
         &context,
         args.marketplace_name.as_deref(),
@@ -682,13 +683,13 @@ pub async fn run_plugin_remove(
     overrides: Vec<(String, toml::Value)>,
     args: RemovePluginArgs,
 ) -> Result<()> {
-    let context = load_plugin_command_context(overrides).await?;
     let RemovePluginArgs {
         plugin,
         marketplace_name,
         json,
     } = args;
     let selection = parse_plugin_selection(plugin, marketplace_name)?;
+    let context = load_plugin_command_context(overrides, Some(&selection.marketplace_name)).await?;
 
     if selection.marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME {
         ensure!(
@@ -766,6 +767,7 @@ struct PluginCommandContext {
 
 async fn load_plugin_command_context(
     overrides: Vec<(String, toml::Value)>,
+    marketplace_name: Option<&str>,
 ) -> Result<PluginCommandContext> {
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let config = Config::load_with_cli_overrides(overrides)
@@ -773,14 +775,20 @@ async fn load_plugin_command_context(
         .context("failed to load configuration")?;
     let plugins_input = config.plugins_config_input();
     let auth_manager = load_cli_auth_manager(&config).await?;
-    let manager = Arc::new(
-        plugins_manager_for_config_with_runtime(&config, Arc::clone(&auth_manager)).await?,
-    );
+    let auth = auth_manager.auth().await;
+    let uses_remote_catalog = plugins_input.plugins_enabled
+        && auth.as_ref().is_some_and(CodexAuth::uses_codex_backend)
+        && marketplace_name.is_none_or(|name| name == REMOTE_GLOBAL_MARKETPLACE_NAME);
+    let manager = Arc::new(if uses_remote_catalog {
+        plugins_manager_for_config_with_runtime(&config, Arc::clone(&auth_manager)).await?
+    } else {
+        plugins_manager_for_config(&config, Arc::clone(&auth_manager))
+    });
     Ok(PluginCommandContext {
         codex_home: codex_home.to_path_buf(),
         plugins_input,
         manager,
-        auth: auth_manager.auth().await,
+        auth,
     })
 }
 
