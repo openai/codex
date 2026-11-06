@@ -1,11 +1,18 @@
 //! Planning reads only the selected channels and respects both the board and history cutoffs.
 
 use crate::evidence_board::EvidenceBoard;
+use crate::evidence_board::routed_original;
+use anyhow::Context;
+use codex_guardian_v3::DeliveryPlan;
 use codex_guardian_v3::DeliveryState;
 use codex_message_board::PageRequest;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::HistoryPosition;
+use codex_protocol::protocol::TruncationPolicy;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 
@@ -29,15 +36,21 @@ async fn plans_unique_originals_in_source_order_from_a_fixed_view() -> anyhow::R
         end_byte_offset: 64 * 1024,
     };
     let selected = BTreeSet::from(["a".into(), "b".into()]);
-    let state = DeliveryState::new(reviewer, owner.into());
+    let mut state = DeliveryState::new(reviewer, owner.into());
     let reads = board.host.agent_path_calls.load(Ordering::SeqCst);
-    let plan = state.plan(&view, &selected, cutoff).await?;
+    let mut plan = state.plan(&view, &selected, cutoff).await?;
     // One short ID page per selected channel completes the scan.
     assert_eq!(
         board.host.agent_path_calls.load(Ordering::SeqCst) - reads,
         2
     );
-    assert_eq!(plan.into_keys().collect::<Vec<_>>(), [1, 3]);
+    assert_eq!(
+        admit_batch(&mut plan).await?,
+        json!({"sources": [
+            routed_original(/*ordinal*/ 1, "one"),
+            routed_original(/*ordinal*/ 3, "three"),
+        ]}),
+    );
     let later = board.writer.read_view(reviewer).await?;
     assert!(state.plan(&later, &selected, cutoff).await.is_err());
     Ok(())
@@ -59,11 +72,30 @@ async fn plans_across_storage_pages_in_reverse_insertion_order() -> anyhow::Resu
         end_ordinal_exclusive: count,
         end_byte_offset: 64 * 1024,
     };
-    let state = DeliveryState::new(reviewer, owner.into());
-    let plan = state.plan(&view, &selected, cutoff).await?;
+    let mut state = DeliveryState::new(reviewer, owner.into());
+    let mut plan = state.plan(&view, &selected, cutoff).await?;
+    let reads = board.host.agent_path_calls.load(Ordering::SeqCst);
+    let expected: Vec<_> = (0..count)
+        .map(|ordinal| routed_original(ordinal, "next review"))
+        .collect();
+    assert_eq!(admit_batch(&mut plan).await?, json!({"sources": expected}));
     assert_eq!(
-        plan.into_keys().collect::<Vec<_>>(),
-        (0..count).collect::<Vec<_>>()
+        board.host.agent_path_calls.load(Ordering::SeqCst) - reads,
+        2
     );
     Ok(())
+}
+
+async fn admit_batch(plan: &mut DeliveryPlan<'_>) -> anyhow::Result<Value> {
+    let mut batch = Vec::new();
+    plan.deliver(TruncationPolicy::Bytes(64 * 1024), |items| {
+        batch = items;
+        std::future::ready(Ok(()))
+    })
+    .await?;
+    let [ResponseItem::FunctionCallOutput { output, .. }] = batch.as_slice() else {
+        anyhow::bail!("expected a single evidence batch");
+    };
+    let text = output.text_content().context("expected evidence text")?;
+    Ok(serde_json::from_str(text)?)
 }

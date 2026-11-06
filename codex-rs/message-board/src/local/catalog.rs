@@ -87,6 +87,35 @@ impl LocalBoardReadView {
         .await
         .map_err(storage_error)
     }
+
+    /// Reads one page of whole posts in the requested sequence order. Every post must
+    /// belong to this board and fall within the captured boundary.
+    pub async fn read_post_texts(
+        &self,
+        caller: ThreadId,
+        sequences: &[i64],
+    ) -> Result<Vec<String>> {
+        self.board.host.agent_path(caller).await?;
+        if sequences.len() > crate::PageRequest::default().limit.get() as usize {
+            return Err(invalid("requested posts exceed one board page"));
+        }
+        // Drive primary-key lookups from the requested page, not from all posts on the board.
+        let texts = sqlx::query_scalar::<_, String>(
+            "SELECT json_extract(p.payload, '$.text') FROM json_each(?) AS requested
+             CROSS JOIN posts AS p
+             WHERE p.seq=requested.value AND p.board=? AND p.seq<=? ORDER BY requested.key",
+        )
+        .bind(serde_json::to_string(sequences).map_err(storage_error)?)
+        .bind(self.board.identity.to_string())
+        .bind(self.view.post_cutoff)
+        .fetch_all(self.board.pool.as_ref())
+        .await
+        .map_err(storage_error)?;
+        if texts.len() != sequences.len() {
+            return Err(invalid("post not found in this board view"));
+        }
+        Ok(texts)
+    }
 }
 
 pub(super) struct ReadView {

@@ -1,5 +1,5 @@
 //! Guardian's durable evidence storage, owned by the main thread.
-//! Reviewer tools search a fixed board view and plan delivery of the originals routed by the housekeeper.
+//! Reviewer tools search a fixed board view and deliver the originals routed by the housekeeper.
 //! The host owns review scheduling and the lifetime of each view.
 //! Hosts invoke permanent-deletion cleanup only when Guardian V3 is enabled.
 
@@ -15,6 +15,7 @@ mod retrieval_tools;
 mod sampling;
 mod selection;
 mod subscription_tools;
+pub use delivery::DeliveryPlan;
 pub use delivery::DeliveryState;
 pub use evidence::EvidenceCursor;
 pub use evidence::EvidenceId;

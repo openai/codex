@@ -25,6 +25,8 @@ use std::sync::atomic::AtomicUsize;
 
 #[path = "../../../message-board/tests/common/mod.rs"]
 mod board_host;
+#[path = "retrieval/delivery.rs"]
+mod delivery;
 #[path = "retrieval/evidence_board.rs"]
 mod evidence_board;
 #[path = "retrieval/planning.rs"]
