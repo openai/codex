@@ -758,14 +758,7 @@ async fn external_auth_401_retry_uses_refreshed_chatgpt_headers() -> anyhow::Res
 
     let mut builder = test_codex().with_auth(CodexAuth::from_api_key("seed"));
     let test = builder.build_with_auto_env(&server).await?;
-    let external_auth = Arc::new(ScriptedExternalAuth {
-        current: Mutex::new(external_chatgpt_auth(INITIAL_ACCESS_TOKEN)?),
-        refreshed: external_chatgpt_auth(REFRESHED_ACCESS_TOKEN)?,
-    });
-    test.thread_manager
-        .auth_manager()
-        .set_external_auth(external_auth.clone())
-        .await?;
+    install_scripted_external_auth(&test).await?;
 
     test.submit_turn("hello").await?;
 
@@ -788,5 +781,58 @@ async fn external_auth_401_retry_uses_refreshed_chatgpt_headers() -> anyhow::Res
             format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
         ]
     );
+    Ok(())
+}
+
+async fn install_scripted_external_auth(
+    test: &core_test_support::test_codex::TestCodex,
+) -> anyhow::Result<()> {
+    let external_auth = Arc::new(ScriptedExternalAuth {
+        current: Mutex::new(external_chatgpt_auth(INITIAL_ACCESS_TOKEN)?),
+        refreshed: external_chatgpt_auth(REFRESHED_ACCESS_TOKEN)?,
+    });
+    test.thread_manager
+        .auth_manager()
+        .set_external_auth(external_auth)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_gateway_retry_then_recovers_refreshable_primary_auth() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let source = tempfile::TempDir::new()?;
+    let token_path = source.path().join("gateway-token");
+    std::fs::write(&token_path, "gateway-token")?;
+    let test = super::gateway_auth::command_gateway(&server, &token_path).await?;
+    install_scripted_external_auth(&test).await?;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("cookie", "gateway=gateway-token"))
+        .and(header(
+            "authorization",
+            format!("Bearer {INITIAL_ACCESS_TOKEN}"),
+        ))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("cookie", "gateway=gateway-token"))
+        .and(header(
+            "authorization",
+            format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse(vec![ev_completed("resp-1")])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    test.submit_turn("hello").await?;
+    server.verify().await;
     Ok(())
 }

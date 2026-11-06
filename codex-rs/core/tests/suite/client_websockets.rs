@@ -2828,6 +2828,56 @@ fn websocket_provider_with_connect_timeout(
     }
 }
 
+#[tokio::test]
+async fn command_gateway_stops_after_a_second_unauthorized_websocket_upgrade() {
+    skip_if_no_network!();
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::header("upgrade", "websocket"))
+        .and(wiremock::matchers::header("cookie", "gateway=exported"))
+        .respond_with(wiremock::ResponseTemplate::new(401))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let command = if cfg!(windows) {
+        "command = 'cmd.exe', args = ['/D', '/C', 'echo', 'exported']"
+    } else {
+        "command = 'echo', args = ['exported']"
+    };
+    let provider = toml::from_str(&format!(
+        r#"
+name = "gateway"
+base_url = "{}/v1"
+supports_websockets = true
+[gateway_oauth]
+delivery = {{ kind = "cookie", name = "gateway" }}
+credential_export = {{ {command} }}
+"#,
+        server.uri()
+    ))
+    .unwrap();
+    let harness = websocket_harness_with_provider_options_and_auth(
+        provider,
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
+        Some(CodexAuth::from_api_key("primary")),
+    )
+    .await;
+    harness
+        .client
+        .new_session()
+        .preconnect_websocket(
+            &harness.model_info,
+            /*service_tier*/ None,
+            &harness.session_telemetry,
+            &websocket_connection_metadata(&harness),
+        )
+        .await
+        .expect_err("a rejected replay ends recovery");
+    server.verify().await;
+}
+
 async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness {
     websocket_harness_with_runtime_metrics(server, /*runtime_metrics_enabled*/ false).await
 }
@@ -2976,17 +3026,21 @@ async fn websocket_harness_with_provider_factory(
     .with_metrics(metrics);
     let effort = None;
     let summary = ReasoningSummary::Auto;
-    let _gateway = provider.gateway_oauth.as_ref().map(|_| {
-        codex_model_provider::test_support::seed_gateway_auth(
-            &provider,
-            &auth_manager,
-            serde_json::json!({
-                "access_token": "gateway-token",
-                "refresh_token": "refresh-token",
-                "expires_at": i64::MAX,
-            }),
-        )
-    });
+    let _gateway = provider
+        .gateway_oauth
+        .as_ref()
+        .filter(|config| !config.uses_credential_export())
+        .map(|_| {
+            codex_model_provider::test_support::seed_gateway_auth(
+                &provider,
+                &auth_manager,
+                serde_json::json!({
+                    "access_token": "gateway-token",
+                    "refresh_token": "refresh-token",
+                    "expires_at": i64::MAX,
+                }),
+            )
+        });
     let client = ModelClient::new(
         provider_factory(provider.clone(), client_auth_manager),
         AgentIdentityAuthPolicy::JwtOnly,

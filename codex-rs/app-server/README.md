@@ -638,7 +638,9 @@ cookie. Choose either `credential_export` or OAuth settings such as
 `authorization_url`, `token_url`, and `client_id`. If the command fails,
 the request returns the export error. Use direct
 inference and catalog URLs because command credentials require same-origin catalog
-access and reject HTTP redirects.
+access and reject HTTP redirects. After an inference HTTP 401 or a rejected
+WebSocket upgrade with status 401, Codex clears the cached export and reruns
+the command once for the retry.
 
 Clients that omit the capability or set it to `false`, including the TUI, retain
 automatic browser authorization after initialization. Startup credential reads

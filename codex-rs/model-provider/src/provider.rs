@@ -561,6 +561,17 @@ impl ModelProvider for ConfiguredModelProvider {
             .map_err(std::io::Error::other)
     }
 
+    fn recover_from_unauthorized(
+        &self,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderUnauthorizedRecovery>> {
+        Box::pin(async {
+            let Some(gateway) = self.gateway_auth_manager()? else {
+                return Ok(ProviderUnauthorizedRecovery::NotConfigured);
+            };
+            Ok(gateway.prepare_retry().await)
+        })
+    }
+
     fn supports_attestation(&self) -> bool {
         self.auth_manager
             .as_ref()

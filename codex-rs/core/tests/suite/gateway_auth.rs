@@ -41,7 +41,10 @@ fn gateway_export_settings(token_path: &std::path::Path) -> Result<String> {
     ))
 }
 
-async fn command_gateway(server: &MockServer, token_path: &std::path::Path) -> Result<TestCodex> {
+pub(super) async fn command_gateway(
+    server: &MockServer,
+    token_path: &std::path::Path,
+) -> Result<TestCodex> {
     let provider: ModelProviderInfo = toml::from_str(&format!(
         r#"
 name = "gateway"
@@ -58,6 +61,42 @@ requires_openai_auth = true
         .with_config(move |config| config.model_provider = provider)
         .build_with_auto_env(server)
         .await
+}
+
+#[test_case::test_case("second", None; "uses_new_export")]
+#[test_case::test_case("", Some("Gateway credential export must print one access token"); "reports_invalid_export")]
+#[tokio::test]
+async fn command_gateway_reexports_after_401(
+    next_export: &'static str,
+    expected_error: Option<&'static str>,
+) -> Result<()> {
+    let server = MockServer::start().await;
+    let source = TempDir::new()?;
+    let token_path = source.path().join("access-token");
+    std::fs::write(&token_path, "first")?;
+    let test = command_gateway(&server, &token_path).await?;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(wiremock::matchers::header("cookie", "gateway=first"))
+        .respond_with(move |_: &wiremock::Request| {
+            std::fs::write(&token_path, next_export).expect("change the export for the retry");
+            ResponseTemplate::new(401)
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(wiremock::matchers::header("cookie", "gateway=second"))
+        .respond_with(responses::sse_response(responses::sse(vec![
+            responses::ev_completed("response"),
+        ])))
+        .expect(u64::from(expected_error.is_none()))
+        .mount(&server)
+        .await;
+    assert_eq!(run_gateway_turn(&test).await?.as_deref(), expected_error);
+    server.verify().await;
+    Ok(())
 }
 
 #[tokio::test]

@@ -30,6 +30,10 @@ impl GatewayExport {
         }
     }
 
+    pub(crate) async fn invalidate(&self) {
+        *self.cached.lock().await = None;
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "concurrent cache misses must share a single credential export"
