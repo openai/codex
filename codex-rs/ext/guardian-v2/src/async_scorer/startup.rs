@@ -67,12 +67,18 @@ pub(super) fn decisions_api_key(
                 .and_then(CodexAuth::api_key)
                 .map(str::to_owned)
                 .or_else(codex_login::read_openai_api_key_from_env)
+                .filter(|key| valid_implicit_decisions_key(key))
                 .ok_or(DecisionsError::Credentials)
         }
         Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => {
             Err(DecisionsError::Credentials)
         }
     }
+}
+
+// Decisions uses a commercial endpoint. Reject padded keys without rewriting credentials.
+pub(super) fn valid_implicit_decisions_key(key: &str) -> bool {
+    !key.is_empty() && key.trim() == key && !codex_login::auth::is_fedramp_api_key(key)
 }
 
 pub(super) async fn sampler_config(

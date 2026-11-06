@@ -160,6 +160,17 @@ fn decisions_prefers_cached_api_key_over_openai_env() -> anyhow::Result<()> {
         decisions_api_key("openai", /*base_url*/ None, &cached) == Ok(auth_key.into()),
         "cached API-key auth must take priority over OPENAI_API_KEY"
     );
+    for auth_key in [
+        "sk-proj-fedramp-synthetic",
+        "sk-svcacct-fedramp-synthetic",
+        " sk-proj-fedramp-synthetic",
+    ] {
+        let cached = AuthManager::from_auth_for_testing(CodexAuth::from_api_key(auth_key));
+        assert!(matches!(
+            decisions_api_key("openai", /*base_url*/ None, &cached),
+            Err(DecisionsError::Credentials)
+        ));
+    }
     Ok(())
 }
 
