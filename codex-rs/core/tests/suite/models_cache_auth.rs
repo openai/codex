@@ -387,7 +387,7 @@ async fn auth_and_provider_switches_do_not_reuse_chatgpt_catalog() -> Result<()>
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_model_info_uses_the_thread_catalog() -> Result<()> {
-    let slug = "gpt-5.5";
+    let slug = "provider-default";
     let server = MockServer::start().await;
     let test = test_codex()
         .with_auth(header_auth("Bearer catalog-test"))
@@ -407,6 +407,7 @@ async fn host_model_info_uses_the_thread_catalog() -> Result<()> {
     model.comp_hash = Some("thread-revision".into());
     let mut next_model = model.clone();
     next_model.slug = "after-update".into();
+    model.priority = i32::MIN;
     Mock::given(method("GET"))
         .and(path("/provider/models"))
         .and(header("authorization", "Bearer catalog-test"))
@@ -418,33 +419,16 @@ async fn host_model_info_uses_the_thread_catalog() -> Result<()> {
         .await;
 
     options.config.model_provider.base_url = Some(format!("{}/provider", server.uri()));
+    options.config.model = None;
     options.config.model_context_window = Some(32_000);
     options.metrics_service_name = Some("codex_work_cca".into());
-    let overrides = options.config.to_models_manager_config();
-    let default = test.thread_manager.get_models_manager();
-    let default_model = default.get_model_info(slug, &overrides).await;
-    assert_eq!(default_model.comp_hash.as_deref(), Some("runtime-revision"));
-
-    let startup = test
-        .thread_manager
-        .models_manager_for_startup(
-            &options.config,
-            options.metrics_service_name.as_deref(),
-            &options.initial_history,
-        )
-        .await;
-    startup
-        .list_models(
-            RefreshStrategy::OnlineIfUncached,
-            options.config.http_client_factory(),
-        )
-        .await;
-    let selected = startup.get_model_info(slug, &overrides).await;
+    let selected = test.thread_manager.resolve_startup_model(&options).await?;
+    assert_eq!(selected.slug, slug);
     assert_eq!(selected.comp_hash.as_deref(), Some("thread-revision"));
     assert_eq!(selected.context_window, Some(32_000));
 
     let thread = test.thread_manager.start_thread(options).await?.thread;
-    assert_eq!(thread.selected_model_info().await, selected.model);
+    assert_eq!(thread.selected_model_info().await, selected);
     thread
         .update_thread_settings(ThreadSettingsOverrides {
             model: Some("after-update".into()),
@@ -454,5 +438,27 @@ async fn host_model_info_uses_the_thread_catalog() -> Result<()> {
     let next = thread.selected_model_info().await;
     assert_eq!(next.slug, "after-update");
     assert_eq!(next.comp_hash.as_deref(), Some("thread-revision"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_model_info_honors_provider_fallback() -> Result<()> {
+    let server = MockServer::start().await;
+    let mut catalog = bundled_models_response()?;
+    catalog.models.retain(|model| model.slug == "gpt-5.5");
+    let test = test_codex()
+        .with_config(move |config| config.model_catalog = Some(catalog))
+        .build_with_auto_env(&server)
+        .await?;
+
+    for (allow_fallback, expected) in [(false, "unavailable-model"), (true, "gpt-5.5")] {
+        let mut options = test.start_thread_options().await;
+        options.config.model = Some("unavailable-model".into());
+        options.allow_provider_model_fallback = allow_fallback;
+        let selected = test.thread_manager.resolve_startup_model(&options).await?;
+        assert_eq!(selected.slug, expected);
+        let thread = test.thread_manager.start_thread(options).await?.thread;
+        assert_eq!(thread.selected_model_info().await, selected);
+    }
     Ok(())
 }

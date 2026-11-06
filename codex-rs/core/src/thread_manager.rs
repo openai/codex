@@ -83,6 +83,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -353,6 +354,20 @@ impl ThreadInstructionsProvider for InheritedThreadInstructions {
 }
 
 impl StartThreadOptions {
+    fn effective_sources(
+        &self,
+        default_source: &SessionSource,
+    ) -> (SessionSource, Option<ThreadSource>) {
+        let (resumed_source, resumed_thread_source) = self
+            .initial_history
+            .get_resumed_session_sources()
+            .unwrap_or_else(|| (default_source.clone(), None));
+        (
+            self.session_source.clone().unwrap_or(resumed_source),
+            self.thread_source.clone().or(resumed_thread_source),
+        )
+    }
+
     /// Use the spawning thread's applied text in place of the destination's live thread provider.
     /// An empty text clears the thread contribution. Supply it again on cold resume.
     pub fn set_inherited_thread_instructions(&mut self, instructions: Instructions) {
@@ -1077,30 +1092,44 @@ impl ThreadManager {
         }
     }
 
-    /// Returns the catalog a root thread will use on start or cold resume.
-    pub async fn models_manager_for_startup(
+    /// Resolves the model before starting or cold-resuming a thread with this manager's credentials.
+    /// Pass the same options to [`Self::start_thread`]. For a live thread, use
+    /// [`CodexThread::selected_model_info`].
+    pub async fn resolve_startup_model(
         &self,
-        config: &Config,
-        service_name: Option<&str>,
-        history: &InitialHistory,
-    ) -> SharedModelsManager {
+        options: &StartThreadOptions,
+    ) -> CodexResult<Arc<ModelInfo>> {
+        if options.internal_parent.is_some() {
+            return Err(CodexErr::InvalidRequest(
+                "startup model lookup does not support a captured internal parent".to_owned(),
+            ));
+        }
+        let (source, _) = options.effective_sources(&self.state.session_source);
         let originator = self
             .state
             .effective_originator(
-                history,
-                service_name,
-                &self.state.session_source,
+                &options.initial_history,
+                options.metrics_service_name.as_deref(),
+                &source,
                 /*parent_thread_id*/ None,
                 /*forked_from_thread_id*/ None,
                 /*parent_originator*/ None,
             )
             .await;
-        self.state.models_for_thread(
-            config,
+        let manager = self.state.models_for_thread(
+            &options.config,
             &self.state.auth_manager,
             &self.state.runtime_auth,
             &originator,
+        );
+        let (_, info) = Session::resolve_startup_model(
+            manager.as_ref(),
+            &options.config,
+            &source,
+            options.allow_provider_model_fallback,
         )
+        .await?;
+        Ok(info.model)
     }
 
     pub fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
@@ -1369,17 +1398,9 @@ impl ThreadManager {
         forked_from_thread_id: Option<ThreadId>,
         startup: Option<Arc<crate::session::startup::SessionStartup>>,
     ) -> CodexResult<NewThread> {
-        let (resumed_session_source, resumed_thread_source) = options
-            .initial_history
-            .get_resumed_session_sources()
-            .unwrap_or_else(|| (self.state.session_source.clone(), None));
-        options.session_source = Some(
-            options
-                .session_source
-                .take()
-                .unwrap_or(resumed_session_source),
-        );
-        options.thread_source = options.thread_source.take().or(resumed_thread_source);
+        let (session_source, thread_source) = options.effective_sources(&self.state.session_source);
+        options.session_source = Some(session_source);
+        options.thread_source = thread_source;
         let parent = options.internal_parent.take();
         if parent.is_some()
             && (!matches!(options.session_source, Some(SessionSource::Internal(_)))

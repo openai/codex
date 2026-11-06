@@ -98,6 +98,7 @@ use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::McpRuntimeInput;
+use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_network_proxy::NetworkProxy;
@@ -141,6 +142,7 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -598,6 +600,44 @@ pub(crate) fn assign_missing_item_id(
 }
 
 impl Session {
+    pub(crate) async fn resolve_startup_model(
+        models_manager: &dyn ModelsManager,
+        config: &Config,
+        session_source: &SessionSource,
+        allow_provider_model_fallback: bool,
+    ) -> CodexResult<(String, CatalogModel)> {
+        let refresh_strategy = if session_source.is_non_root_agent() {
+            RefreshStrategy::Offline
+        } else {
+            RefreshStrategy::OnlineIfUncached
+        };
+        if config.features.enabled(Feature::RuntimeAgentInstances)
+            || config.model.is_none()
+            || refresh_strategy != RefreshStrategy::Offline
+        {
+            let _ = models_manager
+                .list_models(refresh_strategy, config.http_client_factory())
+                .await;
+        }
+        let model = models_manager
+            .get_default_model(
+                &config.model,
+                allow_provider_model_fallback,
+                refresh_strategy,
+                config.http_client_factory(),
+            )
+            .await;
+        if model.trim().is_empty() {
+            return Err(CodexErr::InvalidRequest(
+                "No models are available. Set `model` explicitly or check your model catalog configuration.".to_string(),
+            ));
+        }
+        let model_info = models_manager
+            .get_model_info(model.as_str(), &config.to_models_manager_config())
+            .await;
+        Ok((model, model_info))
+    }
+
     /// Spawn and initialize a new session.
     /// Hide the concrete startup future from callers while keeping initialization lazy.
     #[inline(never)]
@@ -783,35 +823,13 @@ impl Session {
             Arc::clone(&auth_manager),
             &installation_id,
         );
-        let refresh_strategy = if session_source.is_non_root_agent() {
-            codex_models_manager::manager::RefreshStrategy::Offline
-        } else {
-            codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
-        };
-        if configured_runtime.is_some()
-            || config.model.is_none()
-            || !matches!(
-                refresh_strategy,
-                codex_models_manager::manager::RefreshStrategy::Offline
-            )
-        {
-            let _ = models_manager
-                .list_models(refresh_strategy, config.http_client_factory())
-                .await;
-        }
-        let model = models_manager
-            .get_default_model(
-                &config.model,
-                allow_provider_model_fallback,
-                refresh_strategy,
-                config.http_client_factory(),
-            )
-            .await;
-        if model.trim().is_empty() {
-            return Err(CodexErr::InvalidRequest(
-                "No models are available. Set `model` explicitly or check your model catalog configuration.".to_string(),
-            ));
-        }
+        let (model, model_info) = Self::resolve_startup_model(
+            models_manager.as_ref(),
+            &config,
+            &session_source,
+            allow_provider_model_fallback,
+        )
+        .await?;
         let requested_approvals_reviewer = config
             .requested_approvals_reviewer
             .unwrap_or(config.approvals_reviewer);
@@ -871,13 +889,6 @@ impl Session {
             );
         }
 
-        // Resolve base instructions for the session. Priority order:
-        // 1. config.base_instructions override
-        // 2. conversation history => session_meta.base_instructions
-        // 3. rendered instructions_template for current model
-        let model_info = models_manager
-            .get_model_info(model.as_str(), &config.to_models_manager_config())
-            .await;
         let auth = auth_manager.auth_cached();
         // Forked subagents keep their parent's activation with the copied history.
         // Fresh children restore configured preferences before applying startup defaults.
