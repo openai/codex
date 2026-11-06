@@ -19,6 +19,12 @@ use tokio::sync::oneshot;
 /// Unsupported operations must return an explicit error; they must not claim success.
 pub enum CloudOperation {
     Request(Box<ClientRequest>),
+    /// Host project metadata stays on the private transport, outside the app-server wire.
+    StartProjectThread {
+        request_id: RequestId,
+        params: Box<codex_app_server_protocol::ThreadStartParams>,
+        project: codex_cloud_client::ProjectEnvironment,
+    },
     SubmitUserMessage(Box<TurnStartParams>),
     Notify(ClientNotification),
     Resolve {
@@ -124,6 +130,20 @@ impl CloudClient {
 }
 
 impl CloudRequestHandle {
+    pub(crate) async fn start_project_thread(
+        &self,
+        request_id: RequestId,
+        params: codex_app_server_protocol::ThreadStartParams,
+        project: codex_cloud_client::ProjectEnvironment,
+    ) -> io::Result<RequestResult> {
+        self.send(CloudOperation::StartProjectThread {
+            request_id,
+            params: Box::new(params),
+            project,
+        })
+        .await
+    }
+
     /// Submit once with a stable message ID and saved thread settings. The server
     /// starts or steers; an error can mean admission is unknown. Never auto-resend.
     pub async fn submit_user_message(

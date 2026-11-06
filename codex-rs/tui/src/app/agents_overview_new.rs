@@ -167,6 +167,7 @@ impl App {
                 /*session_start_source*/ None,
                 remote_cwd.as_deref(),
                 selected_profile.as_ref(),
+                self.backend_preference_context.local_cwd.as_deref(),
             )),
         )
         .await;

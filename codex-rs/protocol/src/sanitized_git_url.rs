@@ -77,9 +77,13 @@ impl TryFrom<&str> for SanitizedGitUrl {
         // `file://` authority as its host and does not expose its userinfo.
         // Rebuilding only this part also preserves escaped repository paths.
         if let Some((scheme, authority_and_path)) = value.split_once("://") {
-            let authority_end = authority_and_path
-                .find('/')
-                .unwrap_or(authority_and_path.len());
+            // Git treats '?' and '#' as authority text on non-HTTP transports.
+            let authority_end = if matches!(scheme, "http" | "https") {
+                authority_and_path.find(['/', '?', '#'])
+            } else {
+                authority_and_path.find('/')
+            }
+            .unwrap_or(authority_and_path.len());
             let (authority, path) = authority_and_path.split_at(authority_end);
             let Some((_, host)) = authority.rsplit_once('@') else {
                 return Ok(Self(original.to_owned()));

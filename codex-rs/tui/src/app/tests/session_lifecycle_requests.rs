@@ -880,6 +880,7 @@ async fn same_thread_retry_keeps_subscription_and_restores_draft() -> Result<()>
     app.harness_overrides.cwd = Some(app.config.cwd.to_path_buf());
     requests.lock().expect("request recorder lock").clear();
     let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.backend_preference_context.local_cwd = None;
     app.resume_target_session(
         &mut tui,
         &mut app_server,
@@ -892,6 +893,10 @@ async fn same_thread_retry_keeps_subscription_and_restores_draft() -> Result<()>
         },
     )
     .await?;
+    assert_eq!(
+        app.backend_preference_context.local_cwd.as_deref(),
+        Some(app.chat_widget.config_ref().cwd.as_path()),
+    );
     assert_eq!(recorded_params(&requests, "thread/resume").len(), 1);
     assert!(recorded_params(&requests, "thread/unsubscribe").is_empty());
     assert!(!app.chat_widget.is_external_writer_view());

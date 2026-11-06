@@ -1163,6 +1163,7 @@ impl App {
                 session_start_source,
                 /*remote_cwd_override*/ None,
                 /*selected_profile*/ None,
+                self.backend_preference_context.local_cwd.as_deref(),
             )
             .await
         {
@@ -1609,6 +1610,7 @@ impl App {
             .await
         {
             Ok(()) => {
+                self.remember_attached_host_project(app_server);
                 if let Some(mut input) = retained_input {
                     // A successful resume is the authority for clearing the old rejection.
                     input.provider_error = None;

@@ -76,6 +76,18 @@ impl BackendPreferenceContext {
 }
 
 impl App {
+    pub(super) fn remember_attached_host_project(&mut self, app_server: &AppServerSession) {
+        if !app_server.uses_remote_workspace()
+            && !crate::uses_remote_workspace_or_environment(
+                &self.app_server_target,
+                &self.environment_manager,
+            )
+        {
+            self.backend_preference_context.local_cwd =
+                Some(self.chat_widget.config_ref().cwd.to_path_buf());
+        }
+    }
+
     pub(super) async fn new_thread_host_preference(&self) -> Option<&str> {
         let defaults = &self.local_settings.tui.default_hosts;
         if defaults.is_empty() {
@@ -134,6 +146,9 @@ impl App {
             .get(&owner)
             .cloned()
             .ok_or("Connection settings are unavailable.")?;
+        if settings.target == AppServerTarget::Cloud && self.chat_widget.thread_id().is_some() {
+            self.remember_attached_host_project(backends.session_at(outgoing_slot));
+        }
         let preference = if matches!(session, NewBackendSession::CarryDraft)
             && let Some(key) = backends.preference_key(slot)
         {
@@ -191,6 +206,7 @@ impl App {
                 /*session_start_source*/ None,
                 /*remote_cwd_override*/ None,
                 /*selected_profile*/ None,
+                self.backend_preference_context.local_cwd.as_deref(),
             )
             .await
             .map_err(|error| format!("Failed to start the new conversation: {error}"))?;

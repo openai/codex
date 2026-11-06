@@ -15,6 +15,30 @@ fn removes_https_username_and_password() {
     assert_eq!(url.as_str(), "https://github.com/org/repo.git");
 }
 
+#[test]
+fn http_query_and_fragment_are_outside_the_authority() {
+    for (scheme, suffix) in [("http", "?@github.com/a/b"), ("https", "#@github.com/a/b")] {
+        let expected = format!("{scheme}://example.com{suffix}");
+        for authority in ["example.com", "user:password@example.com"] {
+            let remote = format!("{scheme}://{authority}{suffix}");
+            let sanitized = SanitizedGitUrl::try_from(remote.as_str()).expect("parse remote URL");
+            assert_eq!(sanitized.as_str(), expected);
+        }
+    }
+}
+
+#[test]
+fn non_http_credentials_can_contain_query_and_fragment_delimiters() {
+    for scheme in ["ssh", "git", "file"] {
+        let expected = format!("{scheme}://example.com/org/repo");
+        for password in ["synthetic?value", "synthetic#value"] {
+            let remote = format!("{scheme}://user:{password}@example.com/org/repo");
+            let sanitized = SanitizedGitUrl::try_from(remote.as_str()).expect("parse remote URL");
+            assert_eq!(sanitized.as_str(), expected);
+        }
+    }
+}
+
 /// Tokens placed in the username field are credentials too.
 #[test]
 fn removes_https_username_without_password() {

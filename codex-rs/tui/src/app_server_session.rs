@@ -5,6 +5,7 @@
 
 mod account;
 pub(crate) use account::SessionAccount;
+mod cloud_project;
 mod daybreak_api_key_compat;
 mod events;
 mod external_agent_config;
@@ -1012,6 +1013,7 @@ impl AppServerSession {
             /*session_start_source*/ None,
             /*remote_cwd_override*/ None,
             /*selected_profile*/ None,
+            /*host_project_cwd*/ None,
         )
         .await
     }
@@ -1023,6 +1025,7 @@ impl AppServerSession {
         session_start_source: Option<ThreadStartSource>,
         remote_cwd_override: Option<&std::path::Path>,
         selected_profile: Option<&PermissionProfileSelection>,
+        host_project_cwd: Option<&std::path::Path>,
     ) -> Result<AppServerStartedThread> {
         if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Server
             && selected_profile.is_some()
@@ -1063,12 +1066,27 @@ impl AppServerSession {
             self.thread_tool_transport().configure(&mut params);
         }
         let request_handle = self.request_handle();
-        let (response, history_support, task_tools_available) =
-            request_thread_start_with_history_fallback(&request_handle, request_id, params)
+        let project = if self.thread_params_mode == ThreadParamsMode::Cloud {
+            match host_project_cwd {
+                Some(cwd) => cloud_project::from_local_cwd(cwd).await,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let started = match project {
+            Some(project) => request_handle
+                .start_cloud_project_thread(request_id, params, project)
                 .await
-                .map_err(|err| {
-                    bootstrap_request_error("thread/start failed during TUI bootstrap", err)
-                })?;
+                .map(|response| (response, ThreadHistorySupport::Paginated, false)),
+            None => {
+                request_thread_start_with_history_fallback(&request_handle, request_id, params)
+                    .await
+            }
+        };
+        let (response, history_support, task_tools_available) = started.map_err(|err| {
+            bootstrap_request_error("thread/start failed during TUI bootstrap", err)
+        })?;
         if history_support == ThreadHistorySupport::LegacyOnly {
             self.history_support = ThreadHistorySupport::LegacyOnly;
         }

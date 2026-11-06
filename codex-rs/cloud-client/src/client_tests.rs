@@ -232,6 +232,55 @@ async fn activation_preserves_native_settings_and_thread_metadata() {
 }
 
 #[tokio::test]
+async fn prewarm_encodes_blank_and_project_managed_environments() {
+    let mut fixture = fixture_responses(vec![
+        response(vec![frame(&[])], tonic::Status::ok("")),
+        response(vec![frame(&[])], tonic::Status::ok("")),
+    ])
+    .await;
+
+    assert!(matches!(
+        fixture
+            .client
+            .prewarm_default_thread(/*model*/ None, /*model_provider*/ None)
+            .await,
+        Err(Error::InvalidResponse)
+    ));
+    assert_request(&mut fixture, "Prewarm", b"\x52\x04\x0a\x02\x0a\x00").await;
+
+    assert!(matches!(
+        fixture
+            .client
+            .prewarm_thread(
+                /*model*/ None,
+                /*model_provider*/ None,
+                Some(ProjectEnvironment {
+                    name: "App".to_owned(),
+                    cwd: Some("/workspace/acme/app".to_owned()),
+                    origin_urls: vec![
+                        "git@github.com:acme/app.git".to_owned(),
+                        "https://github.com/acme/lib.git".to_owned(),
+                    ],
+                }),
+            )
+            .await,
+        Err(Error::InvalidResponse)
+    ));
+    let expected = [
+        b"\x52\x73\x0a\x71\x0a\x6f\x0a\x0d" as &[u8],
+        b"asenvcfg_base",
+        b"\x12\x13/workspace/acme/app",
+        b"\x1a\x49\x0a\x42\x0a\x1d\x2a\x1b",
+        b"git@github.com:acme/app.git",
+        b"\x0a\x21\x2a\x1f",
+        b"https://github.com/acme/lib.git",
+        b"\x12\x03App",
+    ]
+    .concat();
+    assert_request(&mut fixture, "Prewarm", &expected).await;
+}
+
+#[tokio::test]
 async fn prewarm_uses_managed_defaults_and_preserves_resolved_settings() {
     // PrewarmThread uses Thread field numbers but omits turns entirely.
     let thread = Bytes::from_static(&[

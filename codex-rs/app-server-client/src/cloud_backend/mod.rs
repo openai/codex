@@ -180,7 +180,21 @@ async fn run_worker(
                 let _ = command.response.send(Ok(Ok(Value::Null)));
                 return;
             }
-            CloudOperation::Request(request) => Ok((*request, cloud::SubmissionMode::StartIfIdle)),
+            CloudOperation::Request(request) => {
+                Ok((*request, cloud::SubmissionMode::StartIfIdle, None))
+            }
+            CloudOperation::StartProjectThread {
+                request_id,
+                params,
+                project,
+            } => Ok((
+                protocol::ClientRequest::ThreadStart {
+                    request_id,
+                    params: *params,
+                },
+                cloud::SubmissionMode::StartIfIdle,
+                Some(project),
+            )),
             CloudOperation::SubmitUserMessage(params) => Ok((
                 protocol::ClientRequest::TurnStart {
                     // Native admission is keyed by the caller's stable message ID.
@@ -188,6 +202,7 @@ async fn run_worker(
                     params: *params,
                 },
                 cloud::SubmissionMode::Steer,
+                None,
             )),
             CloudOperation::Notify(_) => {
                 Err(eyre!("Cloud client notifications are not supported yet."))
@@ -197,9 +212,9 @@ async fn run_worker(
             )),
         };
         let result = match request {
-            Ok((request, mode)) => tokio::select! {
+            Ok((request, mode, project)) => tokio::select! {
                 _ = output.closed() => return,
-                result = handle_request(request, mode, requests, replies, output) => result,
+                result = handle_request(request, mode, project, requests, replies, output) => result,
             },
             Err(error) => Err(error),
         };
@@ -231,6 +246,7 @@ async fn run_worker(
 async fn handle_request(
     request: protocol::ClientRequest,
     mode: cloud::SubmissionMode,
+    project: Option<cloud::ProjectEnvironment>,
     requests: &mut requests::Requests,
     replies: &mut Replies,
     output: &mpsc::UnboundedSender<AppServerEvent>,
@@ -256,7 +272,7 @@ async fn handle_request(
         replies.admit_turn(&params.thread_id, output)?;
     }
     match replies
-        .while_listening(requests.handle(request, mode, output), output)
+        .while_listening(requests.handle(request, mode, project, output), output)
         .await?
     {
         requests::Response::Value(value) => Ok(value),

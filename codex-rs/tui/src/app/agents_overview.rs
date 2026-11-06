@@ -856,6 +856,9 @@ impl App {
             self.select_agent_thread(tui, app_server, root_thread_id)
                 .await?;
         }
+        if self.current_displayed_thread_id() == Some(root_thread_id) {
+            self.remember_attached_host_project(app_server);
+        }
         let read_only = self.chat_widget.is_external_writer_view();
         if !read_only {
             self.replay_agents_overview_requests(app_server, root_thread_id)

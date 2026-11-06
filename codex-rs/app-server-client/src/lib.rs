@@ -22,6 +22,7 @@
 
 mod cloud;
 pub mod cloud_backend;
+pub use codex_cloud_client::ProjectEnvironment;
 mod path;
 mod remote;
 mod remote_websocket;
@@ -713,6 +714,27 @@ impl InProcessAppServerRequestHandle {
 }
 
 impl AppServerRequestHandle {
+    /// Starts a native cloud thread with host project metadata without adding wire fields.
+    pub async fn start_cloud_project_thread(
+        &self,
+        request_id: RequestId,
+        params: codex_app_server_protocol::ThreadStartParams,
+        project: codex_cloud_client::ProjectEnvironment,
+    ) -> Result<codex_app_server_protocol::ThreadStartResponse, TypedRequestError> {
+        let response = match self {
+            Self::Cloud(handle) => {
+                handle
+                    .start_project_thread(request_id, params, project)
+                    .await
+            }
+            Self::InProcess(_) | Self::Remote(_) => Err(IoError::new(
+                std::io::ErrorKind::Unsupported,
+                "Project checkout requires the native cloud transport.",
+            )),
+        };
+        decode_typed_response("thread/start", response)
+    }
+
     pub(crate) async fn resolve_server_request(
         &self,
         request_id: RequestId,
