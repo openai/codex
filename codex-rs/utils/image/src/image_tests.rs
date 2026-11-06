@@ -323,6 +323,34 @@ async fn fails_cleanly_for_invalid_images() {
     ));
 }
 
+#[test]
+fn rejects_png_with_readable_dimensions_and_corrupt_pixels() {
+    let image = ImageBuffer::from_pixel(100, 100, Rgba([10u8, 20, 30, 255]));
+    let mut bytes = image_bytes(&image, ImageFormat::Png);
+    let idat = bytes
+        .windows(4)
+        .position(|chunk_type| chunk_type == b"IDAT")
+        .expect("PNG has an IDAT chunk");
+    // Damage the compressed pixel data while keeping the PNG header intact.
+    bytes[idat + 4] ^= 0xff;
+
+    let dimensions = ImageReader::with_format(Cursor::new(&bytes), ImageFormat::Png)
+        .into_dimensions()
+        .expect("dimensions should still be readable");
+    assert_eq!(dimensions, (100, 100));
+
+    let error = load_for_prompt_bytes(
+        Path::new("corrupt.png"),
+        bytes,
+        PromptImageMode::ORIGINAL_DETAIL,
+    )
+    .expect_err("even a PNG small enough to pass through must have decodable pixels");
+    assert!(
+        matches!(error, ImageProcessingError::Decode { .. }),
+        "{error}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn reprocesses_updated_file_contents() {
     IMAGE_CACHE.clear();
