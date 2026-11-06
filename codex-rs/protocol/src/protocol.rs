@@ -839,6 +839,10 @@ pub enum Op {
         decision: ReviewDecision,
     },
 
+    /// Cancel the file change approval issued by the named turn.
+    #[debug("CancelPatchApproval {{ id: {id:?}, turn_id: {turn_id:?} }}")]
+    CancelPatchApproval { id: String, turn_id: String },
+
     /// Resolve an MCP elicitation request.
     #[debug("ResolveElicitation {{ request_id: {request_id:?}, decision: {decision:?} }}")]
     ResolveElicitation {
@@ -1125,7 +1129,7 @@ impl Op {
             Self::TurnSettings { .. } => "turn_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::ExecApproval { .. } => "exec_approval",
-            Self::PatchApproval { .. } => "patch_approval",
+            Self::PatchApproval { .. } | Self::CancelPatchApproval { .. } => "patch_approval",
             Self::ResolveElicitation { .. } => "resolve_elicitation",
             Self::UserInputAnswer { .. } => "user_input_answer",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",

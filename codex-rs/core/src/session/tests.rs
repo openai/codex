@@ -6,6 +6,9 @@ mod compaction_replay_tests;
 #[path = "notification_tests.rs"]
 mod notification_tests;
 
+#[path = "patch_approval_tests.rs"]
+mod patch_approval_tests;
+
 use super::mcp_refresh::McpRefresh;
 #[path = "turn_start_mcp_tests.rs"]
 mod turn_start_mcp_tests;
