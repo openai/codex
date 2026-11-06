@@ -1,10 +1,13 @@
 import io
 import json
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -261,6 +264,113 @@ class DotSlashReleaseConfigTests(unittest.TestCase):
 
 
 class StablePublicationTests(unittest.TestCase):
+    def test_failed_alpha_upload_cleanup_and_rerun(self):
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("Release workflow requires Bash 4.4 or newer")
+        version = subprocess.check_output(
+            [bash, "-c", 'echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"'],
+            text=True,
+        )
+        if tuple(map(int, version.split())) < (4, 4):
+            self.skipTest("Release workflow requires Bash 4.4 or newer")
+
+        workflow = (
+            Path(__file__).resolve().parent.parent / "workflows/rust-release.yml"
+        ).read_text()
+        create = workflow.split("      - name: Create GitHub Release\n", 1)[1]
+        create, cleanup = create.split(
+            "      - name: Remove incomplete prerelease\n", 1
+        )
+        create = textwrap.dedent(create.split("        run: |\n", 1)[1])
+        cleanup = cleanup.split("\n  publish-r2-assets:", 1)[0]
+        condition = cleanup.split("if: ${{ ", 1)[1].split(" }}", 1)[0]
+        # These output comparisons use the same operators in Bash. Run the
+        # actual cleanup command even when the preceding publication failed.
+        condition = re.sub(
+            r"steps\.github_release\.outputs\.(\w+)",
+            lambda match: '"${' + match[1] + ':-}"',
+            condition.replace("always()", "true"),
+        )
+        cleanup_command = cleanup.split("        run: ", 1)[1].strip()
+        cleanup = (
+            'set -euo pipefail\nsource "$GITHUB_OUTPUT"\n'
+            f"if [[ {condition} ]]; then\n{cleanup_command}\nfi\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            gh = directory / "gh"
+            gh.write_text(
+                textwrap.dedent("""\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    case "$1 $2" in
+                      'api graphql')
+                        if [[ -f "$GITHUB_REF_NAME.release" ]]; then echo true; else echo false; fi ;;
+                      'release create')
+                        test -f "$GITHUB_REF_NAME.tag"
+                        printf '%s\\n' "$@" > "$GITHUB_REF_NAME.release" ;;
+                      'release upload')
+                        [[ "$FAIL_AT" != upload ]] || exit 7
+                        touch "$GITHUB_REF_NAME.uploaded" ;;
+                      'release edit')
+                        [[ "$FAIL_AT" != edit ]] || exit 8 ;;
+                      'release delete')
+                        rm -f "$GITHUB_REF_NAME.release" "$GITHUB_REF_NAME.uploaded"
+                        if [[ " $* " == *' --cleanup-tag '* ]]; then rm "$GITHUB_REF_NAME.tag"; fi ;;
+                      *) exit 99 ;;
+                    esac
+                    """)
+            )
+            gh.chmod(0o755)
+            (directory / "dist").mkdir()
+            (directory / "dist/package.tar.gz").write_bytes(b"package")
+            outputs = directory / "outputs"
+            tag = "rust-v0.100.0-alpha.1"
+            # Fail a new alpha, retry it, fail an existing alpha, then fail only
+            # the metadata edit of another new alpha whose assets are complete.
+            for release_tag, fail_at, expected_status, remains_public in (
+                (tag, "upload", 7, False),
+                (tag, "", 0, True),
+                (tag, "upload", 7, True),
+                ("rust-v0.100.0-alpha.2", "edit", 8, True),
+            ):
+                with self.subTest(tag=release_tag, fail_at=fail_at):
+                    (directory / f"{release_tag}.tag").touch()
+                    outputs.write_text("")
+                    env = {
+                        **os.environ,
+                        "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}",
+                        "GITHUB_OUTPUT": str(outputs),
+                        "GITHUB_REPOSITORY": "test/codex",
+                        "GITHUB_REPOSITORY_OWNER": "test",
+                        "GITHUB_REF_NAME": release_tag,
+                        "RELEASE_NAME": release_tag.removeprefix("rust-v"),
+                        "RELEASE_NOTES": "notes.md",
+                        "MAKE_LATEST": "false",
+                        "PRERELEASE": "true",
+                        "FAIL_AT": fail_at,
+                    }
+                    result = subprocess.run(
+                        [bash, "-c", create],
+                        cwd=directory,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, expected_status, result.stderr)
+                    release = directory / f"{release_tag}.release"
+                    self.assertIn("--draft=false", release.read_text().splitlines())
+                    subprocess.run(
+                        [bash, "-c", cleanup], cwd=directory, env=env, check=True
+                    )
+                    self.assertTrue((directory / f"{release_tag}.tag").exists())
+                    self.assertEqual(release.exists(), remains_public)
+                    self.assertEqual(
+                        (directory / f"{release_tag}.uploaded").exists(), remains_public
+                    )
+
     def test_github_latest_orders_numerically_and_allows_equal_reruns(self):
         latest = {"tag_name": "rust-v0.100.0", "draft": False, "prerelease": False}
         self.assertFalse(should_make_latest("0.99.9", latest))

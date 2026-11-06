@@ -1763,6 +1763,7 @@ jobs:
           mv dist/x86_64-pc-windows-msvc/install.ps1 dist/install.ps1
 
       - name: Create GitHub Release
+        id: github_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_NAME: ${{ steps.release_name.outputs.name }}
@@ -1795,13 +1796,24 @@ jobs:
             fi
             gh release create "$GITHUB_REF_NAME" "${release_args[@]}" \
               --draft="$draft" --verify-tag --latest=false
+            if [[ "$PRERELEASE" == true ]]; then
+              echo "created_prerelease=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
           mapfile -d '' assets < <(find dist -type f -print0 | sort -z)
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" --clobber
+          echo "assets_uploaded=true" >> "$GITHUB_OUTPUT"
           gh release edit "$GITHUB_REF_NAME" "${release_args[@]}" \
             --draft=false --latest="$MAKE_LATEST"
+
+      - name: Remove incomplete prerelease
+        # Keep the tag so a rerun can recreate the release and its prereleased event.
+        if: ${{ always() && steps.github_release.outputs.created_prerelease == 'true' && steps.github_release.outputs.assets_uploaded != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes
 
   publish-r2-assets:
     name: publish-r2-assets
