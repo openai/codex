@@ -197,7 +197,10 @@ async fn thread_start_enforces_protected_model_auto_review() -> Result<()> {
 #[tokio::test]
 async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Result<()> {
     let (_home, mut server) = managed_server().await?;
-    let thread = server.start_thread(StartParams::default()).await?.thread;
+    let thread = server
+        .start_thread(params!(StartParams, approvals_reviewer = Some(User)))
+        .await?
+        .thread;
     let id = server
         .send_thread_settings_update_request(params!(
             UpdateParams,
@@ -207,6 +210,35 @@ async fn thread_and_turn_settings_enforce_protected_model_auto_review() -> Resul
         .await?;
     let _: UpdateResponse = timeout(TIMEOUT, server.read_response(id)).await??;
     assert_protected_update(&mut server, OnRequest).await?;
+    // Leaving a protected model restores the requested reviewer. An explicit
+    // automatic-review choice remains selected across later model switches.
+    for (model, approvals_reviewer, expected_reviewer) in [
+        ("ordinary-model", None, User),
+        (MODEL, None, AutoReview),
+        ("ordinary-model", Some(AutoReview), AutoReview),
+        (MODEL, None, AutoReview),
+        ("ordinary-model", None, AutoReview),
+        (MODEL, None, AutoReview),
+    ] {
+        let id = server
+            .send_thread_settings_update_request(params!(
+                UpdateParams,
+                thread_id = thread.id.clone(),
+                model = Some(model.to_string()),
+                approvals_reviewer,
+            ))
+            .await?;
+        let _: UpdateResponse = timeout(TIMEOUT, server.read_response(id)).await??;
+        let updated: SettingsUpdated =
+            timeout(TIMEOUT, server.read_notification("thread/settings/updated")).await??;
+        assert_eq!(
+            (
+                updated.thread_settings.model.as_str(),
+                updated.thread_settings.approvals_reviewer,
+            ),
+            (model, expected_reviewer),
+        );
+    }
     for (approval_policy, approvals_reviewer) in UNSAFE {
         let id = server
             .send_thread_settings_update_request(params!(

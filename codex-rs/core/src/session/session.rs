@@ -604,6 +604,24 @@ impl SessionConfiguration {
             Arc::make_mut(&mut next_configuration.original_config_do_not_use)
                 .requested_approvals_reviewer = Some(reviewer);
         }
+        if !next_configuration.trusted_guardian_reviewer
+            && updates.step_settings.approvals_reviewer.is_none()
+            && self.step_settings.collaboration_mode.model()
+                != next_configuration.step_settings.collaboration_mode.model()
+        {
+            let reviewer = crate::config::resolve_guardian_reviewer(
+                next_configuration
+                    .original_config_do_not_use
+                    .requested_approvals_reviewer
+                    .unwrap_or(self.step_settings.approvals_reviewer),
+                Some(next_configuration.step_settings.collaboration_mode.model()),
+                next_configuration
+                    .original_config_do_not_use
+                    .config_layer_stack
+                    .requirements(),
+            )?;
+            Arc::make_mut(&mut next_configuration.step_settings).approvals_reviewer = reviewer;
+        }
         Ok(next_configuration)
     }
 
