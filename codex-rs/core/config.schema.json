@@ -2127,6 +2127,10 @@
           },
           "description": "Omit to send the gateway token via the Authorization header"
         },
+        "device_authorization_url": {
+          "description": "Optional device endpoint used when the terminal cannot open a browser for gateway sign-in.",
+          "type": "string"
+        },
         "redirect_port": {
           "format": "uint16",
           "minimum": 0.0,

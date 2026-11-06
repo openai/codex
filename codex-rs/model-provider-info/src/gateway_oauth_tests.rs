@@ -35,6 +35,19 @@ fn parses_header_and_cookie_delivery() {
 }
 
 #[test]
+fn a_remote_device_authorization_url_requires_https() {
+    for (url, valid) in [
+        ("https://login.example.test/devicecode", true),
+        ("http://login.example.test/devicecode", false),
+    ] {
+        let config = provider(&format!(
+            "device_authorization_url = '{url}'\ndelivery = {{ kind = 'header', name = 'x-gateway-auth' }}"
+        ));
+        assert_eq!(config.validate().is_ok(), valid, "{url}");
+    }
+}
+
+#[test]
 fn rejects_unsafe_endpoints_and_delivery_collisions() {
     let valid = provider("delivery = { kind = 'header', name = 'x-gateway-auth' }");
     for url in [

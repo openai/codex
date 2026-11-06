@@ -84,6 +84,7 @@ pub use crate::transport::ByteStream;
 pub use crate::transport::HttpTransport;
 pub use crate::transport::ReqwestTransport;
 pub use crate::transport::StreamResponse;
+pub use crate::transport::bounded_response_bytes;
 
 #[cfg(windows)]
 mod windows_proxy_auth;

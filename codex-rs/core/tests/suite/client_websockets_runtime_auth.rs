@@ -101,6 +101,7 @@ async fn runtime_harness(
 fn gateway_config(server: &MockServer, delivery: GatewayOAuthDelivery) -> GatewayOAuthConfig {
     GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
         authorization_url: format!("{}/authorize", server.uri()),
+        device_authorization_url: None,
         token_url: format!("{}/token", server.uri()),
         client_id: "client".into(),
         resource: None,

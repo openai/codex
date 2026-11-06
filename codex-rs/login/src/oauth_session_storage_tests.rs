@@ -3,6 +3,7 @@
 use super::*;
 use codex_keyring_store::CredentialStoreError;
 use codex_keyring_store::KeyringStore;
+use core_test_support::oauth::mount_device_code_grant;
 use pretty_assertions::assert_eq;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -53,7 +54,9 @@ impl KeyringStore for BlockingKeyring {
     }
 }
 
-fn blocking_client() -> (OAuthSessionManager, tempfile::TempDir, Arc<BlockingKeyring>) {
+fn blocking_client(
+    configuration: OAuthSessionConfig,
+) -> (OAuthSessionManager, tempfile::TempDir, Arc<BlockingKeyring>) {
     let home = tempfile::tempdir().unwrap();
     let keyring = Arc::new(BlockingKeyring {
         inner: MockKeyringStore::default(),
@@ -62,7 +65,7 @@ fn blocking_client() -> (OAuthSessionManager, tempfile::TempDir, Arc<BlockingKey
         gate: Mutex::new(/*t*/ None),
     });
     let manager = OAuthSessionManager::new(
-        loopback_config(),
+        configuration,
         home.path().to_path_buf(),
         transport_default_auth_route_config().http_client_factory(),
         keyring.clone(),
@@ -73,7 +76,7 @@ fn blocking_client() -> (OAuthSessionManager, tempfile::TempDir, Arc<BlockingKey
 
 #[tokio::test]
 async fn readiness_does_not_block_cached_requests_or_overwrite_newer_credentials() {
-    let (manager, _home, keyring) = blocking_client();
+    let (manager, _home, keyring) = blocking_client(loopback_config());
     save_token(&manager, "old", /*refresh_token*/ None, i64::MAX);
     assert_eq!(manager.resolve_access_token().await.unwrap(), "old");
     keyring.check_thread.store(/*val*/ true, Ordering::Relaxed);
@@ -129,7 +132,7 @@ async fn readiness_does_not_block_cached_requests_or_overwrite_newer_credentials
 
 #[tokio::test]
 async fn cancel_during_keyring_read_releases_login_and_cached_credentials() {
-    let (manager, _home, keyring) = blocking_client();
+    let (manager, _home, keyring) = blocking_client(loopback_config());
     save_token(&manager, "existing", /*refresh_token*/ None, i64::MAX);
     assert_eq!(manager.resolve_access_token().await.unwrap(), "existing");
     let mut events = manager.state.status_tx.subscribe();
@@ -201,4 +204,40 @@ async fn cancel_during_keyring_read_releases_login_and_cached_credentials() {
         .unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     release_tx.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn canceling_while_saving_an_approved_device_login_keeps_it_for_the_next_request() {
+    let server = MockServer::start().await;
+    let _token_request = mount_device_code_grant(&server, approved_device_tokens()).await;
+    let (manager, _home, keyring) = blocking_client(device_config(&server));
+    save_token(&manager, "existing", /*refresh_token*/ None, i64::MAX);
+
+    let (saving, save_started) = tokio::sync::oneshot::channel();
+    let (resume, paused) = std::sync::mpsc::channel();
+    let login = manager.login_with_device_code(
+        async {
+            save_started
+                .await
+                .expect("Codex received the approved tokens")
+        },
+        |_| {
+            // The next keyring read happens after approval, just before saving the tokens.
+            *keyring.gate.lock().unwrap() = Some((saving, paused));
+        },
+    );
+    let result = tokio::time::timeout(Duration::from_secs(15), login).await;
+    let _ = resume.send(());
+
+    assert_eq!(
+        result
+            .expect("cancel should finish while storage is paused")
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::Interrupted,
+    );
+    assert_eq!(
+        manager.resolve_access_token().await.unwrap(),
+        "device-access"
+    );
 }

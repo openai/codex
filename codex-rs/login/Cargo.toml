@@ -25,6 +25,7 @@ codex-utils-path = { workspace = true }
 codex-utils-template = { workspace = true }
 codex-workload-identity = { workspace = true }
 http = { workspace = true }
+oauth2 = { version = "5", default-features = false }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }

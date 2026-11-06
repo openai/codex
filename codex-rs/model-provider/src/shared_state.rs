@@ -52,7 +52,7 @@ impl ModelProviderSharedState {
     ) -> std::io::Result<Arc<OAuthSessionManager>> {
         let oauth = GatewayAuthConfig {
             authorization_url: config.authorization_url.clone(),
-            device_authorization_url: None,
+            device_authorization_url: config.device_authorization_url.clone(),
             token_url: config.token_url.clone(),
             client_id: config.client_id.clone(),
             resource: config.resource.clone(),

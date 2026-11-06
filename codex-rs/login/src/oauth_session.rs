@@ -42,6 +42,7 @@ mod storage;
 #[path = "oauth_session_token.rs"]
 mod token;
 
+pub use crate::oauth::OAuthDeviceCodePrompt;
 pub use codex_model_provider_info::OAuthSessionConfig;
 pub use login::OAuthLoginControl;
 pub use login::OAuthSessionStatus;
@@ -107,6 +108,7 @@ struct OAuthSessionState {
     codex_home: PathBuf,
     storage: OAuthSessionStorage,
     http_client: HttpClient,
+    http_client_factory: HttpClientFactory,
     cached_token: Arc<Mutex<OAuthSessionCache>>,
     // Reserve explicit login independently of background credential reads and refreshes.
     login_attempt: Arc<Mutex<()>>,
@@ -155,6 +157,7 @@ impl OAuthSessionManager {
                 status_tx: login::status_sender_for_host(&codex_home, http_client_factory),
                 codex_home,
                 http_client,
+                http_client_factory: http_client_factory.clone(),
                 cached_token: Arc::new(Mutex::new(OAuthSessionCache::default())),
                 login_attempt: Arc::new(Mutex::new(())),
                 status: tokio::sync::watch::channel(/*init*/ None).0,

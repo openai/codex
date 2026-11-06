@@ -48,6 +48,9 @@ pub enum GatewayOAuthConfig {
 #[serde(deny_unknown_fields)]
 pub struct GatewayOAuthSettings {
     pub authorization_url: String,
+    /// Optional device endpoint used when the terminal cannot open a browser for gateway sign-in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_authorization_url: Option<String>,
     pub token_url: String,
     pub client_id: String,
     pub resource: Option<String>,
@@ -170,6 +173,9 @@ impl GatewayOAuthConfig {
                     &settings.authorization_url,
                     "gateway_oauth.authorization_url",
                 )?;
+                if let Some(url) = &settings.device_authorization_url {
+                    validate_endpoint_url(url, "gateway_oauth.device_authorization_url")?;
+                }
                 validate_endpoint_url(&settings.token_url, "gateway_oauth.token_url")?;
                 if settings.client_id.trim().is_empty() || settings.redirect_port == Some(0) {
                     return Err(

@@ -7,6 +7,7 @@ use crate::oauth::generate_state;
 use crate::oauth::sanitize_url_for_logging;
 use chrono::Utc;
 use codex_secrets::redact_secrets;
+use oauth2::TokenResponse as _;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -33,6 +34,17 @@ pub(super) struct TokenResponse {
     refresh_token: Option<String>,
     #[serde(default)]
     expires_in: Option<u64>,
+}
+
+impl From<oauth2::basic::BasicTokenResponse> for TokenResponse {
+    fn from(response: oauth2::basic::BasicTokenResponse) -> Self {
+        Self {
+            access_token: response.access_token().secret().clone(),
+            token_type: Some(response.token_type().as_ref().to_owned()),
+            refresh_token: response.refresh_token().map(|token| token.secret().clone()),
+            expires_in: response.expires_in().map(|duration| duration.as_secs()),
+        }
+    }
 }
 
 impl TokenResponse {

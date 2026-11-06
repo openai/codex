@@ -29,6 +29,9 @@ mod login_tests;
 #[path = "oauth_session_request_tests.rs"]
 mod request_tests;
 
+#[path = "oauth_session_device_tests.rs"]
+mod device_tests;
+
 #[path = "oauth_session_storage_tests.rs"]
 mod storage_tests;
 
@@ -59,6 +62,20 @@ fn config(server: &MockServer) -> OAuthSessionConfig {
         redirect_port: None,
         credentials_store: Default::default(),
     }
+}
+
+fn device_config(server: &MockServer) -> OAuthSessionConfig {
+    OAuthSessionConfig {
+        device_authorization_url: Some(format!("{}/devicecode", server.uri())),
+        ..config(server)
+    }
+}
+
+fn approved_device_tokens() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "access_token": "device-access", "refresh_token": "device-refresh",
+        "token_type": "Bearer", "expires_in": 3600,
+    }))
 }
 
 fn loopback_config() -> OAuthSessionConfig {

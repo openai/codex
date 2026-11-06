@@ -297,7 +297,7 @@ fn bounded_response_stream(
     Ok(Box::pin(stream))
 }
 
-async fn bounded_response_bytes(
+pub async fn bounded_response_bytes(
     response: HttpResponse,
     max_bytes: usize,
 ) -> Result<Bytes, TransportError> {

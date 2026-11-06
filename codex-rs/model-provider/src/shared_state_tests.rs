@@ -72,6 +72,7 @@ async fn gateway_credentials_accompany_primary_auth_in_models_and_responses() {
     ] {
         let config = GatewayOAuthSettings {
             authorization_url: format!("{}/authorize", server.uri()),
+            device_authorization_url: None,
             token_url: format!("{}/token", server.uri()),
             client_id: "test".into(),
             resource: None,
@@ -219,6 +220,7 @@ async fn gateway_preserves_runtime_auth_and_rejects_header_collisions() {
         let info = ModelProviderInfo {
             gateway_oauth: Some(GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
                 authorization_url: format!("{}/authorize", server.uri()),
+                device_authorization_url: None,
                 token_url: format!("{}/token", server.uri()),
                 client_id: "client".into(),
                 resource: None,
@@ -321,6 +323,7 @@ async fn gateway_refresh_preserves_primary_auth_and_hides_issuer_errors() {
         let info = ModelProviderInfo {
             gateway_oauth: Some(GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
                 authorization_url: format!("{}/authorize", server.uri()),
+                device_authorization_url: None,
                 token_url: format!("{}/token?credential=query-secret", server.uri()),
                 client_id: "client".into(),
                 resource: None,
@@ -416,6 +419,7 @@ async fn models_cache_is_reused_only_for_matching_gateway_configuration() {
         )])),
         gateway_oauth: Some(GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
             authorization_url: format!("{}/authorize", server.uri()),
+            device_authorization_url: None,
             token_url: format!("{}/token", server.uri()),
             client_id: "client".into(),
             resource: None,
@@ -500,6 +504,7 @@ async fn models_observe_gateway_rotation(instance: ProviderInstance) {
         model_catalog_url: Some(format!("{}/models", server.uri()).into()),
         gateway_oauth: Some(GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
             authorization_url: format!("{}/authorize", server.uri()),
+            device_authorization_url: None,
             token_url: format!("{}/token", server.uri()),
             client_id: "client".into(),
             resource: None,
@@ -615,6 +620,7 @@ async fn gateway_setup_errors_are_reported_when_authentication_is_requested() {
     let mut info = ModelProviderInfo {
         gateway_oauth: Some(GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
             authorization_url: format!("{}/authorize", server.uri()),
+            device_authorization_url: None,
             token_url: format!("{}/token", server.uri()),
             client_id: "client".into(),
             resource: None,
@@ -686,6 +692,7 @@ async fn gateway_login_required_invalidates_the_last_successful_catalog() {
         model_catalog_url: Some(format!("{}/models", server.uri()).into()),
         gateway_oauth: Some(GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
             authorization_url: format!("{}/authorize", server.uri()),
+            device_authorization_url: None,
             token_url: format!("{}/token", server.uri()),
             client_id: "client".into(),
             resource: None,
@@ -771,6 +778,7 @@ async fn gateway_login_states_stop_request_retries() {
     let info = ModelProviderInfo {
         gateway_oauth: Some(GatewayOAuthConfig::OAuth(GatewayOAuthSettings {
             authorization_url: format!("{}/authorize", server.uri()),
+            device_authorization_url: None,
             token_url: format!("{}/token", server.uri()),
             client_id: "client".into(),
             resource: None,
