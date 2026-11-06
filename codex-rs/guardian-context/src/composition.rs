@@ -336,6 +336,7 @@ impl CollectedContext {
                         items
                             .into_iter()
                             .map(|item| Budgeted {
+                                verified_answer: false,
                                 protected: matches!(
                                     item.kind,
                                     RetainedInstructionKind::Framing
@@ -364,10 +365,12 @@ impl CollectedContext {
                         items
                             .into_iter()
                             .map(|item| {
-                                let mut output =
-                                    Budgeted::required(ContentItem::InputText { text: item.text });
-                                output.protected = item.protected;
-                                output
+                                let content = ContentItem::InputText { text: item.text };
+                                if item.protected {
+                                    Budgeted::protected(content)
+                                } else {
+                                    Budgeted::verified_answer(content)
+                                }
                             })
                             .collect(),
                     ),
@@ -396,6 +399,7 @@ impl CollectedContext {
                                         id: "conversation_transcript",
                                         delivery: SectionDelivery::Message(Budgeted {
                                             protected: entry.protected,
+                                            verified_answer: entry.verified_answer,
                                             content: Box::new(ResponseItemEnvelope::new(*message)),
                                             retention: entry.retention,
                                             source: entry.source,
@@ -426,6 +430,7 @@ impl CollectedContext {
                         };
                         items.push(Budgeted {
                             protected: entry.protected,
+                            verified_answer: entry.verified_answer,
                             content,
                             retention: entry.retention,
                             source: entry.source,
@@ -499,6 +504,7 @@ impl CollectedContext {
                             let Budgeted {
                                 content,
                                 protected,
+                                verified_answer,
                                 source,
                                 retention,
                             } = item;
@@ -524,6 +530,7 @@ impl CollectedContext {
                             Some(Ok(Budgeted {
                                 content,
                                 protected,
+                                verified_answer,
                                 source,
                                 retention,
                             }))

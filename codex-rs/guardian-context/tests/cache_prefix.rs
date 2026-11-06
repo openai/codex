@@ -1,23 +1,35 @@
-//! Exercises cache-prefix stability through the public collection and composition API.
+//! Exercises cache-prefix and evidence integrity through public collection and composition.
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_guardian_context::ActionPresentation;
+use codex_guardian_context::ContextBudgeting;
 use codex_guardian_context::ContextPresentation;
 use codex_guardian_context::ContextProfile;
 use codex_guardian_context::ContextTarget;
+use codex_guardian_context::ElasticBudgetConfig;
+use codex_guardian_context::ElasticSection;
+use codex_guardian_context::ElasticSectionLimits;
+use codex_guardian_context::GuardianRootMessage;
 use codex_guardian_context::PlannedAction;
 use codex_guardian_context::PlannedActionKind;
 use codex_guardian_context::PreviousReviews;
+use codex_guardian_context::RequestBudget;
 use codex_guardian_context::SectionHistory;
 use codex_guardian_context::SectionInput;
 use codex_guardian_context::TranscriptFormat;
 use codex_guardian_context::TrustedSkills;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::TrustedToolSource;
+use codex_guardian_context::collect_verified_answer_candidates;
 use codex_guardian_context::default_registry;
+use codex_guardian_context::prepare_sync_context;
+use codex_guardian_context::render_original_verified_answer;
 use codex_history::RetainedContext;
+use codex_history::RetainedContextEvent;
 use codex_history::RetainedInputSource;
 use codex_history::RetainedUserMessage;
+use codex_history::VerifiedAnswer;
+use codex_history::VerifiedQuestionAnswer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
@@ -200,5 +212,129 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
                 ]
             );
         }
+    }
+}
+
+#[test]
+fn elastic_verified_answers_preserve_question_answer_identity() {
+    let answer = VerifiedAnswer {
+        turn_id: "turn".to_owned(),
+        call_id: "confirm".to_owned(),
+        questions: vec![
+            VerifiedQuestionAnswer {
+                question: format!(
+                    "May I delete the production database? {}",
+                    "A".repeat(2_500)
+                ),
+                answer: "No.".to_owned(),
+            },
+            VerifiedQuestionAnswer {
+                question: format!("May I list local files instead? {}", "B".repeat(2_500)),
+                answer: "Yes.".to_owned(),
+            },
+        ],
+    };
+    let original = render_original_verified_answer(&answer);
+    let mut retained = RetainedContext::default();
+    retained.record(
+        &RetainedContextEvent::VerifiedAnswer {
+            answer,
+            acceptance_order: Some(7),
+        },
+        &uuid_v7_item_id_generator_for_test(),
+    );
+    let trusted_answers = collect_verified_answer_candidates(&retained);
+    let root = [GuardianRootMessage::UserInput(original.clone())];
+    // The retained record must stand on its own after the raw transcript is compacted.
+    let history = History {
+        items: Vec::new(),
+        retained: Some(retained),
+    };
+    let profile = ContextProfile::synchronous();
+    for entry_tokens in [900, 1_800] {
+        let collected = default_registry()
+            .prepare(&SectionInput {
+                target: ContextTarget::Sync,
+                history: &history,
+                transcript: &profile.transcript,
+                root_conversation: &root,
+                root_conversation_candidates: None,
+                trusted_user_answers: &trusted_answers,
+                planned_action: None,
+                permissions: None,
+                previous_reviews: None,
+                trusted_tool: None,
+                trusted_skill_paths: &[],
+                images: None,
+                node_repl: None,
+            })
+            .unwrap();
+        let limits = ElasticSectionLimits::new(
+            /*min_total_section_tokens*/ entry_tokens,
+            /*max_section_entry_tokens*/ entry_tokens,
+        )
+        .unwrap();
+        let config = ElasticBudgetConfig {
+            sections: [
+                (ElasticSection::RootConversationMessages, limits),
+                (ElasticSection::TrustedUserAnswers, limits),
+                (
+                    ElasticSection::TranscriptMessages,
+                    // The other section defaults total 9,100 tokens; minimums must sum to 128K.
+                    ElasticSectionLimits::new(
+                        /*min_total_section_tokens*/ 118_900 - 2 * entry_tokens,
+                        /*max_section_entry_tokens*/ 5_000,
+                    )
+                    .unwrap(),
+                ),
+            ]
+            .into(),
+        };
+        let messages = prepare_sync_context(
+            collected,
+            &profile,
+            /*entry_number_offset*/ 0,
+            ContextPresentation::SyncFull {
+                session_id: "worker",
+            },
+            ContextBudgeting::Elastic,
+        )
+        .unwrap()
+        .prepare_elastic_entries(&config)
+        .unwrap()
+        .enforce_budget(
+            RequestBudget {
+                max_input_tokens: 128_000,
+                existing_context_tokens: 0,
+            },
+            "Evidence omitted.".to_owned(),
+        )
+        .unwrap()
+        .into_messages();
+        let omission = GuardianRootMessage::IncompleteVerifiedAnswers.render();
+        let evidence = messages
+            .into_iter()
+            .flat_map(|message| match message {
+                ResponseItem::Message { content, .. } => content,
+                _ => panic!("text evidence"),
+            })
+            .filter_map(|item| match item {
+                ContentItem::InputText { text }
+                    if text.contains("assistant:") || text == omission =>
+                {
+                    Some(text)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let expected = if entry_tokens == 900 {
+            vec![omission.clone(), omission]
+        } else {
+            vec![
+                original.clone(),
+                format!("Retained source order: 7\n{original}"),
+            ]
+        };
+        assert_eq!(evidence, expected);
     }
 }

@@ -1,6 +1,7 @@
 //! Applies configured section text caps exactly once before allocation.
 //! Supporting records remain candidates after truncation. Framing, exact actions,
-//! images and opaque native payloads stay whole. Selection cannot change prepared bytes.
+//! images and opaque native payloads stay whole. Verified answers that exceed their
+//! entry cap are omitted whole. Selection cannot change prepared bytes.
 
 use crate::ComposedContext;
 use crate::ElasticBudgetConfig;
@@ -22,7 +23,7 @@ impl ComposedContext {
     /// can only select whole entries, so later grants cannot change their text.
     /// Omitted groups inherit the same defaults used by allocation.
     /// The existing minimum marker/framing is retained when the cap cannot hold it.
-    /// Entry preparation never selects items; allocation selects whole supporting records.
+    /// Oversized verified answers leave an omission notice; allocation selects the remaining records.
     pub fn prepare_elastic_entries(
         mut self,
         config: &ElasticBudgetConfig,
@@ -67,6 +68,18 @@ impl ComposedContext {
                             continue;
                         }
                         let original_bytes = item.content.evidence_bytes();
+                        if item.verified_answer {
+                            self.truncations.push(TruncationObservation {
+                                source: item.source.clone(),
+                                component: section.id,
+                                original_bytes,
+                                retained_bytes: 0,
+                            });
+                            *item = crate::Budgeted::protected(SectionContent::from(
+                                crate::GuardianRootMessage::IncompleteVerifiedAnswers.render(),
+                            ));
+                            continue;
+                        }
                         truncate_content_to_fit(
                             &mut item.content,
                             maximum.saturating_sub(content_framing_tokens(/*item_count*/ 1)),

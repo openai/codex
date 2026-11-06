@@ -121,8 +121,11 @@ pub(crate) fn root_conversation_items(
             | GuardianRootMessage::RetainedContextScope
             | GuardianRootMessage::LegacyContextScope => true,
         };
+        let verified_answer = matches!(message, GuardianRootMessage::UserInput(_));
         let text = message.render();
-        let item = if protected {
+        let item = if verified_answer {
+            crate::Budgeted::verified_answer(text)
+        } else if protected {
             crate::Budgeted::protected(text)
         } else {
             crate::Budgeted::required(text)
