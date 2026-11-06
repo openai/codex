@@ -30,7 +30,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
 use codex_windows_sandbox_test_support::WindowsSandboxAccountTestGuard;
@@ -746,8 +745,8 @@ fn process_private_desktops() -> Result<BTreeSet<String>> {
 }
 
 fn read_only_sandbox_for_cwd(cwd: std::path::PathBuf) -> Result<FileSystemSandboxContext> {
-    Ok(FileSystemSandboxContext::from_legacy_sandbox_policy(
-        SandboxPolicy::new_read_only_policy(),
+    Ok(FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::read_only(),
         PathUri::from_host_native_path(cwd)?,
-    )?)
+    ))
 }

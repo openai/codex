@@ -885,10 +885,10 @@ async fn v2_discovery_cache_reuses_matching_requests_and_isolates_execution_cont
     assert_eq!(calls().await, 1);
     let restricted = codex_exec_server::DiscoverV2CapabilitiesRequest {
         sandbox: Some(
-            codex_exec_server::FileSystemSandboxContext::from_legacy_sandbox_policy(
-                codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+            codex_exec_server::FileSystemSandboxContext::from_permission_profile(
+                codex_protocol::models::PermissionProfile::read_only(),
                 request.cwd.clone(),
-            )?,
+            ),
         ),
         ..request.clone()
     };

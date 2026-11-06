@@ -27,7 +27,6 @@ use codex_exec_server::WriteFileOptions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillMetadata;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -593,11 +592,10 @@ async fn empty_remote_repo_skills_are_reused_until_watch_invalidation() {
     // The same executor with different captured permissions must scan again.
     let read_only = FileSystemEnvironmentAccessor::new(
         &remote,
-        FileSystemSandboxContext::from_legacy_sandbox_policy(
-            SandboxPolicy::new_read_only_policy(),
+        FileSystemSandboxContext::from_permission_profile(
+            PermissionProfile::read_only(),
             PathUri::from_abs_path(&cwd),
-        )
-        .unwrap(),
+        ),
     );
     assert!(
         service
@@ -699,11 +697,10 @@ async fn incomplete_project_marker_probe_is_retried_before_loading_parent_skills
     calls.denied_marker.lock().unwrap().take();
     let read_only = FileSystemEnvironmentAccessor::new(
         &remote,
-        FileSystemSandboxContext::from_legacy_sandbox_policy(
-            SandboxPolicy::new_read_only_policy(),
+        FileSystemSandboxContext::from_permission_profile(
+            PermissionProfile::read_only(),
             PathUri::from_abs_path(&cwd),
-        )
-        .unwrap(),
+        ),
     );
     assert!(
         service

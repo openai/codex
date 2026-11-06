@@ -59,7 +59,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 #[cfg(unix)]
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -1904,10 +1903,10 @@ async fn assert_remote_windows_sandbox_process_write(
     let workspace = TempDir::new()?;
     let blocked_file = workspace.path().join("blocked.txt");
     let cwd = PathUri::from_host_native_path(workspace.path())?;
-    let mut sandbox = FileSystemSandboxContext::from_legacy_sandbox_policy(
-        SandboxPolicy::new_read_only_policy(),
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile(
+        codex_protocol::models::PermissionProfile::read_only(),
         cwd.clone(),
-    )?;
+    );
     match expected_sandbox_type {
         codex_sandboxing::SandboxType::WindowsRestrictedToken => {
             sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;

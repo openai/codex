@@ -169,10 +169,10 @@ async fn v2_rpc_refreshes_metadata_and_enforces_sandbox() -> anyhow::Result<()> 
                     .contains("cannot enforce split filesystem read restrictions")),
                 "{error:#}"
             );
-            let mut sandbox = FileSystemSandboxContext::from_legacy_sandbox_policy(
-                codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+            let mut sandbox = FileSystemSandboxContext::from_permission_profile(
+                PermissionProfile::read_only(),
                 cwd.clone(),
-            )?;
+            );
             sandbox.windows_sandbox_selection =
                 codex_exec_server::WindowsSandboxSelection::RestrictedToken;
             let permitted = DiscoverV2CapabilitiesRequest {

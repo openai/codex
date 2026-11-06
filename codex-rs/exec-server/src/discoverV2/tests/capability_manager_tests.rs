@@ -3,7 +3,7 @@
 use super::*;
 use crate::discover_v2::capability_locations::tests::request;
 use crate::discover_v2::capability_locations::tests::write;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
@@ -69,10 +69,10 @@ async fn discovery_responses_are_cached_by_sandbox_context() -> anyhow::Result<(
     for index in 0..MAX_CACHED_SANDBOX_CONTEXTS {
         let sandbox_cwd = cwd.join(&format!("context-{index}"))?;
         let sandbox = DiscoverV2CapabilitiesRequest {
-            sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
-                SandboxPolicy::DangerFullAccess,
+            sandbox: Some(FileSystemSandboxContext::from_permission_profile(
+                PermissionProfile::Disabled,
                 sandbox_cwd,
-            )?),
+            )),
             ..params.clone()
         };
         let response = manager.get_or_refresh_discovery(sandbox.clone()).await?;

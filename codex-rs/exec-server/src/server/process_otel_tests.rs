@@ -407,9 +407,10 @@ fn exported_sandbox_denial_keeps_launch_identity_and_separate_exit_outcome() {
             let private_file = directory.path().join(PRIVATE_PAYLOAD);
             std::fs::write(&private_file, PRIVATE_PAYLOAD).expect("write test file");
             let cwd = PathUri::from_host_native_path(directory.path()).expect("cwd URI");
-            let sandbox = crate::FileSystemSandboxContext::from_legacy_sandbox_policy(
-                codex_protocol::protocol::SandboxPolicy::new_read_only_policy(), cwd.clone(),
-            ).expect("read-only sandbox");
+            let sandbox = crate::FileSystemSandboxContext::from_permission_profile(
+                codex_protocol::models::PermissionProfile::read_only(),
+                cwd.clone(),
+            );
             for (index, span) in LAUNCH_SPANS.into_iter().enumerate() {
                 let process_id = format!("{PRIVATE_PAYLOAD}-{index}");
                 let launch = format!("00-{TRACE_ID}-{span}-00");

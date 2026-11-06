@@ -9,16 +9,13 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::config_types::WindowsSandboxProxySettingsMode;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxEntryMissingPathBehavior;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::sandbox::SandboxOverride;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
@@ -380,26 +377,6 @@ pub struct FileSystemSandboxContext {
 }
 
 impl FileSystemSandboxContext {
-    pub fn from_legacy_sandbox_policy(
-        sandbox_policy: SandboxPolicy,
-        cwd: PathUri,
-    ) -> io::Result<Self> {
-        // Legacy policy projection materializes native roots, so convert at the receiving-host
-        // boundary while retaining the URI in the resulting sandbox context.
-        let native_cwd = cwd.to_abs_path()?;
-        let file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                &sandbox_policy,
-                &native_cwd,
-            );
-        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-            &file_system_sandbox_policy,
-            NetworkSandboxPolicy::from(&sandbox_policy),
-        );
-        Ok(Self::from_permission_profile(permissions, cwd))
-    }
-
     pub fn from_permission_profile(permissions: PermissionProfile, cwd: PathUri) -> Self {
         Self {
             permissions,

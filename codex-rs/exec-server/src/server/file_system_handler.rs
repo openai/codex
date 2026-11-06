@@ -369,8 +369,8 @@ fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
 
 #[cfg(test)]
 mod tests {
-    use codex_protocol::protocol::NetworkAccess;
-    use codex_protocol::protocol::SandboxPolicy;
+    use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
@@ -389,20 +389,16 @@ mod tests {
         .expect("runtime paths");
         let handler = FileSystemHandler::new(runtime_paths);
         let sandbox_cwd = PathUri::from_host_native_path(temp_dir.path()).expect("tempdir URI");
-        let sandbox_context = |sandbox_policy| {
-            FileSystemSandboxContext::from_legacy_sandbox_policy(
-                sandbox_policy,
-                sandbox_cwd.clone(),
-            )
-            .expect("sandbox context")
+        let sandbox_context = |permissions| {
+            FileSystemSandboxContext::from_permission_profile(permissions, sandbox_cwd.clone())
         };
 
-        for (file_name, sandbox_policy) in [
-            ("danger.txt", SandboxPolicy::DangerFullAccess),
+        for (file_name, permission_profile) in [
+            ("danger.txt", PermissionProfile::Disabled),
             (
                 "external.txt",
-                SandboxPolicy::ExternalSandbox {
-                    network_access: NetworkAccess::Restricted,
+                PermissionProfile::External {
+                    network: NetworkSandboxPolicy::Restricted,
                 },
             ),
         ] {
@@ -414,7 +410,7 @@ mod tests {
                     path: path.clone(),
                     follow_symlinks: None,
                     data_base64: STANDARD.encode("ok"),
-                    sandbox: Some(sandbox_context(sandbox_policy.clone())),
+                    sandbox: Some(sandbox_context(permission_profile.clone())),
                 })
                 .await
                 .expect("write file");
@@ -422,7 +418,7 @@ mod tests {
             let canonicalized = handler
                 .canonicalize(FsCanonicalizeParams {
                     path: path.clone(),
-                    sandbox: Some(sandbox_context(sandbox_policy.clone())),
+                    sandbox: Some(sandbox_context(permission_profile.clone())),
                 })
                 .await
                 .expect("canonicalize file");
@@ -438,7 +434,7 @@ mod tests {
                 .read_file(FsReadFileParams {
                     path,
                     follow_symlinks: None,
-                    sandbox: Some(sandbox_context(sandbox_policy)),
+                    sandbox: Some(sandbox_context(permission_profile)),
                 })
                 .await
                 .expect("read file");
