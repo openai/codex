@@ -1,6 +1,7 @@
 //! Host-supplied connections to one local board. Access is fixed per runtime,
 //! independent of the board's storage or the agent's tree identity.
 
+use super::BoardMode;
 use super::LocalAgentMessageBoard;
 use super::options::LocalBoardOptions;
 use crate::MessageBoardHost;
@@ -103,7 +104,9 @@ impl LocalBoardConnection {
                 "board database changed; create a new board connection".into(),
             ));
         }
-        board.access = Some(self.access);
+        board.mode = BoardMode::Live {
+            access: Some(self.access),
+        };
         Ok(board)
     }
 }

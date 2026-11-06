@@ -2183,3 +2183,6 @@ async fn storage_namespaces_preserve_isolation_reopen_and_deletion() -> Result<(
 
 #[path = "local_board/mcp_tests.rs"]
 mod mcp;
+
+#[path = "local_board/read_view_tests.rs"]
+mod read_view;

@@ -6,21 +6,19 @@
 //! a board after its root has been permanently deleted.
 //! Opening storage adds optional channel metadata without invalidating older readers.
 //! Explicit connections can restrict writes; default handles retain legacy access.
+//! Fixed read views freeze the channel catalog and restrict reads to a captured post sequence.
 //! Posting subscribes and notifies; host appends share persistence without these side effects.
 
 use self::connection::Access;
 use self::options::LocalBoardOptions;
 use crate::AppendRequest;
 use crate::ChannelDescription;
-use crate::ChannelPermissions;
 use crate::ChannelSummary;
 use crate::CreateChannelRequest;
 use crate::MessageBoardHost;
-use crate::PostContent;
 use crate::PostDestination;
 use crate::PostMetadata;
 use crate::PostRequest;
-use crate::ReadPostRequest;
 use crate::SubscriptionChange;
 use crate::SubscriptionRequest;
 use crate::SubscriptionState;
@@ -45,6 +43,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+pub(crate) mod catalog;
 pub(crate) mod connection;
 mod lifecycle;
 pub(crate) mod options;
@@ -61,12 +60,37 @@ const MAX_POST_BYTES: usize = 64 * 1024;
 const MAX_CHANNEL_BYTES: usize = 128;
 const MAX_READ_CHARS: usize = 20_000;
 
+/// Capturing a view makes the handle read-only, regardless of its original access.
+#[derive(Clone)]
+enum BoardMode {
+    Live { access: Option<Access> },
+    Fixed { view: Arc<catalog::ReadView> },
+}
+
+impl BoardMode {
+    const FIXED_ACCESS: Access = Access::ReadOnly;
+
+    fn access(&self) -> Option<Access> {
+        match self {
+            Self::Live { access } => *access,
+            Self::Fixed { .. } => Some(Self::FIXED_ACCESS),
+        }
+    }
+
+    fn view(&self) -> Option<&catalog::ReadView> {
+        match self {
+            Self::Live { .. } => None,
+            Self::Fixed { view } => Some(view),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct LocalAgentMessageBoard {
     identity: SessionId,
     pool: Arc<SqlitePool>,
     host: Arc<dyn MessageBoardHost>,
-    access: Option<Access>,
+    mode: BoardMode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,8 +113,15 @@ impl LocalAgentMessageBoard {
             identity,
             pool: pool::open(sqlite, options).await?,
             host,
-            access: None,
+            mode: BoardMode::Live { access: None },
         })
+    }
+
+    /// Captures a read-only catalog and post boundary without retaining a SQLite transaction.
+    /// Later appends and metadata edits are excluded; deletion may make captured posts unavailable.
+    pub async fn read_view(&self, caller: ThreadId) -> Result<catalog::LocalBoardReadView> {
+        self.host.agent_path(caller).await?;
+        catalog::capture(self).await
     }
 
     pub async fn create_channel(
@@ -98,7 +129,7 @@ impl LocalAgentMessageBoard {
         caller: ThreadId,
         request: CreateChannelRequest,
     ) -> Result<ChannelSummary> {
-        if let Some(access) = self.access {
+        if let Some(access) = self.mode.access() {
             access.require_write(self.identity, "board.create_channel")?;
         }
         validate_channel(&request.channel_name)?;
@@ -122,7 +153,7 @@ impl LocalAgentMessageBoard {
             )
             .await?;
         }
-        let summary = self.channel_summary(&mut tx, &request.channel_name).await?;
+        let summary = catalog::channel_summary(self, &mut tx, &request.channel_name).await?;
         tx.commit().await.map_err(storage_error)?;
         Ok(summary)
     }
@@ -158,7 +189,7 @@ impl LocalAgentMessageBoard {
         request: PostRequest,
         behavior: PostBehavior,
     ) -> Result<PostMetadata> {
-        if let Some(access) = self.access {
+        if let Some(access) = self.mode.access() {
             access.require_write(
                 self.identity,
                 match &request.destination {
@@ -339,18 +370,21 @@ impl LocalAgentMessageBoard {
         caller: ThreadId,
         request: SubscriptionRequest,
     ) -> Result<SubscriptionState> {
+        if self.mode.view().is_some() {
+            Access::ReadOnly.require_write(self.identity, "board.manage_subscriptions")?;
+        }
         let caller_path = self.host.agent_path(caller).await?;
         let target_path = request.target_agent.unwrap_or(caller_path);
         let target_agent = self.host.resolve_agent(target_path.clone()).await?;
         if target_agent != caller
-            && let Some(access) = self.access
+            && let Some(access) = self.mode.access()
         {
             access.require_write(self.identity, "board.manage_subscriptions")?;
         }
         let mut tx = self.begin_write().await?;
         let (channel, root, last) = match &request.target {
             SubscriptionTarget::Channel(name) => {
-                let summary = self.channel_summary(&mut tx, name).await?;
+                let summary = catalog::channel_summary(self, &mut tx, name).await?;
                 (name.clone(), None, summary.last_message_id)
             }
             SubscriptionTarget::Thread(root) => {
@@ -399,31 +433,6 @@ impl LocalAgentMessageBoard {
         })
     }
 
-    pub async fn read_post(
-        &self,
-        caller: ThreadId,
-        request: ReadPostRequest,
-    ) -> Result<PostContent> {
-        self.host.agent_path(caller).await?;
-        let mut conn = self.pool.acquire().await.map_err(storage_error)?;
-        let post = self.load_post(&mut conn, request.message_id).await?;
-        let n_chars = post.text.chars().count();
-        let offset = (request.offset_chars as usize).min(n_chars);
-        let text: String = post
-            .text
-            .chars()
-            .skip(offset)
-            .take((request.limit_chars.get() as usize).min(MAX_READ_CHARS))
-            .collect();
-        let next_offset_chars = offset + text.chars().count();
-        Ok(PostContent {
-            metadata: post.metadata,
-            text,
-            n_chars,
-            next_offset_chars,
-        })
-    }
-
     async fn subscribe(
         &self,
         conn: &mut SqliteConnection,
@@ -438,18 +447,6 @@ impl LocalAgentMessageBoard {
             .await
             .map_err(storage_error)?;
         Ok(())
-    }
-
-    async fn load_post(&self, conn: &mut SqliteConnection, id: Uuid) -> Result<StoredPost> {
-        let payload: Option<String> =
-            sqlx::query_scalar("SELECT payload FROM posts WHERE board=? AND id=?")
-                .bind(self.identity.to_string())
-                .bind(id.to_string())
-                .fetch_optional(conn)
-                .await
-                .map_err(storage_error)?;
-        serde_json::from_str(&payload.ok_or_else(|| invalid("post not found in this board"))?)
-            .map_err(storage_error)
     }
 
     async fn existing_post(
@@ -471,48 +468,6 @@ impl LocalAgentMessageBoard {
             serde_json::from_str(row.get("payload")).map_err(storage_error)
         })
         .transpose()
-    }
-
-    async fn channel_summary(
-        &self,
-        conn: &mut SqliteConnection,
-        name: &str,
-    ) -> Result<ChannelSummary> {
-        let row = sqlx::query(
-            "SELECT c.created_at,c.author,c.description,
-             (SELECT COUNT(*) FROM posts p WHERE p.board=c.board AND p.channel=c.name) AS message_count,
-             (SELECT p.id FROM posts p WHERE p.board=c.board AND p.channel=c.name ORDER BY p.timestamp DESC,p.seq DESC LIMIT 1) AS last_message_id
-             FROM channels c WHERE c.board=? AND c.name=?",
-        )
-        .bind(self.identity.to_string())
-        .bind(name)
-        .fetch_optional(conn)
-        .await
-        .map_err(storage_error)?
-        .ok_or_else(|| invalid("channel not found in this board"))?;
-        Ok(ChannelSummary {
-            permissions: self.access.map(|access| {
-                let write = matches!(access, Access::ReadWrite);
-                ChannelPermissions {
-                    read: true,
-                    post: write,
-                    reply: write,
-                    edit_metadata: false,
-                }
-            }),
-            channel_name: name.to_string(),
-            description: row.get("description"),
-            created_at: DateTime::parse_from_rfc3339(row.get("created_at"))
-                .map_err(storage_error)?
-                .with_timezone(&Utc),
-            created_by: AgentPath::try_from(row.get::<String, _>("author")).map_err(invalid)?,
-            message_count: row.get::<i64, _>("message_count") as usize,
-            last_message_id: row
-                .get::<Option<String>, _>("last_message_id")
-                .map(|id| Uuid::parse_str(&id))
-                .transpose()
-                .map_err(storage_error)?,
-        })
     }
 }
 

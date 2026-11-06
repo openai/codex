@@ -34,6 +34,7 @@ pub use host::NotificationDelivery;
 pub use in_memory::InMemoryAgentMessageBoard;
 pub use in_memory::InMemoryMessageBoards;
 pub use local::LocalAgentMessageBoard;
+pub use local::catalog::LocalBoardReadView;
 pub use local::connection::LocalBoard;
 pub use local::connection::LocalBoardConnection;
 pub use local::options::LocalBoardOptions;
