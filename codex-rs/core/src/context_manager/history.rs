@@ -79,7 +79,9 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use codex_utils_output_truncation::truncate_function_output_payload;
 use codex_utils_output_truncation::with_serialization_allowance;
+use image::ImageReader;
 use std::collections::BTreeSet;
+use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -1507,15 +1509,18 @@ fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
                 return None;
             }
         };
-        let dynamic = match image::load_from_memory(&bytes) {
-            Ok(dynamic) => dynamic,
+        let dimensions = image::guess_format(&bytes).and_then(|format| {
+            ImageReader::with_format(Cursor::new(bytes.as_slice()), format).into_dimensions()
+        });
+        let (width, height) = match dimensions {
+            Ok(dimensions) => dimensions,
             Err(error) => {
-                tracing::trace!("failed to decode original-detail image bytes: {error}");
+                tracing::trace!("failed to read original-detail image dimensions: {error}");
                 return None;
             }
         };
-        let width = i64::from(dynamic.width());
-        let height = i64::from(dynamic.height());
+        let width = i64::from(width);
+        let height = i64::from(height);
         let patch_size = i64::from(ORIGINAL_IMAGE_PATCH_SIZE);
         let patches_wide = width.saturating_add(patch_size.saturating_sub(1)) / patch_size;
         let patches_high = height.saturating_add(patch_size.saturating_sub(1)) / patch_size;
