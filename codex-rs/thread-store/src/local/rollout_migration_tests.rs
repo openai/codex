@@ -508,6 +508,7 @@ async fn migration_projects_explicit_and_implicit_legacy_completed_items() {
             sort_direction: SortDirection::Asc,
             sort_key: ItemSortKey::CreatedAtOrdinal,
             after_updated_at_ordinal: None,
+            before_updated_at_ordinal: None,
         })
         .await
         .expect("read projected items");
@@ -730,6 +731,7 @@ async fn migration_keeps_late_completions_in_their_original_turn() {
             sort_direction: SortDirection::Asc,
             sort_key: ItemSortKey::CreatedAtOrdinal,
             after_updated_at_ordinal: None,
+            before_updated_at_ordinal: None,
         })
         .await
         .expect("read projected late completion");
@@ -1221,6 +1223,7 @@ async fn migration_keeps_late_completions_for_surviving_turns_across_rollback() 
             sort_direction: SortDirection::Asc,
             sort_key: ItemSortKey::CreatedAtOrdinal,
             after_updated_at_ordinal: None,
+            before_updated_at_ordinal: None,
         })
         .await
         .expect("read late-completion rollback items");

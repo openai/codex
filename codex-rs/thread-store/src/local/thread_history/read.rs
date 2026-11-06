@@ -175,6 +175,7 @@ pub(in crate::local) async fn list_items(
         if params.turn_id.is_none()
             || params.position.is_some()
             || params.after_updated_at_ordinal.is_some()
+            || params.before_updated_at_ordinal.is_some()
             || params.sort_key != crate::ItemSortKey::CreatedAtOrdinal
             || !(1..=100).contains(&ids.len())
         {
