@@ -11,12 +11,10 @@ use super::edit_view;
 use super::editor;
 use super::loading_with_notice;
 use super::progress;
+use super::rpc;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::ModelProviderConfigWriteParams;
 use codex_app_server_protocol::ModelProviderConfigWriteResponse;
 use codex_app_server_protocol::ProviderSettingsPatch;
@@ -120,21 +118,14 @@ impl Write {
                     }
                 }),
             Self::Default(id) => {
-                let response: ConfigWriteResponse = handle
-                    .request_typed(ClientRequest::ConfigValueWrite {
-                        request_id: RequestId::String(Uuid::new_v4().to_string()),
-                        params: ConfigValueWriteParams {
-                            key_path: "model_provider".into(),
-                            value: id.clone().into(),
-                            merge_strategy: MergeStrategy::Replace,
-                            file_path: None,
-                            expected_version: None,
-                        },
-                    })
+                let response = rpc::set_default_provider(handle, id)
                     .await
                     .map_err(|error| match error {
-                        TypedRequestError::Server { .. } => format!("Could not save provider: {error}"),
-                        TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. } => {
+                        TypedRequestError::Server { .. } => {
+                            format!("Could not save provider: {error}")
+                        }
+                        TypedRequestError::Transport { .. }
+                        | TypedRequestError::Deserialize { .. } => {
                             // The server may have committed the write before its reply was lost.
                             *provider_changed = true;
                             format!("Could not confirm whether {id} was saved: {error}")
@@ -143,11 +134,12 @@ impl Write {
                 match response.status {
                     WriteStatus::Ok => {
                         *provider_changed = true;
-                        Ok(SaveNotice::Saved(format!("/new now uses {id}. Restart the app server and TUI to refresh /model.")))
+                        Ok(SaveNotice::Saved(format!(
+                            "/new now uses {id}. Restart the app server and TUI to refresh /model."
+                        )))
                     }
                     WriteStatus::OkOverridden => {
-                        let reason = response.overridden_metadata.map(|metadata| metadata.message)
-                            .unwrap_or_else(|| "A higher-priority setting overrides this choice.".into());
+                        let reason = rpc::override_reason(response);
                         Ok(SaveNotice::Saved(format!("Saved {id}. {reason}")))
                     }
                 }

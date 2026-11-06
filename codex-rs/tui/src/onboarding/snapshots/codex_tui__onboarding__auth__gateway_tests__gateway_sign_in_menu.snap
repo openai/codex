@@ -1,0 +1,12 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: terminal.backend().to_string()
+---
+  Sign in another way
+
+> 1. Use an OpenAI API key
+  2. Use Amazon Bedrock
+  3. Use Google Cloud Vertex AI
+  4. Use a custom gateway
+  Press enter to continue
+  Press esc to go back

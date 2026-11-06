@@ -1,0 +1,6 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: "screen(&widget, 4)"
+---
+Gateway sign-in expired.
+Press Enter to retry or Ctrl+C to quit.

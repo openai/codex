@@ -477,6 +477,8 @@ pub enum Feature {
     BedrockSetupWizard,
     /// Offer Google Cloud Vertex AI setup during TUI sign-in onboarding.
     GcpSetupWizard,
+    /// Offer custom gateway setup during TUI sign-in onboarding.
+    GatewaySetupWizard,
     /// Removed compatibility flag retained as a no-op.
     Personality,
     /// Enable native artifact tools.
@@ -2259,6 +2261,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GcpSetupWizard,
         key: "gcp_setup_wizard",
+        stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GatewaySetupWizard,
+        key: "gateway_setup_wizard",
         stage: Stage::Stable,
         default_enabled: false,
     },

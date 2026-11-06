@@ -1,0 +1,12 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: screen(&widget)
+---
+  Use a custom gateway
+
+
+› ○ Office  office
+
+
+
+  Press enter to use as default or esc to go back

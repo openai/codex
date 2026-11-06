@@ -1,0 +1,7 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: "screen(&widget, 4)"
+---
+Finish signing in to your gateway in the browser.
+https://office.example.test/authorize
+Press Ctrl+C to quit.

@@ -1,0 +1,9 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: "screen(&widget, 8)"
+---
+  Use a custom gateway
+  No custom gateways are configured.
+
+
+› 1. Back

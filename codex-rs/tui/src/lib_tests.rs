@@ -81,7 +81,7 @@ async fn provider_setup_wizards_require_eligible_onboarding() -> color_eyre::Res
         websocket_url: "ws://127.0.0.1:4500/".to_string(),
         auth_token: None,
     };
-    let enabled = "[features]\nbedrock_setup_wizard = true\ngcp_setup_wizard = true\n";
+    let enabled = "[features]\nbedrock_setup_wizard = true\ngcp_setup_wizard = true\ngateway_setup_wizard = true\n";
 
     for (label, config_toml, login_status, target, expected) in [
         (
@@ -89,42 +89,49 @@ async fn provider_setup_wizards_require_eligible_onboarding() -> color_eyre::Res
             "",
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
-            [true, false],
+            [true, false, false],
         ),
         (
             "explicitly disabled",
-            "[features]\nbedrock_setup_wizard = false\ngcp_setup_wizard = false\n",
+            "[features]\nbedrock_setup_wizard = false\ngcp_setup_wizard = false\ngateway_setup_wizard = false\n",
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
-            [false, false],
+            [false, false, false],
         ),
         (
             "only GCP enabled",
             "[features]\nbedrock_setup_wizard = false\ngcp_setup_wizard = true\n",
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
-            [false, true],
+            [false, true, false],
+        ),
+        (
+            "only custom gateway enabled",
+            "[features]\nbedrock_setup_wizard = false\ngateway_setup_wizard = true\n",
+            LoginStatus::NotAuthenticated,
+            AppServerTarget::Embedded,
+            [false, false, true],
         ),
         (
             "enabled for the default provider",
             enabled,
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
-            [true, true],
+            [true, true, true],
         ),
         (
             "explicit OpenAI provider with default flags",
             "model_provider = \"openai\"\n",
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
-            [true, false],
+            [true, false, false],
         ),
         (
-            "explicit OpenAI provider with both wizards enabled",
-            "model_provider = \"openai\"\n[features]\nbedrock_setup_wizard = true\ngcp_setup_wizard = true\n",
+            "explicit OpenAI provider with wizards enabled",
+            "model_provider = \"openai\"\n[features]\nbedrock_setup_wizard = true\ngcp_setup_wizard = true\ngateway_setup_wizard = true\n",
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
-            [true, true],
+            [true, true, true],
         ),
         (
             "custom provider requiring OpenAI auth",
@@ -138,24 +145,25 @@ requires_openai_auth = true
 [features]
 bedrock_setup_wizard = true
 gcp_setup_wizard = true
+gateway_setup_wizard = true
 "#,
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
-            [false, false],
+            [false, false, false],
         ),
         (
             "forced ChatGPT login",
-            "forced_login_method = \"chatgpt\"\n[features]\nbedrock_setup_wizard = true\ngcp_setup_wizard = true\n",
+            "forced_login_method = \"chatgpt\"\n[features]\nbedrock_setup_wizard = true\ngcp_setup_wizard = true\ngateway_setup_wizard = true\n",
             LoginStatus::NotAuthenticated,
             AppServerTarget::Embedded,
-            [false, false],
+            [false, false, false],
         ),
         (
             "existing authentication",
             enabled,
             LoginStatus::AuthMode(AuthMode::Chatgpt),
             AppServerTarget::Embedded,
-            [false, false],
+            [false, false, false],
         ),
         (
             "shared local daemon",
@@ -165,7 +173,7 @@ gcp_setup_wizard = true
                 allow_embedded_fallback: true,
                 endpoint: shared_endpoint.clone(),
             },
-            [true, false],
+            [true, false, false],
         ),
         (
             "remote app server",
@@ -174,15 +182,19 @@ gcp_setup_wizard = true
             AppServerTarget::Remote {
                 endpoint: shared_endpoint,
             },
-            [false, false],
+            [false, false, false],
         ),
     ] {
         let codex_home = TempDir::new()?;
         std::fs::write(codex_home.path().join("config.toml"), config_toml)?;
         let config = build_config(&codex_home).await?;
-        for (feature, expected) in [Feature::BedrockSetupWizard, Feature::GcpSetupWizard]
-            .into_iter()
-            .zip(expected)
+        for (feature, expected) in [
+            Feature::BedrockSetupWizard,
+            Feature::GcpSetupWizard,
+            Feature::GatewaySetupWizard,
+        ]
+        .into_iter()
+        .zip(expected)
         {
             assert_eq!(
                 should_show_provider_setup_wizard(
@@ -204,6 +216,26 @@ gcp_setup_wizard = true
             ));
         }
     }
+
+    let home = TempDir::new()?;
+    std::fs::write(home.path().join("config.toml"), enabled)?;
+    let requirements = home.path().join("requirements.toml");
+    std::fs::write(&requirements, "model_provider = 'openai'")?;
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            system_requirements_path: Some(requirements),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await?;
+    assert!(!should_show_provider_setup_wizard(
+        LoginStatus::NotAuthenticated,
+        /*requires_openai_auth*/ true,
+        &config,
+        &AppServerTarget::Embedded,
+        Feature::GatewaySetupWizard,
+    ));
 
     Ok(())
 }

@@ -11,6 +11,7 @@ use crate::config_panel::ResumeCurrentAvailability;
 use crate::model_catalog::ModelCatalog;
 use crate::tui::TuiEvent;
 use crate::tui::test_support::make_test_tui;
+use codex_app_server_client::TypedRequestError;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -349,7 +350,7 @@ fn unsupported_list_method_explains_server_compatibility() {
             },
         };
         assert_eq!(
-            request_error(error),
+            rpc::request_error(error),
             "Update the connected app server to browse model providers."
         );
     }
