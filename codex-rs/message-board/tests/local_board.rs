@@ -1940,6 +1940,89 @@ async fn silent_appends_preserve_evidence_and_explicit_subscriptions()
 }
 
 #[tokio::test]
+async fn bulk_subscriptions_are_atomic_and_scoped_to_the_caller_and_supplied_channels() -> Result<()>
+{
+    use SubscriptionChange::Subscribe;
+    use SubscriptionChange::Unsubscribe;
+    use std::collections::BTreeMap;
+
+    let dir = tempfile::tempdir()?;
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let owner = ThreadId::new();
+    let reviewer = ThreadId::new();
+    let host = Arc::new(Host {
+        clock: AtomicI64::default(),
+        fail_clock: AtomicBool::default(),
+        agent_path_calls: AtomicUsize::default(),
+        members: [
+            (owner, AgentPath::root()),
+            (reviewer, AgentPath::root().join("reviewer").unwrap()),
+        ]
+        .into(),
+        active: AtomicBool::new(true),
+        fail_notifications: AtomicBool::default(),
+        notifications: Mutex::default(),
+    });
+    let board = LocalBoard::new(sqlite, owner.into());
+    let writer = board.read_write().open(host.clone()).await?;
+    let reader = board.read_only().open(host.clone()).await?;
+    for name in ["build", "release"] {
+        writer
+            .create_channel(
+                owner,
+                CreateChannelRequest {
+                    channel_name: name.into(),
+                    description: None,
+                    subscription: Subscribe,
+                },
+            )
+            .await?;
+    }
+    reader
+        .set_subscriptions(
+            reviewer,
+            &BTreeMap::from([("build", Subscribe), ("release", Subscribe)]),
+        )
+        .await?;
+    let both = vec!["build".to_owned(), "release".to_owned()];
+    assert!(
+        reader
+            .set_subscriptions(
+                reviewer,
+                &BTreeMap::from([("build", Unsubscribe), ("missing", Subscribe)])
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        reader
+            .subscribed_channels(reviewer, PageRequest::default())
+            .await?
+            .results,
+        both
+    );
+    reader
+        .set_subscriptions(reviewer, &BTreeMap::from([("build", Unsubscribe)]))
+        .await?;
+    assert_eq!(
+        reader
+            .subscribed_channels(reviewer, PageRequest::default())
+            .await?
+            .results,
+        vec!["release".to_owned()]
+    );
+    assert_eq!(
+        reader
+            .subscribed_channels(owner, PageRequest::default())
+            .await?
+            .results,
+        both
+    );
+    assert!(host.notifications.lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn local_board_setup_survives_reopen() -> Result<()> {
     use serde_json::json;
     let dir = tempfile::tempdir()?;

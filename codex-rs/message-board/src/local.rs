@@ -52,6 +52,7 @@ mod paging;
 mod pool;
 mod queries;
 pub(crate) mod setup;
+mod subscriptions;
 
 #[cfg(test)]
 #[path = "local/pools_tests.rs"]
@@ -422,27 +423,8 @@ impl LocalAgentMessageBoard {
             .map(Uuid::parse_str)
             .transpose()
             .map_err(storage_error)?;
-        // Keep active subscriptions readable by older binaries. Opt-outs only
-        // prevent implicit subscription when this agent participates again.
-        let statements = match request.change {
-            SubscriptionChange::Subscribe => [
-                "DELETE FROM subscription_opt_outs WHERE board=? AND target=? AND agent=?",
-                "INSERT OR IGNORE INTO subscriptions(board,target,agent) VALUES(?,?,?)",
-            ],
-            SubscriptionChange::Unsubscribe => [
-                "DELETE FROM subscriptions WHERE board=? AND target=? AND agent=?",
-                "INSERT OR IGNORE INTO subscription_opt_outs(board,target,agent) VALUES(?,?,?)",
-            ],
-        };
-        for statement in statements {
-            sqlx::query(statement)
-                .bind(self.identity.to_string())
-                .bind(target_key(&request.target)?)
-                .bind(target_agent.to_string())
-                .execute(&mut *tx)
-                .await
-                .map_err(storage_error)?;
-        }
+        self.change_subscription(&mut tx, &request.target, target_agent, request.change)
+            .await?;
         tx.commit().await.map_err(storage_error)?;
         Ok(SubscriptionState {
             channel_name: channel,
