@@ -1,5 +1,6 @@
 //! Shared cross-process ownership for local thread writers and rollout publication.
-//! Thread lock-file creation and removal uses a bounded wait for the home coordination lock.
+//! Opening a thread lock file uses a bounded wait for home coordination. Cleanup
+//! removes the file only if it can acquire exclusive coordination immediately.
 
 use std::fs;
 use std::fs::File;
@@ -43,12 +44,22 @@ impl WriterLockCoordinator {
 
     /// Acquires exclusive writer ownership, returning `WouldBlock` for an active writer.
     pub fn acquire(self: &Arc<Self>, thread_id: ThreadId) -> io::Result<WriterLockGuard> {
-        let _coordination_lock = self.lock_coordination()?;
-        if !self.cleanup_attempted.swap(true, Ordering::Relaxed)
-            && let Err(err) = self.remove_stale_thread_locks()
-        {
-            warn!("failed to clean up stale thread writer locks: {err}");
+        let file = self.open_coordination()?;
+        // Never queue a directory sweep behind another writer. Removal remains exclusive.
+        let have_exclusive = !self.cleanup_attempted.swap(true, Ordering::Relaxed)
+            && match file.try_lock() {
+                Ok(()) => true,
+                Err(fs::TryLockError::WouldBlock) => false,
+                Err(fs::TryLockError::Error(err)) => return Err(err),
+            };
+        if have_exclusive {
+            if let Err(err) = self.remove_stale_thread_locks() {
+                warn!("failed to clean up stale thread writer locks: {err}");
+            }
+        } else {
+            Self::wait_for_coordination(|| file.try_lock_shared())?;
         }
+        let _coordination_lock = file;
 
         let path = self.directory.join(format!("{thread_id}.lock"));
         let file = OpenOptions::new()
@@ -107,18 +118,29 @@ impl WriterLockCoordinator {
         }
     }
 
-    fn lock_coordination(&self) -> io::Result<File> {
+    fn open_coordination(&self) -> io::Result<File> {
         fs::create_dir_all(&self.directory)?;
-        let file = OpenOptions::new()
+        OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(self.directory.join(COORDINATION_LOCK_FILE))?;
+            .open(self.directory.join(COORDINATION_LOCK_FILE))
+    }
+
+    fn lock_coordination(&self) -> io::Result<File> {
+        let file = self.open_coordination()?;
+        Self::wait_for_coordination(|| file.try_lock())?;
+        Ok(file)
+    }
+
+    fn wait_for_coordination(
+        try_lock: impl Fn() -> Result<(), fs::TryLockError>,
+    ) -> io::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(/*secs*/ 30);
         loop {
-            match file.try_lock() {
-                Ok(()) => break,
+            match try_lock() {
+                Ok(()) => return Ok(()),
                 Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(/*millis*/ 50));
                 }
@@ -131,7 +153,6 @@ impl WriterLockCoordinator {
                 Err(fs::TryLockError::Error(err)) => return Err(err),
             }
         }
-        Ok(file)
     }
 
     fn remove_stale_thread_locks(&self) -> io::Result<()> {
@@ -186,13 +207,23 @@ impl WriterLockCoordinator {
 
 impl Drop for WriterLockGuard {
     fn drop(&mut self) {
-        let coordination_lock = match self.coordinator.lock_coordination() {
+        let coordination_lock = match self.coordinator.open_coordination() {
             Ok(lock) => lock,
             Err(err) => {
                 warn!("failed to coordinate thread writer lock cleanup: {err}");
                 return;
             }
         };
+
+        match coordination_lock.try_lock() {
+            Ok(()) => {}
+            // Leave the file for the next writer. Dropping the guard still closes it.
+            Err(fs::TryLockError::WouldBlock) => return,
+            Err(fs::TryLockError::Error(err)) => {
+                warn!("failed to coordinate thread writer lock cleanup: {err}");
+                return;
+            }
+        }
 
         // Close the writer lock before deleting it so cleanup works on Windows too.
         drop(self.file.take());
