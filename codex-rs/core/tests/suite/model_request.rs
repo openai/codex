@@ -10,6 +10,11 @@ use codex_extension_api::ModelResponseInterceptor;
 use codex_extension_api::ModelResponseStream;
 use codex_extension_api::ResponseEvent;
 use codex_features::Feature;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -24,6 +29,8 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Semaphore;
 use tokio::time::Duration;
 use tokio::time::timeout;
@@ -120,6 +127,93 @@ impl Drop for Permit {
             self.gates.cancelled.add_permits(1);
         }
     }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct BudgetCache(pub(super) AtomicBool);
+
+impl ModelRequestContributor for BudgetCache {
+    fn request(&self, _input: ModelRequestInput<'_>) -> Option<Box<dyn ModelResponseInterceptor>> {
+        None
+    }
+
+    fn budget_exhausted(&self, _thread_id: &str) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+#[tokio::test]
+#[test_case::test_case(false; "budget available")]
+#[test_case::test_case(true; "budget exhausted")]
+async fn budget_is_checked_again_after_tool_call(exhausted: bool) -> Result<()> {
+    const CALL_ID: &str = "status-call";
+    const TOOL_NAME: &str = "check_status";
+    const TOOL_OUTPUT: &str = "Release ready.";
+
+    let server = responses::start_mock_server().await;
+    let model =
+        responses::mount_function_call_agent_response(&server, CALL_ID, "{}", TOOL_NAME).await;
+    let budget = Arc::new(BudgetCache::default());
+    let mut registry = ExtensionRegistryBuilder::new();
+    registry.model_request_contributor(budget.clone());
+    let mut builder = test_codex().with_extensions(Arc::new(registry.build()));
+    let test = builder.build_with_auto_env(&server).await?;
+    let mut options = test.start_thread_options().await;
+    options.dynamic_tools = vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+        name: TOOL_NAME.into(),
+        description: "Check the release status.".into(),
+        input_schema: json!({"type": "object", "properties": {}}),
+        defer_loading: false,
+    })];
+    let thread = test.thread_manager.start_thread(options).await?.thread;
+    thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Check the release status.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(
+        &thread,
+        |event| matches!(event, EventMsg::DynamicToolCallRequest(call) if call.call_id == CALL_ID),
+    )
+    .await;
+    budget.0.store(exhausted, Ordering::Relaxed);
+    thread
+        .submit(Op::DynamicToolResponse {
+            id: CALL_ID.into(),
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: TOOL_OUTPUT.into(),
+                }],
+                success: true,
+            },
+        })
+        .await?;
+    let EventMsg::TurnComplete(completed) =
+        wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await
+    else {
+        unreachable!();
+    };
+    let request_count = responses::received_responses_requests(&server).await.len();
+    if exhausted {
+        assert_eq!(
+            completed.error.and_then(|error| error.codex_error_info),
+            Some(CodexErrorInfo::SessionBudgetExceeded)
+        );
+        assert_eq!(request_count, 1);
+    } else {
+        assert_eq!(completed.error, None);
+        assert_eq!(completed.last_agent_message.as_deref(), Some("done"));
+        assert_eq!(request_count, 2);
+        assert_eq!(
+            model
+                .completion
+                .single_request()
+                .function_call_output_content_and_success(CALL_ID),
+            Some((Some(TOOL_OUTPUT.into()), None))
+        );
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

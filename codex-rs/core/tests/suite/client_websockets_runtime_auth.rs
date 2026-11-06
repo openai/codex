@@ -66,6 +66,7 @@ async fn runtime_harness(
         /*concurrent_reasoning_summaries_enabled*/ false,
         &[],
         Some(initial.clone()),
+        Vec::new(),
         move |provider, credentials| {
             let credentials = credentials.expect("runtime fixture requires credentials");
             let runtime = Arc::new(RuntimeAuthManager::new(

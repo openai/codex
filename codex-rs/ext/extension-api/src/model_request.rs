@@ -29,9 +29,16 @@ pub struct ModelRequestInput<'a> {
     pub model: &'a str,
 }
 
-/// Creates request-scoped interceptors without delaying inference.
-/// Return None for requests this host does not manage.
+/// Checks model requests and creates request-scoped response interceptors.
 pub trait ModelRequestContributor: Send + Sync + std::fmt::Debug {
+    /// Reads the local budget state for a managed thread before submitting generation to the transport.
+    /// Return true to fail with `SessionBudgetExceeded`. Requests already handed to the
+    /// transport can still complete or retry. WebSocket warmup skips this check.
+    fn budget_exhausted(&self, _thread_id: &str) -> bool {
+        false
+    }
+
+    /// Return None for requests this contributor does not intercept.
     fn request(&self, input: ModelRequestInput<'_>) -> Option<Box<dyn ModelResponseInterceptor>>;
 }
 

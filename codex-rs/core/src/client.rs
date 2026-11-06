@@ -1946,11 +1946,18 @@ impl ResponsesHttpExecutor<'_> {
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
             options.extra_headers.extend(responses_headers);
+            let thread_id = self.client.state.thread_id.to_string();
+            let kind = codex_extension_api::ModelRequestKind::Generation;
+            crate::model_request::check_budget(
+                &self.client.request_contributors,
+                &thread_id,
+                kind,
+            )?;
             let interceptors = crate::model_request::prepare(
                 &self.client.request_contributors,
-                &self.client.state.thread_id.to_string(),
+                &thread_id,
                 &model_info.slug,
-                codex_extension_api::ModelRequestKind::Generation,
+                kind,
                 &mut request.client_metadata,
             );
             let inference_trace_attempt = inference_trace.start_attempt();
@@ -2057,6 +2064,12 @@ impl ModelClientSession {
         let after_prewarm = !warmup && self.websocket_session.last_response_from_untraced_warmup;
         let provider = Arc::clone(&self.client.state.provider);
         let auth_manager = provider.auth_manager();
+        let thread_id = self.client.state.thread_id.to_string();
+        let kind = if warmup {
+            codex_extension_api::ModelRequestKind::Warmup
+        } else {
+            codex_extension_api::ModelRequestKind::Generation
+        };
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -2064,6 +2077,11 @@ impl ModelClientSession {
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
+            crate::model_request::check_budget(
+                &self.client.request_contributors,
+                &thread_id,
+                kind,
+            )?;
             let client_setup = self
                 .client
                 .current_client_setup(ClientRouting::Workspace)
@@ -2158,6 +2176,13 @@ impl ModelClientSession {
                 Err(err) => return Err(provider.map_api_error(err)),
             }
 
+            // The budget can be exhausted while the connection is being established.
+            crate::model_request::check_budget(
+                &self.client.request_contributors,
+                &thread_id,
+                kind,
+            )?;
+
             let mut client_metadata = self.client.build_ws_client_metadata(
                 responses_metadata,
                 include_internal,
@@ -2248,13 +2273,9 @@ impl ModelClientSession {
             );
             let interceptors = crate::model_request::prepare(
                 &self.client.request_contributors,
-                &self.client.state.thread_id.to_string(),
+                &thread_id,
                 &model_info.slug,
-                if warmup {
-                    codex_extension_api::ModelRequestKind::Warmup
-                } else {
-                    codex_extension_api::ModelRequestKind::Generation
-                },
+                kind,
                 &mut ws_payload.client_metadata,
             );
             let mut ws_request = ResponsesWsRequest::ResponseCreate(ws_payload);

@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+use super::model_request::BudgetCache;
 use codex_api::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
 use codex_api::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
 use codex_core::CodexResponsesMetadata;
@@ -12,6 +13,7 @@ use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::test_support::EmptyUserInstructionsProvider;
 use codex_core::test_support::with_parent_turn;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ModelRequestContributor;
 use codex_features::Feature;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
@@ -30,6 +32,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -75,6 +78,7 @@ use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Instrument;
@@ -738,15 +742,40 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
 
     let mut provider = websocket_provider(&server);
     provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
-    let harness = websocket_harness_with_provider_options(
+    let budget = Arc::new(BudgetCache(true.into()));
+    let harness = websocket_harness_with_provider_factory(
         provider,
         /*runtime_metrics_enabled*/ true,
         /*concurrent_reasoning_summaries_enabled*/ true,
         /*enabled_features*/ &[],
+        /*auth*/ None,
+        vec![budget.clone()],
+        codex_model_provider::create_model_provider,
     )
     .await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
+    let Err(error) = client_session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort.clone(),
+            harness.summary,
+            /*service_tier*/ None,
+            &turn_metadata(&harness, /*turn_id*/ None),
+            &InferenceTraceContext::disabled(),
+        )
+        .await
+    else {
+        panic!("exhausted generation unexpectedly succeeded");
+    };
+    assert!(
+        matches!(error.details(), CodexErrorDetails::SessionBudgetExceeded),
+        "{error:?}"
+    );
+    assert!(server.handshakes().is_empty());
+
     let responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
     client_session
         .prewarm_websocket(
@@ -760,6 +789,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
         )
         .await
         .expect("websocket prewarm failed");
+    budget.0.store(false, Ordering::Relaxed);
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     assert_eq!(server.handshakes().len(), 1);
@@ -2870,7 +2900,8 @@ async fn websocket_harness_with_provider_options_and_auth(
         concurrent_reasoning_summaries_enabled,
         enabled_features,
         auth,
-        |provider, auth| codex_model_provider::create_model_provider(provider, auth),
+        Vec::new(),
+        codex_model_provider::create_model_provider,
     )
     .await
 }
@@ -2881,6 +2912,7 @@ async fn websocket_harness_with_provider_factory(
     concurrent_reasoning_summaries_enabled: bool,
     enabled_features: &[Feature],
     auth: Option<CodexAuth>,
+    request_contributors: Vec<Arc<dyn ModelRequestContributor>>,
     provider_factory: impl FnOnce(
         ModelProviderInfo,
         Option<Arc<AuthManager>>,
@@ -2976,7 +3008,7 @@ async fn websocket_harness_with_provider_factory(
         /*attestation_provider*/ None,
         http_client_factory,
         config.workspace_routing_context(),
-        Vec::new(),
+        request_contributors,
     );
 
     WebsocketTestHarness {
