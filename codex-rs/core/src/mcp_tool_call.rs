@@ -549,6 +549,7 @@ async fn handle_approved_mcp_tool_call(
                         .as_ref()
                         .zip(item_metadata.action_name.as_ref())
                         .map(|(connector_id, action_name)| HostedFileUploadContext {
+                            thread_id: None,
                             connector_id: connector_id.clone(),
                             action_name: action_name.clone(),
                             model: step_context.settings.model_info.slug.clone(),

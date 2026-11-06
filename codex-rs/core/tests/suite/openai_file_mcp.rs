@@ -291,6 +291,12 @@ async fn codex_apps_file_params_omit_fields_absent_from_tool_schema() -> Result<
         upload_body.get("codex_connector_id"),
         Some(&json!("calendar"))
     );
+    let thread_id = json!(test.session_configured.session_id);
+    assert_eq!(
+        apps_tool_call.pointer("/params/_meta/threadId"),
+        Some(&thread_id)
+    );
+    assert_eq!(upload_body.get("codex_thread_id"), None);
     assert_eq!(upload_body.get("upload_source"), None);
     assert_eq!(upload_body.get("store_in_library"), None);
 

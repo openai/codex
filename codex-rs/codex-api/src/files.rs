@@ -29,6 +29,7 @@ const OPENAI_FILE_USE_CASE: &str = "codex";
 
 #[derive(Debug)]
 pub struct HostedFileUploadContext {
+    pub thread_id: Option<String>,
     pub connector_id: String,
     pub action_name: String,
     pub model: String,
@@ -158,7 +159,7 @@ where
         "use_case": OPENAI_FILE_USE_CASE,
     });
     let request = authorized_request(client_pool, auth, Method::POST, &create_url).await?;
-    let create_request = match hosted_upload {
+    let mut create_request = match hosted_upload {
         Some(context) => serde_json::json!({
             "file_name": file_name.as_str(),
             "file_size": file_size_bytes,
@@ -169,6 +170,9 @@ where
         }),
         None => create_request,
     };
+    if let Some(thread_id) = hosted_upload.and_then(|context| context.thread_id.as_ref()) {
+        create_request["codex_thread_id"] = serde_json::Value::String(thread_id.clone());
+    }
     let create_response = request
         .json(&create_request)
         .send()
@@ -636,6 +640,7 @@ mod tests {
             "file_name": "report.pdf",
             "file_size": 8,
             "use_case": "codex",
+            "codex_thread_id": "00000000-0000-0000-0000-000000000001",
             "codex_connector_id": "library",
             "codex_action_name": "create_library_file",
             "codex_model": "gpt-work",
@@ -677,6 +682,7 @@ mod tests {
             .await;
 
         let hosted_upload = HostedFileUploadContext {
+            thread_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
             connector_id: "library".to_string(),
             action_name: "create_library_file".to_string(),
             model: "gpt-work".to_string(),
@@ -702,12 +708,21 @@ mod tests {
     async fn upload_hosted_app_preserves_empty_finalization_for_older_servers() {
         let server = MockServer::start().await;
         let hosted_upload = HostedFileUploadContext {
+            thread_id: None,
             connector_id: "library".to_string(),
             action_name: "create_library_file".to_string(),
             model: "gpt-work".to_string(),
         };
         Mock::given(method("POST"))
             .and(path("/backend-api/files"))
+            .and(body_json(serde_json::json!({
+                "file_name": "report.pdf",
+                "file_size": 8,
+                "use_case": "codex",
+                "codex_connector_id": "library",
+                "codex_action_name": "create_library_file",
+                "codex_model": "gpt-work",
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "file_id": "file_pdf",
                 "upload_url": format!("{}/upload/file_pdf", server.uri()),
