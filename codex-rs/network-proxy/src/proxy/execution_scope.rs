@@ -17,6 +17,17 @@ impl Drop for ExecutionScope {
 }
 
 impl NetworkProxy {
+    /// Waits until every remote decision callback and in-flight request for this
+    /// execution has been dropped. Call after the executor has started, when no
+    /// further callbacks will be installed for this scope. An unscoped proxy
+    /// cannot establish this boundary, so its wait remains pending.
+    pub async fn wait_for_remote_policy_deciders(&self) {
+        match &self.execution_scope {
+            Some(scope) => scope.lifetime_tx.closed().await,
+            None => std::future::pending().await,
+        }
+    }
+
     /// Returns a proxy with execution-specific attribution and attachment policy.
     pub fn for_execution(
         &self,

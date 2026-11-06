@@ -1720,11 +1720,6 @@ impl Session {
             } else {
                 None
             };
-            let blocked_request_observer = config
-                .permissions
-                .network
-                .as_ref()
-                .map(|_| build_blocked_request_observer(Arc::clone(&network_approval)));
             let network_policy_decider =
                 network_policy_decider_session
                     .as_ref()
@@ -1747,7 +1742,7 @@ impl Session {
                     config.permissions.permission_profile(),
                     config.effective_local_windows_sandbox_type(),
                     network_policy_decider.as_ref().map(Arc::clone),
-                    blocked_request_observer.as_ref().map(Arc::clone),
+                    Some(build_blocked_request_observer(Arc::clone(&network_approval))),
                     managed_network_requirements_configured,
                     network_proxy_audit_metadata.clone(),
                 )

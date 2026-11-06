@@ -45,6 +45,8 @@ use std::io;
 use std::sync::Arc;
 use std::sync::Mutex as SyncMutex;
 use std::sync::OnceLock as SyncOnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OnceCell;
@@ -73,11 +75,19 @@ pub(crate) struct NetworkApprovalSpec {
 }
 
 #[derive(Clone, Debug)]
+struct NetworkApprovalProxy {
+    proxy: NetworkProxy,
+    // Only an executor-owned remote proxy can drain its decisions. A shared listener
+    // can also attribute untagged traffic to this execution, even after a config refresh.
+    shared_ingress_for_remote: Option<Arc<AtomicBool>>,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct DeferredNetworkApproval {
     registration_id: String,
     cancellation_token: CancellationToken,
     finish_outcome: Arc<OnceCell<Option<String>>>,
-    _execution_proxy: Option<NetworkProxy>,
+    _execution_proxy: Option<NetworkApprovalProxy>,
 }
 
 impl DeferredNetworkApproval {
@@ -91,6 +101,20 @@ impl DeferredNetworkApproval {
 
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancellation_token.is_cancelled()
+    }
+
+    pub(crate) async fn remote_decisions_drained(&self) {
+        if let Some(NetworkApprovalProxy {
+            proxy,
+            shared_ingress_for_remote: Some(shared_ingress),
+        }) = &self._execution_proxy
+        {
+            proxy.wait_for_remote_policy_deciders().await;
+            if !shared_ingress.load(Ordering::Acquire) {
+                return;
+            }
+        }
+        std::future::pending().await
     }
 
     async fn finish(&self, service: &NetworkApprovalService) -> Result<(), ToolError> {
@@ -109,7 +133,7 @@ impl DeferredNetworkApproval {
 pub(crate) struct ActiveNetworkApproval {
     registration_id: Option<String>,
     cancellation_token: CancellationToken,
-    execution_proxy: NetworkProxy,
+    execution_proxy: NetworkApprovalProxy,
 }
 
 impl ActiveNetworkApproval {
@@ -118,7 +142,7 @@ impl ActiveNetworkApproval {
     }
 
     pub(crate) fn execution_proxy(&self) -> &NetworkProxy {
-        &self.execution_proxy
+        &self.execution_proxy.proxy
     }
 
     pub(crate) fn into_deferred(self) -> Option<DeferredNetworkApproval> {
@@ -279,6 +303,7 @@ struct PendingNetworkApprovals {
 }
 
 pub(crate) struct NetworkApprovalService {
+    shared_ingress_registered: Arc<AtomicBool>,
     // Pending-request cleanup must publish a tool outcome synchronously before cancelling it.
     calls: SyncMutex<NetworkApprovalCallState>,
     // Owner cleanup runs from Drop, so this lock cannot require an async task.
@@ -461,6 +486,7 @@ impl Drop for PendingHostApprovalOwner<'_> {
 impl Default for NetworkApprovalService {
     fn default() -> Self {
         Self {
+            shared_ingress_registered: Arc::default(),
             calls: SyncMutex::new(NetworkApprovalCallState::default()),
             pending_host_approvals: SyncMutex::default(),
             session_policy_commit_lock: Mutex::new(()),
@@ -1155,6 +1181,9 @@ impl NetworkApprovalService {
 pub(crate) fn build_blocked_request_observer(
     network_approval: Arc<NetworkApprovalService>,
 ) -> Arc<dyn BlockedRequestObserver> {
+    network_approval
+        .shared_ingress_registered
+        .store(true, Ordering::Release);
     Arc::new(move |blocked: BlockedRequest| {
         let network_approval = Arc::clone(&network_approval);
         async move {
@@ -1212,12 +1241,16 @@ pub(crate) async fn begin_network_approval(
         )
     });
     let registration_id = Uuid::new_v4().to_string();
-    let Some(execution_proxy) = execution_network_proxy(
+    let environment = environments
+        .turn_environments()
+        .find(|environment| environment.selection.environment_id == environment_id);
+    let executor_owns_proxy = network_policy.is_some()
+        && turn.config.permissions.network.is_none()
+        && environment.is_some_and(|environment| environment.environment().is_remote());
+    let Some(proxy) = execution_network_proxy(
         session,
         turn,
-        environments
-            .turn_environments()
-            .find(|environment| environment.selection.environment_id == environment_id),
+        environment,
         network,
         &environment_id,
         &permission_profile,
@@ -1249,7 +1282,11 @@ pub(crate) async fn begin_network_approval(
     Ok(Some(ActiveNetworkApproval {
         registration_id: Some(registration_id),
         cancellation_token,
-        execution_proxy,
+        execution_proxy: NetworkApprovalProxy {
+            proxy,
+            shared_ingress_for_remote: executor_owns_proxy
+                .then(|| Arc::clone(&session.services.network_approval.shared_ingress_registered)),
+        },
     }))
 }
 
