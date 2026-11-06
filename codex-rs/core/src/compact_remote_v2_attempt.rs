@@ -31,6 +31,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::CompactionTraceContext;
+use codex_tools::ToolSpec;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -91,10 +92,8 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let model_info = turn_context.model_info();
             let mut history = sess.clone_history().await;
             let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
-            let tools_in_history = step_context.settings.model_info.use_responses_lite
-                && history
-                    .raw_items()
-                    .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
+            let tools_in_history = step_context.incremental_tools_feature().is_some()
+                && history.has_tool_declarations();
             let base_instructions = if tools_in_history {
                 BaseInstructions {
                     text: String::new(),
@@ -169,7 +168,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             Some(input.window),
         ),
     };
-    let tools_in_history = model_info.use_responses_lite
+    let tools_in_history = step_context.incremental_tools_feature().is_some()
         && input
             .iter()
             .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
@@ -178,7 +177,12 @@ pub(super) async fn run_remote_compact_v2_attempt(
     let prompt = Prompt {
         input,
         tools: if tools_in_history {
-            Arc::default()
+            tool_router
+                .model_visible_specs()
+                .iter()
+                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. }))
+                .cloned()
+                .collect()
         } else {
             tool_router.model_visible_specs()
         },
@@ -247,18 +251,15 @@ pub(crate) async fn capture_background_input(
     auth_owner_generation: Option<u64>,
     window: (String, u64, uuid::Uuid),
 ) -> BackgroundCompactionInput {
-    let base_instructions = if step_context.settings.model_info.use_responses_lite
-        && snapshot
-            .raw_items()
-            .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
-    {
-        BaseInstructions {
-            text: String::new(),
-            provenance: None,
-        }
-    } else {
-        base_instructions
-    };
+    let base_instructions =
+        if step_context.incremental_tools_feature().is_some() && snapshot.has_tool_declarations() {
+            BaseInstructions {
+                text: String::new(),
+                provenance: None,
+            }
+        } else {
+            base_instructions
+        };
     let prefix = CompactionPrefix {
         generation: snapshot.history_version(),
         len: snapshot.annotated_items().len(),
