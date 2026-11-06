@@ -49,13 +49,13 @@ async fn missing_invocation_completion_racing_cancellation_preserves_session() {
 }
 
 fn session(client: GrpcClient) -> Arc<SessionInner> {
+    let client = Arc::new(client);
     Arc::new(SessionInner {
         id: "session".to_string(),
         output_truncation: CodeModeOutputTruncation::Client,
-        client: client.clone(),
         route: None,
         runtime: tokio::runtime::Handle::current(),
-        state: Mutex::new(SessionState::default()),
+        state: Mutex::new(SessionState::with_client(Arc::clone(&client))),
         wait_slots: Mutex::new(HashMap::new()),
         shutdown_requested: AtomicBool::new(/*v*/ false),
         shutdown_result: Mutex::new(/*t*/ None),

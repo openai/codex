@@ -16,10 +16,10 @@ pub(super) async fn sample(
 ) -> Result<CodeModeProcessMetricsSample, String> {
     let deadline = Duration::from_secs(/*secs*/ 1);
     tokio::time::timeout(deadline, async {
-        let mut client = provider.transport.client().await?;
+        let client = provider.transport.client().await?;
         let mut request = tonic::Request::new(grpc::GetProcessMetricsRequest {});
         request.set_timeout(deadline);
-        match client.get_process_metrics(request).await {
+        match client.as_ref().clone().get_process_metrics(request).await {
             Ok(response) => {
                 let snapshot = response.into_inner();
                 if snapshot.process_id == 0

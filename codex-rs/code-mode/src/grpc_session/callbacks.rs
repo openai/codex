@@ -184,7 +184,6 @@ impl SessionInner {
         result: Result<serde_json::Value, String>,
     ) {
         let request = completion::request(&self.id, &invocation_id, result);
-        let mut client = self.client();
         tokio::select! {
             biased;
             _ = cancellation.cancelled() => {}
@@ -193,6 +192,7 @@ impl SessionInner {
             result = async {
                 let _permit = self.completion_permits.acquire().await
                     .map_err(|_| "code-mode completion queue is closed".to_string())?;
+                let mut client = self.client()?;
                 deadline::request(
                     self,
                     "tool invocation completion",

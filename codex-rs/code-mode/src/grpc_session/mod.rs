@@ -140,7 +140,7 @@ impl GrpcCodeModeSessionProvider {
         options: &CodeModeSessionOptions,
         pinned_mode: Option<CodeModeOutputTruncation>,
     ) -> Result<Arc<GrpcCodeModeSession>, String> {
-        let mut client = deadline::startup("transport connection", self.transport.client()).await?;
+        let client = deadline::startup("transport connection", self.transport.client()).await?;
         let requested_mode = pinned_mode.unwrap_or(options.output_truncation);
         let limits = &options.cell_execution_limits;
         let limits = grpc::SessionCellExecutionLimits {
@@ -172,7 +172,7 @@ impl GrpcCodeModeSessionProvider {
                 });
                 inject_span_traceparent(&mut request, &open_session_span);
                 let result = async {
-                    let response = client.open_session(request).await?;
+                    let response = client.as_ref().clone().open_session(request).await?;
                     let route = response.metadata().get(ROUTE_HEADER).cloned();
                     if route
                         .as_ref()
@@ -243,10 +243,9 @@ impl GrpcCodeModeSessionProvider {
         let inner = Arc::new(SessionInner {
             id: opened.session_id,
             output_truncation,
-            client,
             route,
             runtime: tokio::runtime::Handle::current(),
-            state: Mutex::new(SessionState::default()),
+            state: Mutex::new(SessionState::with_client(client)),
             wait_slots: Mutex::new(HashMap::new()),
             shutdown_requested: AtomicBool::new(false),
             shutdown_result: Mutex::new(None),
@@ -269,7 +268,7 @@ impl GrpcCodeModeSessionProvider {
             tool_names: Vec::new(),
         });
         inject_span_traceparent(&mut request, &subscribe_span);
-        let mut client = inner.client();
+        let mut client = inner.client()?;
         let response =
             match deadline::startup("tool subscription", client.subscribe_to_tool_calls(request))
                 .instrument(subscribe_span)
@@ -386,7 +385,6 @@ impl Drop for GrpcCodeModeSession {
 pub(super) struct SessionInner {
     pub(super) id: String,
     output_truncation: CodeModeOutputTruncation,
-    pub(super) client: GrpcClient,
     // Affinity belongs to the session: parents and children may share a transport
     // while being admitted to different hosts. The token is opaque to Codex.
     route: Option<tonic::metadata::MetadataValue<tonic::metadata::Ascii>>,
@@ -402,8 +400,11 @@ pub(super) struct SessionInner {
 }
 
 impl SessionInner {
-    pub(super) fn client(&self) -> GrpcClient {
-        self.client.clone()
+    pub(super) fn client(&self) -> Result<GrpcClient, String> {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .client()
     }
 
     pub(super) fn request<T>(&self, message: T) -> tonic::Request<T> {
@@ -481,14 +482,7 @@ impl SessionInner {
     }
 
     async fn drive_shutdown(&self) -> Result<(), String> {
-        let is_open = self
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .require_open()
-            .is_ok();
-        let result = if is_open {
-            let mut client = self.client();
+        let result = if let Ok(mut client) = self.client() {
             deadline::request(
                 self,
                 "session shutdown",

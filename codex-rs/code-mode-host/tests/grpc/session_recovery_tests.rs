@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -15,8 +16,10 @@ use codex_code_mode::NoopCodeModeSessionDelegate;
 use codex_code_mode::RuntimeResponse;
 use codex_code_mode_host::GrpcCodeModeHost;
 use codex_code_mode_protocol::grpc::code_mode_host_server::CodeModeHostServer;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::task::AbortOnDropHandle;
 use tonic::Code;
@@ -26,6 +29,119 @@ use tonic::transport::Server;
 use super::execute;
 use super::request;
 use super::text_response;
+
+#[tokio::test]
+async fn quiet_session_reuses_its_worker_connection() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let connections = Arc::new(AtomicUsize::new(0));
+    let accepted = Arc::clone(&connections);
+    let incoming = TcpListenerStream::new(listener).inspect(move |_| {
+        accepted.fetch_add(1, Ordering::SeqCst);
+    });
+    let _server = AbortOnDropHandle::new(tokio::spawn(
+        Server::builder()
+            .add_service(CodeModeHostServer::new(GrpcCodeModeHost::new()))
+            .serve_with_incoming(incoming),
+    ));
+    let session = GrpcCodeModeSessionProvider::new(endpoint)
+        .create_session()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    execute(
+        &session,
+        request(r#"store("key", "persisted");"#),
+        Arc::new(NoopCodeModeSessionDelegate),
+    )
+    .await?;
+
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(120)).await;
+    tokio::time::resume();
+
+    let result = execute(
+        &session,
+        request(r#"text(load("key"));"#),
+        Arc::new(NoopCodeModeSessionDelegate),
+    )
+    .await?;
+    assert_eq!(
+        result,
+        text_response("2", "persisted", result.code_mode_host_duration())
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn last_failed_session_releases_the_shared_connection() -> Result<()> {
+    let reject = Arc::new(AtomicBool::new(false));
+    let reject_next_rpc = Arc::clone(&reject);
+    let service = CodeModeHostServer::with_interceptor(GrpcCodeModeHost::new(), move |req| {
+        if reject_next_rpc.swap(false, Ordering::SeqCst) {
+            Err(Status::not_found("session was lost"))
+        } else {
+            Ok(req)
+        }
+    });
+    let host = TcpListener::bind("127.0.0.1:0").await?;
+    let host_addr = host.local_addr()?;
+    let _server = AbortOnDropHandle::new(tokio::spawn(
+        Server::builder()
+            .add_service(service)
+            .serve_with_incoming(TcpListenerStream::new(host)),
+    ));
+
+    // Forward exactly one TCP connection. Its EOF is the worker-release signal.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let provider = GrpcCodeModeSessionProvider::new(format!("http://{}", listener.local_addr()?));
+    let connection = AbortOnDropHandle::new(tokio::spawn(async move {
+        let (mut client, _) = listener.accept().await?;
+        drop(listener);
+        let mut host = TcpStream::connect(host_addr).await?;
+        tokio::io::copy_bidirectional(&mut client, &mut host).await
+    }));
+    let first = provider
+        .create_session()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let last = provider
+        .create_session()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    first.shutdown().await.map_err(anyhow::Error::msg)?;
+    let result = execute(
+        &last,
+        request("text('still live')"),
+        Arc::new(NoopCodeModeSessionDelegate),
+    )
+    .await?;
+    assert_eq!(
+        result,
+        text_response("g2:1", "still live", result.code_mode_host_duration())
+    );
+
+    reject.store(true, Ordering::SeqCst);
+    let error = execute(
+        &last,
+        request("text('must not run')"),
+        Arc::new(NoopCodeModeSessionDelegate),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "gRPC code-mode execution failed: {}",
+            Status::not_found("session was lost")
+        )
+    );
+    tokio::time::timeout(super::TEST_TIMEOUT, connection)
+        .await
+        .expect("last failed session kept its worker connection open")??;
+    drop((first, last, provider));
+    Ok(())
+}
 
 #[tokio::test]
 async fn only_missing_sessions_reopen_without_replaying_execution() -> Result<()> {

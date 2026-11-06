@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Weak;
 
 use codex_code_mode_protocol::grpc::code_mode_host_client::CodeModeHostClient;
 use codex_code_mode_protocol::host::MAX_FRAME_BYTES;
@@ -24,9 +25,9 @@ pub(super) enum SharedTransport {
     Url {
         endpoint: String,
         http_client_factory: HttpClientFactory,
-        client: tokio::sync::Mutex<Option<(HttpClientFactory, GrpcClient)>>,
+        client: tokio::sync::Mutex<Option<(HttpClientFactory, Weak<GrpcClient>)>>,
     },
-    Connected(GrpcClient),
+    Connected(Arc<GrpcClient>),
 }
 
 impl SharedTransport {
@@ -40,24 +41,24 @@ impl SharedTransport {
 
     pub(super) fn with_channel(channel: Channel) -> Self {
         let transport = channel.map_err(|error| Status::from_error(Box::new(error)));
-        Self::Connected(
+        Self::Connected(Arc::new(
             CodeModeHostClient::new(BoxCloneSyncService::new(transport))
                 .accept_compressed(tonic::codec::CompressionEncoding::Zstd)
                 .max_decoding_message_size(MAX_FRAME_BYTES)
                 .max_encoding_message_size(MAX_FRAME_BYTES),
-        )
+        ))
     }
 
     pub(super) fn with_transport(transport: GrpcTransport) -> Self {
-        Self::Connected(
+        Self::Connected(Arc::new(
             CodeModeHostClient::new(transport)
                 .accept_compressed(tonic::codec::CompressionEncoding::Zstd)
                 .max_decoding_message_size(MAX_FRAME_BYTES)
                 .max_encoding_message_size(MAX_FRAME_BYTES),
-        )
+        ))
     }
 
-    pub(super) async fn client(&self) -> Result<GrpcClient, String> {
+    pub(super) async fn client(&self) -> Result<Arc<GrpcClient>, String> {
         let (endpoint, http_client_factory, client) = match self {
             Self::Url {
                 endpoint,
@@ -75,8 +76,9 @@ impl SharedTransport {
         let mut cached = client.lock().await;
         if let Some((factory, client)) = cached.as_ref()
             && factory == &bound_factory
+            && let Some(client) = client.upgrade()
         {
-            return Ok(client.clone());
+            return Ok(client);
         }
         let client = if endpoint.starts_with("unix:") {
             let channel = Endpoint::from_shared(endpoint.clone())
@@ -107,6 +109,9 @@ impl SharedTransport {
                 ClientRouteClass::Other,
                 codex_http_client::HttpClientBuilder::new()
                     .without_request_logging()
+                    // Some hosts assign a worker per connection. A quiet session
+                    // must still reach the worker holding its open lease.
+                    .without_pool_idle_timeout()
                     .http2_prior_knowledge()
                     .without_redirects(),
             );
@@ -145,7 +150,9 @@ impl SharedTransport {
             .accept_compressed(tonic::codec::CompressionEncoding::Zstd)
             .max_decoding_message_size(MAX_FRAME_BYTES)
             .max_encoding_message_size(MAX_FRAME_BYTES);
-        *cached = Some((bound_factory, client.clone()));
+        // Let the last session release its worker even if the provider stays alive.
+        let client = Arc::new(client);
+        *cached = Some((bound_factory, Arc::downgrade(&client)));
         Ok(client)
     }
 }
