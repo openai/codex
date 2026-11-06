@@ -1,0 +1,15 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 4599
+expression: "tab_styles.join(\"\\n\")"
+---
+sidebar rest  inactive Rgb(142, 142, 142)/Reset/NONE  selected Rgb(0, 0, 46)/Rgb(99, 168, 248)/BOLD
+sidebar hover  inactive Reset/Rgb(31, 31, 31)/NONE  selected Rgb(0, 0, 46)/Rgb(99, 168, 248)/BOLD
+sidebar fallback  inactive Reset/Reset/UNDERLINED  selected Reset/Reset/BOLD | REVERSED
+sidebar selected  inactive Rgb(142, 142, 142)/Reset/NONE  selected Rgb(0, 0, 46)/Rgb(99, 168, 248)/BOLD
+sidebar leave  inactive Rgb(142, 142, 142)/Reset/NONE  selected Rgb(0, 0, 46)/Rgb(99, 168, 248)/BOLD
+main rest  inactive Rgb(142, 142, 142)/Reset/NONE  selected Rgb(224, 224, 224)/Rgb(76, 76, 76)/BOLD
+main hover  inactive Reset/Rgb(31, 31, 31)/NONE  selected Rgb(224, 224, 224)/Rgb(76, 76, 76)/BOLD
+main fallback  inactive Reset/Reset/UNDERLINED  selected Reset/Reset/BOLD | UNDERLINED
+main selected  inactive Rgb(142, 142, 142)/Reset/NONE  selected Rgb(224, 224, 224)/Rgb(76, 76, 76)/BOLD
+main leave  inactive Rgb(142, 142, 142)/Reset/NONE  selected Rgb(224, 224, 224)/Rgb(76, 76, 76)/BOLD

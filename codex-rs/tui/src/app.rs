@@ -859,7 +859,14 @@ impl App {
             tui.frame_requester().schedule_frame();
             return Ok(AppRunControl::Continue);
         }
+        let previous = tui.link_hover.position();
         tui.link_hover.observe(&event);
+        let current = tui.link_hover.position();
+        if previous != current
+            && self.hovered_sidebar_tab(previous) != self.hovered_sidebar_tab(current)
+        {
+            tui.frame_requester().schedule_frame();
+        }
         if self.handle_pane_resize(tui, &event).await {
             return Ok(AppRunControl::Continue);
         }

@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use codex_terminal_detection::TerminalName;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
+use ratatui::layout::Position;
 
 use super::Tui;
 use super::TuiEvent;
@@ -30,6 +31,10 @@ pub(crate) struct LinkHover {
 }
 
 impl LinkHover {
+    pub(crate) fn position(&self) -> Option<Position> {
+        self.mouse.map(|mouse| (mouse.column, mouse.row).into())
+    }
+
     pub(crate) fn observe(&mut self, event: &TuiEvent) {
         match event {
             TuiEvent::Mouse(mouse) => {

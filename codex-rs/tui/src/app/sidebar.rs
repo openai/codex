@@ -5,7 +5,7 @@ use super::App;
 use super::pane_motion::PaneMotion;
 use super::side_pane;
 use super::side_pane::SidePaneLayout;
-use crate::sidebar_tab_strip::TabStrip;
+use crate::sidebar_chooser::ChatTabs;
 use crate::tui::Tui;
 use codex_protocol::ThreadId;
 use ratatui::layout::Rect;
@@ -74,7 +74,10 @@ impl SidebarPane {
                 self.visits.push(id);
             }
             SidebarContent::Chooser if self.content != content || self.focus.is_none() => {
-                self.choice = self.chat_tabs().selected_index().unwrap_or(self.tabs.len());
+                self.choice = self
+                    .selected_chat()
+                    .and_then(|id| self.chat_tabs().choice_index(id))
+                    .unwrap_or(0);
             }
             SidebarContent::Chooser => {}
         }
@@ -82,8 +85,11 @@ impl SidebarPane {
         self.focus = Some(focus);
     }
 
-    pub(super) fn chat_tabs(&self) -> TabStrip<'_, ThreadId> {
-        crate::sidebar_chooser::chat_tabs(&self.tabs, self.selected_chat())
+    pub(super) fn chat_tabs(&self) -> ChatTabs<'_> {
+        ChatTabs {
+            ids: &self.tabs,
+            selected: self.selected_chat(),
+        }
     }
 
     pub(super) fn selected_chat(&self) -> Option<ThreadId> {
@@ -120,9 +126,10 @@ impl SidebarPane {
         self.tabs.remove(index);
         self.tabs_revision += 1;
         self.visits.retain(|visited| *visited != id);
-        if index < self.choice || (index == self.choice && index == self.tabs.len()) {
-            self.choice = self.choice.saturating_sub(1);
+        if index + 1 < self.choice {
+            self.choice -= 1;
         }
+        self.choice = self.choice.min(self.tabs.len());
         if self.content == SidebarContent::Chat(id) {
             self.content = match self.selected_chat() {
                 Some(child) => SidebarContent::Chat(child),

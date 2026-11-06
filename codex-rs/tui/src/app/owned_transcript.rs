@@ -71,6 +71,13 @@ impl ConversationFrame {
         }
     }
 
+    pub(super) fn sidebar_tab_strip(&self) -> Option<Rect> {
+        self.chat_strip.or_else(|| {
+            self.chooser_area()
+                .map(|area| side_pane::tab_and_body(area)[0])
+        })
+    }
+
     pub(super) fn divider_area(&self) -> Option<Rect> {
         self.sidebar.as_ref()?.divider_area()
     }
@@ -281,6 +288,7 @@ impl App {
         }
         let highlight_divider =
             self.pane_resize.is_some() || tui.link_hover.shape == tui::PointerShape::Resize;
+        let hovered_tab = self.hovered_sidebar_tab(tui.link_hover.position());
         // An input refresh opens a fresh terminal buffer. Carry the outer owner's
         // completed cells through it when only the conversation is being redrawn.
         let backdrop = caller_inset.map(|_| {
@@ -347,7 +355,10 @@ impl App {
                                 if resize_hint.is_some() {
                                     message.clone()
                                 } else {
-                                    format!("{message}\nEnter retry · Esc back")
+                                    crate::sidebar_chooser::creation_failure_text(
+                                        message,
+                                        &self.keymap,
+                                    )
                                 }
                             }
                         };
@@ -355,14 +366,35 @@ impl App {
                             .wrap(ratatui::widgets::Wrap { trim: false })
                             .render(body, frame.buffer);
                     } else if let Some(pane) = self.sidebar() {
+                        let footer = if let Some(hint) = resize_hint {
+                            let row = crate::sidebar_chooser::body_row(*sidebar, sidebar.y);
+                            crate::sidebar_chooser::resize_hint(hint, row.width)
+                        } else {
+                            crate::sidebar_chooser::footer(&self.keymap, *sidebar, pane.choice)
+                                .0
+                                .line
+                        };
                         crate::sidebar_chooser::paint(
                             focused,
                             *sidebar,
                             frame.buffer,
-                            &self.keymap,
+                            footer,
                             pane.chat_tabs(),
                             pane.choice,
-                            resize_hint,
+                            self.local_settings.tui.status_line_use_colors,
+                        );
+                        let chooser = if focused {
+                            TabState::Active
+                        } else {
+                            TabState::Inactive
+                        };
+                        crate::sidebar_chooser::tab_strip(
+                            *sidebar,
+                            chooser,
+                            TabState::Absent,
+                            pane.chat_tabs(),
+                            hovered_tab,
+                            frame.buffer,
                         );
                     }
                     frame
@@ -382,6 +414,7 @@ impl App {
                     TabState::Absent,
                     chat,
                     pane.chat_tabs(),
+                    hovered_tab,
                     frame.buffer,
                 );
             }

@@ -1,8 +1,9 @@
 ---
 source: tui/src/app/tests/key_chords.rs
+assertion_line: 1408
 expression: narrow
 ---
 
  The side conversation could
  not be prepared.
- Enter retry · Esc back
+ f5 g retry · esc back

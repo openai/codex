@@ -4506,7 +4506,8 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
 
     // Open a sibling from the chooser, then revisit each retained conversation.
     let chooser_key = KeyEvent::from(KeyCode::Char('t'));
-    let [up, down, enter] = [KeyCode::Up, KeyCode::Down, KeyCode::Enter].map(KeyEvent::from);
+    let [up, down, enter] =
+        [KeyCode::Char('k'), KeyCode::Char('j'), KeyCode::Enter].map(KeyEvent::from);
     side_frame(&mut app, &mut tui, even)?;
     let sidebar_x = app.conversation_frame.chat_strip.unwrap().x;
     keys!(prefix, chooser_key, down, enter);
@@ -4544,7 +4545,65 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     assert_eq!(draft, "sibling draft");
     assert!(side_frame(&mut app, &mut tui, even)?.contains("sibling-24"));
 
-    keys!(prefix, main);
+    let colors = crate::terminal_probe::DefaultColors {
+        fg: (224, 224, 224),
+        bg: (20, 20, 20),
+    };
+    let mut tab_styles = Vec::new();
+    let mut redraws = crate::tui::test_support::record_frame_requests(&mut tui);
+    for (focus, owner) in [("sidebar", sibling), ("main", parent_thread_id)] {
+        assert_eq!(app.current_displayed_thread_id(), Some(owner));
+        side_frame(&mut app, &mut tui, even)?;
+        let strip = app.conversation_frame.chat_strip.unwrap();
+        let (tabs, _) = app
+            .sidebar()
+            .unwrap()
+            .chat_tabs()
+            .strip()
+            .strip_targets(strip);
+        let [inactive, selected] = tabs
+            .map(|(_, _, area)| area.x + 1)
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("both side-chat tabs are visible");
+        for (state, column, row, palette, redraw) in [
+            ("rest", selected, strip.y + 1, Some(colors), None),
+            ("hover", inactive, strip.y, Some(colors), Some(true)),
+            ("fallback", inactive + 1, strip.y, None, Some(false)),
+            ("selected", selected, strip.y, Some(colors), Some(true)),
+            ("leave", selected, strip.y + 1, Some(colors), Some(false)),
+        ] {
+            while redraws.try_recv().is_ok() {}
+            let event = mouse(MouseEventKind::Moved, column, row);
+            boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, event)).await?;
+            if let Some(redraw) = redraw {
+                assert_eq!(redraws.try_recv().is_ok(), redraw, "{focus} {state}");
+            }
+            crate::terminal_palette::with_test_default_colors(palette, || {
+                side_frame(&mut app, &mut tui, even)
+            })?;
+            let buffer = tui.terminal.previous_buffer();
+            let style = |x| {
+                let cell = &buffer[(x, strip.y)];
+                format!("{:?}/{:?}/{:?}", cell.fg, cell.bg, cell.modifier)
+            };
+            tab_styles.push(format!(
+                "{focus} {state}  inactive {}  selected {}",
+                style(inactive),
+                style(selected),
+            ));
+        }
+        if owner == sibling {
+            keys!(prefix, KeyCode::Char('r').into());
+            assert!(app.pane_resize.is_some());
+            let event = mouse(MouseEventKind::Moved, inactive, strip.y);
+            boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, event)).await?;
+            assert_eq!(app.hovered_sidebar_tab(tui.link_hover.position()), None);
+            keys!(KeyCode::Esc.into(), prefix, main);
+        }
+    }
+    assert_app_snapshot!("side_chat_tab_hover", tab_styles.join("\n"));
+
     app.chat_widget
         .dispatch_command(crate::slash_command::SlashCommand::Side);
     drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;

@@ -222,6 +222,7 @@ pub(crate) use picker_option::picker_option_list;
 pub(crate) use picker_option::picker_option_row;
 pub(crate) mod popup_consts;
 mod scroll_state;
+pub(crate) use scroll_state::ScrollState;
 mod selection_popup_common;
 pub(crate) use selection_popup_common::menu_surface_padding_height;
 pub(crate) use selection_popup_common::render_menu_surface;

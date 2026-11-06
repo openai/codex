@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::app_backtrack::SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE;
+use crate::keymap::KeymapContextSet;
 use crate::keymap::bindings_for_action;
 use crate::keymap::keymap_action_ids;
 
@@ -18,6 +19,9 @@ impl App {
         key_event: KeyEvent,
     ) -> bool {
         let active_contexts = self.key_chord_contexts(tui);
+        if self.focused_sidebar_chooser(tui) {
+            return false;
+        }
         let rename_active = self
             .chat_widget
             .selected_index_for_active_view(AGENTS_OVERVIEW_VIEW_ID)
@@ -101,6 +105,7 @@ impl App {
         if (matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key_event))
             || (tui.is_owned_screen()
                 && self.overlay.is_none()
+                && !self.focused_sidebar_chooser(tui)
                 && self.chat_widget.no_modal_or_popup_active()
                 && self.transcript_view.owns_interaction_key(key_event)
                 && (self.transcript_view.has_active_interaction()
@@ -242,15 +247,19 @@ impl App {
         self.chat_widget.set_footer_hint_override(items);
     }
 
+    fn focused_sidebar_chooser(&self, tui: &tui::Tui) -> bool {
+        self.conversation_focus_available(tui)
+            && self.chooser_focus() == Some(super::sidebar::PaneFocus::Sidebar)
+            && self.sidebar_chooser_available()
+    }
+
     fn key_chord_contexts(&self, tui: &tui::Tui) -> crate::keymap::KeymapContextSet {
         let contexts = self.active_keymap_contexts();
         if !self.conversation_focus_available(tui) {
             return contexts;
         }
-        if self.chooser_focus() == Some(super::sidebar::PaneFocus::Sidebar)
-            && self.sidebar_chooser_available()
-        {
-            let contexts = crate::keymap::KeymapContextSet::focused_sidebar_chooser();
+        if self.focused_sidebar_chooser(tui) {
+            let contexts = KeymapContextSet::focused_sidebar_chooser();
             return if self.can_nudge_side_width(tui) {
                 contexts.with_sidebar_resize().with_focused_side_pane()
             } else {

@@ -184,7 +184,7 @@ impl KeymapContextSet {
     }
 
     pub(crate) const fn focused_sidebar_chooser() -> Self {
-        Self(SIDE_PANE | PANE_DIRECTION | MAIN_COMPOSER_FOCUS)
+        Self(SIDE_PANE | PANE_DIRECTION | MAIN_COMPOSER_FOCUS).with(KeymapContext::List)
     }
 
     pub(crate) const fn with_sidebar_chooser(self) -> Self {
