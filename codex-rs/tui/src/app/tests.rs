@@ -4316,6 +4316,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     app.enqueue_thread_notification(parent, delta).await?;
     let streaming = side_frame(&mut app, &mut tui, size)?;
     let item = ThreadItemPayload::AgentMessage {
+        moderation: None,
         id: "reply".into(),
         text: "Already visible while unfocused.".into(),
         phase: None,
@@ -5969,6 +5970,7 @@ async fn active_thread_file_change_approval_recovers_buffered_changes() {
                 thread_id.to_string(),
                 "turn-active-approval".to_string(),
                 ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "agent-1".to_string(),
                     text: "streaming".to_string(),
                     phase: None,
@@ -10702,6 +10704,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                             }],
                         }),
                         ThreadItem::untimed(ThreadItemPayload::AgentMessage {
+                            moderation: None,
                             id: "assistant-2".to_string(),
                             text: "done".to_string(),
                             phase: None,

@@ -28,6 +28,7 @@ use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianA
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 pub use codex_protocol::items::AgentMessageDelivery;
+use codex_protocol::items::AgentMessageModeration as CoreAgentMessageModeration;
 pub use codex_protocol::items::AsyncUserInputQuestion;
 use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallStatus as CoreCollabAgentToolCallStatus;
@@ -147,6 +148,21 @@ pub enum CommandAction {
     Unknown {
         command: String,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AgentMessageModeration {
+    pub moderated: bool,
+}
+
+impl From<CoreAgentMessageModeration> for AgentMessageModeration {
+    fn from(value: CoreAgentMessageModeration) -> Self {
+        Self {
+            moderated: value.moderated,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -313,6 +329,8 @@ pub enum ThreadItemPayload {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     AgentMessage {
+        #[serde(default)]
+        moderation: Option<AgentMessageModeration>,
         id: String,
         text: String,
         #[serde(default)]
@@ -958,6 +976,7 @@ impl From<CoreTurnItem> for ThreadItemPayload {
                     })
                     .collect::<String>();
                 Self::AgentMessage {
+                    moderation: agent.moderation.map(Into::into),
                     id: agent.id,
                     text,
                     phase: agent.phase,

@@ -16,6 +16,7 @@ fn failed_turn_does_not_overwrite_output_last_message_file() {
             "thread-1".to_string(),
             "turn-1".to_string(),
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "msg-1".to_string(),
                 text: "partial answer".to_string(),
                 phase: None,

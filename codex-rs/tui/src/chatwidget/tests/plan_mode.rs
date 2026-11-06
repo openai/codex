@@ -805,6 +805,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
             items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: vec![ThreadItem::untimed(
                 AppServerThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "msg-plan".to_string(),
                     text: "Plan details".to_string(),
                     phase: Some(MessagePhase::FinalAnswer),
@@ -848,6 +849,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
             items_view: codex_app_server_protocol::TurnItemsView::Full,
             items: vec![ThreadItem::untimed(
                 AppServerThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "msg-plan-replay".to_string(),
                     text: "Plan details".to_string(),
                     phase: Some(MessagePhase::FinalAnswer),

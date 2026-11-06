@@ -172,6 +172,7 @@ fn user_message(text: &str) -> RolloutItem {
 
 fn agent_message(text: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+        moderation: None,
         message: text.to_string(),
         phase: None,
         memory_citation: None,

@@ -332,11 +332,26 @@ pub(crate) async fn finalize_non_tool_response_item(
     })
 }
 
+pub(crate) fn apply_answer_moderation(
+    item: &mut TurnItem,
+    decision: Option<&codex_protocol::protocol::TargetedAnswerModeration>,
+) {
+    if let (TurnItem::AgentMessage(answer), Some(decision)) = (item, decision)
+        && answer.phase == Some(codex_protocol::models::MessagePhase::FinalAnswer)
+        && answer.id == decision.item_id
+    {
+        answer.moderation = Some(codex_protocol::items::AgentMessageModeration {
+            moderated: decision.moderated,
+        });
+    }
+}
+
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
+    moderation: Option<&codex_protocol::protocol::TargetedAnswerModeration>,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.step_context.turn.mode() == ModeKind::Plan;
@@ -404,7 +419,7 @@ pub(crate) async fn handle_output_item_done(
             let finalized_facts = finalized_turn_item
                 .as_ref()
                 .map(|finalized| finalized.facts.clone());
-            if let Some(finalized_turn_item) = finalized_turn_item {
+            if let Some(mut finalized_turn_item) = finalized_turn_item {
                 if previously_active_item.is_none() {
                     ctx.sess
                         .emit_turn_item_started(
@@ -414,6 +429,7 @@ pub(crate) async fn handle_output_item_done(
                         .await;
                 }
 
+                apply_answer_moderation(&mut finalized_turn_item.turn_item, moderation);
                 ctx.sess
                     .emit_turn_item_completed_with_metadata(
                         &ctx.step_context.turn,

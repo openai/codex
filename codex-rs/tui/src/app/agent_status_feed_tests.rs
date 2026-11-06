@@ -38,6 +38,7 @@ fn agent_status_uses_bounded_buffered_activity() {
             "thread-child".to_string(),
             "turn-1".to_string(),
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "message-1".to_string(),
                 text: "Finished checking the focused TUI tests.".to_string(),
                 phase: None,

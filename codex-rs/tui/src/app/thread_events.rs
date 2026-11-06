@@ -1051,6 +1051,7 @@ mod tests {
         store.push_notification(serde_json::from_value(expected.clone()).unwrap());
         store.rebase_buffer_after_session_refresh();
         expected["params"]["item"]["text"] = serde_json::json!("");
+        expected["params"]["item"]["moderation"] = serde_json::Value::Null;
         let ThreadBufferedEvent::Notification(actual) = &store.snapshot().events[0] else {
             panic!("missing live question");
         };

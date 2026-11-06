@@ -312,6 +312,7 @@ fn unsupported_items_do_not_consume_synthetic_ids() {
             "thread-1".to_string(),
             "turn-1".to_string(),
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "message-1".to_string(),
                 text: "hello".to_string(),
                 phase: None,
@@ -1014,6 +1015,7 @@ fn agent_message_item_updates_final_message() {
             "thread-1".to_string(),
             "turn-1".to_string(),
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "msg-1".to_string(),
                 text: "hello".to_string(),
                 phase: None,
@@ -1052,6 +1054,7 @@ fn agent_message_item_started_is_ignored() {
             "thread-1".to_string(),
             "turn-1".to_string(),
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "msg-1".to_string(),
                 text: "hello".to_string(),
                 phase: None,
@@ -1408,6 +1411,7 @@ fn turn_completion_recovers_final_message_from_turn_items() {
                 root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::untimed(ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "msg-1".to_string(),
                     text: "final answer".to_string(),
                     phase: None,
@@ -1545,6 +1549,7 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
             "thread-1".to_string(),
             "turn-1".to_string(),
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "msg-stale".to_string(),
                 text: "stale answer".to_string(),
                 phase: None,
@@ -1565,6 +1570,7 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
                 root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::untimed(ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "msg-1".to_string(),
                     text: "final answer".to_string(),
                     phase: None,
@@ -1601,6 +1607,7 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
             "thread-1".to_string(),
             "turn-1".to_string(),
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "msg-streamed".to_string(),
                 text: "streamed answer".to_string(),
                 phase: None,
@@ -1651,6 +1658,7 @@ fn failed_turn_clears_stale_final_message() {
             "thread-1".to_string(),
             "turn-1".to_string(),
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "msg-1".to_string(),
                 text: "partial answer".to_string(),
                 phase: None,

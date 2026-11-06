@@ -354,6 +354,7 @@ async fn config_summary_entries_include_runtime_workspace_roots() {
 fn final_message_from_turn_items_uses_latest_agent_message() {
     let message = final_message_from_turn_items(&[
         ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: "msg-1".to_string(),
             text: "first".to_string(),
             phase: None,
@@ -366,6 +367,7 @@ fn final_message_from_turn_items_uses_latest_agent_message() {
             text: "plan".to_string(),
         },
         ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: "msg-2".to_string(),
             text: "second".to_string(),
             phase: None,
@@ -428,6 +430,7 @@ fn turn_completed_recovers_final_message_from_turn_items() {
                 root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::untimed(ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "msg-1".to_string(),
                     text: "final answer".to_string(),
                     phase: None,
@@ -480,6 +483,7 @@ fn turn_completed_overwrites_stale_final_message_from_turn_items() {
                 root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::untimed(ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "msg-1".to_string(),
                     text: "final answer".to_string(),
                     phase: None,

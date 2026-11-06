@@ -57,6 +57,7 @@ fn completed_reply_preserves_the_full_text_questions_and_timestamp() -> Result<(
             "thread".into(),
             "turn".into(),
             protocol::ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "reply".into(),
                 text: "Choose one".into(),
                 phase: None,

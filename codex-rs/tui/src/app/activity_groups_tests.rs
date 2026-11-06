@@ -196,6 +196,7 @@ async fn every_page_split_folds_reasoning_before_answer_and_completion_boundarie
             let mut items = vec![call("call", kind, "completed"), reasoning("detail")];
             if let Some(text) = answer {
                 items.push(ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "answer".to_owned(),
                     text: text.to_owned(),
                     phase: None,

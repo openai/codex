@@ -129,6 +129,7 @@ fn projects_completed_canonical_turn_items() {
         }],
     });
     let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: "agent-1".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "done".to_string(),

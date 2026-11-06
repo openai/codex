@@ -151,6 +151,11 @@ pub struct AsyncUserInputQuestion {
     pub options: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS, JsonSchema)]
+pub struct AgentMessageModeration {
+    pub moderated: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 /// Assistant-authored message payload used in turn-item streams.
 ///
@@ -158,6 +163,9 @@ pub struct AsyncUserInputQuestion {
 /// should use it when present, but retain legacy completion semantics when it
 /// is `None`.
 pub struct AgentMessageItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub moderation: Option<AgentMessageModeration>,
     pub id: String,
     pub content: Vec<AgentMessageContent>,
     /// Optional phase metadata carried through from `ResponseItem::Message`.

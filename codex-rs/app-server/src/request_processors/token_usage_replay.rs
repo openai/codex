@@ -177,6 +177,7 @@ mod tests {
                 ..Default::default()
             })),
             RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                moderation: None,
                 message: "first answer".to_string(),
                 phase: None,
                 memory_citation: None,

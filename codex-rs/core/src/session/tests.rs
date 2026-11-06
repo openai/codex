@@ -13311,9 +13311,11 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         cancellation_token: CancellationToken::new(),
     };
 
-    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
-        .await
-        .expect("tool call should be handled");
+    let output = handle_output_item_done(
+        &mut ctx, item, /*previously_active_item*/ None, /*moderation*/ None,
+    )
+    .await
+    .expect("tool call should be handled");
 
     assert!(output.needs_follow_up);
     assert!(output.tool_future.is_some());

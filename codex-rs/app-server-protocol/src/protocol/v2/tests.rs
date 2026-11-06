@@ -3260,6 +3260,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: "agent-1".to_string(),
         content: vec![
             AgentMessageContent::Text {
@@ -3275,9 +3276,17 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         questions: None,
     });
 
+    let agent_payload = ThreadItemPayload::from(agent_item);
     assert_eq!(
-        ThreadItemPayload::from(agent_item),
+        serde_json::to_value(&agent_payload)
+            .unwrap()
+            .get("moderation"),
+        Some(&serde_json::Value::Null),
+    );
+    assert_eq!(
+        agent_payload,
         ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: "agent-1".to_string(),
             text: "Hello world".to_string(),
             phase: None,
@@ -3288,6 +3297,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let agent_item_with_phase = TurnItem::AgentMessage(AgentMessageItem {
+        moderation: Some(codex_protocol::items::AgentMessageModeration { moderated: true }),
         id: "agent-2".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "final".to_string(),
@@ -3309,6 +3319,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     assert_eq!(
         ThreadItemPayload::from(agent_item_with_phase),
         ThreadItemPayload::AgentMessage {
+            moderation: Some(AgentMessageModeration { moderated: true }),
             id: "agent-2".to_string(),
             text: "final".to_string(),
             phase: Some(MessagePhase::FinalAnswer),
@@ -3327,6 +3338,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let async_item = ThreadItemPayload::from(TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: "async-1".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "Which?".to_string(),
@@ -3343,6 +3355,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         serde_json::to_value(&async_item).unwrap(),
         json!({
             "type": "agentMessage", "id": "async-1", "text": "Which?", "phase": "final_answer",
+            "moderation": null,
             "memoryCitation": null, "delivery": "async", "questions": [{"title": "Which?", "options": null}]
         })
     );

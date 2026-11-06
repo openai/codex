@@ -126,18 +126,30 @@ impl UserMessageItem {
 
 impl AgentMessageItem {
     pub fn as_legacy_events(&self) -> Vec<EventMsg> {
-        self.content
-            .iter()
-            .map(|c| match c {
-                AgentMessageContent::Text { text } => EventMsg::AgentMessage(AgentMessageEvent {
-                    message: text.clone(),
-                    phase: self.phase.clone(),
-                    memory_citation: self.memory_citation.clone(),
-                    delivery: self.delivery,
-                    questions: self.questions.clone(),
-                }),
+        let texts = self.content.iter().map(|part| match part {
+            AgentMessageContent::Text { text } => text.as_str(),
+        });
+        let event = |message, moderation| {
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message,
+                moderation,
+                phase: self.phase.clone(),
+                memory_citation: self.memory_citation.clone(),
+                delivery: self.delivery,
+                questions: self.questions.clone(),
             })
-            .collect()
+        };
+        if let Some(decision) = self.moderation {
+            // The canonical answer has one ID even when the model supplied multiple text parts.
+            return vec![event(
+                texts.collect(),
+                Some(crate::protocol::TargetedAnswerModeration {
+                    item_id: self.id.clone(),
+                    moderated: decision.moderated,
+                }),
+            )];
+        }
+        texts.map(|text| event(text.to_owned(), None)).collect()
     }
 }
 

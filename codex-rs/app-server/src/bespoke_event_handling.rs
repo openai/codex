@@ -3508,6 +3508,7 @@ mod tests {
                     thread_id: conversation_id,
                     turn_id: event_turn_id.clone(),
                     item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                        moderation: None,
                         id: "msg-1".to_string(),
                         content: vec![
                             CoreAgentMessageContent::Text {
@@ -3533,6 +3534,7 @@ mod tests {
                     thread_id: conversation_id,
                     turn_id: event_turn_id.clone(),
                     item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                        moderation: None,
                         id: "msg-2".to_string(),
                         content: vec![CoreAgentMessageContent::Text {
                             text: "  ".to_string(),

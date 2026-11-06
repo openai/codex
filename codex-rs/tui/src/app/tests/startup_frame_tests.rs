@@ -95,6 +95,7 @@ async fn owned_startup_preserves_loading_until_resume_replay_is_applied() -> Res
     for items in [
         Vec::new(),
         vec![ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: "answer".into(),
             text: "Retained **answer** after resume.".into(),
             phase: None,

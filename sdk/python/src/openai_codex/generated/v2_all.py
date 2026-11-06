@@ -154,6 +154,13 @@ class AgentMessageInputContent(
     root: InputTextAgentMessageInputContent | EncryptedContentAgentMessageInputContent
 
 
+class AgentMessageModeration(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    moderated: bool
+
+
 class AgentPath(RootModel[str]):
     root: str
 
@@ -10715,6 +10722,7 @@ class AgentMessageThreadItem(BaseModel):
     delivery: AgentMessageDelivery | None = None
     id: str
     memory_citation: Annotated[MemoryCitation | None, Field(alias="memoryCitation")] = None
+    moderation: AgentMessageModeration | None = None
     phase: MessagePhase | None = None
     questions: list[AsyncUserInputQuestion] | None = None
     started_at_ms: Annotated[

@@ -1176,6 +1176,7 @@ mod tests {
                 "thread-1".to_string(),
                 "turn-1".to_string(),
                 ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "item-1".to_string(),
                     text: "Still working".to_string(),
                     phase: None,

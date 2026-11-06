@@ -3072,6 +3072,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
     ];
     items.extend((0..97).map(|index| {
         TurnItem::AgentMessage(AgentMessageItem {
+            moderation: None,
             id: format!("review-output-{index}"),
             content: vec![AgentMessageContent::Text {
                 text: format!("review output {index}"),
@@ -3270,6 +3271,7 @@ async fn transcript_alt_beginning_loads_every_older_history_page() -> Result<()>
             thread_id,
             turn_id: "multi-page-turn".to_string(),
             item: TurnItem::AgentMessage(AgentMessageItem {
+                moderation: None,
                 id: format!("history-item-{index}"),
                 content: vec![AgentMessageContent::Text {
                     text: format!("history output {index}"),
@@ -3687,6 +3689,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
             thread_id,
             turn_id: "scrollback-pagination-turn".to_string(),
             item: TurnItem::AgentMessage(AgentMessageItem {
+                moderation: None,
                 id: format!("scrollback-item-{index}"),
                 content: vec![AgentMessageContent::Text {
                     text: format!("scrollback output {index}"),
@@ -5947,6 +5950,7 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
                         thread_id,
                         turn_id: format!("saved-turn-{index}"),
                         item: TurnItem::AgentMessage(AgentMessageItem {
+                            moderation: None,
                             id: format!("saved-answer-{index}"),
                             content: vec![AgentMessageContent::Text {
                                 text: "Saved final answer".to_string(),

@@ -66,6 +66,7 @@ async fn turn_timing_state_records_ttfm_independently_of_ttft() {
     assert!(
         state
             .record_ttfm_for_turn_item(&TurnItem::AgentMessage(AgentMessageItem {
+                moderation: None,
                 id: "msg-1".to_string(),
                 content: Vec::new(),
                 phase: None,
@@ -79,6 +80,7 @@ async fn turn_timing_state_records_ttfm_independently_of_ttft() {
     assert_eq!(
         state
             .record_ttfm_for_turn_item(&TurnItem::AgentMessage(AgentMessageItem {
+                moderation: None,
                 id: "msg-2".to_string(),
                 content: Vec::new(),
                 phase: None,

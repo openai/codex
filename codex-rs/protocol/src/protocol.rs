@@ -2393,6 +2393,12 @@ pub struct ModelVerificationEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct TargetedAnswerModeration {
+    pub item_id: String,
+    pub moderated: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct TurnModerationMetadataEvent {
     pub metadata: Value,
 }
@@ -2790,6 +2796,10 @@ impl fmt::Display for FinalOutput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct AgentMessageEvent {
+    /// Legacy history assigns synthetic item IDs. Preserve the native ID for a moderated answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub moderation: Option<TargetedAnswerModeration>,
     pub message: String,
     #[serde(default)]
     pub phase: Option<MessagePhase>,

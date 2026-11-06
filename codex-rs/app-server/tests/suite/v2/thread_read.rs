@@ -708,6 +708,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
                     thread_id,
                     "turn-1",
                     CoreTurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "commentary-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "commentary needle".to_string(),
@@ -722,6 +723,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
                     thread_id,
                     "turn-1",
                     CoreTurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "partial-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "stable partial answer".to_string(),
@@ -736,6 +738,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
                     thread_id,
                     "turn-1",
                     CoreTurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "final-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "😀 **Final**  \nneedle".to_string(),
@@ -2026,6 +2029,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
                     thread_id,
                     "turn-1",
                     CoreTurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "agent-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "first".to_string(),
@@ -2082,6 +2086,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
                 content: Vec::new(),
             },
             ThreadItemPayload::AgentMessage {
+                moderation: None,
                 id: "agent-1".to_string(),
                 text: "first".to_string(),
                 phase: None,
@@ -2286,6 +2291,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
                     content: Vec::new(),
                 },
                 ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "agent-1".to_string(),
                     text: "first".to_string(),
                     phase: None,
@@ -2532,6 +2538,7 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
                 output_deferred: false,
                 item: codex_app_server_protocol::ThreadItem {
                     payload: ThreadItemPayload::AgentMessage {
+                        moderation: None,
                         id: "agent-1".to_string(),
                         text: "first".to_string(),
                         phase: None,
@@ -2756,6 +2763,7 @@ fn append_agent_message(path: &Path, timestamp: &str, text: &str) -> anyhow::Res
             "timestamp": timestamp,
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                moderation: None,
                 message: text.to_string(),
                 phase: None,
                 memory_citation: None,

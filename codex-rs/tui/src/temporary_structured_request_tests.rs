@@ -27,6 +27,7 @@ fn agent_message_notification(turn_id: &str, text: &str) -> ServerNotification {
         "thread-1".to_string(),
         turn_id.to_string(),
         ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: "message-1".to_string(),
             text: text.to_string(),
             phase: None,

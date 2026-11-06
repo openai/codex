@@ -236,6 +236,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
                     thread_id,
                     "turn-1",
                     TurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "agent-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "done".to_string(),
@@ -330,6 +331,7 @@ async fn paginated_live_append_materializes_turn_items_and_state() {
                     thread_id,
                     "turn-1",
                     TurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "agent-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "done".to_string(),
@@ -646,6 +648,7 @@ async fn paginated_realtime_items_materialize_separately_in_rollout_order() {
                     thread_id,
                     "turn-1",
                     TurnItem::AgentMessage(AgentMessageItem {
+                        moderation: None,
                         id: "agent-1".to_string(),
                         content: vec![AgentMessageContent::Text {
                             text: "Result".to_string(),
@@ -3183,6 +3186,7 @@ fn completed_item(thread_id: ThreadId, turn_id: &str, item: TurnItem) -> Rollout
 
 fn agent_message(id: &str, phase: MessagePhase) -> TurnItem {
     TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: id.to_string(),
         content: vec![AgentMessageContent::Text {
             text: id.to_string(),

@@ -164,6 +164,7 @@ fn joins_respect_actual_turns_and_intervening_items() {
         expected[0].transcript_lines(/*width*/ 80),
     );
     turns[0].items[1] = ThreadItem::untimed(ThreadItemPayload::AgentMessage {
+        moderation: None,
         id: "message".to_string(),
         text: "Visible boundary".to_string(),
         phase: None,

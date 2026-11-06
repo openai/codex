@@ -457,3 +457,50 @@ async fn model_request_gates_websocket_output_but_not_warmup() -> Result<()> {
     server.shutdown().await;
     Ok(())
 }
+
+/// The same final answer carries the targeted public flag on completion and in legacy history.
+#[tokio::test]
+async fn final_answer_carries_its_moderation_decision() -> Result<()> {
+    use core_test_support::wait_for_event_match;
+    let server = responses::start_mock_server().await;
+    let mut answer = responses::ev_assistant_message("msg-42", "Answer");
+    answer["item"]["phase"] = json!("final_answer");
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            json!({"type":"response.metadata","metadata":{"openai_chatgpt_moderation_metadata":{
+                "final_answer_moderation":{"item_id":"msg-42","moderated":true},
+                "generation":{"private":"classifier details"}
+            }}}),
+            answer,
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "test".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let item = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ItemCompleted(done) if done.item.id() == "msg-42" => Some(done.item.clone()),
+        _ => None,
+    })
+    .await;
+    let codex_protocol::items::TurnItem::AgentMessage(message) = item else {
+        panic!("expected assistant answer");
+    };
+    let public = serde_json::to_value(&message)?;
+    assert_eq!(public["moderation"], json!({"moderated": true}));
+    let [EventMsg::AgentMessage(legacy)] = &message.as_legacy_events()[..] else {
+        panic!("expected one legacy answer");
+    };
+    assert_eq!(
+        serde_json::to_value(&legacy.moderation)?,
+        json!({"item_id":"msg-42","moderated":true})
+    );
+    Ok(())
+}

@@ -7387,6 +7387,17 @@
           }
         ]
       },
+      "AgentMessageModeration": {
+        "properties": {
+          "moderated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "moderated"
+        ],
+        "type": "object"
+      },
       "AgentPath": {
         "type": "string"
       },
@@ -23431,6 +23442,17 @@
                 "anyOf": [
                   {
                     "$ref": "#/definitions/v2/MemoryCitation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "moderation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/AgentMessageModeration"
                   },
                   {
                     "type": "null"

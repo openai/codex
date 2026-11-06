@@ -4834,6 +4834,7 @@ mod tests {
                         ),
                         ThreadItem::untimed(
                             codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                                moderation: None,
                                 id: "assistant-1".to_string(),
                                 text: "assistant reply".to_string(),
                                 phase: None,

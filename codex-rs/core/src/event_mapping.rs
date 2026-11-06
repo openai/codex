@@ -170,6 +170,7 @@ fn parse_agent_message(
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     AgentMessageItem {
+        moderation: None,
         id,
         content,
         phase,

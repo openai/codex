@@ -341,6 +341,7 @@ async fn active_patch_approval_preserves_deferred_startup_protection() -> Result
                 thread_id.to_string(),
                 TURN_ID.to_string(),
                 ThreadItemPayload::AgentMessage {
+                    moderation: None,
                     id: "agent-1".to_string(),
                     text: "streaming".to_string(),
                     phase: None,
