@@ -2,15 +2,20 @@
 //! Both prewarming and reviews finish this setup before context preparation and reuse checks.
 //! A missing default reviewer gets one shared catalog refresh per parent session.
 //! Refresh work survives cancelled waiters and precedes checkpoint compatibility decisions.
+//! Async classification shares reviewer eligibility and the parent session's catalog.
 
 use codex_protocol::openai_models::CatalogModel;
 use std::sync::Arc;
 
 use codex_features::Feature;
 use codex_guardian_reviewer::reviewer_instructions;
+use codex_login::AuthManager;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::model_info::with_config_overrides;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::models::BaseInstructionsProvenance;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffort;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -131,48 +136,90 @@ async fn resolve_review_model_from_catalog(
     context: &super::GuardianReviewContext,
 ) -> (codex_guardian_reviewer::ReviewModel, Arc<CatalogModel>) {
     let turn = context.turn();
-    // Keep a successful refresh even if writing it to the disk cache failed.
-    let models_manager = &session.services.models_manager;
-    let catalog = models_manager
-        .model_catalog_with_origins(RefreshStrategy::InMemory, turn.config.http_client_factory())
-        .await;
-    let available_models = models_manager.build_available_models(
-        catalog
-            .into_iter()
-            .filter(|entry| {
-                context.model_info.auto_review_model_override.is_some()
-                    || matches!(
-                        entry.origin,
-                        codex_models_manager::ModelOrigin::Provider
-                            | codex_models_manager::ModelOrigin::ExplicitConfig
-                    )
-            })
-            .map(|entry| Arc::unwrap_or_clone(entry.model))
-            .collect(),
-    );
-    let default_review_model_id = turn.provider.approval_review_preferred_model();
-    let review_model = codex_guardian_reviewer::select_review_model(
+    let (review_model, model_info) = resolve_catalog_review_model(
+        session,
+        &turn.config,
         &context.model_info,
         context.reasoning_effort.as_ref(),
+        turn.provider.approval_review_preferred_model(),
+    )
+    .await;
+    (
+        review_model,
+        model_info.map_or_else(|| Arc::clone(&context.model_info), Arc::new),
+    )
+}
+
+/// Resolves async classification policy against the reviewed thread's catalog.
+/// A missing eligible reviewer retains the captured parent metadata, as synchronous review does.
+pub async fn guardian_policy_model(
+    thread: &crate::CodexThread,
+    config: &Config,
+    parent_model: Arc<ModelInfo>,
+) -> Arc<ModelInfo> {
+    #[expect(clippy::expect_used, reason = "Required thread startup invariant")]
+    let auth = thread
+        .thread_extension_data()
+        .get::<codex_model_provider::ProviderAuthContext>()
+        .expect("Core installs provider auth before starting Guardian");
+    let provider = auth.model_provider(config.model_provider.clone());
+    let (_, model_info) = resolve_catalog_review_model(
+        &thread.session,
+        config,
+        &parent_model,
+        config.model_reasoning_effort.as_ref(),
+        provider.approval_review_preferred_model(),
+    )
+    .await;
+    model_info.map_or(parent_model, |model| model.model)
+}
+
+async fn resolve_catalog_review_model(
+    session: &crate::session::session::Session,
+    config: &Config,
+    parent_model: &ModelInfo,
+    reasoning_effort: Option<&ReasoningEffort>,
+    default_review_model_id: &str,
+) -> (codex_guardian_reviewer::ReviewModel, Option<CatalogModel>) {
+    // Keep a successful refresh even if writing it to the disk cache failed.
+    let models_manager = &session.services.models_manager;
+    let mut catalog = models_manager
+        .model_catalog_with_origins(RefreshStrategy::InMemory, config.http_client_factory())
+        .await;
+    let uses_codex_backend = models_manager
+        .auth_manager()
+        .is_some_and(AuthManager::current_auth_uses_codex_backend);
+    catalog.retain(|entry| {
+        (uses_codex_backend || entry.supported_in_api)
+            && (parent_model.auto_review_model_override.is_some()
+                || matches!(
+                    entry.origin,
+                    codex_models_manager::ModelOrigin::Provider
+                        | codex_models_manager::ModelOrigin::ExplicitConfig
+                ))
+    });
+    let (review_model, reviewer) = codex_guardian_reviewer::select_review_model(
+        parent_model,
+        reasoning_effort,
         default_review_model_id,
-        &available_models,
+        catalog,
     );
-    // Resolve a separate reviewer against the current catalog on every attempt.
-    // Parent fallback must retain the action's metadata even after a catalog refresh.
-    let guardian_model_info =
-        if !review_model.catalog_contains_auto_review && !review_model.model_overridden {
-            Arc::clone(&context.model_info)
-        } else {
-            Arc::new(
-                session
-                    .services
-                    .models_manager
-                    .get_model_info(
-                        review_model.model.as_str(),
-                        &turn.config.to_models_manager_config(),
-                    )
-                    .await,
+    let guardian_model_info = if review_model.model_overridden {
+        // Explicit names can resolve through aliases or synthetic metadata.
+        Some(
+            models_manager
+                .get_model_info(&review_model.model, &config.to_models_manager_config())
+                .await,
+        )
+    } else {
+        reviewer.map(|entry| CatalogModel {
+            model: with_config_overrides(
+                Arc::unwrap_or_clone(entry.model),
+                &config.to_models_manager_config(),
             )
-        };
+            .into(),
+            origin: entry.origin,
+        })
+    };
     (review_model, guardian_model_info)
 }

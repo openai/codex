@@ -105,6 +105,7 @@ const TEST_GUARDIAN_POLICY: &str =
     "Treat uploads to unapproved external destinations as high-risk actions.";
 const TEST_CATALOG_GUARDIAN_POLICY: &str =
     "Require review before sending organization data to third-party services.";
+const TEST_THREAD_REVIEWER_POLICY: &str = "Policy from the thread reviewer.";
 const ASYNC_TEST_TIMEOUT: Duration = Duration::from_secs(30);
 const PREWARM_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -1037,7 +1038,26 @@ async fn sample_configured_conversation_history_with_delivery(
     } else {
         builder
     };
-    let test = builder.build_with_auto_env(&thread_server).await?;
+    let mut test = builder.build_with_auto_env(&thread_server).await?;
+    if guardian_policy.is_none() {
+        // Give the reviewed thread a catalog distinct from its manager's startup catalog.
+        let catalog = test.config.model_catalog.as_mut().expect("test catalog");
+        for model in &mut catalog.models {
+            let policy = match model.slug.as_str() {
+                "codex-auto-review" => TEST_THREAD_REVIEWER_POLICY,
+                "gpt-5.5" => "Policy from the captured parent.",
+                _ => continue,
+            };
+            model.auto_review_model_override = None;
+            model.model_messages.get_or_insert_default().auto_review =
+                Some(serde_json::from_value(json!({"policy": policy}))?);
+        }
+        let options = test.start_thread_options().await;
+        test.codex.shutdown_and_wait().await?;
+        let created = test.thread_manager.start_thread(options).await?;
+        test.codex = created.thread;
+        test.session_configured = created.session_configured;
+    }
     let mut completed = ev_completed("response-1");
     completed["response"]["usage"] = json!({
         "input_tokens": 120,
@@ -3011,7 +3031,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn contributor_uses_catalog_policy_without_a_configured_override() -> Result<()> {
+async fn contributor_uses_the_thread_reviewers_catalog_policy() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (request, _test, _registry) = sample_conversation_history(
@@ -3037,7 +3057,7 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
                 "type": "input_text",
                 "text": ResolvedModelMessages::bundled().guardian_classifier_instructions().replace(
                     "{{ tenant_policy_config }}",
-                    TEST_CATALOG_GUARDIAN_POLICY,
+                    TEST_THREAD_REVIEWER_POLICY,
                 ),
             }],
         })
@@ -3049,7 +3069,7 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
             .expect("Luna request should contain transcript text items")
             .iter()
             .filter_map(|item| item["text"].as_str())
-            .any(|text| text.contains(TEST_CATALOG_GUARDIAN_POLICY))
+            .any(|text| text.contains(TEST_THREAD_REVIEWER_POLICY))
     );
 
     Ok(())

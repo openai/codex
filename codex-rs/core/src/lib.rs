@@ -60,6 +60,7 @@ pub use codex_thread::GuardianRootMessage;
 pub use codex_thread::GuardianRootSnapshot;
 pub use codex_thread::ThreadConfigSnapshot;
 pub use guardian::ScoreAuthorization as GuardianScoreAuthorization;
+pub use guardian::guardian_policy_model;
 pub use session::turn_context::TurnContext;
 pub use thread_startup_metadata::ThreadStartupMetadata;
 mod agent;

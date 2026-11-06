@@ -367,9 +367,6 @@ impl GuardianV2Extension {
                 return;
             }
         };
-        let review_model_override = parent_model
-            .as_ref()
-            .and_then(|model| model.auto_review_model_override.clone());
         // Snapshot before spawning so a delayed sample cannot see later reviews.
         let sync_reviews = guardian_evidence.snapshot();
         let codex_core::context::GuardianUserInputSnapshot {
@@ -434,7 +431,6 @@ impl GuardianV2Extension {
             call_id,
             mcp_tool,
             planned_action,
-            review_model_override,
             sync_reviews,
             trusted_user_inputs,
             authorization_version,

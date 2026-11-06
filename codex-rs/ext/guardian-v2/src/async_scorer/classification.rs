@@ -3,7 +3,6 @@
 //! Requests outside every active action's lag allowance stop as superseded, not failed.
 //! Expiry also cancels metadata waits before transcript preparation, releasing reservations.
 
-use codex_protocol::openai_models::ModelOrigin;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,7 +33,6 @@ use codex_guardian_context::PreviousReviews;
 use codex_guardian_context::ReviewEvidence;
 use codex_guardian_context::render_review_evidence;
 use codex_history::RolloutItem;
-use codex_model_provider::create_model_provider;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::models::ContentItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -82,7 +80,6 @@ pub(super) struct Classification {
     pub(super) call_id: String,
     pub(super) mcp_tool: Option<McpToolContext>,
     pub(super) planned_action: String,
-    pub(super) review_model_override: Option<String>,
     pub(super) sync_reviews: Vec<Arc<GuardianReviewEvidenceRecord>>,
     pub(super) trusted_user_inputs: Vec<String>,
     pub(super) authorization_version: GuardianAuthorizationVersion,
@@ -138,7 +135,6 @@ impl Classification {
             call_id,
             mcp_tool,
             planned_action,
-            review_model_override,
             sync_reviews,
             trusted_user_inputs,
             authorization_version,
@@ -291,23 +287,10 @@ impl Classification {
         let mut classification_risk = None;
         let mut classification_finished_at = None;
         let result: Result<ClassificationOutcome, String> = async {
-            let review_model = if config.guardian_policy_config.is_none() {
-                let review_model_id = review_model_override.as_deref().unwrap_or_else(|| {
-                    create_model_provider(
-                        config.model_provider.clone(),
-                        Some(manager.auth_manager()),
-                    )
-                    .approval_review_preferred_model()
-                });
-                let review_model = manager
-                    .get_models_manager()
-                    .get_model_info(review_model_id, &config.to_models_manager_config())
-                    .await;
-                if review_model.origin == ModelOrigin::Synthetic && review_model_override.is_none() {
-                    parent_model.clone()
-                } else {
-                    Some(review_model.model)
-                }
+            let review_model = if config.guardian_policy_config.is_none()
+                && let Some(parent_model) = parent_model.as_ref()
+            {
+                Some(codex_core::guardian_policy_model(&thread, &config, Arc::clone(parent_model)).await)
             } else {
                 None
             };

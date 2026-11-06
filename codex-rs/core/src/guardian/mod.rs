@@ -24,6 +24,7 @@ pub(crate) use response_resampling::ResponseResampling;
 mod review;
 mod review_session;
 mod reviewer_config;
+pub use reviewer_config::guardian_policy_model;
 pub(crate) use reviewer_config::resolve_review_model;
 mod routing;
 pub(crate) use routing::ParentResponse;
