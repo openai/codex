@@ -5,6 +5,7 @@ use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::ContextualUserFragment;
 use codex_context_fragments::message_from_parts;
 use codex_guardian_v3::EvidenceCursor;
+use codex_guardian_v3::OriginalEvidence;
 use codex_history::AcceptedFileAudio;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
@@ -138,7 +139,34 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         },
         acceptance_order: 3,
     });
-    let expected = vec![
+    let response =
+        |item: &ResponseItemEnvelope| json!({"type":"response_item","payload":item.item});
+    let expected = [
+        json!({
+            "type":"response_item",
+            "payload":user.item,
+            "metadata":{"client_authored":false,"user_input_order":1}
+        }),
+        response(&assistant),
+        response(&call),
+        response(&result),
+        serde_json::to_value(&answer)?,
+        response(&approval),
+        json!({
+            "type":"response_item",
+            "payload":{
+                "type":"message","id":"delivered-1","role":"assistant",
+                "content":[{"type":"output_text","text":"I will write the draft only."}],
+                "internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}
+            },
+            "metadata":{
+                "client_authored":false,
+                "delivered_assistant_message":"codex:code-mode-delivery:v1:complete",
+                "user_input_order":3
+            }
+        }),
+    ];
+    let mut items = vec![
         RolloutItem::ResponseItem(user.clone()),
         RolloutItem::ResponseItem(assistant),
         RolloutItem::ResponseItem(call),
@@ -163,7 +191,14 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
     let mut cursor = EvidenceCursor::from_now(&store, owner).await?;
     assert!(cursor.capture(&store).await?.records().is_empty());
 
-    let mut items = expected.clone();
+    for item in &mut items {
+        if let RolloutItem::ResponseItem(envelope) = item {
+            envelope
+                .metadata
+                .get_or_insert_default()
+                .sampled_through_sequence = Some(99);
+        }
+    }
     items.insert(1, RolloutItem::ResponseItem(generated));
     items.extend([
         RolloutItem::ResponseItem(summary),
@@ -188,15 +223,14 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         .await?;
     store.flush_thread(owner).await?;
     let captured = cursor.capture(&store).await?;
-    let originals = captured
-        .records()
-        .iter()
-        .map(|record| &record.original)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        serde_json::to_value(originals)?,
-        serde_json::to_value(&expected)?
-    );
+    // Check the serialized board post, independently of the rollout serializer.
+    let board_originals = |records: &[OriginalEvidence]| -> serde_json::Result<Vec<_>> {
+        records
+            .iter()
+            .map(|record| Ok(serde_json::to_value(record)?["original"].take()))
+            .collect()
+    };
+    assert_eq!(board_originals(captured.records())?, expected);
 
     let mut later = user.clone();
     later.item = serde_json::from_value(json!({"type":"message","id":"user-2","role":"user",
@@ -215,28 +249,17 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
     // Reads do not acknowledge delivery, and a later append cannot enter the old capture.
     assert_eq!(cursor.pending(&captured)?.len(), expected.len());
     cursor.acknowledge(&captured, /*count*/ 2)?;
-    assert_eq!(
-        serde_json::to_value(
-            cursor
-                .pending(&captured)?
-                .iter()
-                .map(|r| &r.original)
-                .collect::<Vec<_>>()
-        )?,
-        serde_json::to_value(&expected[2..])?
-    );
+    assert_eq!(board_originals(cursor.pending(&captured)?)?, expected[2..]);
     cursor.acknowledge(&captured, expected.len() - 2)?;
     assert!(cursor.pending(&captured)?.is_empty());
     let latest = cursor.capture(&store).await?;
     assert_eq!(
-        serde_json::to_value(
-            latest
-                .records()
-                .iter()
-                .map(|r| &r.original)
-                .collect::<Vec<_>>()
-        )?,
-        serde_json::to_value(vec![RolloutItem::ResponseItem(later.clone())])?
+        board_originals(latest.records())?,
+        [json!({
+            "type":"response_item",
+            "payload":later.item,
+            "metadata":{"client_authored":false,"user_input_order":4}
+        })]
     );
     assert_eq!(captured.records().len(), expected.len());
     cursor.acknowledge(&latest, /*count*/ 1)?;

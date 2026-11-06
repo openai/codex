@@ -5,6 +5,7 @@ use super::BoardMode;
 use super::LocalAgentMessageBoard;
 use super::connection::Access;
 use super::invalid;
+use super::options::LocalBoardOptions;
 use super::paging::Window;
 use super::storage_error;
 use crate::AgentMessageBoard;
@@ -29,14 +30,27 @@ use uuid::Uuid;
 /// transaction open. Clones share the catalog, cutoff and underlying connection pool.
 #[derive(Clone)]
 pub struct LocalBoardReadView {
-    board: Arc<dyn AgentMessageBoard>,
+    board: Arc<LocalAgentMessageBoard>,
     view: Arc<ReadView>,
 }
 
 impl LocalBoardReadView {
     /// Reads use the captured boundary; every mutation, including subscriptions, is denied.
     pub fn board(&self) -> Arc<dyn AgentMessageBoard> {
-        Arc::clone(&self.board)
+        self.board.clone()
+    }
+
+    /// Reads this capture with literal search over JSON posts and a string-encoded JSON field.
+    /// The JSON Pointer identifies the field to decode.
+    pub fn board_with_json_search(&self, pointer: &'static str) -> Arc<dyn AgentMessageBoard> {
+        let mut board = self.board.as_ref().clone();
+        board.nested_json_pointer = Some(pointer);
+        Arc::new(board)
+    }
+
+    /// Whether the captured database belongs to the caller's requested storage namespace.
+    pub fn uses_storage_namespace(&self, options: &LocalBoardOptions) -> Result<bool> {
+        self.board.uses_storage_namespace(options)
     }
 
     /// Complete catalog captured with the post boundary, ordered by newest activity first.

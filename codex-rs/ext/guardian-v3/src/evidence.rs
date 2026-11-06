@@ -2,6 +2,7 @@
 //! A capture has a fixed end; consumers acknowledge records only after their writes succeed.
 
 use anyhow::ensure;
+use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContextEvent;
 use codex_history::RolloutItem;
@@ -21,12 +22,12 @@ pub struct EvidenceId {
     pub ordinal: u64,
 }
 
-/// The original rollout record retains roles, call IDs and host provenance unchanged.
+/// Original model-visible evidence, with roles, call IDs and verified source order.
 /// Its contents are deliberately excluded from Debug output.
 #[derive(Serialize)]
 pub struct OriginalEvidence {
     pub id: EvidenceId,
-    pub original: RolloutItem,
+    original: RolloutItem,
     #[serde(skip)]
     end: HistoryPosition,
 }
@@ -84,48 +85,14 @@ impl EvidenceCursor {
         let end = history.end;
         let mut records = Vec::new();
         for record in history.items {
-            let include = match &record.item {
-                RolloutItem::ResponseItem(envelope) => selected(envelope)?,
-                RolloutItem::RetainedContext(RetainedContextEvent::VerifiedAnswer {
-                    answer,
-                    ..
-                }) => {
-                    ensure!(!answer.questions.is_empty(), "incomplete verified answer");
-                    true
-                }
-                RolloutItem::RetainedContext(RetainedContextEvent::DeliveredAssistantMessage {
-                    message,
-                    ..
-                }) => {
-                    ensure!(message.complete, "incomplete delivered assistant message");
-                    true
-                }
-                RolloutItem::SessionMeta(_)
-                | RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
-                    anyhow::bail!("evidence history was replaced");
-                }
-                RolloutItem::RetainedContext(RetainedContextEvent::AcceptedFileAudio {
-                    ..
-                })
-                | RolloutItem::DynamicToolsUpdated { .. }
-                | RolloutItem::InterAgentCommunication(_)
-                | RolloutItem::InterAgentCommunicationMetadata { .. }
-                | RolloutItem::Compacted(_)
-                | RolloutItem::TurnContext(_)
-                | RolloutItem::TokenUsageRecord(_)
-                | RolloutItem::WorldState(_)
-                | RolloutItem::SecurityRiskScore(_)
-                | RolloutItem::EventMsg(_)
-                | RolloutItem::RealtimeItem(_) => false,
-            };
-            if include {
+            if let Some(original) = review_original(record.item)? {
                 records.push(OriginalEvidence {
                     id: EvidenceId {
                         ordinal: record.end.end_ordinal_exclusive.checked_sub(1).ok_or_else(
                             || anyhow::anyhow!("evidence record has no source ordinal"),
                         )?,
                     },
-                    original: record.item,
+                    original,
                     end: record.end,
                 });
             }
@@ -275,4 +242,52 @@ fn selected(envelope: &ResponseItemEnvelope) -> anyhow::Result<bool> {
         | ResponseItem::CompactionTrigger { .. }
         | ResponseItem::Other => false,
     })
+}
+
+/// Apply the same admission and model-visible projection at intake and canonical verification.
+fn review_original(mut item: RolloutItem) -> anyhow::Result<Option<RolloutItem>> {
+    let include = match &item {
+        RolloutItem::ResponseItem(envelope) => selected(envelope)?,
+        RolloutItem::RetainedContext(RetainedContextEvent::VerifiedAnswer { answer, .. }) => {
+            ensure!(!answer.questions.is_empty(), "incomplete verified answer");
+            true
+        }
+        RolloutItem::RetainedContext(RetainedContextEvent::DeliveredAssistantMessage {
+            message,
+            ..
+        }) => {
+            ensure!(message.complete, "incomplete delivered assistant message");
+            true
+        }
+        RolloutItem::SessionMeta(_) | RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
+            anyhow::bail!("evidence history was replaced");
+        }
+        RolloutItem::RetainedContext(RetainedContextEvent::AcceptedFileAudio { .. })
+        | RolloutItem::DynamicToolsUpdated { .. }
+        | RolloutItem::InterAgentCommunication(_)
+        | RolloutItem::InterAgentCommunicationMetadata { .. }
+        | RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::TokenUsageRecord(_)
+        | RolloutItem::WorldState(_)
+        | RolloutItem::SecurityRiskScore(_)
+        | RolloutItem::EventMsg(_)
+        | RolloutItem::RealtimeItem(_) => false,
+    };
+    if !include {
+        return Ok(None);
+    }
+    if let RolloutItem::ResponseItem(envelope) = &mut item {
+        // Admission uses private host provenance. Keep only the source order in the
+        // copy seen by the housekeeper, board readers and reviewer.
+        envelope.metadata = envelope
+            .metadata
+            .take()
+            .and_then(|metadata| metadata.user_input_order)
+            .map(|order| CodexHarnessMetadata {
+                user_input_order: Some(order),
+                ..Default::default()
+            });
+    }
+    Ok(Some(item))
 }

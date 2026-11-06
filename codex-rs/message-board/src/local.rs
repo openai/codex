@@ -45,6 +45,7 @@ use uuid::Uuid;
 
 pub(crate) mod catalog;
 pub(crate) mod connection;
+mod json_search;
 mod lifecycle;
 pub(crate) mod options;
 mod paging;
@@ -91,6 +92,7 @@ pub struct LocalAgentMessageBoard {
     pool: Arc<SqlitePool>,
     host: Arc<dyn MessageBoardHost>,
     mode: BoardMode,
+    nested_json_pointer: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -114,7 +116,15 @@ impl LocalAgentMessageBoard {
             pool: pool::open(sqlite, options).await?,
             host,
             mode: BoardMode::Live { access: None },
+            nested_json_pointer: None,
         })
+    }
+
+    /// Whether this already-open handle uses the requested storage namespace.
+    pub fn uses_storage_namespace(&self, options: &LocalBoardOptions) -> Result<bool> {
+        let filename = options.database_file()?;
+        Ok(self.pool.connect_options().get_filename().file_name()
+            == Some(std::ffi::OsStr::new(&filename)))
     }
 
     /// Captures a read-only catalog and post boundary without retaining a SQLite transaction.

@@ -6,6 +6,7 @@ use super::StoredPost;
 use super::catalog;
 use super::connection::Access;
 use super::invalid;
+use super::json_search;
 use super::paging::Window;
 use super::paging::decode_posts;
 use super::paging::direction;
@@ -428,11 +429,6 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
             if let Some(author) = query.author {
                 sql.push(" AND author=").push_bind(author.to_string());
             }
-            if let Some(text) = query.query {
-                sql.push(" AND instr(body_search,")
-                    .push_bind(default_case_fold_str(&text))
-                    .push(")>0");
-            }
             if let Some((timestamp, seq)) = after {
                 sql.push(" AND (timestamp,seq)>(")
                     .push_bind(timestamp)
@@ -440,16 +436,29 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
                     .push_bind(seq)
                     .push(")");
             }
-            sql.push(" ORDER BY timestamp DESC,seq DESC LIMIT ")
-                .push_bind((window.limit + 1) as i64)
-                .push(" OFFSET ")
-                .push_bind(window.offset());
-            let posts = decode_posts(
-                sql.build_query_scalar::<String>()
-                    .fetch_all(&mut *tx)
-                    .await
-                    .map_err(storage_error)?,
-            )?;
+            let needle = query.query.as_deref().map(default_case_fold_str);
+            let posts = if let (Some(pointer), Some(needle)) = (
+                self.nested_json_pointer,
+                needle.as_deref().filter(|text| !text.is_empty()),
+            ) {
+                json_search::page(sql, &mut tx, pointer, needle, &window).await?
+            } else {
+                if let Some(needle) = needle {
+                    sql.push(" AND instr(body_search,")
+                        .push_bind(needle)
+                        .push(")>0");
+                }
+                sql.push(" ORDER BY timestamp DESC,seq DESC LIMIT ")
+                    .push_bind((window.limit + 1) as i64)
+                    .push(" OFFSET ")
+                    .push_bind(window.offset());
+                decode_posts(
+                    sql.build_query_scalar::<String>()
+                        .fetch_all(&mut *tx)
+                        .await
+                        .map_err(storage_error)?,
+                )?
+            };
             let chars = (query.max_chars_per_post.get() as usize)
                 .min(MAX_READ_CHARS / posts.len().min(window.limit).max(1));
             window.finish(posts.into_iter().map(|post| preview(post, chars)).collect())
