@@ -2400,7 +2400,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .expect("spawned agent thread should exist");
     let child_turn = child_thread.session.new_default_turn().await;
     assert_eq!(
-        child_turn.file_system_sandbox_policy(),
+        child_turn.permission_profile().file_system_sandbox_policy(),
         expected_file_system_sandbox_policy
     );
     assert_eq!(

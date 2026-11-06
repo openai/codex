@@ -3831,6 +3831,7 @@ dependencies = [
  "anyhow",
  "codex-protocol",
  "codex-protocol-test-support",
+ "codex-utils-absolute-path",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",

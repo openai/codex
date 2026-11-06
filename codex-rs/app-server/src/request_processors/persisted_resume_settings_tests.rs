@@ -9,7 +9,6 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnContextItem;
@@ -73,10 +72,8 @@ fn turn_context_item(
         cwd: cwd(),
         approval_policy,
         approvals_reviewer,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: Some(PermissionProfile::read_only()),
+        permission_profile: PermissionProfile::read_only(),
         active_permission_profile,
-        file_system_sandbox_policy: None,
         model: "gpt-5".to_string(),
         comp_hash: None,
         collaboration_mode: None,

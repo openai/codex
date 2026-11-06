@@ -14,7 +14,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
@@ -747,10 +746,8 @@ fn turn_context(root: &Path, turn_id: &str) -> RolloutItem {
         cwd: serde_json::from_value(serde_json::json!(root)).expect("absolute cwd"),
         approval_policy: AskForApproval::Never,
         approvals_reviewer: None,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: None,
+        permission_profile: codex_protocol::models::PermissionProfile::read_only(),
         active_permission_profile: None,
-        file_system_sandbox_policy: None,
         model: "test-model".to_string(),
         comp_hash: None,
         collaboration_mode: None,

@@ -3641,7 +3641,7 @@ impl WorldStateItem {
 /// context updates, and again after mid-turn compaction when replacement
 /// history re-establishes full context, so resume/fork replay can recover the
 /// latest durable baseline.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
@@ -3660,15 +3660,11 @@ pub struct TurnContextItem {
     pub approval_policy: AskForApproval,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
-    pub sandbox_policy: SandboxPolicy,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_profile: Option<PermissionProfile>,
+    pub permission_profile: PermissionProfile,
     /// Built-in or named profile that produced `permission_profile`, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file_system_sandbox_policy: Option<RawFileSystemSandboxPolicy>,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp_hash: Option<String>,
@@ -3688,26 +3684,79 @@ pub struct TurnContextItem {
     pub summary: Option<ReasoningSummaryConfig>,
 }
 
-impl TurnContextItem {
-    pub fn permission_profile(&self) -> PermissionProfile {
-        self.permission_profile.clone().unwrap_or_else(|| {
-            let file_system_sandbox_policy = self
-                .file_system_sandbox_policy
-                .clone()
-                .map(TryInto::try_into)
-                .transpose()
-                .unwrap_or_else(|_| Some(FileSystemSandboxPolicy::restricted(Vec::new())))
-                .unwrap_or_else(|| {
-                    FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                        &self.sandbox_policy,
-                        self.cwd.as_path(),
-                    )
-                });
-            PermissionProfile::from_runtime_permissions_with_enforcement(
-                SandboxEnforcement::from_legacy_sandbox_policy(&self.sandbox_policy),
-                &file_system_sandbox_policy,
-                NetworkSandboxPolicy::from(&self.sandbox_policy),
-            )
+impl<'de> Deserialize<'de> for TurnContextItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            turn_id: Option<String>,
+            root_turn_id: Option<String>,
+            direct_only_tool_namespaces: Option<Vec<String>>,
+            disabled_plugin_ids: Option<Vec<String>>,
+            cwd: AbsolutePathBuf,
+            approval_policy: AskForApproval,
+            approvals_reviewer: Option<ApprovalsReviewer>,
+            // Older histories are normalized here; decoded items retain only the profile.
+            sandbox_policy: Option<SandboxPolicy>,
+            permission_profile: Option<PermissionProfile>,
+            active_permission_profile: Option<ActivePermissionProfile>,
+            file_system_sandbox_policy: Option<RawFileSystemSandboxPolicy>,
+            model: String,
+            comp_hash: Option<String>,
+            collaboration_mode: Option<CollaborationMode>,
+            multi_agent_version: Option<MultiAgentVersion>,
+            realtime_active: Option<bool>,
+            cyber_access_program: Option<CyberAccessProgram>,
+            effort: Option<ReasoningEffortConfig>,
+            summary: Option<ReasoningSummaryConfig>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let permission_profile = match wire.permission_profile {
+            Some(permission_profile) => permission_profile,
+            None => {
+                let sandbox_policy = wire
+                    .sandbox_policy
+                    .ok_or_else(|| serde::de::Error::missing_field("permission_profile"))?;
+                let file_system_sandbox_policy = wire
+                    .file_system_sandbox_policy
+                    .map(TryInto::try_into)
+                    .transpose()
+                    // Malformed historical split rules must not regain legacy grants.
+                    .unwrap_or_else(|_| Some(FileSystemSandboxPolicy::restricted(Vec::new())))
+                    .unwrap_or_else(|| {
+                        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+                            &sandbox_policy,
+                            wire.cwd.as_path(),
+                        )
+                    });
+                PermissionProfile::from_runtime_permissions_with_enforcement(
+                    SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
+                    &file_system_sandbox_policy,
+                    NetworkSandboxPolicy::from(&sandbox_policy),
+                )
+            }
+        };
+        Ok(Self {
+            turn_id: wire.turn_id,
+            root_turn_id: wire.root_turn_id,
+            direct_only_tool_namespaces: wire.direct_only_tool_namespaces,
+            disabled_plugin_ids: wire.disabled_plugin_ids,
+            cwd: wire.cwd,
+            approval_policy: wire.approval_policy,
+            approvals_reviewer: wire.approvals_reviewer,
+            permission_profile,
+            active_permission_profile: wire.active_permission_profile,
+            model: wire.model,
+            comp_hash: wire.comp_hash,
+            collaboration_mode: wire.collaboration_mode,
+            multi_agent_version: wire.multi_agent_version,
+            realtime_active: wire.realtime_active,
+            cyber_access_program: wire.cyber_access_program,
+            effort: wire.effort,
+            summary: wire.summary,
         })
     }
 }
@@ -6587,7 +6636,7 @@ mod tests {
         }))?;
 
         assert_eq!(item.summary, None);
-        assert_eq!(item.file_system_sandbox_policy, None);
+        assert_eq!(item.permission_profile, PermissionProfile::Disabled);
         assert_eq!(item.comp_hash, None);
         assert_eq!(serde_json::to_value(item)?.get("summary"), None);
         Ok(())
@@ -6608,56 +6657,63 @@ mod tests {
     }
 
     #[test]
-    fn turn_context_item_serializes_split_policy_and_summary() -> Result<()> {
-        let item = TurnContextItem {
-            turn_id: None,
-            root_turn_id: None,
-            direct_only_tool_namespaces: None,
-            disabled_plugin_ids: None,
-            cwd: test_path_buf("/tmp").abs(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            permission_profile: None,
-            active_permission_profile: None,
-            file_system_sandbox_policy: Some(
-                FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-                    path: FileSystemPath::GlobPattern {
-                        pattern: "/tmp/private/**/*.txt".to_string(),
-                    },
-                    access: FileSystemAccessMode::Deny,
-                    missing_path_behavior: None,
-                }])
-                .try_into()
+    fn turn_context_item_normalizes_legacy_permissions_and_writes_profile_only() -> Result<()> {
+        let cwd = test_path_buf("/tmp").abs();
+        let file_system = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "/tmp/private/**/*.txt".to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
+        }]);
+        let mut legacy = json!({
+            "cwd": cwd,
+            "approval_policy": "never",
+            "sandbox_policy": { "type": "danger-full-access" },
+            "file_system_sandbox_policy": RawFileSystemSandboxPolicy::try_from(file_system.clone())
                 .expect("serializable split policy"),
-            ),
-            model: "gpt-5".to_string(),
-            comp_hash: None,
-            collaboration_mode: None,
-            multi_agent_version: None,
-            realtime_active: None,
-            cyber_access_program: None,
-            effort: None,
-            summary: Some(ReasoningSummaryConfig::None),
-        };
-
-        let value = serde_json::to_value(item)?;
+            "model": "gpt-5",
+            "summary": "none",
+        });
+        let item: TurnContextItem = serde_json::from_value(legacy.clone())?;
+        let profile = PermissionProfile::from_runtime_permissions(
+            &file_system,
+            NetworkSandboxPolicy::Enabled,
+        );
+        assert_eq!(item.permission_profile, profile);
+        let canonical = serde_json::to_value(&item)?;
         assert_eq!(
-            value["file_system_sandbox_policy"],
+            canonical,
             json!({
-                "kind": "restricted",
-                "entries": [{
-                    "path": {
-                        "type": "glob_pattern",
-                        "pattern": "/tmp/private/**/*.txt"
-                    },
-                    "access": "deny"
-                }]
+                "cwd": cwd,
+                "approval_policy": "never",
+                "permission_profile": profile,
+                "model": "gpt-5",
+                "summary": "none",
             })
         );
-        let legacy_summary: ReasoningSummaryConfig =
-            serde_json::from_value(value["summary"].clone())?;
-        assert_eq!(legacy_summary, ReasoningSummaryConfig::None);
+        assert_eq!(
+            serde_json::from_value::<TurnContextItem>(canonical.clone())?,
+            item
+        );
+
+        legacy["file_system_sandbox_policy"]["entries"][0]["path"] =
+            json!({ "type": "path", "path": "://" });
+        assert_eq!(
+            serde_json::from_value::<TurnContextItem>(legacy.clone())?.permission_profile,
+            PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(Vec::new()),
+                NetworkSandboxPolicy::Enabled,
+            ),
+        );
+        legacy["permission_profile"] = serde_json::to_value(&profile)?;
+        assert_eq!(serde_json::from_value::<TurnContextItem>(legacy)?, item);
+        let mut missing_permissions = canonical;
+        missing_permissions
+            .as_object_mut()
+            .expect("context object")
+            .remove("permission_profile");
+        assert!(serde_json::from_value::<TurnContextItem>(missing_permissions).is_err());
         Ok(())
     }
 

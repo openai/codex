@@ -31,7 +31,6 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelOrigin;
-use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::ErrorEvent;
@@ -792,10 +791,6 @@ impl TurnContext {
         })
     }
 
-    pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
-        self.permission_profile().file_system_sandbox_policy()
-    }
-
     pub(crate) fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
         self.permission_profile().network_sandbox_policy()
     }
@@ -944,25 +939,6 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<RawFileSystemSandboxPolicy> {
-        // Omit the derived split filesystem policy when it is equivalent to
-        // the legacy sandbox policy. This keeps turn-context payloads stable
-        // while both fields exist; once callers consume only the split policy,
-        // this comparison and the legacy projection should go away.
-        let legacy_file_system_sandbox_policy =
-            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
-                &self.sandbox_policy(),
-                #[allow(deprecated)]
-                &self.cwd,
-            );
-        let file_system_sandbox_policy = self.file_system_sandbox_policy();
-        // `permission_profile` below is authoritative and serializes the same
-        // runtime entries, so this compatibility field may omit an unrenderable policy.
-        (file_system_sandbox_policy != legacy_file_system_sandbox_policy)
-            .then(|| file_system_sandbox_policy.try_into().ok())
-            .flatten()
-    }
-
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
@@ -977,13 +953,11 @@ impl TurnContext {
             cwd,
             approval_policy: self.approval_policy(),
             approvals_reviewer: Some(self.config.approvals_reviewer),
-            sandbox_policy: self.sandbox_policy(),
-            permission_profile: Some(self.permission_profile()),
+            permission_profile: self.permission_profile(),
             active_permission_profile: self.initial_environments.primary().map_or_else(
                 || self.config.permissions.active_permission_profile(),
                 TurnEnvironment::active_permission_profile,
             ),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info().slug.clone(),
             comp_hash: self.model_info().comp_hash.clone(),
             collaboration_mode: Some(self.collaboration_mode()),

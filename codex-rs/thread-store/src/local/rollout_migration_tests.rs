@@ -34,7 +34,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -2226,10 +2225,8 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
                 cwd: serde_json::from_value(json!(home.path())).expect("absolute cwd"),
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: None,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                permission_profile: None,
+                permission_profile: codex_protocol::models::PermissionProfile::read_only(),
                 active_permission_profile: None,
-                file_system_sandbox_policy: None,
                 model: "test-model".to_string(),
                 comp_hash: None,
                 collaboration_mode: None,

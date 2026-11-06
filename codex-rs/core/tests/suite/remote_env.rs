@@ -720,10 +720,7 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
             turn_context.permission_profile,
             turn_context.active_permission_profile
         ),
-        (
-            Some(PermissionProfile::read_only()),
-            Some(owner_active_profile)
-        )
+        (PermissionProfile::read_only(), Some(owner_active_profile))
     );
 
     Ok(())
@@ -821,7 +818,7 @@ async fn executor_profile_roots_survive_settings_restore_and_turn_recording() ->
             context.permission_profile,
             context.active_permission_profile,
         ),
-        (Some(expected_profile), Some(active_profile))
+        (expected_profile, Some(active_profile))
     );
     Ok(())
 }

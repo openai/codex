@@ -133,7 +133,7 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
     metadata.model = Some(turn_ctx.model.clone());
     metadata.reasoning_effort = turn_ctx.effort.clone();
     metadata.sandbox_policy =
-        serde_json::to_string(&turn_ctx.permission_profile()).unwrap_or_default();
+        serde_json::to_string(&turn_ctx.permission_profile).unwrap_or_default();
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
 }
 
@@ -240,7 +240,6 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ItemCompletedEvent;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
@@ -588,10 +587,8 @@ mod tests {
                 .expect("absolute parent cwd"),
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: None,
-                sandbox_policy: SandboxPolicy::DangerFullAccess,
-                permission_profile: None,
+                permission_profile: PermissionProfile::Disabled,
                 active_permission_profile: None,
-                file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
                 comp_hash: None,
                 collaboration_mode: None,
@@ -633,10 +630,8 @@ mod tests {
                 .expect("absolute workspace cwd"),
                 approval_policy: AskForApproval::OnRequest,
                 approvals_reviewer: None,
-                sandbox_policy: SandboxPolicy::DangerFullAccess,
-                permission_profile: Some(permission_profile.clone()),
+                permission_profile: permission_profile.clone(),
                 active_permission_profile: None,
-                file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
                 comp_hash: None,
                 collaboration_mode: None,
@@ -674,10 +669,8 @@ mod tests {
                     .expect("absolute fallback cwd"),
                 approval_policy: AskForApproval::OnRequest,
                 approvals_reviewer: None,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                permission_profile: None,
+                permission_profile: PermissionProfile::read_only(),
                 active_permission_profile: None,
-                file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
                 comp_hash: None,
                 collaboration_mode: None,
@@ -712,10 +705,8 @@ mod tests {
                 .expect("absolute fallback cwd"),
                 approval_policy: AskForApproval::OnRequest,
                 approvals_reviewer: None,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                permission_profile: None,
+                permission_profile: PermissionProfile::read_only(),
                 active_permission_profile: None,
-                file_system_sandbox_policy: None,
                 model: "gpt-5".to_string(),
                 comp_hash: None,
                 collaboration_mode: None,

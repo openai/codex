@@ -904,7 +904,6 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ItemCompletedEvent;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadHistoryMode;
     use codex_protocol::protocol::ThreadMemoryMode;
@@ -1155,10 +1154,8 @@ mod tests {
                 cwd: serde_json::from_value(serde_json::json!(cwd)).expect("absolute cwd"),
                 approval_policy,
                 approvals_reviewer: None,
-                sandbox_policy: SandboxPolicy::DangerFullAccess,
-                permission_profile: None,
+                permission_profile: codex_protocol::models::PermissionProfile::Disabled,
                 active_permission_profile: None,
-                file_system_sandbox_policy: None,
                 model: model.to_string(),
                 comp_hash: None,
                 collaboration_mode: None,

@@ -82,7 +82,7 @@ impl ThreadRequestProcessor {
             return;
         }
         // Recovery must not override a stricter saved or newly configured policy.
-        if previous_context.permission_profile() != config.permission_profile {
+        if previous_context.permission_profile != config.permission_profile {
             return;
         }
         let continuation = ContextualUserFragment::into(InternalModelContextFragment::new(

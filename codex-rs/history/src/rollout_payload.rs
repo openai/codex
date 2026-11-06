@@ -19,6 +19,10 @@ use crate::RetainedUserMessage;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::RawFileSystemSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -52,6 +56,7 @@ pub(super) enum RolloutItemWire<'a> {
         payload: Cow<'a, Box<CompactedItem>>,
     },
     TurnContext {
+        #[serde(serialize_with = "serialize_turn_context")]
         payload: Cow<'a, TurnContextItem>,
     },
     TokenUsageRecord {
@@ -72,6 +77,60 @@ pub(super) enum RolloutItemWire<'a> {
     RealtimeItem {
         payload: Cow<'a, RealtimeItem>,
     },
+}
+
+fn serialize_turn_context<S>(context: &TurnContextItem, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    // Keep older rollout readers usable during deployment and rollback. Runtime
+    // contexts stay profile-only; compatibility fields exist only on the wire.
+    #[derive(Serialize)]
+    struct Wire<'a> {
+        #[serde(flatten)]
+        context: &'a TurnContextItem,
+        sandbox_policy: SandboxPolicy,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_system_sandbox_policy: Option<RawFileSystemSandboxPolicy>,
+    }
+
+    let cwd = context.cwd.as_path();
+    let (file_system, network) = context.permission_profile.to_runtime_permissions();
+    let sandbox_policy = context
+        .permission_profile
+        .to_legacy_sandbox_policy(cwd)
+        .unwrap_or_else(|_| {
+            let tmpdir_writable = std::env::var_os("TMPDIR")
+                .filter(|path| !path.is_empty())
+                .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+                .is_some_and(|path| file_system.can_write_local_path_with_cwd(path.as_path(), cwd));
+            let slash_tmp = std::path::Path::new("/tmp");
+            let slash_tmp_writable = slash_tmp.is_absolute()
+                && slash_tmp.is_dir()
+                && file_system.can_write_local_path_with_cwd(slash_tmp, cwd);
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: file_system
+                    .get_writable_roots_with_cwd(cwd)
+                    .into_iter()
+                    .map(|root| root.root)
+                    .filter(|root| root != &context.cwd)
+                    .collect(),
+                network_access: network.is_enabled(),
+                exclude_tmpdir_env_var: !tmpdir_writable,
+                exclude_slash_tmp: !slash_tmp_writable,
+            }
+        });
+    let legacy_file_system =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
+    let file_system_sandbox_policy = (file_system != legacy_file_system)
+        .then(|| file_system.try_into().ok())
+        .flatten();
+    Wire {
+        context,
+        sandbox_policy,
+        file_system_sandbox_policy,
+    }
+    .serialize(serializer)
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

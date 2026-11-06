@@ -1066,6 +1066,7 @@ async fn activation_must_match_the_retained_turn_authority(change: ManagedPolicy
     });
     assert!(
         !turn
+            .permission_profile()
             .file_system_sandbox_policy()
             .has_full_disk_write_access()
     );
