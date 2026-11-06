@@ -42,6 +42,7 @@ use uuid::Uuid;
 pub struct QueuedItem {
     pub id: String,
     pub input: TurnInput,
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Error)]
@@ -267,11 +268,21 @@ impl QueuedItemService {
         thread_id: ThreadId,
         input: TurnInput,
     ) -> Result<QueuedItem, QueueServiceError> {
+        self.enqueue_with_metadata(thread_id, input, /*responsesapi_client_metadata*/ None)
+            .await
+    }
+
+    pub async fn enqueue_with_metadata(
+        &self,
+        thread_id: ThreadId,
+        input: TurnInput,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
+    ) -> Result<QueuedItem, QueueServiceError> {
         let input = prepare_queued_user_input(input).await?;
-        let payload = serde_json::to_string(&input)?;
+        let payload = queued_input_payload(&input, responsesapi_client_metadata.as_ref())?;
         let item = {
             let _dispatch_guard = self.dispatch_guard(thread_id).await;
-            let item = queued_item_from_record(self.queue.enqueue(thread_id, payload).await?)?;
+            let item = QueuedItem::try_from(self.queue.enqueue(thread_id, payload).await?)?;
             self.emit_changed(thread_id);
             item
         };
@@ -294,7 +305,7 @@ impl QueuedItemService {
             .list_page(thread_id, offset, limit)
             .await?
             .into_iter()
-            .map(queued_item_from_record)
+            .map(QueuedItem::try_from)
             .collect()
     }
 
@@ -302,29 +313,50 @@ impl QueuedItemService {
         &self,
         thread_id: ThreadId,
         queued_item_id: String,
-        mut input: TurnInput,
+        input: TurnInput,
     ) -> Result<Option<QueuedItem>, QueueServiceError> {
+        self.update_with_metadata(
+            thread_id,
+            queued_item_id,
+            input,
+            /*responsesapi_client_metadata*/ None,
+        )
+        .await
+    }
+
+    /// Omitted or empty metadata preserves the input's attribution, not the current controller's.
+    pub async fn update_with_metadata(
+        &self,
+        thread_id: ThreadId,
+        queued_item_id: String,
+        mut input: TurnInput,
+        mut responsesapi_client_metadata: Option<HashMap<String, String>>,
+    ) -> Result<Option<QueuedItem>, QueueServiceError> {
+        responsesapi_client_metadata =
+            responsesapi_client_metadata.filter(|metadata| !metadata.is_empty());
         let _dispatch_guard = self.dispatch_guard(thread_id).await;
+        let previous = self
+            .list(thread_id)
+            .await?
+            .into_iter()
+            .find(|item| item.id == queued_item_id);
         if let TurnInput::UserInput { client_id, .. } = &mut input {
-            *client_id = self
-                .list(thread_id)
-                .await?
-                .into_iter()
-                .find_map(|item| match item {
-                    QueuedItem {
-                        id,
-                        input: TurnInput::UserInput { client_id, .. },
-                    } if id == queued_item_id => client_id,
-                    _ => None,
-                });
+            *client_id = previous.as_ref().and_then(|item| match &item.input {
+                TurnInput::UserInput { client_id, .. } => client_id.clone(),
+                _ => None,
+            });
+        }
+        if responsesapi_client_metadata.is_none() {
+            responsesapi_client_metadata =
+                previous.and_then(|item| item.responsesapi_client_metadata);
         }
         let input = prepare_queued_user_input(input).await?;
-        let payload = serde_json::to_string(&input)?;
+        let payload = queued_input_payload(&input, responsesapi_client_metadata.as_ref())?;
         let item = self
             .queue
             .update(thread_id, queued_item_id, payload)
             .await?
-            .map(queued_item_from_record)
+            .map(QueuedItem::try_from)
             .transpose()?;
         if item.is_some() {
             self.emit_changed(thread_id);
@@ -389,12 +421,15 @@ impl QueuedItemService {
             return Err(QueueServiceError::InvalidInput);
         };
         let submission = thread
-            .start_turn_if_idle(TurnInputRequest::new(input).with_trace(trace).on_start(
-                TurnStartOptions {
-                    turn_trigger: Some("queue".to_string()),
-                    ..Default::default()
-                },
-            ))
+            .start_turn_if_idle(
+                TurnInputRequest::new(input)
+                    .with_responses_metadata(item.responsesapi_client_metadata)
+                    .with_trace(trace)
+                    .on_start(TurnStartOptions {
+                        turn_trigger: Some("queue".to_string()),
+                        ..Default::default()
+                    }),
+            )
             .await?;
         if matches!(submission, StartIfIdleSubmission::Started { .. }) {
             self.delete_locked(thread_id, queued_item_id).await?;
@@ -422,25 +457,29 @@ impl QueuedItemService {
             };
             let queued_item_id = record.id.clone();
 
-            let input = match serde_json::from_str::<TurnInput>(&record.payload) {
-                Ok(input) => input,
+            let item = match QueuedItem::try_from(record) {
+                Ok(item) => item,
                 Err(error) => {
                     tracing::warn!(%queued_item_id, %error, "discarding invalid queued item");
                     self.delete_locked(thread_id, queued_item_id).await?;
                     continue;
                 }
             };
-            if !matches!(input, TurnInput::UserInput { .. }) {
+            if !matches!(item.input, TurnInput::UserInput { .. }) {
                 tracing::warn!(%queued_item_id, "discarding non-user queued input");
                 self.delete_locked(thread_id, queued_item_id).await?;
                 continue;
             }
 
             match thread
-                .start_turn_if_idle(TurnInputRequest::new(input).on_start(TurnStartOptions {
-                    turn_trigger: Some("queue".to_string()),
-                    ..Default::default()
-                }))
+                .start_turn_if_idle(
+                    TurnInputRequest::new(item.input)
+                        .with_responses_metadata(item.responsesapi_client_metadata)
+                        .on_start(TurnStartOptions {
+                            turn_trigger: Some("queue".to_string()),
+                            ..Default::default()
+                        }),
+                )
                 .await
             {
                 Ok(StartIfIdleSubmission::Started { .. }) => {
@@ -566,11 +605,34 @@ where
     }
 }
 
-fn queued_item_from_record(
-    record: QueuedUserSubmissionRecord,
-) -> Result<QueuedItem, QueueServiceError> {
-    Ok(QueuedItem {
-        id: record.id,
-        input: serde_json::from_str::<TurnInput>(&record.payload)?,
-    })
+fn queued_input_payload(
+    input: &TurnInput,
+    metadata: Option<&HashMap<String, String>>,
+) -> Result<String, QueueServiceError> {
+    let Some(metadata) = metadata else {
+        return Ok(serde_json::to_string(input)?);
+    };
+    let mut payload = serde_json::to_value(input)?;
+    // Keep TurnInput's wire shape so older readers can still execute the input.
+    payload["UserInput"]["responsesapi_client_metadata"] = serde_json::to_value(metadata)?;
+    Ok(serde_json::to_string(&payload)?)
+}
+
+impl TryFrom<QueuedUserSubmissionRecord> for QueuedItem {
+    type Error = QueueServiceError;
+
+    fn try_from(record: QueuedUserSubmissionRecord) -> Result<Self, Self::Error> {
+        let mut payload: serde_json::Value = serde_json::from_str(&record.payload)?;
+        let responsesapi_client_metadata = payload
+            .get_mut("UserInput")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|input| input.remove("responsesapi_client_metadata"))
+            .map(serde_json::from_value)
+            .transpose()?;
+        Ok(QueuedItem {
+            id: record.id,
+            input: serde_json::from_value(payload)?,
+            responsesapi_client_metadata,
+        })
+    }
 }

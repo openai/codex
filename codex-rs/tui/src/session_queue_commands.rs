@@ -127,6 +127,7 @@ pub(super) async fn run_session_queue_action_with_app_server(
         .request_typed(ClientRequest::ThreadQueueAdd {
             request_id,
             params: ThreadQueueAddParams {
+                responsesapi_client_metadata: None,
                 thread_id: thread_id.to_string(),
                 input: vec![UserInput::Text {
                     text: message.to_string(),

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -136,10 +137,18 @@ async fn queue_crud_preserves_identity_order_and_notifications() -> Result<()> {
         &mut app,
         ThreadQueueAddParams {
             client_user_message_id: "first-client-message".to_string(),
+            responsesapi_client_metadata: Some(HashMap::from([(
+                "client_type".to_string(),
+                "macos_app".to_string(),
+            )])),
             ..submission(&thread_id, "first")
         },
     )
     .await?;
+    assert_eq!(
+        first.responsesapi_client_metadata.as_ref().unwrap()["client_type"],
+        "macos_app"
+    );
     let second = queue_item(&mut app, submission(&thread_id, "second")).await?;
     let first_change: ThreadQueueChangedNotification =
         timeout(READ_TIMEOUT, app.read_notification("thread/queue/changed")).await??;
@@ -162,6 +171,10 @@ async fn queue_crud_preserves_identity_order_and_notifications() -> Result<()> {
         .request(|request_id| ClientRequest::ThreadQueueUpdate {
             request_id,
             params: ThreadQueueUpdateParams {
+                responsesapi_client_metadata: Some(HashMap::from([(
+                    "client_type".to_string(),
+                    "ios_app".to_string(),
+                )])),
                 thread_id: thread_id.clone(),
                 queued_submission_id: first.id.clone(),
                 input: vec![text("first edited")],
@@ -174,6 +187,14 @@ async fn queue_crud_preserves_identity_order_and_notifications() -> Result<()> {
         first.client_user_message_id
     );
     assert_eq!(updated.queued_submission.input, vec![text("first edited")]);
+    assert_eq!(
+        updated
+            .queued_submission
+            .responsesapi_client_metadata
+            .as_ref()
+            .unwrap()["client_type"],
+        "ios_app"
+    );
     let update_change: ThreadQueueChangedNotification =
         timeout(READ_TIMEOUT, app.read_notification("thread/queue/changed")).await??;
     assert_eq!(
@@ -271,6 +292,7 @@ async fn queue_list_returns_ordered_pages_and_lightweight_notifications() -> Res
     let queued = queue_item(
         &mut app,
         ThreadQueueAddParams {
+            responsesapi_client_metadata: None,
             thread_id: thread_id.clone(),
             input: vec![text(&"x".repeat(64 * 1024))],
             client_user_message_id: "oversized-snapshot".to_string(),
@@ -375,6 +397,10 @@ async fn idle_queue_dispatch_preserves_client_id() -> Result<()> {
         .thread
         .id;
     let queued_submission = ThreadQueueAddParams {
+        responsesapi_client_metadata: Some(std::collections::HashMap::from([(
+            "client_type".to_string(),
+            "ios_app".to_string(),
+        )])),
         thread_id: thread_id.clone(),
         input: vec![text("durable queued message")],
         client_user_message_id: "stable-queued-client-id".to_string(),
@@ -417,6 +443,7 @@ async fn idle_queue_dispatch_preserves_client_id() -> Result<()> {
         .to_str()
         .context("queued turn metadata header is not valid ASCII")?;
     let metadata: Value = serde_json::from_str(metadata_header)?;
+    assert_eq!(metadata["client_type"], "ios_app");
     assert_eq!(metadata["thread_id"].as_str(), Some(thread_id.as_str()));
     assert_eq!(
         metadata["turn_id"].as_str(),
@@ -1056,6 +1083,7 @@ async fn decline_approval(app: &mut TestAppServer, request_id: RequestId) -> Res
 
 fn submission(thread_id: &str, value: &str) -> ThreadQueueAddParams {
     ThreadQueueAddParams {
+        responsesapi_client_metadata: None,
         thread_id: thread_id.to_string(),
         input: vec![text(value)],
         client_user_message_id: format!("queued-{value}"),

@@ -83,9 +83,10 @@ impl ThreadQueueRequestProcessor {
         ensure_direct_input_allowed(loaded_thread.as_deref(), &source)?;
         let queued_item = self
             .service()?
-            .enqueue(
+            .enqueue_with_metadata(
                 thread_id,
                 submission_into_turn_input(params.input, Some(params.client_user_message_id)),
+                params.responsesapi_client_metadata,
             )
             .await
             .map_err(queue_error)?;
@@ -140,10 +141,11 @@ impl ThreadQueueRequestProcessor {
         ensure_direct_input_allowed(loaded_thread.as_deref(), &source)?;
         let queued_item = self
             .service()?
-            .update(
+            .update_with_metadata(
                 thread_id,
                 params.queued_submission_id.clone(),
                 submission_into_turn_input(params.input, /*client_user_message_id*/ None),
+                params.responsesapi_client_metadata,
             )
             .await
             .map_err(queue_error)?
@@ -345,6 +347,7 @@ fn api_queued_submission(value: QueuedItem) -> Result<QueuedSubmission, JSONRPCE
     };
     Ok(QueuedSubmission {
         id: value.id,
+        responsesapi_client_metadata: value.responsesapi_client_metadata,
         input: content.into_iter().map(Into::into).collect(),
         client_user_message_id: client_id
             .ok_or_else(|| internal_error("queued submission is missing its client message id"))?,
