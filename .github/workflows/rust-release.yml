@@ -208,6 +208,7 @@ jobs:
         name: Install musl build tools
         env:
           TARGET: ${{ matrix.target }}
+          CODEX_MUSL_RELEASE_LINK_FLAGS: "1"
         run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
       - if: ${{ matrix.build-system == 'cargo' && contains(matrix.target, 'linux') }}

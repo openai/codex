@@ -67,6 +67,12 @@ def _release_profile_impl(settings, attr):
             "@local_config_cc//:cc-toolchain-x64_windows",
             "@local_config_cc//:cc-toolchain-arm64_windows",
         ]
+    if attr.linux_x86_64_musl:
+        # Match the Cargo release linker for x86-64 static PIEs.
+        profile[_RUSTC_FLAGS] += [
+            "-Cllvm-args=--addrsig",
+            "-Clink-arg=-Wl,--icf=safe",
+        ]
     return profile
 
 _release_profile = transition(
@@ -132,6 +138,7 @@ _runtime_binary_files = rule(
     attrs = {
         "binary": attr.label(mandatory = True, executable = True, cfg = _release_profile),
         "platform_os": attr.string(),
+        "linux_x86_64_musl": attr.bool(),
         "macos_minimum_os": attr.string(),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
@@ -159,6 +166,10 @@ def release_binary(binary, name = "release", macos_x86_64_minimum_os = "10.12", 
     _runtime_binary_files(
         name = name + "_files",
         binary = binary,
+        linux_x86_64_musl = select({
+            "@llvm//platforms/config:linux_x86_64_musl": True,
+            "//conditions:default": False,
+        }),
         platform_os = select({
             "@platforms//os:macos": "macos",
             "@platforms//os:linux": "linux",
