@@ -1,4 +1,4 @@
-//! One typed housekeeper operation through the existing isolated-turn executor.
+//! Typed Guardian operations through the existing isolated-turn executor.
 
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_guardian_reviewer::GuardianReviewSessionOutcome;
@@ -9,9 +9,11 @@ use codex_guardian_reviewer::start_review_turn;
 use codex_guardian_reviewer::wait_for_guardian_review;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::turn_input::TurnInput;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnStartOptions;
+use codex_utils_string::to_json_string_bounded;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -19,45 +21,82 @@ use tokio_util::sync::CancellationToken;
 
 /// The host must honor the runtime disposition, including when an operation fails.
 #[must_use = "honor the disposition before reusing the isolated runtime"]
-pub struct HousekeeperResult<T> {
+pub struct OperationResult<T> {
     pub result: anyhow::Result<T>,
     pub disposition: SessionDisposition,
 }
 
+/// Existing housekeeper callers share the same disposition contract.
+pub type HousekeeperResult<T> = OperationResult<T>;
+
+pub(crate) enum GuardianOperation {
+    HousekeeperRouting,
+    ChannelSelection,
+}
+
+impl GuardianOperation {
+    fn input_name(&self) -> &'static str {
+        match self {
+            Self::HousekeeperRouting => "guardian_housekeeper_input",
+            Self::ChannelSelection => "guardian_channel_selection_input",
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::HousekeeperRouting => "Guardian housekeeper routing",
+            Self::ChannelSelection => "Guardian channel selection",
+        }
+    }
+}
+
+pub(crate) fn context_input(
+    name: &str,
+    input: &impl Serialize,
+    policy: TruncationPolicy,
+) -> anyhow::Result<ResponseItem> {
+    Ok(ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: Some(name.into()),
+        namespace: Some("guardian".into()),
+        output: FunctionCallOutputPayload::from_text(to_json_string_bounded(
+            input,
+            policy.byte_budget(),
+        )?),
+        internal_chat_message_metadata_passthrough: None,
+    })
+}
+
 pub(crate) async fn sample<T: DeserializeOwned>(
     runtime: &impl ReviewerRuntime,
+    operation: GuardianOperation,
     input: &impl Serialize,
+    policy: TruncationPolicy,
     schema: Value,
     deadline: ReviewDeadline,
     cancellation: &CancellationToken,
-) -> HousekeeperResult<T> {
-    let text = match serde_json::to_string(input) {
-        Ok(text) => text,
+) -> OperationResult<T> {
+    let label = operation.label();
+    let input = match context_input(operation.input_name(), input, policy) {
+        Ok(input) => input,
         Err(error) => {
-            return HousekeeperResult {
-                result: Err(error.into()),
+            return OperationResult {
+                result: Err(error),
                 disposition: SessionDisposition::Reusable,
             };
         }
     };
     let request =
-        TurnInputRequest::new(TurnInput::ResponseItem(ResponseItem::FunctionCallOutput {
-            id: None,
-            call_id: None,
-            name: Some("guardian_housekeeper_input".into()),
-            namespace: Some("guardian".into()),
-            output: FunctionCallOutputPayload::from_text(text),
-            internal_chat_message_metadata_passthrough: None,
-        }))
-        .on_start(TurnStartOptions {
+        TurnInputRequest::new(TurnInput::ResponseItem(input)).on_start(TurnStartOptions {
             final_output_json_schema: Some(schema),
             ..Default::default()
         });
     let turn_id = match start_review_turn(runtime, request, deadline, Some(cancellation)).await {
         Ok(turn_id) => turn_id,
         Err(_) => {
-            return HousekeeperResult {
-                result: Err(anyhow::anyhow!("housekeeper turn did not start")),
+            return OperationResult {
+                result: Err(anyhow::anyhow!("{label} turn did not start")),
                 disposition: SessionDisposition::Discard,
             };
         }
@@ -76,23 +115,23 @@ pub(crate) async fn sample<T: DeserializeOwned>(
             serde_json::from_str(response.raw()).map_err(anyhow::Error::from)
         }
         GuardianReviewSessionOutcome::Completed(_) => {
-            Err(anyhow::anyhow!("invalid housekeeper response"))
+            Err(anyhow::anyhow!("{label} returned an invalid response"))
         }
         GuardianReviewSessionOutcome::PromptBuildFailed(error)
         | GuardianReviewSessionOutcome::SessionFailed { error, .. } => Err(error),
         GuardianReviewSessionOutcome::InputBudgetExceeded => {
-            Err(anyhow::anyhow!("housekeeper input exceeded budget"))
+            Err(anyhow::anyhow!("{label} input exceeded budget"))
         }
-        GuardianReviewSessionOutcome::TimedOut => Err(anyhow::anyhow!("housekeeper timed out")),
-        GuardianReviewSessionOutcome::Aborted => Err(anyhow::anyhow!("housekeeper aborted")),
+        GuardianReviewSessionOutcome::TimedOut => Err(anyhow::anyhow!("{label} timed out")),
+        GuardianReviewSessionOutcome::Aborted => Err(anyhow::anyhow!("{label} aborted")),
         GuardianReviewSessionOutcome::StaleAuthorization => {
-            Err(anyhow::anyhow!("housekeeper input became stale"))
+            Err(anyhow::anyhow!("{label} input became stale"))
         }
     };
     if result.is_err() && matches!(disposition, SessionDisposition::Reusable) {
         disposition = SessionDisposition::Rollback;
     }
-    HousekeeperResult {
+    OperationResult {
         result,
         disposition,
     }

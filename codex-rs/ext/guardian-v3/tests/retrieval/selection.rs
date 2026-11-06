@@ -1,5 +1,12 @@
-//! Reviewer subscriptions stay inside the fixed Guardian catalog.
+//! Reviewer tools and model-driven selection share a fixed Guardian catalog.
 
+use codex_analytics::GuardianReviewSessionKind;
+use codex_core::guardian_review::prepare_review_prewarm;
+use codex_extension_api::SessionIsolation;
+use codex_extension_api::ToolPolicy;
+use codex_guardian_reviewer::ReviewDeadline;
+use codex_guardian_reviewer::SessionDisposition;
+use codex_guardian_v3::CHANNEL_SELECTION_INSTRUCTIONS;
 use codex_guardian_v3::ReviewerSubscriptions;
 use codex_guardian_v3::local_board;
 use codex_message_board::AppendRequest;
@@ -12,20 +19,31 @@ use codex_message_board::SubscriptionTarget;
 use codex_message_board::UpsertChannelRequest;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::SessionSource;
 use codex_state::SqliteConfig;
 use codex_tools::ToolCall;
 use codex_tools::ToolCallSource;
 use codex_tools::ToolName;
 use codex_tools::ToolPayload;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::SnapshotEntry;
+use core_test_support::responses::*;
+use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicUsize;
+use tokio_util::sync::CancellationToken;
 
 use crate::board_host;
 
@@ -181,5 +199,180 @@ async fn subscription_tools_only_change_the_caller_and_return_captured_post_ids(
             .map_err(|_| anyhow::anyhow!("notifications poisoned"))?
             .is_empty()
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preparation_commits_only_valid_selections_from_the_captured_catalog() -> anyhow::Result<()>
+{
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let policy = TruncationPolicyConfig::bytes(/*limit*/ 1024);
+    let test = test_codex()
+        .with_model_info_override("test-gpt-5.1-codex", move |model| {
+            model.auto_review_model_override = Some(model.slug.clone());
+            model.truncation_policy = policy;
+        })
+        .with_config(|config| {
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config.include_environment_context = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let prepared = prepare_review_prewarm(&test.codex).await?;
+    let key = prepared.reuse_key(/*previous*/ None);
+    let (mut options, state) = prepared
+        .thread_options(GuardianReviewSessionKind::TrunkNew, /*snapshot*/ None)
+        .await;
+    options.config.base_instructions = Some(CHANNEL_SELECTION_INSTRUCTIONS.into());
+    options.session_source = Some(SessionSource::Internal(InternalSessionSource::Guardian));
+    options
+        .thread_extension_init
+        .insert(SessionIsolation::Isolated);
+    options.thread_extension_init.insert(ToolPolicy {
+        allowed_tools: Some(Vec::new()),
+        ..Default::default()
+    });
+    let spawned = test.thread_manager.start_thread(options).await?;
+    let cancellation = CancellationToken::new();
+    let runtime = prepared
+        .bind_thread(&spawned.thread, key, state, cancellation.clone())
+        .await;
+    let owner = test.session_configured.thread_id;
+    let reviewer = spawned.thread_id;
+    let path = AgentPath::root()
+        .join("reviewer")
+        .map_err(anyhow::Error::msg)?;
+    let host = host(owner, reviewer, &path);
+    let dir = tempfile::tempdir()?;
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into()?);
+    let storage = local_board(sqlite, owner.into());
+    let writer = storage.read_write().open(host.clone()).await?;
+    for (name, description) in [("build", "Build"), ("release", "Release policy")] {
+        writer
+            .upsert_channel(
+                owner,
+                UpsertChannelRequest {
+                    channel_name: name.into(),
+                    description: description.to_owned().try_into()?,
+                },
+            )
+            .await?;
+    }
+    let board = Arc::new(storage.read_only().open(host.clone()).await?);
+    writer
+        .set_subscriptions(owner, &BTreeMap::from([("release", Subscribe)]))
+        .await?;
+    board
+        .set_subscriptions(reviewer, &BTreeMap::from([("build", Subscribe)]))
+        .await?;
+    let subscriptions =
+        Arc::new(ReviewerSubscriptions::capture(Arc::clone(&board), reviewer, path.clone()).await?);
+    // A newer channel can gain a subscription after capture, before this selection commits.
+    writer
+        .upsert_channel(
+            owner,
+            UpsertChannelRequest {
+                channel_name: "later".into(),
+                description: "Later channel".to_owned().try_into()?,
+            },
+        )
+        .await?;
+    board
+        .set_subscriptions(reviewer, &BTreeMap::from([("later", Subscribe)]))
+        .await?;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("selection", r#"{"channels":["release"]}"#),
+            ev_completed("selection"),
+        ]),
+    )
+    .await;
+    let selected = subscriptions
+        .prepare(
+            &runtime,
+            "Publish?",
+            policy.into(),
+            ReviewDeadline::Unlimited,
+            &cancellation,
+        )
+        .await;
+    assert_eq!(selected.disposition, SessionDisposition::Reusable);
+    let expected = BTreeSet::from(["release".into()]);
+    assert_eq!(selected.result?, expected);
+    assert_eq!(
+        board
+            .subscribed_channels(reviewer, Default::default())
+            .await?
+            .results,
+        vec!["later".to_owned(), "release".to_owned()]
+    );
+    assert_eq!(
+        board
+            .subscribed_channels(owner, Default::default())
+            .await?
+            .results,
+        vec!["release".to_owned()]
+    );
+    assert_eq!(subscriptions.channels().await?, expected);
+    let mut request = response.single_request().body_json();
+    for item in request["input"].as_array_mut().expect("request input") {
+        if let Some(Value::String(output)) = item.get_mut("output") {
+            *output = context_snapshot::normalize_json_lines(output);
+        }
+    }
+    insta::assert_snapshot!(context_snapshot::format_context_snapshot(
+        "Reviewer replaces a previous subscription with the relevant channel.",
+        &[SnapshotEntry::body(&request)], &ContextSnapshotOptions::default().rewrite_known_segments(),
+    ), @r###"
+    Scenario: Reviewer replaces a previous subscription with the relevant channel.
+
+    ## Window 1
+    -- request 1 (request) --
+    00:message/developer:
+        <MODEL_INSTRUCTIONS>
+    01:message/developer:
+        <PERMISSIONS_INSTRUCTIONS>
+    02:function_call_output/guardian.guardian_channel_selection_input:{"catalog":{"build":"Build","release":"Release policy"},"subscriptions":["build"],"task":"Publish?"}
+    "###);
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let stopped = subscriptions
+        .prepare(
+            &runtime,
+            "Publish?",
+            policy.into(),
+            ReviewDeadline::Unlimited,
+            &cancelled,
+        )
+        .await;
+    assert!(stopped.result.is_err());
+    assert_eq!(stopped.disposition, SessionDisposition::Reusable);
+    assert_eq!(response.requests().len(), 1);
+    assert_eq!(subscriptions.channels().await?, expected);
+    let invalid = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("invalid", r#"{"channels":["build","later"]}"#),
+            ev_completed("invalid"),
+        ]),
+    )
+    .await;
+    let selected = subscriptions
+        .prepare(
+            &runtime,
+            "Publish?",
+            policy.into(),
+            ReviewDeadline::Unlimited,
+            &cancellation,
+        )
+        .await;
+    assert_eq!(selected.disposition, SessionDisposition::Rollback);
+    assert!(selected.result.is_err());
+    assert_eq!(subscriptions.channels().await?, expected);
+    assert_eq!(invalid.requests().len(), 1);
+    spawned.thread.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }

@@ -23,6 +23,8 @@ pub use housekeeper::Housekeeper;
 pub use retrieval_tools::RetrievalBinding;
 pub use retrieval_tools::install_retrieval_tools;
 pub use sampling::HousekeeperResult;
+pub use sampling::OperationResult;
+pub use selection::CHANNEL_SELECTION_INSTRUCTIONS;
 pub use selection::ReviewerSubscriptions;
 
 /// Storage selected by the Guardian consumer for setup, opening and cleanup.

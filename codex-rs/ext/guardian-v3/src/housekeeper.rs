@@ -5,6 +5,7 @@
 use crate::EvidenceCursor;
 use crate::EvidenceSnapshot;
 use crate::OriginalEvidence;
+use crate::sampling::GuardianOperation;
 use crate::sampling::HousekeeperResult;
 use crate::sampling::sample;
 use anyhow::ensure;
@@ -186,8 +187,16 @@ impl Housekeeper {
                         "additionalProperties":{"type":"string","description":"Channel purpose, at most 512 UTF-8 bytes."}}
                 }
             });
-            let sampled =
-                sample::<RoutingOutput>(runtime, &input, schema, deadline, cancellation).await;
+            let sampled = sample::<RoutingOutput>(
+                runtime,
+                GuardianOperation::HousekeeperRouting,
+                &input,
+                self.input_policy,
+                schema,
+                deadline,
+                cancellation,
+            )
+            .await;
             disposition = sampled.disposition;
             let output = sampled.result?;
             let valid = output.routes.len() == sources.len()
