@@ -3,16 +3,19 @@
 //! Comparisons omit reasoning and compaction.
 //! Other unsupported evidence is rejected intact.
 //! Errors never contain credentials or wire bodies.
+//! Queued comparisons retain their credential source; runtime-bound threads pin it at startup.
 //! Evidence preserves message roles, content order, and boundaries.
 //! The caller records measurements after baseline publication; dropping its task aborts Decisions work.
 
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClient;
+use codex_login::AuthManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value;
 use serde_json::json;
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -62,10 +65,49 @@ pub(super) enum DecisionsError {
     InvalidResponse,
 }
 
+pub(super) enum DecisionsCredential {
+    ApiKey(String),
+    SavedLogin(Arc<AuthManager>),
+    RuntimeLogin(Arc<AuthManager>, u64),
+}
+
+impl From<&str> for DecisionsCredential {
+    fn from(key: &str) -> Self {
+        Self::ApiKey(key.to_owned())
+    }
+}
+
+impl DecisionsCredential {
+    fn source_generation(&self) -> Option<u64> {
+        match self {
+            Self::ApiKey(_) => None,
+            Self::RuntimeLogin(_, source) => Some(*source),
+            Self::SavedLogin(manager) => {
+                let changes = manager.auth_change_state_receiver();
+                Some(changes.borrow().source_generation)
+            }
+        }
+    }
+
+    fn resolve(&self, source_generation: Option<u64>) -> Option<Cow<'_, str>> {
+        match self {
+            Self::ApiKey(key) => Some(Cow::Borrowed(key)),
+            Self::SavedLogin(manager) | Self::RuntimeLogin(manager, _) => {
+                let auth = manager.auth_cached()?;
+                let source = manager.auth_change_state_for(&auth)?.source_generation;
+                let key = auth.api_key()?;
+                (Some(source) == source_generation
+                    && super::startup::valid_implicit_decisions_key(key))
+                .then(|| Cow::Owned(key.to_owned()))
+            }
+        }
+    }
+}
+
 pub(super) struct DecisionsSampler {
     client: HttpClient,
     // No Debug implementation: credentials must not reach diagnostics.
-    api_key: String,
+    api_key: DecisionsCredential,
     url: String,
     slots: Semaphore,
     active_requests: Mutex<VecDeque<AbortHandle>>,
@@ -102,10 +144,10 @@ impl DecisionsTask {
 impl DecisionsSampler {
     pub(super) fn new(
         client: HttpClient,
-        api_key: String,
+        api_key: DecisionsCredential,
         url: String,
     ) -> Result<Self, DecisionsError> {
-        if api_key.trim().is_empty() {
+        if matches!(&api_key, DecisionsCredential::ApiKey(key) if key.trim().is_empty()) {
             return Err(DecisionsError::Credentials);
         }
         Ok(Self {
@@ -123,6 +165,7 @@ impl DecisionsSampler {
         input: &[ResponseItemEnvelope],
     ) -> DecisionsTask {
         let started = Instant::now();
+        let source_generation = self.api_key.source_generation();
         let body = (|| {
             let [tools, instructions, evidence @ ..] = input else {
                 return Err(DecisionsError::UnexpectedRequestSetup);
@@ -145,13 +188,14 @@ impl DecisionsSampler {
             }
             request_body(rubric, evidence.iter().map(|item| &item.item))
         })();
-        self.spawn_request(body, started)
+        self.spawn_request(body, started, source_generation)
     }
 
     fn spawn_request(
         self: &Arc<Self>,
         body: Result<Value, DecisionsError>,
         started: Instant,
+        source_generation: Option<u64>,
     ) -> DecisionsTask {
         let body = match body {
             Ok(body) => body,
@@ -177,7 +221,7 @@ impl DecisionsSampler {
             let Ok(_permit) = sampler.slots.acquire().await else {
                 return (Err(DecisionsError::Transport), started.elapsed());
             };
-            let result = tokio::time::timeout(DEADLINE, sampler.request(body))
+            let result = tokio::time::timeout(DEADLINE, sampler.request(body, source_generation))
                 .await
                 .unwrap_or(Err(DecisionsError::Timeout));
             (result, started.elapsed())
@@ -189,12 +233,16 @@ impl DecisionsSampler {
         }
     }
 
-    async fn request(&self, body: Value) -> Result<&'static str, DecisionsError> {
-        let request = self
-            .client
-            .post(&self.url)
-            .bearer_auth(&self.api_key)
-            .json(&body);
+    async fn request(
+        &self,
+        body: Value,
+        source_generation: Option<u64>,
+    ) -> Result<&'static str, DecisionsError> {
+        let key = self
+            .api_key
+            .resolve(source_generation)
+            .ok_or(DecisionsError::Credentials)?;
+        let request = self.client.post(&self.url).bearer_auth(key).json(&body);
         drop(body);
         let mut response = request
             .send()

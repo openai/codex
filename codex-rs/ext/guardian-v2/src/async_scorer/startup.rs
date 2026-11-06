@@ -11,8 +11,9 @@ use codex_extension_api::ThreadStartInput;
 use codex_features::Feature;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
-use codex_login::CodexAuth;
+use codex_model_provider::ProviderAuthContext;
 
+use super::decisions::DecisionsCredential;
 use super::decisions::DecisionsError;
 use super::decisions::DecisionsSampler;
 use super::decisions::URL;
@@ -22,12 +23,13 @@ use super::sampler::MODEL;
 // Decisions setup failures are telemetry only; they never affect the baseline sampler.
 pub(super) fn decisions_sampler(
     input: &ThreadStartInput<'_, Config>,
-    auth_manager: &AuthManager,
+    auth_manager: &Arc<AuthManager>,
 ) -> Option<DecisionsSampler> {
     use codex_http_client::ClientRouteClass;
     let result = decisions_api_key(
         &input.config.model_provider_id,
         input.config.model_provider.base_url.as_deref(),
+        input.thread_store.get::<ProviderAuthContext>().as_deref(),
         auth_manager,
     )
     .and_then(|key| {
@@ -56,18 +58,33 @@ pub(super) fn decisions_sampler(
 pub(super) fn decisions_api_key(
     provider_id: &str,
     base_url: Option<&str>,
-    auth_manager: &AuthManager,
-) -> Result<String, DecisionsError> {
+    context: Option<&ProviderAuthContext>,
+    fallback: &Arc<AuthManager>,
+) -> Result<DecisionsCredential, DecisionsError> {
     match std::env::var("CODEX_GUARDIAN_DECISIONS_API_KEY") {
-        Ok(key) => Ok(key),
+        Ok(key) => Ok(DecisionsCredential::ApiKey(key)),
         Err(std::env::VarError::NotPresent) if provider_id == "openai" && base_url.is_none() => {
-            auth_manager
-                .auth_cached()
-                .as_ref()
-                .and_then(CodexAuth::api_key)
-                .map(str::to_owned)
-                .or_else(codex_login::read_openai_api_key_from_env)
+            let manager = context.map_or(fallback, |context| &context.credentials);
+            if let Some(auth) = manager.auth_cached()
+                && let Some(key) = auth.api_key()
+            {
+                if !valid_implicit_decisions_key(key) {
+                    return Err(DecisionsError::Credentials);
+                }
+                if context.is_some_and(|context| context.runtime_auth.is_some()) {
+                    let state = manager
+                        .auth_change_state_for(&auth)
+                        .ok_or(DecisionsError::Credentials)?;
+                    return Ok(DecisionsCredential::RuntimeLogin(
+                        Arc::clone(manager),
+                        state.source_generation,
+                    ));
+                }
+                return Ok(DecisionsCredential::SavedLogin(Arc::clone(manager)));
+            }
+            codex_login::read_openai_api_key_from_env()
                 .filter(|key| valid_implicit_decisions_key(key))
+                .map(DecisionsCredential::ApiKey)
                 .ok_or(DecisionsError::Credentials)
         }
         Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => {

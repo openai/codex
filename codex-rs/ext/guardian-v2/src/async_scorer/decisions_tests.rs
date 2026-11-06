@@ -1,14 +1,16 @@
-use super::super::startup::decisions_api_key;
+use super::super::startup::decisions_api_key as select_api_key;
 use super::*;
 use crate::async_scorer::sampler::LunaSampler;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::ContextualUserFragment;
 use codex_context_fragments::RenderedFragment;
+use codex_features::Feature::RuntimeAgentInstances;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::TrustedToolSource;
 use codex_http_client::HttpClientBuilder;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider::ProviderAuthContext;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ContentItemMetadata;
 use codex_protocol_test_support::ContentItemTestExt;
@@ -97,6 +99,21 @@ fn adapter_preserves_trusted_tool_authority_and_scope() {
     );
 }
 
+fn decisions_api_key(
+    provider_id: &str,
+    base_url: Option<&str>,
+    manager: &Arc<AuthManager>,
+) -> Result<String, DecisionsError> {
+    select_api_key(provider_id, base_url, /*context*/ None, manager).and_then(current_key)
+}
+
+fn current_key(credential: DecisionsCredential) -> Result<String, DecisionsError> {
+    credential
+        .resolve(credential.source_generation())
+        .map(Cow::into_owned)
+        .ok_or(DecisionsError::Credentials)
+}
+
 #[tokio::test]
 async fn decisions_key_lookup_honors_override_or_reloaded_login() {
     let home = tempfile::tempdir().unwrap();
@@ -104,6 +121,18 @@ async fn decisions_key_lookup_honors_override_or_reloaded_login() {
         codex_login::CodexAuth::from_api_key("old-account-key"),
         home.path().to_path_buf(),
     );
+    let mut config = core_test_support::load_default_config_for_test(&home).await;
+    config.features.enable(RuntimeAgentInstances).unwrap();
+    let runtime =
+        codex_core::build_runtime_auth_manager(&config, manager.clone(), "installation").unwrap();
+    let mut context = ProviderAuthContext {
+        credentials: manager.clone(),
+        runtime_auth: Some((runtime, config.runtime_auth_mode)),
+    };
+    let harness = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("harness-key"));
+    let pinned = select_api_key("openai", /*base_url*/ None, Some(&context), &harness);
+    context.runtime_auth = None;
+    let live = select_api_key("openai", /*base_url*/ None, Some(&context), &harness);
     codex_login::login_with_api_key(
         home.path(),
         "synthetic-key",
@@ -112,16 +141,13 @@ async fn decisions_key_lookup_honors_override_or_reloaded_login() {
     )
     .unwrap();
     manager.reload().await;
-    let default =
-        super::super::startup::decisions_api_key("openai", /*base_url*/ None, &manager);
-    let custom_url = super::super::startup::decisions_api_key(
-        "openai",
-        Some("https://gateway.example/v1"),
-        &manager,
-    );
+    let default = live.and_then(current_key);
+    let custom_url = decisions_api_key("openai", Some("https://gateway.example/v1"), &manager);
     let expected = match std::env::var("CODEX_GUARDIAN_DECISIONS_API_KEY") {
         Ok(key) => (Ok(key.clone()), Ok(key)),
         Err(std::env::VarError::NotPresent) => {
+            let pinned = pinned.unwrap();
+            assert!(pinned.resolve(pinned.source_generation()).is_none());
             (Ok("synthetic-key".into()), Err(DecisionsError::Credentials))
         }
         Err(std::env::VarError::NotUnicode(_)) => (
@@ -292,22 +318,27 @@ async fn http_contract_and_untrusted_response_validation() {
         .mount(&server)
         .await;
     Arc::get_mut(&mut sampler).unwrap().url = format!("{}/denied", server.uri());
-    assert_eq!(sampler.request(body).await, Err(DecisionsError::Http(403)));
+    let result = sampler.request(body, /*source_generation*/ None).await;
+    assert_eq!(result, Err(DecisionsError::Http(403)));
 }
 
 #[tokio::test]
 async fn decisions_admits_newest_request_by_cancelling_oldest() {
     core_test_support::skip_if_no_network!();
+    let home = tempfile::tempdir().unwrap();
+    let initial = CodexAuth::from_api_key("old-key");
+    let manager = AuthManager::from_auth_for_testing_with_home(initial, home.path().into());
     let server = MockServer::start().await;
     Mock::given(method("POST"))
+        .and(header("authorization", "Bearer replacement-key"))
         .respond_with(ResponseTemplate::new(/*s*/ 403))
-        .expect(MAX_CONCURRENT_REQUESTS as u64)
+        .expect((MAX_CONCURRENT_REQUESTS - 1) as u64)
         .mount(&server)
         .await;
     let sampler = Arc::new(
         DecisionsSampler::new(
             HttpClientBuilder::new().build_direct().unwrap(),
-            "synthetic-key".into(),
+            DecisionsCredential::SavedLogin(Arc::clone(&manager)),
             server.uri(),
         )
         .unwrap(),
@@ -330,19 +361,33 @@ async fn decisions_admits_newest_request_by_cancelling_oldest() {
         .await
         .unwrap();
     let oldest = sampler.start_conversation_comparison(&input);
-    let mut remaining = (1..MAX_CONCURRENT_REQUESTS)
+    let stale = sampler.start_conversation_comparison(&input);
+    let store = codex_login::AuthCredentialsStoreMode::File;
+    let keyring = codex_login::AuthKeyringBackendKind::default();
+    let login = |key| codex_login::login_with_api_key(home.path(), key, store, keyring).unwrap();
+    login("replacement-key");
+    manager.reload().await;
+    let mut remaining = (2..MAX_CONCURRENT_REQUESTS)
         .map(|_| sampler.start_conversation_comparison(&input))
         .collect::<Vec<_>>();
     remaining.push(sampler.start_conversation_comparison(&input));
     assert!(oldest.finish().await.unwrap_err().is_cancelled());
     assert!(server.received_requests().await.unwrap().is_empty());
     drop(permits);
+    let rejected = Err(DecisionsError::Credentials);
+    assert_eq!(stale.finish().await.unwrap().0, rejected);
     for task in remaining {
         assert_eq!(
             task.finish().await.unwrap().0,
             Err(DecisionsError::Http(403))
         );
     }
+    let compare = || sampler.start_conversation_comparison(&input);
+    login(" sk-proj-fedramp-synthetic");
+    manager.reload().await;
+    assert_eq!(compare().finish().await.unwrap().0, rejected);
+    manager.logout().await.unwrap();
+    assert_eq!(compare().finish().await.unwrap().0, rejected);
 }
 
 #[test]
