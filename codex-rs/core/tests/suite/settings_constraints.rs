@@ -8,10 +8,17 @@ use codex_features::Feature;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::PermissionMessages;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
@@ -19,6 +26,8 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -32,6 +41,173 @@ const INITIAL_MODEL: &str = "gpt-5.4";
 const PROTECTED_MODEL: &str = "gpt-5.2";
 const REVIEW_INSTRUCTIONS: &str = "Protected-model automatic review instructions.";
 const PERMISSION_INSTRUCTIONS: &str = "Protected-model read-only instructions.";
+
+#[tokio::test]
+async fn protected_model_startup_preserves_legacy_permission_behavior() -> Result<()> {
+    enum StartupExpectation {
+        Preserve,
+        Downgrade,
+        Reject,
+    }
+
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let root_write = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        FileSystemAccessMode::Write,
+    )]);
+    let mut carveout = root_write.clone();
+    carveout.entries.push(FileSystemSandboxEntry::new(
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Tmpdir,
+        },
+        FileSystemAccessMode::Read,
+    ));
+    let mut unprojectable = root_write.clone();
+    unprojectable.entries.push(FileSystemSandboxEntry::new(
+        PathUri::parse("file:///%00/bad/path/YQ")?.into(),
+        FileSystemAccessMode::Write,
+    ));
+    let mut projectable = root_write.clone();
+    let local_path = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
+    projectable.entries.push(FileSystemSandboxEntry::new(
+        local_path.into(),
+        FileSystemAccessMode::Write,
+    ));
+    for (profile, expectation) in [
+        (PermissionProfile::Disabled, StartupExpectation::Downgrade),
+        (
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Unrestricted,
+                network: NetworkSandboxPolicy::Enabled,
+            },
+            StartupExpectation::Downgrade,
+        ),
+        (
+            PermissionProfile::from_runtime_permissions(&root_write, NetworkSandboxPolicy::Enabled),
+            StartupExpectation::Downgrade,
+        ),
+        (
+            PermissionProfile::from_runtime_permissions(
+                &projectable,
+                NetworkSandboxPolicy::Enabled,
+            ),
+            StartupExpectation::Downgrade,
+        ),
+        (
+            PermissionProfile::from_runtime_permissions(
+                &root_write,
+                NetworkSandboxPolicy::Restricted,
+            ),
+            StartupExpectation::Reject,
+        ),
+        (
+            PermissionProfile::External {
+                network: NetworkSandboxPolicy::Enabled,
+            },
+            StartupExpectation::Reject,
+        ),
+        (
+            PermissionProfile::External {
+                network: NetworkSandboxPolicy::Restricted,
+            },
+            StartupExpectation::Reject,
+        ),
+        (PermissionProfile::read_only(), StartupExpectation::Preserve),
+        (
+            PermissionProfile::workspace_write(),
+            StartupExpectation::Preserve,
+        ),
+        (
+            PermissionProfile::from_runtime_permissions(&carveout, NetworkSandboxPolicy::Enabled),
+            StartupExpectation::Preserve,
+        ),
+        (
+            PermissionProfile::from_runtime_permissions(
+                &unprojectable,
+                NetworkSandboxPolicy::Enabled,
+            ),
+            StartupExpectation::Reject,
+        ),
+    ] {
+        let expected = match expectation {
+            StartupExpectation::Preserve => Some(profile.clone()),
+            StartupExpectation::Downgrade => Some(PermissionProfile::workspace_write()),
+            StartupExpectation::Reject => None,
+        };
+        let case = format!("{profile:?}");
+        let result = test_codex()
+            .with_model(PROTECTED_MODEL)
+            .with_cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                    "[auto_review]\nrequired_on_models = [\"gpt-5.2\"]\n",
+                ),
+            )
+            .with_config(move |config| {
+                config.workspace_roots = vec![config.cwd.clone()];
+                config
+                    .permissions
+                    .set_workspace_roots(config.workspace_roots.clone());
+                config.permissions.approval_policy =
+                    Constrained::allow_any(AskForApproval::OnRequest);
+                config
+                    .permissions
+                    .set_permission_profile(profile)
+                    .expect("set permission profile");
+                config
+                    .features
+                    .enable(Feature::GuardianApproval)
+                    .expect("enable Guardian");
+            })
+            .build_with_auto_env(&server)
+            .await;
+        if let Some(expected) = expected {
+            let test = result?;
+            let settings = test.codex.thread_settings_snapshot().await;
+            let restored = test.codex.restorable_thread_settings().await;
+            let environments = restored.environments.expect("captured environments");
+            let environment = environments
+                .environment_requests
+                .first()
+                .expect("selected executor environment");
+            let actual = restored
+                .permission_profile
+                .expect("captured permission profile")
+                .materialize_project_roots_with_path_uris(&environment.workspace_roots);
+            // Keep foreign executor roots intact and derive the expectation from the fixture.
+            let expected = expected.materialize_project_roots_with_path_uris(
+                &test.executor_environment().selection().workspace_roots,
+            );
+            assert_eq!(
+                (
+                    actual,
+                    settings.approvals_reviewer,
+                    settings.cwd,
+                    settings.runtime_workspace_roots
+                ),
+                (
+                    expected,
+                    ApprovalsReviewer::AutoReview,
+                    test.config.cwd.clone(),
+                    Some(test.config.workspace_roots.clone())
+                ),
+                "{case}",
+            );
+            test.codex.shutdown_and_wait().await?;
+        } else {
+            let error = result
+                .err()
+                .expect("protected model must reject full disk writes");
+            assert!(
+                error.to_string().contains("you need to use auto review"),
+                "{case}: {error}"
+            );
+        }
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy)]
 enum SettingsOperation {

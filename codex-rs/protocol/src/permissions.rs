@@ -226,6 +226,19 @@ impl FileSystemSandboxEntry {
     pub fn skips_missing_path(&self) -> bool {
         self.missing_path_behavior == Some(FileSystemSandboxEntryMissingPathBehavior::Skip)
     }
+
+    /// Projects an explicit writable path for the legacy native-path sandbox adapter.
+    /// Special paths and glob patterns are handled separately by that adapter.
+    pub fn legacy_writable_path(&self) -> io::Result<Option<AbsolutePathBuf>> {
+        match &self.path {
+            FileSystemPath::Path { path } if self.access.can_write() => {
+                path.to_abs_path().map(Some)
+            }
+            FileSystemPath::Path { .. }
+            | FileSystemPath::Special { .. }
+            | FileSystemPath::GlobPattern { .. } => Ok(None),
+        }
+    }
 }
 
 #[derive(
@@ -1880,9 +1893,8 @@ impl FileSystemSandboxPolicy {
                 for entry in &self.entries {
                     match &entry.path {
                         FileSystemPath::GlobPattern { .. } => {}
-                        FileSystemPath::Path { path } => {
-                            if entry.access.can_write() {
-                                let path = path.to_abs_path()?;
+                        FileSystemPath::Path { .. } => {
+                            if let Some(path) = entry.legacy_writable_path()? {
                                 if cwd_absolute.as_ref().is_some_and(|cwd| cwd == &path) {
                                     workspace_root_writable = true;
                                 } else {
