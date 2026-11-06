@@ -120,16 +120,33 @@ impl TranscriptView {
             let Some(layout) = self.layout(cells, index) else {
                 continue;
             };
-            let mut ranges = if let Some(user) = user {
-                user_ranges(layout.text(), &user.message)
-            } else if self.mode == crate::history_cell::HistoryRenderMode::Raw {
-                user_ranges(layout.text(), "")
-                    .into_iter()
-                    .filter(|(_, label, _)| *label != "User message")
-                    .collect()
+            let mut ranges = if self.mode == crate::history_cell::HistoryRenderMode::Raw
+                && !self.detailed
+                || user.is_some_and(|user| !user.uses_markdown())
+            {
+                literal_block_ranges(layout.text(), user)
             } else {
                 layout.copy_block_ranges()
             };
+            let user_source = user
+                .map(|user| user.message.as_str())
+                .filter(|source| !source.is_empty())
+                .map(|source| crate::history_cell::sanitize_user_text(source.into()));
+            if user.is_some()
+                && (!layout.text().trim().is_empty()
+                    || user_source
+                        .as_ref()
+                        .is_some_and(|source| !source.trim().is_empty()))
+            {
+                ranges.insert(
+                    0,
+                    (
+                        0..layout.text().len(),
+                        "User message",
+                        user_source.map(std::borrow::Cow::into_owned),
+                    ),
+                );
+            }
             ranges.sort_by_key(|(range, _, _)| (range.start, std::cmp::Reverse(range.end)));
             if let Some(source) = user
                 .map(|user| user.message.as_str())
@@ -149,7 +166,8 @@ impl TranscriptView {
                     match event {
                         pulldown_cmark::Event::Start(pulldown_cmark::Tag::BlockQuote) => {
                             if depth == 0 {
-                                quotes.push(crate::markdown_copy::quote_content(&source[span]));
+                                let raw = &source[span];
+                                quotes.push((raw, crate::markdown_copy::quote_content(raw)));
                             }
                             depth += 1;
                         }
@@ -179,10 +197,15 @@ impl TranscriptView {
                         {
                             *payload = Some(codes.remove(at).to_string());
                         }
-                    } else if user.is_none()
-                        && *label == "Blockquote"
+                    } else if *label == "Blockquote"
                         && let Some(displayed) = payload.as_deref()
-                        && let Some(at) = quotes.iter().position(|quote| {
+                        && let Some(at) = quotes.iter().position(|(_, quote)| {
+                            if normalized(quote) == normalized(displayed) {
+                                return true;
+                            }
+                            if user.is_some() {
+                                return false;
+                            }
                             let visible = quote
                                 .split_inclusive('\n')
                                 .map(|line| {
@@ -190,18 +213,19 @@ impl TranscriptView {
                                 })
                                 .collect::<String>();
                             normalized(&visible) == normalized(displayed)
-                                || normalized(quote) == normalized(displayed)
                         })
                     {
-                        *payload = Some(
-                            quotes
-                                .remove(at)
+                        let (raw, quote) = quotes.remove(at);
+                        *payload = Some(if user.is_some() {
+                            crate::history_cell::sanitize_user_text(raw.into()).into_owned()
+                        } else {
+                            quote
                                 .split_inclusive('\n')
                                 .map(|line| {
                                     crate::git_action_directives::strip_line_directives(line).0
                                 })
-                                .collect(),
-                        );
+                                .collect()
+                        });
                     }
                 }
             }
@@ -326,27 +350,22 @@ fn is_response(cell: &Arc<dyn HistoryCell>) -> bool {
     cell.as_any().is::<AgentMarkdownCell>() || cell.as_any().is::<ProposedPlanCell>()
 }
 
-fn user_ranges(text: &str, message: &str) -> Vec<(Range<usize>, &'static str, Option<String>)> {
+fn literal_block_ranges(
+    text: &str,
+    user: Option<&UserHistoryCell>,
+) -> Vec<(Range<usize>, &'static str, Option<String>)> {
     use pulldown_cmark::Event;
     use pulldown_cmark::Tag;
     use pulldown_cmark::TagEnd;
     let mut ranges = Vec::new();
-    if !text.trim().is_empty() {
-        ranges.push((
-            0..text.len(),
-            "User message",
-            (!message.is_empty())
-                .then(|| crate::history_cell::sanitize_user_text(message.into()).into_owned()),
-        ));
-    }
     let mut depth = 0;
     let mut code: Option<(Range<usize>, String)> = None;
     for (event, range) in pulldown_cmark::Parser::new(text).into_offset_iter() {
         match event {
             Event::Start(Tag::BlockQuote) => {
                 if depth == 0 {
-                    let source = message
-                        .is_empty()
+                    let source = user
+                        .is_none_or(|user| user.message.is_empty())
                         .then(|| crate::markdown_copy::quote_content(&text[range.clone()]));
                     ranges.push((range, "Blockquote", source));
                 }

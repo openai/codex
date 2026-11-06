@@ -1,0 +1,25 @@
+---
+source: tui/src/history_cell/messages_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+width 64
+
+› testing hello example documentation
+  (https://example.test/docs)
+
+  • Try the command
+
+  echo '*literal*'
+
+width 20
+
+› testing hello
+  example
+  documentation
+  (https://
+  example.test/
+  docs)
+
+  • Try the command
+
+  echo '*literal*'

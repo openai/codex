@@ -115,6 +115,38 @@ pub(crate) struct CopyLine {
     literal_ranges: Vec<Range<usize>>,
 }
 
+/// Keep literal prompt spacing when parsing only changed whitespace, and retain the source
+/// when Markdown renders nothing (for example, a reference definition on its own).
+pub(crate) fn has_visible_markup(
+    lines: &[crate::terminal_hyperlinks::HyperlinkLine],
+    source: &str,
+) -> bool {
+    let mut displayed = lines
+        .iter()
+        .flat_map(|line| &line.line.spans)
+        .flat_map(|span| span.content.chars())
+        .filter(|ch| !ch.is_whitespace())
+        .peekable();
+    displayed.peek().is_some()
+        && (displayed.ne(source.chars().filter(|ch| !ch.is_whitespace()))
+            || lines.iter().any(|line| {
+                line.source
+                    .as_ref()
+                    .and_then(|source| source.copy.as_deref())
+                    .is_some_and(|copy| {
+                        !copy.prefix.is_empty()
+                            || copy.code
+                            || copy.code_source.is_some()
+                            || copy.quote_source.is_some()
+                            || copy.table.is_some()
+                            || copy.rule
+                            || copy.heading != 0
+                            || copy.hard_break
+                            || copy.runs.iter().any(|(_, inline)| !inline.is_empty())
+                    })
+            }))
+}
+
 impl CopyLine {
     pub(crate) fn push(&mut self, length: usize, inline: &[Inline]) {
         if length == 0 {

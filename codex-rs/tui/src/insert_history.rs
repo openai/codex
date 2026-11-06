@@ -860,6 +860,39 @@ mod tests {
     }
 
     #[test]
+    fn vt100_preserves_bold_at_the_start_of_a_typed_prompt() {
+        use crate::history_cell::HistoryCell;
+        use crate::history_cell::new_user_prompt;
+
+        let width = 30;
+        let lines = new_user_prompt("**Bold** plain".into(), vec![], vec![], vec![])
+            .display_hyperlink_lines(width);
+        let row = lines
+            .iter()
+            .find(|line| line.line.to_string().starts_with("› "))
+            .expect("prompt row");
+        let mut backend = VT100Backend::new(width, /*height*/ 1);
+        write_history_line(&mut backend, row, usize::from(width)).unwrap();
+
+        let screen = backend.vt100().screen();
+        let row = screen.rows(/*start*/ 0, width).next().unwrap();
+        let marker = screen.cell(/*row*/ 0, /*col*/ 0).unwrap();
+        let first = screen.cell(/*row*/ 0, /*col*/ 2).unwrap();
+        let plain = screen.cell(/*row*/ 0, /*col*/ 7).unwrap();
+        let snapshot = format!(
+            "{}\nmarker dim: {}, first word bold: {}, trailing word bold: {}",
+            row.trim_end(),
+            marker.dim(),
+            first.bold(),
+            plain.bold(),
+        );
+        insta::assert_snapshot!(snapshot, @"
+        › Bold plain
+        marker dim: true, first word bold: true, trailing word bold: false
+        ");
+    }
+
+    #[test]
     fn vt100_prompt_keeps_text_element_accent_without_a_terminal_palette() {
         use crate::history_cell::HistoryCell;
         use crate::history_cell::new_user_prompt;

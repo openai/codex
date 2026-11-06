@@ -10,7 +10,12 @@ async fn completed_replay_preserves_messages_and_draft_across_reconstruction() {
         let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.note_rendered_width(/*width*/ 80);
         chat.handle_paste("Unsent draft".to_string());
-        replay_user_message_text(&mut chat, "user", "Question", ReplayKind::ThreadSnapshot);
+        replay_user_message_text(
+            &mut chat,
+            "user",
+            "**Question**",
+            ReplayKind::ThreadSnapshot,
+        );
         replay_agent_message(
             &mut chat,
             "first",

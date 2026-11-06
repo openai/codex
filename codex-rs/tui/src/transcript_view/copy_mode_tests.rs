@@ -189,6 +189,45 @@ fn user_messages_support_vim_navigation_without_an_assistant_response() {
 }
 
 #[test]
+fn marker_only_prompt_is_a_copy_target() {
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![
+        Arc::new(crate::history_cell::new_user_prompt(
+            "8.".into(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )),
+        Arc::new(AgentMarkdownCell::new("Response".into(), Path::new("/"))),
+    ];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells, /*width*/ 50, /*height*/ 8);
+    view.begin_copy_mode(&cells, /*guard*/ None);
+    view.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), &cells);
+    insta::assert_snapshot!(
+        view.footer_with_navigation(/*width*/ 50, crate::motion::MotionMode::Reduced, "")
+            .unwrap().text.to_string(), @"
+    Copy user message
+    ↑/↓/j/k select · g/G ends · enter copy · esc close
+    "
+    );
+    let Some(ViewAction::CopyAndFollow(selection)) =
+        view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells)
+    else {
+        panic!("expected a copy action");
+    };
+    view.copy_selected_text_with(
+        &cells,
+        &selection,
+        /*clear_selection*/ true,
+        |text, _| {
+            assert_eq!(text, "8.");
+            Ok(CopyStatus::Confirmed)
+        },
+    )
+    .unwrap();
+}
+
+#[test]
 fn copy_highlight_fills_a_block_across_blank_and_wrapped_rows() {
     let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(AgentMarkdownCell::new(
         "Before\n\n```text\nlonger line\n\nx\n```\n\nAfter".into(),
@@ -461,10 +500,70 @@ fn user_code_blocks_preserve_original_line_endings() {
         Vec::new(),
         Vec::new(),
     ))];
+    for (detailed, mode) in [
+        (false, crate::history_cell::HistoryRenderMode::Rich),
+        (false, crate::history_cell::HistoryRenderMode::Raw),
+        (true, crate::history_cell::HistoryRenderMode::Raw),
+    ] {
+        let mut view = TranscriptView::default();
+        view.set_presentation(detailed, mode);
+        render(&mut view, &cells, /*width*/ 40, /*height*/ 10);
+        view.begin_copy_mode(&cells, /*guard*/ None);
+        assert_eq!(
+            payload(&mut view, &cells),
+            "echo user  \r\n",
+            "{detailed} {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn copying_a_disabled_fenced_table_uses_the_original_body() {
+    use crate::markdown_render::preferences;
+    use codex_config::types::TuiRendering;
+
+    let original = preferences::current();
+    preferences::init(TuiRendering {
+        tables: false,
+        ..original
+    });
+    let body = "| Name | Value |\r\n|---|---|\r\n| alpha | beta |  \r\n";
+    let message = format!("Intro\r\n\r\n```md\r\n{body}```\r\n\r\n```sh\r\necho done\r\n```\r\n");
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(crate::history_cell::new_user_prompt(
+        message.clone(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ))];
+    let mut view = TranscriptView::default();
+    let buffer = render(&mut view, &cells, /*width*/ 50, /*height*/ 12);
+    assert!(text(&buffer).contains("```md"));
+    view.begin_copy_mode(&cells, /*guard*/ None);
+    assert_eq!(payload(&mut view, &cells), "echo done\r\n");
+    view.move_copy_target(&cells, KeyCode::Up);
+    assert_eq!(payload(&mut view, &cells), body);
+    view.move_copy_target(&cells, KeyCode::Up);
+    assert_eq!(payload(&mut view, &cells), message.replace('\r', ""));
+    preferences::init(original);
+}
+
+#[test]
+fn copying_the_whole_typed_prompt_preserves_markdown_source() {
+    let message = "**Try this**\n\n> Quoted *text*\n\n```sh\nprintf 'hello'  \n```\n";
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(crate::history_cell::new_user_prompt(
+        message.into(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ))];
     let mut view = TranscriptView::default();
     render(&mut view, &cells, /*width*/ 40, /*height*/ 10);
     view.begin_copy_mode(&cells, /*guard*/ None);
-    assert_eq!(payload(&mut view, &cells), "echo user  \r\n");
+    assert_eq!(payload(&mut view, &cells), "printf 'hello'  \n");
+    view.move_copy_target(&cells, KeyCode::Up);
+    assert_eq!(payload(&mut view, &cells), "> Quoted *text*\n");
+    view.move_copy_target(&cells, KeyCode::Up);
+    assert_eq!(payload(&mut view, &cells), message);
 }
 
 #[test]

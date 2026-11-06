@@ -81,6 +81,31 @@ fn table_url_with_tilde_keeps_complete_hyperlink() {
 }
 
 #[test]
+fn links_keep_their_columns_after_styled_fragments() {
+    let input = "**界** [a](https://example.com/a) _b_ [`c`](https://example.com/c) [d](https://example.com/d)\n\n[e](https://example.com/e)";
+    let lines = super::render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
+        input,
+        /*width*/ None,
+        /*cwd*/ None,
+        &|_| true,
+    );
+    let links = lines
+        .iter()
+        .flat_map(|line| line.hyperlinks.iter())
+        .map(|link| (link.columns.clone(), link.destination.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        links,
+        vec![
+            (3..4, "https://example.com/a"),
+            (7..8, "https://example.com/c"),
+            (9..10, "https://example.com/d"),
+            (0..1, "https://example.com/e"),
+        ],
+    );
+}
+
+#[test]
 fn merged_text_events_preserve_entity_decoding() {
     let source = "https://example.com/a&amp;b~c";
     let destination = "https://example.com/a&b~c";

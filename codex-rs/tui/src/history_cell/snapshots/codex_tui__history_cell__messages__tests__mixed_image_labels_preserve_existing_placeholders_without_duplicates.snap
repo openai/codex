@@ -6,4 +6,4 @@ expression: "ratatui::text::Text::from(cell.display_lines(40))"
   [Image #1]
   [Image #3]
 
-› [Image #2] compare these
+› [Image #2] **compare** these

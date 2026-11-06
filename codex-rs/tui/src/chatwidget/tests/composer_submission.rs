@@ -18,7 +18,8 @@ async fn composer_submission_sends_once_and_requests_latest() {
     let (mut chat, mut events, mut operations) =
         make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.apply_external_edit("send once".to_string());
+    let prompt = "**send once**";
+    chat.apply_external_edit(prompt.to_string());
     while events.try_recv().is_ok() {}
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     assert_eq!(
@@ -33,7 +34,7 @@ async fn composer_submission_sends_once_and_requests_latest() {
     assert_eq!(
         items,
         vec![UserInput::Text {
-            text: "send once".into(),
+            text: prompt.into(),
             text_elements: Vec::new(),
         }]
     );
