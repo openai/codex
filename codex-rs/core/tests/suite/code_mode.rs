@@ -12,11 +12,6 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_analytics::AnalyticsEventsClient;
-use codex_code_mode::CodeModeOutputTruncation;
-use codex_code_mode::CodeModeSessionOptions;
-use codex_code_mode::CodeModeSessionProvider;
-use codex_code_mode::CodeModeSessionProviderFuture;
-use codex_code_mode::ProcessOwnedCodeModeSessionProvider;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
@@ -25,7 +20,6 @@ use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::context::NodeReplReviewEvidence;
-use codex_core::test_support::ProcessOwnedGrpcCodeModeSessionProvider;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -315,72 +309,15 @@ async fn run_code_mode_turn_with_builder(
     Ok((test, second_mock))
 }
 
-// Request server truncation from the real host and verify what it negotiated.
-struct ServerOutputProvider(Arc<dyn CodeModeSessionProvider>);
-
-impl CodeModeSessionProvider for ServerOutputProvider {
-    fn availability(&self) -> std::result::Result<(), String> {
-        self.0.availability()
-    }
-
-    fn create_session(&self) -> CodeModeSessionProviderFuture<'_> {
-        Box::pin(async {
-            let session = self
-                .0
-                .create_session_with_options(CodeModeSessionOptions {
-                    output_truncation: CodeModeOutputTruncation::Server,
-                    ..CodeModeSessionOptions::default()
-                })
-                .await?;
-            assert_eq!(
-                session.output_truncation(),
-                CodeModeOutputTruncation::Server
-            );
-            Ok(session)
+fn code_mode_test_builder(disabled_features: &'static [Feature]) -> TestCodexBuilder {
+    test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            config.features.enable(Feature::CodeMode).unwrap();
+            for &feature in disabled_features {
+                config.features.disable(feature).unwrap();
+            }
         })
-    }
-}
-
-pub(super) enum OutputHost {
-    DefaultClient,
-    ServerStdio,
-    ServerGrpc,
-}
-
-impl OutputHost {
-    pub(super) fn test_codex(self) -> TestCodexBuilder {
-        let builder = test_codex()
-            .with_model("test-gpt-5.1-codex")
-            .with_config(|config| {
-                config
-                    .features
-                    .enable(Feature::CodeMode)
-                    .expect("enable code mode");
-            });
-        let host = || {
-            codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")
-                .expect("locate the code-mode host")
-        };
-        let provider: Arc<dyn CodeModeSessionProvider> = match self {
-            Self::DefaultClient => return builder,
-            Self::ServerStdio => Arc::new(ProcessOwnedCodeModeSessionProvider::with_host_program(
-                host(),
-            )),
-            Self::ServerGrpc => Arc::new(
-                ProcessOwnedGrpcCodeModeSessionProvider::with_host_program(host()),
-            ),
-        };
-        builder
-            .with_config(|config| {
-                config
-                    .features
-                    .disable(Feature::CodeModeHost)
-                    .expect("use the injected provider");
-            })
-            .with_thread_manager(move |manager| {
-                manager.with_code_mode_session_provider(Arc::new(ServerOutputProvider(provider)))
-            })
-    }
 }
 
 async fn run_unavailable_code_mode_turn(
@@ -4028,7 +3965,7 @@ text(JSON.stringify({{
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[test_case(false; "legacy_stdio")]
-#[test_case(true; "grpc_stdio")]
+#[test_case(true; "default_grpc_stdio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_only_can_call_nested_tools(grpc_stdio: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -4070,8 +4007,8 @@ text(output.output);
 
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeModeOnly);
-        if grpc_stdio {
-            let _ = config.features.enable(Feature::CodeModeHostGrpc);
+        if !grpc_stdio {
+            config.features.disable(Feature::CodeModeHostGrpc).unwrap();
         }
     });
     #[cfg(unix)]
@@ -4644,11 +4581,13 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 // The outer directive limits output after JavaScript emits it; it does not
 // limit `result.output` returned by the nested command.
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
-#[test_case(OutputHost::DefaultClient; "client_stdio")]
-#[test_case(OutputHost::ServerStdio; "server_stdio")]
-#[test_case(OutputHost::ServerGrpc; "server_grpc")]
+#[test_case(&[]; "default_grpc")]
+#[test_case(&[Feature::CodeModeHostGrpc]; "server_stdio")]
+#[test_case(&[Feature::CodeModeHostGrpc, Feature::CodeModeHostOutputTruncation]; "client_stdio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_outer_limit_truncates_emitted_output(host: OutputHost) -> Result<()> {
+async fn code_mode_exec_outer_limit_truncates_emitted_output(
+    disabled_features: &'static [Feature],
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -4661,7 +4600,7 @@ const result = await tools.exec_command({
 });
 text(result.output);
 "#,
-        host.test_codex(),
+        code_mode_test_builder(disabled_features),
     )
     .await?;
 
@@ -4720,11 +4659,12 @@ Error:\ boom\n
 
 // An overflow notice is outside the observation budget. This distinguishes
 // actual server formatting from Core silently repeating client truncation.
-#[test_case(false; "stdio")]
-#[test_case(true; "grpc")]
+#[test_case(None; "default")]
+#[test_case(Some(Feature::CodeModeHostGrpc); "server_stdio")]
+#[test_case(Some(Feature::CodeModeHostOutputTruncation); "client_grpc")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_collector_notice_survives_the_observation_budget(
-    grpc_stdio: bool,
+async fn code_mode_zero_budget_reports_host_truncation(
+    disabled_feature: Option<Feature>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -4738,14 +4678,8 @@ text("x".repeat(2 * 1024 * 1024));
 text("end");
 "#,
         move |config| {
-            let _ = config.features.enable(Feature::CodeModeHost);
-            let _ = config
-                .features
-                .enable(Feature::CodeModeHostOutputTruncation);
-            if grpc_stdio {
-                let _ = config.features.enable(Feature::CodeModeHostGrpc);
-            } else {
-                let _ = config.features.disable(Feature::CodeModeHostGrpc);
+            if let Some(feature) = disabled_feature {
+                config.features.disable(feature).unwrap();
             }
         },
     )
@@ -4753,11 +4687,18 @@ text("end");
     let (output, success) =
         custom_tool_output_body_and_success(&follow_up.single_request(), "call-1");
     assert_ne!(success, Some(false), "{output}");
-    assert!(
-        output.contains("Code Mode session output limit reached")
-            && output.contains("text segments, 0 images, 0 audio items"),
-        "host omission notice must survive Core's zero-token exec budget: {output}"
-    );
+    if disabled_feature == Some(Feature::CodeModeHostOutputTruncation) {
+        assert!(
+            !output.contains("Code Mode session output limit reached"),
+            "{output}"
+        );
+    } else {
+        assert!(
+            output.contains("Code Mode session output limit reached")
+                && output.contains("text segments, 0 images, 0 audio items"),
+            "host omission notice must survive Core's zero-token exec budget: {output}"
+        );
+    }
     Ok(())
 }
 
@@ -4810,15 +4751,16 @@ try {
     Ok(())
 }
 
-/// A stalled host wait must return its timeout to the model and reconnect for the next exec.
+/// The framed stdio host reconnects on the first exec after reporting a wait timeout.
 #[tokio::test(flavor = "current_thread")]
-async fn code_mode_wait_timeout_reconnects_on_next_exec() -> Result<()> {
+async fn code_mode_stdio_wait_timeout_reconnects_on_next_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(|config| {
+            config.features.disable(Feature::CodeModeHostGrpc).unwrap();
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -5688,19 +5630,20 @@ impl ToolLifecycleContributor for TerminationOutputReady {
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
-#[test_case(OutputHost::DefaultClient; "client_stdio")]
-#[test_case(OutputHost::ServerStdio; "server_stdio")]
-#[test_case(OutputHost::ServerGrpc; "server_grpc")]
+#[test_case(&[]; "default_grpc")]
+#[test_case(&[Feature::CodeModeHostGrpc]; "server_stdio")]
+#[test_case(&[Feature::CodeModeHostGrpc, Feature::CodeModeHostOutputTruncation]; "client_stdio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_wait_can_terminate_and_continue(host: OutputHost) -> Result<()> {
+async fn code_mode_wait_can_terminate_and_continue(
+    disabled_features: &'static [Feature],
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     extensions.tool_lifecycle_contributor(Arc::new(TerminationOutputReady::default()));
-    let mut builder = host
-        .test_codex()
-        .with_extensions(Arc::new(extensions.build()));
+    let mut builder =
+        code_mode_test_builder(disabled_features).with_extensions(Arc::new(extensions.build()));
     let test = builder.build(&server).await?;
     let termination_gate = test.workspace_path("code-mode-terminate.ready");
     let termination_wait = wait_for_file_source(&termination_gate)?;
@@ -6418,15 +6361,17 @@ async fn code_mode_interrupt_terminates_active_cells_and_nested_tools() -> Resul
     Ok(())
 }
 
-#[test_case(OutputHost::DefaultClient; "client_stdio")]
-#[test_case(OutputHost::ServerStdio; "server_stdio")]
-#[test_case(OutputHost::ServerGrpc; "server_grpc")]
+#[test_case(&[]; "default_grpc")]
+#[test_case(&[Feature::CodeModeHostGrpc]; "server_stdio")]
+#[test_case(&[Feature::CodeModeHostGrpc, Feature::CodeModeHostOutputTruncation]; "client_stdio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_wait_uses_its_own_max_tokens_budget(host: OutputHost) -> Result<()> {
+async fn code_mode_wait_uses_its_own_max_tokens_budget(
+    disabled_features: &'static [Feature],
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let mut builder = host.test_codex();
+    let mut builder = code_mode_test_builder(disabled_features);
     let test = builder.build_with_auto_env(&server).await?;
 
     // Both transports accept exec budgets above i32::MAX. The wait uses its own budget.

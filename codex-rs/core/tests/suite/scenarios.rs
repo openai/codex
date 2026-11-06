@@ -2355,11 +2355,11 @@ text(`MCP: ${ping.structuredContent?.echo ?? "missing"}`);"#,
 async fn astra_reads_code_mode_call_timing() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
-    let test = super::code_mode::OutputHost::ServerGrpc
-        .test_codex()
+    let test = test_codex()
         .with_model("gpt-6-astra")
         .with_config(|config| {
             configure_scenario_catalog(config);
+            config.features.enable(Feature::CodeMode).unwrap();
             // Use the selected cwd as the workspace root on local and remote executors.
             config.workspace_roots = vec![config.cwd.clone()];
             config.code_mode.experimental_show_cell_overhead = true;
