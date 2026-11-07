@@ -26,6 +26,7 @@ impl ChatComposer {
         text: &str,
         shell_prefix: ShellPrefixHandling,
     ) {
+        self.draft.skill_completion_space = None;
         if !text.is_empty() && self.sparkle.draft.get() == sparkle::SparkleDraft::Untouched {
             self.dismiss_sparkle();
         }
@@ -71,7 +72,15 @@ impl ChatComposer {
                     textarea.replace_vim_text(&ch.to_string());
                 }
             }
-            FlushResult::Typed(ch) => textarea.insert_str_at(snapshot.cursor, &ch.to_string()),
+            FlushResult::Typed(ch) => {
+                if let Some(space) = self.draft.skill_completion_space_for_char(ch) {
+                    let space = space + usize::from(self.draft.is_bash_mode);
+                    textarea.replace_range(space..space + 1, &ch.to_string());
+                    snapshot.cursor = space + ch.len_utf8();
+                } else {
+                    textarea.insert_str_at(snapshot.cursor, &ch.to_string());
+                }
+            }
             FlushResult::Paste(pasted) => textarea.insert_str_at(snapshot.cursor, &pasted),
             FlushResult::None => {}
         }
@@ -154,7 +163,15 @@ impl ChatComposer {
                 true
             }
             FlushResult::Typed(ch) => {
+                let completion_space = self.draft.skill_completion_space_for_char(ch);
+                let started_vim_edit = completion_space.is_some() && self.begin_direct_vim_edit();
+                if let Some(space) = completion_space {
+                    self.draft.textarea.replace_range(space..space + 1, "");
+                }
                 self.insert_str(ch.to_string().as_str());
+                if started_vim_edit {
+                    self.finish_vim_edit();
+                }
                 true
             }
             FlushResult::None => false,
@@ -189,6 +206,7 @@ impl ChatComposer {
         pasted: String,
         shell_prefix: ShellPrefixHandling,
     ) -> bool {
+        self.draft.skill_completion_space = None;
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let pasted = sanitize_user_text(pasted.into());
         if self.history_search.is_some() {

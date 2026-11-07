@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                                                                    "
+"› 请用 $rustdoc》                                                                                   " Hidden by multi-width symbols: [(3, " "), (5, " "), (16, " ")]
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                 100% context left  "

@@ -68,6 +68,9 @@
 //! horizontal separator. It advances across an existing separator when no suffix would be joined;
 //! otherwise it inserts a space, preserving the existing separator before a non-whitespace suffix.
 //! It also inserts a space rather than crossing a line break.
+//! After selecting a skill, common closing punctuation, including full-width sentence marks and
+//! the Chinese closing book-title bracket (`》`), takes the place of a newly inserted separator.
+//! Existing whitespace stays part of the draft.
 //!
 //! `Esc` records the active token as dismissed. A completed value that begins with `@` or `$` is
 //! also re-dismissed before popup synchronization, because separator affinity can still identify
@@ -262,8 +265,9 @@
 //! Some terminals, especially Windows, deliver pastes as rapid `KeyCode::Char`/`Enter`/`Tab` events.
 //! [`PasteBurst`](super::paste_burst::PasteBurst) buffers text-producing keys (plain, Shift, or
 //! Windows AltGr) and integrates buffered text through the composer, avoiding transient shortcut UI.
-//! It briefly holds the first ASCII char to detect a burst. Non-ASCII chars appear immediately
-//! for IME responsiveness, but still participate in burst detection.
+//! It briefly holds the first ASCII char or an eligible skill-completion punctuation mark to detect
+//! a burst. Other non-ASCII chars appear immediately for IME responsiveness, but still participate
+//! in burst detection.
 //! Parent views must keep flushing editors that lose focus while input is buffered; a hidden
 //! editor's pending burst can otherwise keep the shared draw loop waiting indefinitely.
 //!
@@ -1627,6 +1631,7 @@ impl ChatComposer {
         self.draft.is_bash_mode = false;
         self.draft.pending_pastes.clear();
         self.draft.mention_bindings.clear();
+        self.draft.skill_completion_space = None;
 
         let (text, text_elements) = match shell_prefix {
             ShellPrefixHandling::Interpret => self.imported_text_for_textarea(text, text_elements),
@@ -1666,6 +1671,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn set_current_cursor(&mut self, cursor: usize) {
+        self.draft.skill_completion_space = None;
         let visible_cursor = if self.draft.is_bash_mode {
             cursor.saturating_sub(1)
         } else {
@@ -2027,6 +2033,14 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        let is_char = matches!(key_event.code, KeyCode::Char(_));
+        if !is_char {
+            if self.draft.skill_completion_space.is_some() && self.draft.paste_burst.is_active() {
+                self.handle_paste_burst_flush(tokio::time::Instant::now().into_std());
+            }
+            self.draft.skill_completion_space = None;
+        }
+
         if self.history_search.is_none()
             && !self.popups.active()
             && self.config.slash_commands_enabled
@@ -2042,6 +2056,9 @@ impl ChatComposer {
         self.draft.textarea_state.get_mut().follow_cursor();
         let before = self.before_sparkle_key(key_event);
         let result = self.handle_key_event_inner(key_event);
+        if is_char && !self.draft.paste_burst.is_active() {
+            self.draft.skill_completion_space = None;
+        }
         self.after_sparkle_key(before, &result.0);
         result
     }
@@ -2496,7 +2513,9 @@ impl ChatComposer {
     /// Another separator is preserved before any non-whitespace suffix so subsequent typing does
     /// not merge into it. Line breaks are never reused as separators; a space is inserted before
     /// them so subsequent typing stays on the completed token's line.
-    fn advance_past_completion_separator(&mut self) {
+    ///
+    /// Returns the position of the space when completion inserted one.
+    fn advance_past_completion_separator(&mut self) -> Option<usize> {
         let cursor = self.draft.textarea.cursor();
         let existing_separator_len = self.draft.textarea.text()[cursor..]
             .chars()
@@ -2520,14 +2539,13 @@ impl ChatComposer {
                 .chars()
                 .next()
                 .is_some_and(|c| !c.is_whitespace());
-            if separator_precedes_suffix {
-                self.draft.textarea.insert_str_at(cursor, " ");
-            } else {
+            if !separator_precedes_suffix {
                 self.draft.textarea.set_cursor(after_separator);
+                return None;
             }
-        } else {
-            self.draft.textarea.insert_str_at(cursor, " ");
         }
+        self.draft.textarea.insert_str_at(cursor, " ");
+        Some(cursor)
     }
 
     /// Dismisses popup synchronization only for the exact token occurrence just inserted.
@@ -2918,7 +2936,13 @@ impl ChatComposer {
             task_mentions.clear();
         }
 
-        self.advance_past_completion_separator();
+        let inserted_space = self.advance_past_completion_separator();
+        let is_skill = path.is_some_and(|path| {
+            self.skills
+                .as_deref()
+                .is_some_and(|skills| skills.iter().any(|skill| skill.path.as_str() == path))
+        });
+        self.draft.skill_completion_space = inserted_space.filter(|_| is_skill);
         if let Some(sigil) = insert_text.chars().next()
             && matches!(sigil, '$' | '@')
         {
@@ -3747,6 +3771,15 @@ impl ChatComposer {
                 .modifiers
                 .intersects(KeyModifiers::SUPER | KeyModifiers::HYPER | KeyModifiers::META);
 
+        let completion_punctuation = match input.code {
+            KeyCode::Char(ch) if !has_non_text_modifier => self
+                .draft
+                .skill_completion_space_for_char(ch)
+                .map(|space| (space, ch)),
+            _ => None,
+        };
+        self.draft.skill_completion_space = None;
+
         // Intercept text-producing Char inputs to optionally accumulate into a burst buffer.
         //
         // This preserves plain, Shift, and Windows AltGr input while keeping shortcut modifiers
@@ -3760,9 +3793,9 @@ impl ChatComposer {
                 && !self.draft.disable_paste_burst
                 && self.draft.textarea.allows_paste_burst()
             {
-                // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts, so avoid
-                // holding the first char while still allowing burst detection for paste input.
-                if !ch.is_ascii() {
+                // Keep IME input responsive. Skill-completion punctuation needs classification
+                // before it can replace the inserted separator.
+                if !ch.is_ascii() && completion_punctuation.is_none() {
                     return self.handle_non_ascii_char(input, now);
                 }
 
@@ -3799,6 +3832,8 @@ impl ChatComposer {
                     }
                     CharDecision::RetainFirstChar => {
                         // Keep the first fast char pending momentarily.
+                        self.draft.skill_completion_space =
+                            completion_punctuation.map(|(space, _)| space);
                         return (InputResult::None, true);
                     }
                 }
@@ -3870,7 +3905,20 @@ impl ChatComposer {
                 self.draft.textarea.finish_vim_repeat();
             }
         } else {
-            self.draft.textarea.input(input);
+            let textarea = &mut self.draft.textarea;
+            let before_len = textarea.text().len();
+            textarea.input(input);
+            // Check that the key inserted punctuation, since an editor binding can consume it.
+            if let Some((space, ch)) = completion_punctuation
+                && textarea.text().len() == before_len + ch.len_utf8()
+                && textarea.cursor() == space + 1 + ch.len_utf8()
+                && textarea
+                    .text()
+                    .get(space + 1..)
+                    .is_some_and(|suffix| suffix.starts_with(ch))
+            {
+                textarea.replace_range(space..space + 1, "");
+            }
             vim_register::sync(self);
         }
         if self.draft.textarea.prefix_insertion_revision() != prefix_insertion_revision {
@@ -5040,6 +5088,10 @@ mod snapshot_tests;
 mod mentions_layout_tests;
 
 #[cfg(test)]
+#[path = "chat_composer/skill_completion_tests.rs"]
+mod skill_completion_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::PathBufExt;
@@ -5271,7 +5323,7 @@ mod tests {
         insta::assert_snapshot!(name, terminal.backend());
     }
 
-    fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
+    pub(super) fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
     where
         F: FnOnce(&mut ChatComposer),
     {
@@ -6963,7 +7015,7 @@ mod tests {
         assert_eq!(mention.path, Some("plugin://sample@test".to_string()));
     }
 
-    fn test_skill_metadata(name: &str) -> SkillMetadata {
+    pub(super) fn test_skill_metadata(name: &str) -> SkillMetadata {
         SkillMetadata {
             name: name.to_string(),
             description: "Example skill used in tests.".to_string(),
@@ -6977,7 +7029,7 @@ mod tests {
         }
     }
 
-    fn test_skill_binding(name: &str) -> MentionBinding {
+    pub(super) fn test_skill_binding(name: &str) -> MentionBinding {
         MentionBinding {
             sigil: '$',
             mention: name.to_string(),
@@ -7790,50 +7842,6 @@ mod tests {
                     has_skills: true,
                     mcp_server_names: vec!["sample".to_string()],
                     app_connector_ids: vec![AppConnectorId("calendar".to_string())],
-                }]));
-            },
-        );
-    }
-
-    #[test]
-    fn default_unified_mention_popup_snapshot() {
-        snapshot_composer_state(
-            "default_unified_mention_popup",
-            /*enhanced_keys_supported*/ false,
-            |composer| {
-                let features = codex_features::Features::with_defaults();
-                composer
-                    .set_mentions_v2_enabled(features.enabled(codex_features::Feature::MentionsV2));
-                composer.set_skill_mentions(Some(vec![
-                    SkillMetadata {
-                        name: "sample-tools:search".to_string(),
-                        plugin_id: Some("sample@test".to_string()),
-                        ..test_skill_metadata("sample-search")
-                    },
-                    SkillMetadata {
-                        name: "sample:summarize".to_string(),
-                        plugin_id: Some("sample@test".to_string()),
-                        ..test_skill_metadata("sample-summarize")
-                    },
-                    SkillMetadata {
-                        name: "sample:notes".to_string(),
-                        ..test_skill_metadata("sample-notes")
-                    },
-                    SkillMetadata {
-                        name: "sample:other".to_string(),
-                        plugin_id: Some("sample@other-marketplace".to_string()),
-                        ..test_skill_metadata("sample-other")
-                    },
-                ]));
-                composer.set_text_content("@sa".to_string(), Vec::new(), Vec::new());
-                composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
-                    config_name: "sample@test".to_string(),
-                    display_name: "Sample Plugin".to_string(),
-                    plugin_namespace: Some("sample".to_string()),
-                    description: Some("Plugin with skills and an MCP server".to_string()),
-                    has_skills: true,
-                    mcp_server_names: vec!["sample".to_string()],
-                    app_connector_ids: Vec::new(),
                 }]));
             },
         );

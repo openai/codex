@@ -154,6 +154,7 @@ impl ChatComposer {
             .textarea
             .handle_mouse(event, *self.draft.textarea_state.borrow());
         if handled {
+            self.draft.skill_completion_space = None;
             self.draft.textarea_state.borrow_mut().follow_cursor();
             self.attachments.clear_remote_image_selection();
             self.sync_popups();

@@ -13,7 +13,7 @@
 //! text-producing character events (plain, Shift, or Windows AltGr) and uses the full buffering
 //! decisions to either:
 //!
-//! - briefly hold a first ASCII char (flicker suppression),
+//! - briefly hold a first char (flicker suppression),
 //! - buffer a burst as a single pasted string, or
 //! - let input flow through as normal typing.
 //!
@@ -22,8 +22,9 @@
 //! `PasteBurst` is a pure state machine: it never mutates the textarea directly. The caller feeds
 //! it events and then applies the chosen action:
 //!
-//! - For each text-producing `KeyCode::Char`, call [`PasteBurst::on_plain_char`] (ASCII) or
-//!   [`PasteBurst::on_plain_char_no_hold`] (non-ASCII/IME).
+//! - For each text-producing `KeyCode::Char`, call [`PasteBurst::on_plain_char`] (ASCII and
+//!   eligible skill-completion punctuation) or [`PasteBurst::on_plain_char_no_hold`] (other
+//!   non-ASCII/IME input).
 //! - If the decision indicates buffering, the caller appends to `PasteBurst.buffer` via
 //!   [`PasteBurst::append_char_to_buffer`].
 //! - On Enter or Tab, [`PasteBurst::append_control_char_if_active`] promotes a held first character
@@ -48,7 +49,7 @@
 //! - `active`: true while we are still *actively* accepting characters into the current burst.
 //! - `buffer`: accumulated burst text that will eventually flush as a single `Paste(String)`.
 //!   A non-empty buffer is treated as "in burst context" even if `active` has been cleared.
-//! - `pending_first_char`: a single held ASCII char used for flicker suppression. The caller must
+//! - `pending_first_char`: a single held char used for flicker suppression. The caller must
 //!   not render this char until it joins a burst through `BeginBufferFromPending` or
 //!   `append_control_char_if_active`, or flushes as a normal typed char (`FlushResult::Typed`).
 //! - `last_plain_char_time`/`consecutive_plain_char_burst`: the timing/count heuristic for
@@ -91,7 +92,7 @@
 //!
 //! There are two ways callers end burst handling, and they are not interchangeable:
 //!
-//! - `flush_before_modified_input()` returns the buffered text (and/or a pending first ASCII char)
+//! - `flush_before_modified_input()` returns the buffered text (and/or a pending first char)
 //!   so the caller can apply it through the normal paste path before handling an unrelated input.
 //! - `clear_window_after_non_char()` clears the *classification window* so subsequent typing does
 //!   not get grouped into the previous burst. It assumes the caller has already flushed any buffer
@@ -101,7 +102,7 @@
 //! # States (Conceptually)
 //!
 //! - **Idle**: no buffered text, no pending char.
-//! - **Pending first char**: `pending_first_char` holds one ASCII char for up to
+//! - **Pending first char**: `pending_first_char` holds one char for up to
 //!   `PASTE_BURST_CHAR_INTERVAL` while we wait to see if a burst follows.
 //! - **Active buffer**: `active`/`buffer` holds paste-like content until it times out and flushes.
 //! - **Enter suppress window**: `burst_window_until` keeps Enter treated as newline briefly after
@@ -110,7 +111,7 @@
 //! # ASCII vs Non-ASCII
 //!
 //! - [`PasteBurst::on_plain_char`] may return [`CharDecision::RetainFirstChar`] to hold the first
-//!   ASCII char and avoid flicker.
+//!   char and avoid flicker.
 //! - [`PasteBurst::on_plain_char_no_hold`] never holds (used for IME/non-ASCII paths), since
 //!   holding a non-ASCII character can feel like dropped input.
 //!
@@ -119,7 +120,7 @@
 //! `PasteBurst` does not mutate the UI text buffer on its own. Callers must interpret decisions
 //! and apply the corresponding UI edits. `ChatComposer` uses the full buffering contract:
 //!
-//! - For each plain ASCII `KeyCode::Char`, call [`PasteBurst::on_plain_char`].
+//! - For plain ASCII input and eligible skill-completion punctuation, call [`PasteBurst::on_plain_char`].
 //!   - [`CharDecision::RetainFirstChar`]: do **not** insert the char into the textarea yet.
 //!   - [`CharDecision::BeginBufferFromPending`]: call [`PasteBurst::append_char_to_buffer`] for the
 //!     current char (the previously-held char is already in the burst buffer).
@@ -130,7 +131,7 @@
 //!     to normal insertion.
 //!   - [`CharDecision::BufferAppend`]: call [`PasteBurst::append_char_to_buffer`].
 //!
-//! - For each plain non-ASCII `KeyCode::Char`, call [`PasteBurst::on_plain_char_no_hold`] and then:
+//! - For other plain non-ASCII input, call [`PasteBurst::on_plain_char_no_hold`] and then:
 //!   - If it returns `Some(CharDecision::BufferAppend)`, call
 //!     [`PasteBurst::append_char_to_buffer`].
 //!   - If it returns `Some(CharDecision::BeginBuffer { retro_chars })`, call
@@ -292,7 +293,7 @@ impl PasteBurst {
     ///
     /// - [`FlushResult::Paste`] when a paste burst was active and buffered text is emitted as one
     ///   pasted string.
-    /// - [`FlushResult::Typed`] when a single fast first ASCII char was being held (flicker
+    /// - [`FlushResult::Typed`] when a single fast first char was being held (flicker
     ///   suppression) and no burst followed before the timeout elapsed.
     /// - [`FlushResult::None`] when the timeout has not elapsed, or there is nothing to flush.
     pub fn flush_if_due(&mut self, now: Instant) -> FlushResult {
