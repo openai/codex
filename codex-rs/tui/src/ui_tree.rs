@@ -4,6 +4,7 @@ mod decode;
 mod render;
 mod theme;
 
+pub(crate) use render::PreparedUiTree;
 use theme::Color;
 use theme::TextWeight;
 

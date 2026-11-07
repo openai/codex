@@ -5,10 +5,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
+use std::sync::Arc;
 
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::highlight::with_syntax_theme;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::ui_tree::PreparedUiTree;
 use crate::ui_tree::UiTree;
 
 /// Owned content for the footer's negotiated left-hand area.
@@ -16,12 +18,14 @@ use crate::ui_tree::UiTree;
 pub(crate) enum FooterContent {
     Line(Line<'static>),
     HyperlinkLine(HyperlinkLine),
-    Extension { content: UiTree },
+    Extension { content: Arc<PreparedUiTree> },
 }
 
 impl From<UiTree> for FooterContent {
-    fn from(content: UiTree) -> Self {
-        Self::Extension { content }
+    fn from(tree: UiTree) -> Self {
+        Self::Extension {
+            content: Arc::new(tree.prepare()),
+        }
     }
 }
 

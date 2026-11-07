@@ -1,12 +1,10 @@
 #![cfg(test)]
 
+use super::Paint;
 use super::PreparedNode;
 use crate::ui_tree::UiNode;
-use crate::ui_tree::theme::RenderTheme;
 use pretty_assertions::assert_eq;
-use ratatui::style::Style;
 use serde_json::json;
-use syntect::highlighting::Theme;
 
 #[test]
 fn a_row_measures_whole_children_and_intervening_gaps() {
@@ -17,13 +15,6 @@ fn a_row_measures_whole_children_and_intervening_gaps() {
         ]
     }))
     .unwrap();
-    let theme = Theme::default();
-    let node = PreparedNode::from_node(
-        &node,
-        Style::default(),
-        /*href*/ None,
-        &RenderTheme::new(&theme),
-    )
-    .unwrap();
+    let node = PreparedNode::from_node(node, Paint::default()).unwrap();
     assert_eq!((node.widths.minimum, node.widths.preferred), (16, 22));
 }

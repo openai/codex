@@ -1,13 +1,16 @@
 //! Prepared inline text retains styled chunks and their legal line breaks across leaves.
 
+use super::RenderTheme;
 use super::push_link;
 use super::sanitize_leaf;
 use crate::line_truncation::span_width;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::ui_tree::theme::Color;
 use ratatui::style::Style;
 use ratatui::text::Span;
-use std::borrow::Cow;
+use std::ops::Deref;
 use std::ops::Range;
+use std::sync::Arc;
 use textwrap::core::Fragment;
 use textwrap::wrap_algorithms::wrap_first_fit;
 use unicode_linebreak::linebreaks;
@@ -16,48 +19,93 @@ use unicode_segmentation::GraphemeCursor;
 use unicode_segmentation::GraphemeIncomplete;
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Paint<'a> {
-    pub(super) style: Style,
-    pub(super) href: Option<&'a str>,
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Paint {
+    pub(super) modifiers: Style,
+    pub(super) foreground: Option<Color>,
+    pub(super) background: Option<Color>,
+    pub(super) href: Option<Arc<String>>,
 }
 
-#[derive(Debug)]
-struct Run<'a> {
-    text: Cow<'a, str>,
-    paint: Paint<'a>,
-}
-
-fn slice<'a>(text: &Cow<'a, str>, range: Range<usize>) -> Cow<'a, str> {
-    match text {
-        Cow::Borrowed(raw) => Cow::Borrowed(&raw[range]),
-        Cow::Owned(raw) => Cow::Owned(raw[range].to_owned()),
+impl Paint {
+    pub(super) fn style(&self, theme: &mut RenderTheme<'_>) -> Style {
+        let mut style = self.modifiers;
+        style.fg = self.foreground.map(|c| theme.resolve(c));
+        style.bg = self.background.map(|c| theme.resolve(c));
+        style
     }
 }
 
-#[derive(Debug, Default)]
-pub(super) struct Chunk<'a> {
-    runs: Vec<Run<'a>>,
+#[derive(Debug, PartialEq)]
+struct Run {
+    text: RunText,
+    paint: Paint,
+}
+
+// Splitting a leaf at style, whitespace or wrap boundaries shares its original buffer.
+#[derive(Debug)]
+enum RunText {
+    Slice(Arc<String>, Range<usize>),
+    Space,
+}
+
+impl RunText {
+    fn new(text: String) -> Self {
+        let len = text.len();
+        Self::Slice(Arc::new(text), 0..len)
+    }
+
+    fn slice(&self, range: Range<usize>) -> Self {
+        match self {
+            Self::Slice(text, bytes) => Self::Slice(
+                Arc::clone(text),
+                bytes.start + range.start..bytes.start + range.end,
+            ),
+            Self::Space => Self::Space,
+        }
+    }
+}
+
+impl Deref for RunText {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        match self {
+            Self::Slice(text, bytes) => &text[bytes.clone()],
+            Self::Space => " ",
+        }
+    }
+}
+
+impl PartialEq for RunText {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct Chunk {
+    runs: Vec<Run>,
     pub(super) width_cells: usize,
-    pub(super) trailing_space: Option<Paint<'a>>,
+    pub(super) trailing_space: Option<Paint>,
 }
 
-#[derive(Default)]
-pub(super) struct PreparedText<'a> {
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct PreparedText {
     pub(super) has_authored_break: bool,
-    pub(super) lines: Vec<Vec<Chunk<'a>>>,
+    pub(super) lines: Vec<Vec<Chunk>>,
 }
 
 #[derive(Default)]
-pub(super) struct InlineText<'a> {
-    text: PreparedText<'a>,
-    line: Vec<Run<'a>>,
-    space: Option<Paint<'a>>,
+pub(super) struct InlineText {
+    text: PreparedText,
+    line: Vec<Run>,
+    space: Option<Paint>,
 }
 
-impl<'a> InlineText<'a> {
-    pub(super) fn push_leaf(&mut self, raw: &'a str, paint: Paint<'a>) {
-        let text = sanitize_leaf(raw);
+impl InlineText {
+    pub(super) fn push_leaf(&mut self, raw: String, paint: Paint) {
+        let text = RunText::new(sanitize_leaf(raw));
         let mut start = 0;
         for (end, ch) in text
             .match_indices([' ', '\t', '\n'])
@@ -66,26 +114,26 @@ impl<'a> InlineText<'a> {
             if start < end {
                 if let Some(paint) = self.space.take() {
                     self.line.push(Run {
-                        text: " ".into(),
+                        text: RunText::Space,
                         paint,
                     });
                 }
                 self.line.push(Run {
-                    text: slice(&text, start..end),
-                    paint,
+                    text: text.slice(start..end),
+                    paint: paint.clone(),
                 });
             }
             if ch == "\n" {
                 self.text.lines.push(chunks(std::mem::take(&mut self.line)));
                 self.space = None;
             } else if !ch.is_empty() && !self.line.is_empty() {
-                self.space.get_or_insert(paint);
+                self.space.get_or_insert_with(|| paint.clone());
             }
             start = end + ch.len();
         }
     }
 
-    pub(super) fn finish(mut self) -> PreparedText<'a> {
+    pub(super) fn finish(mut self) -> PreparedText {
         self.text.has_authored_break = !self.text.lines.is_empty();
         if !self.line.is_empty() {
             self.text.lines.push(chunks(self.line));
@@ -96,7 +144,7 @@ impl<'a> InlineText<'a> {
 
 // Most seams already fall between graphemes. Only a cluster that actually crosses a
 // seam needs contiguous storage, including when it spans more than two leaves.
-fn join_graphemes(runs: Vec<Run<'_>>) -> Vec<Run<'_>> {
+fn join_graphemes(runs: Vec<Run>) -> Vec<Run> {
     let mut runs = runs.into_iter().peekable();
     let mut joined = Vec::new();
     while let Some(run) = runs.next() {
@@ -130,8 +178,8 @@ fn join_graphemes(runs: Vec<Run<'_>>) -> Vec<Run<'_>> {
         let prefix = run.text.len() - split;
         if prefix > 0 {
             joined.push(Run {
-                text: slice(&run.text, 0..prefix),
-                paint,
+                text: run.text.slice(0..prefix),
+                paint: paint.clone(),
             });
         }
         // Resume in the growing cluster so even a long chain of combining marks
@@ -153,14 +201,14 @@ fn join_graphemes(runs: Vec<Run<'_>>) -> Vec<Run<'_>> {
             }
             if consumed < next.text.len() {
                 if consumed > 0 {
-                    next.text = slice(&next.text, consumed..next.text.len());
+                    next.text = next.text.slice(consumed..next.text.len());
                 }
                 break;
             }
             runs.next();
         }
         joined.push(Run {
-            text: Cow::Owned(cluster),
+            text: RunText::new(cluster),
             paint,
         });
     }
@@ -209,7 +257,7 @@ fn break_offsets<'a>(runs: impl Iterator<Item = &'a str>) -> Vec<usize> {
     breaks
 }
 
-fn chunks(runs: Vec<Run<'_>>) -> Vec<Chunk<'_>> {
+fn chunks(runs: Vec<Run>) -> Vec<Chunk> {
     let runs = join_graphemes(runs);
     let mut breaks = break_offsets(runs.iter().map(|run| run.text.as_ref()))
         .into_iter()
@@ -232,7 +280,7 @@ fn chunks(runs: Vec<Run<'_>>) -> Vec<Chunk<'_>> {
             };
             if can_break {
                 chunk.push(&run, start..i);
-                if chunk.runs.last().is_some_and(|r| r.text == " ") {
+                if chunk.runs.last().is_some_and(|r| &*r.text == " ") {
                     chunk.trailing_space = chunk.runs.pop().map(|r| r.paint);
                     chunk.width_cells -= 1;
                 }
@@ -255,17 +303,20 @@ fn chunks(runs: Vec<Run<'_>>) -> Vec<Chunk<'_>> {
     out
 }
 
-impl<'a> Chunk<'a> {
-    fn push(&mut self, run: &Run<'a>, range: Range<usize>) {
+impl Chunk {
+    fn push(&mut self, run: &Run, range: Range<usize>) {
         if !range.is_empty() {
-            let text = slice(&run.text, range);
-            self.width_cells += span_width(&Span::raw(text.as_ref()));
-            self.runs.push(Run { text, ..*run });
+            let text = run.text.slice(range);
+            self.width_cells += span_width(&Span::raw(&*text));
+            self.runs.push(Run {
+                text,
+                paint: run.paint.clone(),
+            });
         }
     }
 }
 
-impl Fragment for Chunk<'_> {
+impl Fragment for Chunk {
     fn width(&self) -> f64 {
         self.width_cells as f64
     }
@@ -277,25 +328,30 @@ impl Fragment for Chunk<'_> {
     }
 }
 
-impl PreparedText<'_> {
-    pub(super) fn layout(&self, width: usize, limit: usize) -> Vec<HyperlinkLine> {
+impl PreparedText {
+    pub(super) fn layout(
+        &self,
+        width: usize,
+        limit: usize,
+        theme: &mut RenderTheme<'_>,
+    ) -> Vec<HyperlinkLine> {
         self.lines
             .iter()
             .flat_map(|line| wrap_first_fit(line, &[width as f64]))
             .take(limit)
-            .map(paint_chunks)
+            .map(|chunks| paint_chunks(chunks, theme))
             .collect()
     }
 }
 
-fn paint_chunks(chunks: &[Chunk<'_>]) -> HyperlinkLine {
+fn paint_chunks(chunks: &[Chunk], theme: &mut RenderTheme<'_>) -> HyperlinkLine {
     let mut line = HyperlinkLine::default();
     let mut col = 0;
     for (index, chunk) in chunks.iter().enumerate() {
         for run in &chunk.runs {
-            let span = Span::styled(run.text.to_string(), run.paint.style);
+            let span = Span::styled(run.text.to_string(), run.paint.style(theme));
             let end = col + span_width(&span);
-            if let Some(url) = run.paint.href
+            if let Some(url) = &run.paint.href
                 && end > col
             {
                 push_link(&mut line, col..end, url);
@@ -304,10 +360,10 @@ fn paint_chunks(chunks: &[Chunk<'_>]) -> HyperlinkLine {
             col = end;
         }
         if index + 1 < chunks.len()
-            && let Some(paint) = chunk.trailing_space
+            && let Some(paint) = &chunk.trailing_space
         {
-            line.line.push_span(Span::styled(" ", paint.style));
-            if let Some(url) = paint.href {
+            line.line.push_span(Span::styled(" ", paint.style(theme)));
+            if let Some(url) = &paint.href {
                 push_link(&mut line, col..col + 1, url);
             }
             col += 1;

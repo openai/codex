@@ -18,39 +18,34 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::TerminalHyperlink;
 use ratatui::layout::Size;
 use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::text::Span;
-use std::borrow::Cow;
 use std::ops::Range;
 use syntect::highlighting::Theme;
 use vtparse::CollectingVTActor;
 use vtparse::VTAction;
 use vtparse::VTParser;
 
-pub(crate) struct PreparedUiTree<'a>(Option<PreparedNode<'a>>);
+#[derive(Debug, PartialEq)]
+pub(crate) struct PreparedUiTree(Option<PreparedNode>);
 
 impl UiTree {
-    pub(crate) fn prepare(&self, theme: &Theme) -> PreparedUiTree<'_> {
-        let theme = RenderTheme::new(theme);
-        PreparedUiTree(self.0.as_ref().and_then(|node| {
-            PreparedNode::from_node(node, Style::default(), /*href*/ None, &theme)
-        }))
-    }
-
-    pub(crate) fn render_line(&self, width: u16, theme: &Theme) -> HyperlinkLine {
-        self.prepare(theme).render_line(width)
+    pub(crate) fn prepare(self) -> PreparedUiTree {
+        PreparedUiTree(
+            self.0
+                .and_then(|node| PreparedNode::from_node(node, Paint::default())),
+        )
     }
 }
 
-impl PreparedUiTree<'_> {
-    pub(crate) fn render_line(&self, width: u16) -> HyperlinkLine {
-        self.render_lines(Size::new(width, /*height*/ 1))
+impl PreparedUiTree {
+    pub(crate) fn render_line(&self, width: u16, theme: &Theme) -> HyperlinkLine {
+        self.render_lines(Size::new(width, /*height*/ 1), theme)
             .pop()
             .unwrap_or_default()
     }
 
     /// Fit the tree to the viewport, marking clipped rows and vertical overflow with an unlinked ellipsis.
-    pub(crate) fn render_lines(&self, size: Size) -> Vec<HyperlinkLine> {
+    pub(crate) fn render_lines(&self, size: Size, theme: &Theme) -> Vec<HyperlinkLine> {
         let Some(item) = &self.0 else {
             return Vec::new();
         };
@@ -60,7 +55,7 @@ impl PreparedUiTree<'_> {
         let width = usize::from(size.width);
         let height = usize::from(size.height);
         // The extra row distinguishes an exact fit from vertical overflow.
-        let mut lines = layout_node(item, width, height + 1);
+        let mut lines = layout_node(item, width, height + 1, &mut RenderTheme::new(theme));
         let more = lines.len() > height;
         lines.truncate(height);
         for (index, line) in lines.iter_mut().enumerate() {
@@ -73,9 +68,14 @@ impl PreparedUiTree<'_> {
     }
 }
 
-fn layout_node(node: &PreparedNode<'_>, width: usize, limit: usize) -> Vec<HyperlinkLine> {
+fn layout_node(
+    node: &PreparedNode,
+    width: usize,
+    limit: usize,
+    theme: &mut RenderTheme<'_>,
+) -> Vec<HyperlinkLine> {
     match &node.kind {
-        NodeKind::Text(text) => text.layout(width, limit),
+        NodeKind::Text(text) => text.layout(width, limit, theme),
         NodeKind::Row {
             children,
             gap,
@@ -94,7 +94,8 @@ fn layout_node(node: &PreparedNode<'_>, width: usize, limit: usize) -> Vec<Hyper
                         width,
                         limit - lines.len(),
                         gap,
-                        *paint,
+                        paint,
+                        theme,
                     ));
                     if lines.len() == limit {
                         return lines;
@@ -112,7 +113,8 @@ fn layout_node(node: &PreparedNode<'_>, width: usize, limit: usize) -> Vec<Hyper
                 width,
                 limit - lines.len(),
                 gap,
-                *paint,
+                paint,
+                theme,
             ));
             lines
         }
@@ -120,11 +122,12 @@ fn layout_node(node: &PreparedNode<'_>, width: usize, limit: usize) -> Vec<Hyper
 }
 
 fn layout_band(
-    children: &[PreparedNode<'_>],
+    children: &[PreparedNode],
     width: usize,
     limit: usize,
     gap: usize,
-    paint: Paint<'_>,
+    paint: &Paint,
+    theme: &mut RenderTheme<'_>,
 ) -> Vec<HyperlinkLine> {
     let bounded = |cells: u64| cells.min((width + 1) as u64) as usize;
     let mut reserved = children
@@ -140,7 +143,7 @@ fn layout_band(
         let available = bounded(child.widths.preferred)
             .min(width.saturating_sub(offset + reserved))
             .max(minimum);
-        let fragments = layout_node(child, available.clamp(1, width), limit);
+        let fragments = layout_node(child, available.clamp(1, width), limit, theme);
         if rows.len() < fragments.len() {
             rows.resize_with(fragments.len(), Default::default);
         }
@@ -149,8 +152,8 @@ fn layout_band(
             let start = offset.min(width + 1);
             if start > *end {
                 line.line
-                    .push_span(Span::styled(" ".repeat(start - *end), paint.style));
-                if let Some(href) = paint.href {
+                    .push_span(Span::styled(" ".repeat(start - *end), paint.style(theme)));
+                if let Some(href) = &paint.href {
                     push_link(line, *end..start, href);
                 }
                 *end = start;
@@ -175,14 +178,17 @@ fn layout_band(
     rows.into_iter().map(|(line, _)| line).collect()
 }
 
-fn sanitize_leaf(raw: &str) -> Cow<'_, str> {
+fn sanitize_leaf(mut raw: String) -> String {
     // Built-in values can bypass the wire decoder's text limit.
-    let raw = &raw[..raw.floor_char_boundary(MAX_TEXT_BYTES)];
+    if raw.len() > MAX_TEXT_BYTES {
+        raw.truncate(raw.floor_char_boundary(MAX_TEXT_BYTES));
+        raw.shrink_to_fit();
+    }
     if raw
         .chars()
         .all(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
     {
-        return Cow::Borrowed(raw);
+        return raw;
     }
     let mut actions = CollectingVTActor::default();
     VTParser::new().parse(raw.as_bytes(), &mut actions);
@@ -209,9 +215,9 @@ fn push_link(line: &mut HyperlinkLine, columns: Range<usize>, href: &str) {
 }
 
 impl TextProps {
-    fn style(&self, mut style: Style, theme: &RenderTheme<'_>) -> Style {
-        if let Some(color) = &self.color {
-            style = style.fg(color.resolve(theme));
+    fn apply_to(&self, paint: &mut Paint) {
+        if let Some(color) = self.color {
+            paint.foreground = Some(color);
         }
         for (enabled, modifier) in [
             (
@@ -222,11 +228,10 @@ impl TextProps {
             (self.underline, Modifier::UNDERLINED),
         ] {
             match enabled {
-                Some(true) => style = style.add_modifier(modifier),
-                Some(false) => style = style.remove_modifier(modifier),
+                Some(true) => paint.modifiers = paint.modifiers.add_modifier(modifier),
+                Some(false) => paint.modifiers = paint.modifiers.remove_modifier(modifier),
                 None => {}
             }
         }
-        style
     }
 }

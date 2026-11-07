@@ -5,53 +5,44 @@ use super::text::Paint;
 use super::text::PreparedText;
 use crate::ui_tree::RowWrap;
 use crate::ui_tree::UiNode;
-use crate::ui_tree::theme::RenderTheme;
-use ratatui::style::Style;
 
-pub(super) struct PreparedNode<'a> {
-    pub(super) kind: NodeKind<'a>,
+#[derive(Debug, PartialEq)]
+pub(super) struct PreparedNode {
+    pub(super) kind: NodeKind,
     pub(super) widths: Widths,
 }
 
+#[derive(Debug, PartialEq)]
 pub(super) struct Widths {
     pub(super) minimum: u64,
     pub(super) preferred: u64,
 }
 
-pub(super) enum NodeKind<'a> {
-    Text(PreparedText<'a>),
+#[derive(Debug, PartialEq)]
+pub(super) enum NodeKind {
+    Text(PreparedText),
     Row {
-        children: Vec<PreparedNode<'a>>,
+        children: Vec<PreparedNode>,
         gap: u64,
         wrap: RowWrap,
-        paint: Paint<'a>,
+        paint: Paint,
     },
 }
 
-impl<'a> PreparedNode<'a> {
-    pub(super) fn from_node(
-        node: &'a UiNode,
-        style: Style,
-        href: Option<&'a str>,
-        theme: &RenderTheme<'_>,
-    ) -> Option<Self> {
+impl PreparedNode {
+    pub(super) fn from_node(node: UiNode, paint: Paint) -> Option<Self> {
         let mut items = Vec::new();
         let mut inline = InlineText::default();
-        Self::collect_inline(&mut items, &mut inline, node, style, href, theme);
+        Self::collect_inline(&mut items, &mut inline, node, paint.clone());
         items.extend(Self::text(inline));
         if items.len() <= 1 {
             items.pop()
         } else {
-            Self::row(
-                items,
-                /*gap*/ 0,
-                RowWrap::Nowrap,
-                Paint { style, href },
-            )
+            Self::row(items, /*gap*/ 0, RowWrap::Nowrap, paint)
         }
     }
 
-    fn text(inline: InlineText<'a>) -> Option<Self> {
+    fn text(inline: InlineText) -> Option<Self> {
         let text = inline.finish();
         if text.lines.is_empty() {
             return None;
@@ -75,7 +66,7 @@ impl<'a> PreparedNode<'a> {
         })
     }
 
-    fn row(mut children: Vec<Self>, gap: u64, wrap: RowWrap, paint: Paint<'a>) -> Option<Self> {
+    fn row(mut children: Vec<Self>, gap: u64, wrap: RowWrap, paint: Paint) -> Option<Self> {
         children.retain(|child| {
             child.widths.preferred > 0
                 || match &child.kind {
@@ -115,59 +106,52 @@ impl<'a> PreparedNode<'a> {
 
     fn collect_inline(
         items: &mut Vec<Self>,
-        inline: &mut InlineText<'a>,
-        node: &'a UiNode,
-        mut style: Style,
-        mut href: Option<&'a str>,
-        theme: &RenderTheme<'_>,
+        inline: &mut InlineText,
+        node: UiNode,
+        mut paint: Paint,
     ) {
         let children = match node {
             UiNode::String(raw) => {
-                inline.push_leaf(raw, Paint { style, href });
+                inline.push_leaf(raw, paint);
                 return;
             }
             UiNode::Row { props, children } => {
                 items.extend(Self::text(std::mem::take(inline)));
-                if let Some(color) = &props.background {
-                    style = style.bg(color.resolve(theme));
+                if let Some(color) = props.background {
+                    paint.background = Some(color);
                 }
                 let children = children
-                    .iter()
+                    .into_iter()
                     .flatten()
-                    .filter_map(|node| Self::from_node(node, style, href, theme))
+                    .filter_map(|node| Self::from_node(node, paint.clone()))
                     .collect();
-                items.extend(Self::row(
-                    children,
-                    props.gap,
-                    props.wrap,
-                    Paint { style, href },
-                ));
+                items.extend(Self::row(children, props.gap, props.wrap, paint));
                 return;
             }
             UiNode::Text { props, children } => {
-                style = props.style(style, theme);
+                props.apply_to(&mut paint);
                 children
             }
             UiNode::Link { props, children } => {
-                href = Some(&props.href.0);
-                style = style.underlined();
+                paint.href = Some(props.href.0.into());
+                paint.modifiers = paint.modifiers.underlined();
                 children
             }
             UiNode::Bold { children } => {
-                style = style.bold();
+                paint.modifiers = paint.modifiers.bold();
                 children
             }
             UiNode::Italic { children } => {
-                style = style.italic();
+                paint.modifiers = paint.modifiers.italic();
                 children
             }
             UiNode::Underline { children } => {
-                style = style.underlined();
+                paint.modifiers = paint.modifiers.underlined();
                 children
             }
         };
-        for node in children.iter().flatten() {
-            Self::collect_inline(items, inline, node, style, href, theme);
+        for node in children.into_iter().flatten() {
+            Self::collect_inline(items, inline, node, paint.clone());
         }
     }
 }

@@ -14,14 +14,17 @@ fn parse(value: Value) -> serde_json::Result<UiTree> {
     value.to_string().parse()
 }
 
-fn tree(value: Value) -> UiTree {
-    parse(value).unwrap()
+fn tree(value: Value) -> PreparedUiTree {
+    parse(value).unwrap().prepare()
 }
 
 #[test]
 fn elements_round_trip_and_require_explicit_row_spacing() {
     let value = json!({"type":"row","props":{"gap":1},"children":[{"type":"link","props":{"href":"https://example.com/pr/42","title":"PR details"},"children":["12%"]}, null, " "]});
-    assert_eq!(serde_json::to_value(tree(value.clone())).unwrap(), value);
+    assert_eq!(
+        serde_json::to_value(parse(value.clone()).unwrap()).unwrap(),
+        value
+    );
     for href in [
         "relative/path",
         "file:///tmp/example",
@@ -204,7 +207,7 @@ fn single_line_view_marks_vertical_overflow() {
 #[test]
 fn directly_constructed_text_keeps_a_bounded_utf8_prefix() {
     let prefix = "x".repeat(MAX_TEXT_BYTES - 1);
-    let text = UiTree(Some(UiNode::String(format!("{prefix}界tail"))));
+    let text = UiTree(Some(UiNode::String(format!("{prefix}界tail")))).prepare();
     assert_eq!(
         text.render_line(u16::MAX, &Theme::default())
             .line
@@ -227,7 +230,10 @@ fn text_and_row_share_the_color_contract() {
         let value = json!({"type":"row","props":{"gap":0,"background":color},"children":[
             {"type":"text","props":{"color":color,"weight":"bold","italic":true,"underline":false},"children":["ok"]}
         ]});
-        assert_eq!(serde_json::to_value(tree(value.clone())).unwrap(), value);
+        assert_eq!(
+            serde_json::to_value(parse(value.clone()).unwrap()).unwrap(),
+            value
+        );
     }
     for props in [
         json!({"weight":"semibold"}),
@@ -488,9 +494,7 @@ fn whitespace_collapses_across_styled_leaves() {
     let node = tree(json!({"type":"text","children":[
         "  build\t", {"type":"bold","children":["  ready  "]}, "\nnext"
     ]}));
-    let lines = node
-        .prepare(&Theme::default())
-        .render_lines(Size::new(/*width*/ 20, /*height*/ 2));
+    let lines = node.render_lines(Size::new(/*width*/ 20, /*height*/ 2), &Theme::default());
     let text: Vec<_> = lines
         .into_iter()
         .map(|line| line.line.to_string())
@@ -505,12 +509,12 @@ fn whitespace_collapses_across_styled_leaves() {
 fn reads_row_wrap_without_moving_existing_positional_props() {
     let row = |props| json!({"type":"row","props":props,"children":["ok"]});
     assert_eq!(
-        tree(row(json!([1, "red"]))),
-        tree(row(json!({"gap":1,"background":"red"})))
+        parse(row(json!([1, "red"]))).unwrap(),
+        parse(row(json!({"gap":1,"background":"red"}))).unwrap()
     );
     assert_eq!(
-        tree(row(json!({"gap":1,"wrap":"nowrap"}))),
-        tree(row(json!({"gap":1})))
+        parse(row(json!({"gap":1,"wrap":"nowrap"}))).unwrap(),
+        parse(row(json!({"gap":1}))).unwrap()
     );
     for invalid in [json!("wrap-reverse"), json!(null), json!({"wrap":null})] {
         assert!(parse(row(json!({"gap":0,"wrap":invalid}))).is_err());
@@ -530,7 +534,7 @@ fn wrapped_link_offsets_follow_each_row_and_stop_before_clipping() {
         (Size::new(4, 2), vec![(">12…", 1..3), (" 67", 1..3)]),
         (Size::new(6, 1), vec![(">1234…", 1..5)]),
     ] {
-        let lines = node.prepare(&Theme::default()).render_lines(size);
+        let lines = node.render_lines(size, &Theme::default());
         assert_eq!(lines.len(), expected.len());
         for (line, (text, columns)) in lines.into_iter().zip(expected) {
             assert_eq!(line.line.to_string(), text);
@@ -555,9 +559,7 @@ fn styled_text_wraps_in_the_space_its_nowrap_row_assigns() {
             {"type":"link","props":{"href":href},"children":["was green"]}
         ]}, "!"
     ]}));
-    let lines = node
-        .prepare(&Theme::default())
-        .render_lines(Size::new(10, 4));
+    let lines = node.render_lines(Size::new(10, 4), &Theme::default());
     assert_eq!(
         lines
             .iter()
@@ -579,9 +581,7 @@ fn styled_text_wraps_in_the_space_its_nowrap_row_assigns() {
 #[test]
 fn shrinking_a_hyphenated_word_reserves_the_siblings_column() {
     let node = tree(json!({"type":"row","props":{"gap":1},"children":["aa-bb", "!"]}));
-    let lines = node
-        .prepare(&Theme::default())
-        .render_lines(Size::new(6, 2));
+    let lines = node.render_lines(Size::new(6, 2), &Theme::default());
     assert_eq!(
         lines
             .iter()
@@ -606,9 +606,7 @@ fn wrapping_row_moves_a_hash_and_nonbreaking_pr_label_together() {
         (20, vec!["gpt-5", "a1b2c3d PR\u{a0}#123"], 8..15),
         (12, vec!["gpt-5", "a1b2c3d PR\u{a0}…"], 8..11),
     ] {
-        let lines = node
-            .prepare(&Theme::default())
-            .render_lines(Size::new(width, 4));
+        let lines = node.render_lines(Size::new(width, 4), &Theme::default());
         let text: Vec<_> = lines.iter().map(|line| line.line.to_string()).collect();
         assert_eq!(text, expected);
         assert_eq!(
@@ -629,7 +627,7 @@ fn authored_line_breaks_and_collapsed_whitespace_preserve_styles_and_links() {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 4,
     );
-    let lines = node.prepare(&Theme::default()).render_lines(area.as_size());
+    let lines = node.render_lines(area.as_size(), &Theme::default());
     assert_eq!(
         lines[3].hyperlinks,
         [TerminalHyperlink::web(0..6, href.to_owned())]
@@ -653,9 +651,7 @@ fn authored_line_breaks_and_collapsed_whitespace_preserve_styles_and_links() {
 #[test]
 fn earlier_sibling_grows_after_reserving_the_later_siblings_minimum() {
     let node = tree(json!({"type":"row","props":{"gap":0},"children":["aaa a bb", "aaa a bb"]}));
-    let lines = node
-        .prepare(&Theme::default())
-        .render_lines(Size::new(10, 3));
+    let lines = node.render_lines(Size::new(10, 3), &Theme::default());
     assert_eq!(
         lines
             .iter()
@@ -675,9 +671,7 @@ fn width_fitting_respects_word_hyphens_across_styles() {
     ] {
         let node =
             tree(json!({"type":"text","children":[{"type":"bold","children":[prefix]},suffix]}));
-        let lines = node
-            .prepare(&Theme::default())
-            .render_lines(Size::new(2, 3));
+        let lines = node.render_lines(Size::new(2, 3), &Theme::default());
         assert_eq!(
             lines
                 .iter()
