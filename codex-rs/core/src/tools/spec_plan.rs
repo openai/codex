@@ -1109,7 +1109,7 @@ fn register_code_mode_executors(
     }
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-    let exec_description = codex_code_mode::build_exec_tool_description(
+    let (exec_description, _) = codex_code_mode::build_exec_tool_description_and_definitions(
         &enabled_tools,
         &deferred_tools,
         &namespace_descriptions,
@@ -1121,6 +1121,7 @@ fn register_code_mode_executors(
             codex_code_mode::ImageDetailVisibility::Visible
         },
         deferred_tool_discovery,
+        /*incremental_exec_enabled*/ false,
         model_messages.code_mode(),
     );
     let execute_handler = CodeModeExecuteHandler::new(

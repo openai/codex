@@ -11,11 +11,14 @@ use super::WorldStateSection;
 use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
+use codex_code_mode::ExecDefinition;
+use codex_code_mode::PUBLIC_TOOL_NAME;
 use codex_extension_api::ExtensionMetrics;
 use codex_otel::TOOL_INCREMENTAL_UPDATES_METRIC;
 use codex_otel::TOOL_SPEC_DESCRIPTION_BYTES_METRIC;
 use codex_otel::TOOL_SPEC_DESCRIPTION_BYTES_METRIC_BUCKETS;
 use codex_prompts::ResolvedIncrementalToolMessages;
+use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::models::ContentItem;
@@ -23,6 +26,8 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -32,12 +37,31 @@ const ACTION_ADDED: &str = "added";
 const ACTION_REMOVED: &str = "removed";
 const ACTION_SCHEMA_CHANGED: &str = "schema_changed";
 
+const EXEC_TOOLS_UPDATE_HINT: &str = "Use these definitions and namespace instructions with `functions.exec`. Each replaces its earlier version in full. Unlisted tools keep their latest definitions and `tools` methods.";
+const EXEC_TOOLS_REMOVED_DEFINITIONS_HEADER: &str = "Listed `Tool:` entries are unavailable until redefined or rediscovered. `Namespace instructions:` removes guidance only. Unlisted entries are unchanged.";
+
 /// The exact serialized Responses Lite declarations visible in one captured step.
 pub(crate) struct TopLevelToolsState {
     messages: ResolvedIncrementalToolMessages,
     definitions: Vec<Value>,
     hashes: BTreeMap<String, WorldStateHash>,
     metrics: Option<Arc<dyn ExtensionMetrics>>,
+    /// Whether this captured step uses granular exec catalog updates.
+    incremental_exec_tools: bool,
+    /// Diffable entries for the current CodeModeOnly catalog; absent in other tool modes.
+    exec_definitions: Option<Arc<Vec<ExecDefinition>>>,
+}
+
+/// Ordinary catalogs keep their landed flat format; exec mode adds its own comparison state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum TopLevelToolsSnapshot {
+    WithExec {
+        tools: BTreeMap<String, WorldStateHash>,
+        /// Stable entry keys and definition hashes, retained while exec is unavailable.
+        exec: BTreeMap<String, WorldStateHash>,
+    },
+    ToolsOnly(BTreeMap<String, WorldStateHash>),
 }
 
 impl TopLevelToolsState {
@@ -77,7 +101,23 @@ impl TopLevelToolsState {
             definitions,
             hashes,
             metrics,
+            incremental_exec_tools: false,
+            exec_definitions: None,
         })
+    }
+
+    /// Track granular exec updates as part of this tool catalog.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Activated by the follow-up runtime integration")
+    )]
+    pub(crate) fn with_incremental_exec_tools(
+        mut self,
+        exec_definitions: Option<Arc<Vec<ExecDefinition>>>,
+    ) -> Self {
+        self.incremental_exec_tools = true;
+        self.exec_definitions = exec_definitions;
+        self
     }
 }
 
@@ -129,20 +169,66 @@ fn record_changed_tool_metrics(
 
 impl WorldStateSection for TopLevelToolsState {
     const ID: &'static str = "top_level_tools";
-    type Snapshot = BTreeMap<String, WorldStateHash>;
+    type Snapshot = TopLevelToolsSnapshot;
 
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> SectionTransition<Self::Snapshot> {
-        let previous = match previous {
-            PreviousSectionState::Known(previous) => Some(previous),
-            PreviousSectionState::Absent | PreviousSectionState::Unknown => None,
+        let (previous, previous_exec) = match previous {
+            PreviousSectionState::Known(TopLevelToolsSnapshot::WithExec { tools, exec }) => {
+                (Some(tools), Some(exec))
+            }
+            PreviousSectionState::Known(TopLevelToolsSnapshot::ToolsOnly(tools)) => {
+                (Some(tools), None)
+            }
+            PreviousSectionState::Absent | PreviousSectionState::Unknown => (None, None),
         };
+        // Only an advertised CodeModeOnly exec declaration gets granular updates.
+        let exec_catalog = self.exec_definitions.as_ref().and_then(|entries| {
+            self.definitions.iter().find_map(|namespace| {
+                if namespace["type"] != "namespace"
+                    || namespace["name"] != DEFAULT_FUNCTION_NAMESPACE
+                {
+                    return None;
+                }
+                let exec = namespace["tools"]
+                    .as_array()?
+                    .iter()
+                    .find(|tool| tool["type"] == "custom" && tool["name"] == PUBLIC_TOOL_NAME)?;
+                Some((namespace, exec, entries.as_slice()))
+            })
+        });
+        let manages_exec = exec_catalog.is_some();
+        let mut updates = self.render_declaration_updates(previous, manages_exec);
+        self.append_removed_tools(previous, &mut updates);
+        let snapshot = if self.incremental_exec_tools {
+            let exec =
+                self.append_exec_updates(previous, previous_exec, exec_catalog, &mut updates);
+            TopLevelToolsSnapshot::WithExec {
+                tools: self.hashes.clone(),
+                exec,
+            }
+        } else {
+            TopLevelToolsSnapshot::ToolsOnly(self.hashes.clone())
+        };
+        // Persist empty catalogs as known comparison baselines.
+        (Some(snapshot), updates)
+    }
+}
+
+impl TopLevelToolsState {
+    /// Render added or changed declarations and namespace instruction updates.
+    fn render_declaration_updates(
+        &self,
+        previous: Option<&BTreeMap<String, WorldStateHash>>,
+        manages_exec: bool,
+    ) -> Vec<WorldStateUpdate> {
         let changed =
             |name: &str| previous.and_then(|previous| previous.get(name)) != self.hashes.get(name);
         let mut namespace_updates = Vec::new();
         let mut tools = Vec::new();
+        // Tool declarations: collect changed standalone tools and namespace members.
         for definition in &self.definitions {
             let name = definition_name(definition);
             let Some(members) = definition["tools"].as_array() else {
@@ -160,6 +246,9 @@ impl WorldStateSection for TopLevelToolsState {
             let mut changed_members = Vec::new();
             for tool in members {
                 let tool_name = format!("{name}.{}", definition_name(tool));
+                if manages_exec && previous.is_some() && tool_name == "functions.exec" {
+                    continue;
+                }
                 if changed(&tool_name) {
                     record_changed_tool_metrics(
                         &tool_name,
@@ -174,9 +263,8 @@ impl WorldStateSection for TopLevelToolsState {
                 let mut namespace = definition.clone();
                 namespace["tools"] = Value::Array(changed_members);
                 tools.push(namespace);
-            } else if changed(name) {
-                // Namespace declarations require a member. Update metadata as text without
-                // repeating unchanged tool definitions.
+            } else if changed(name) && (previous.is_some() || !manages_exec) {
+                // Namespace instruction updates use text because declarations require a member.
                 let instructions = definition["description"].as_str().unwrap_or_default();
                 let text = if instructions.is_empty() {
                     self.messages
@@ -201,12 +289,13 @@ impl WorldStateSection for TopLevelToolsState {
         }
         let mut updates = Vec::new();
         if !tools.is_empty() {
+            // Incremental tool updates: introduce an appended batch of namespace declarations.
             if previous.is_some()
                 && tools.iter().any(|tool| tool["type"] == "namespace")
                 && !self.messages.tool_update_hint.is_empty()
             {
                 updates.push(WorldStateUpdate::prefix_item(ContextualUserFragment::into(
-                    IncrementalToolsHint(self.messages.tool_update_hint.clone()),
+                    IncrementalToolsUpdate(self.messages.tool_update_hint.clone()),
                 )));
             }
             updates.push(WorldStateUpdate::prefix_item(
@@ -218,7 +307,17 @@ impl WorldStateSection for TopLevelToolsState {
             ));
         }
         updates.extend(namespace_updates);
+        updates
+    }
+
+    /// Append a removal notice, listing removed namespaces instead of their individual members.
+    fn append_removed_tools(
+        &self,
+        previous: Option<&BTreeMap<String, WorldStateHash>>,
+        updates: &mut Vec<WorldStateUpdate>,
+    ) {
         if let Some(previous) = previous {
+            // Removal notices: withdraw namespaces and tools absent from the current catalog.
             // Namespace and member names cannot contain dots. A qualified key identifies
             // its old namespace without changing the persisted header/member hash format.
             let namespaces = previous
@@ -259,19 +358,94 @@ impl WorldStateSection for TopLevelToolsState {
                 );
             }
         }
-        // Persist the empty map too: it is a known empty catalog, not missing state.
-        (Some(self.hashes.clone()), updates)
+    }
+
+    /// Append exec catalog updates and return the matching comparison snapshot.
+    fn append_exec_updates(
+        &self,
+        previous: Option<&BTreeMap<String, WorldStateHash>>,
+        previous_exec: Option<&BTreeMap<String, WorldStateHash>>,
+        exec_catalog: Option<(&Value, &Value, &[ExecDefinition])>,
+        updates: &mut Vec<WorldStateUpdate>,
+    ) -> BTreeMap<String, WorldStateHash> {
+        // Retain entry hashes while functions.exec is not advertised.
+        // When it returns, send the full current catalog and withdraw removed entries.
+        let mut exec = BTreeMap::new();
+        if let Some((namespace, declaration, entries)) = exec_catalog {
+            exec = entries
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.key.clone(),
+                        WorldStateHash::from_json(&Value::String(entry.description.clone())),
+                    )
+                })
+                .collect();
+            if previous_exec.is_some()
+                && previous.is_some_and(|tools| tools.contains_key("functions.exec"))
+            {
+                // Incremental tool updates: append entries; the exec declaration stays frozen.
+                let changed = entries
+                    .iter()
+                    .filter(|entry| {
+                        previous_exec.and_then(|previous| previous.get(&entry.key))
+                            != exec.get(&entry.key)
+                    })
+                    .collect::<Vec<_>>();
+                if !changed.is_empty() {
+                    updates.push(
+                        WorldStateUpdate::fragment(render_exec_update(&changed)).standalone(),
+                    );
+                }
+            } else if previous.is_some() {
+                // Install the full catalog when enabling granular updates or restoring exec.
+                if previous_exec.is_some()
+                    && let Some(metrics) = self.metrics.as_deref()
+                {
+                    metrics.counter(
+                        TOOL_INCREMENTAL_UPDATES_METRIC,
+                        /*inc*/ 1,
+                        &[("action", ACTION_ADDED), ("tool", "functions.exec")],
+                    );
+                }
+                let mut namespace = namespace.clone();
+                namespace["tools"] = Value::Array(vec![declaration.clone()]);
+                updates.push(WorldStateUpdate::prefix_item(
+                    ResponseItem::AdditionalTools {
+                        id: None,
+                        role: "developer".to_string(),
+                        tools: Arc::from(vec![namespace]),
+                    },
+                ));
+            }
+            // Removal notices: include exec entries removed while it was unavailable.
+            if let Some(previous) = previous_exec {
+                let removed = previous
+                    .keys()
+                    .filter(|key| !exec.contains_key(*key))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !removed.is_empty() {
+                    updates.push(
+                        WorldStateUpdate::fragment(RemovedExecDefinitions(removed)).standalone(),
+                    );
+                }
+            }
+        } else if let Some(previous) = previous_exec {
+            exec = previous.clone();
+        }
+        exec
     }
 }
 
-/// Guidance for an appended catalog batch, retained or discarded with its declarations.
-pub(crate) struct IncrementalToolsHint(pub(crate) String);
+/// An appended catalog hint or exec definition update, retained or discarded with its baseline.
+pub(crate) struct IncrementalToolsUpdate(pub(crate) String);
 
-impl IncrementalToolsHint {
+impl IncrementalToolsUpdate {
     pub(crate) const KIND: &str = "tools.incremental_update";
 }
 
-impl ContextualUserFragment for IncrementalToolsHint {
+impl ContextualUserFragment for IncrementalToolsUpdate {
     fn role(&self) -> &'static str {
         "developer"
     }
@@ -341,6 +515,46 @@ impl ContextualUserFragment for RemovedTools {
             }
         }
         input_text(body)
+    }
+}
+
+/// Render a nonempty batch of complete replacement definitions with the exec update hint.
+fn render_exec_update(definitions: &[&ExecDefinition]) -> IncrementalToolsUpdate {
+    let description = definitions
+        .iter()
+        .map(|entry| entry.description.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    IncrementalToolsUpdate(format!(
+        "{EXEC_TOOLS_UPDATE_HINT}\n\n## Namespace: functions\n{description}"
+    ))
+}
+
+/// Removal notice containing the stable keys of withdrawn tools or namespace instructions.
+struct RemovedExecDefinitions(Vec<String>);
+
+impl ContextualUserFragment for RemovedExecDefinitions {
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("tools.removed_definition".to_string())
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("", "")
+    }
+
+    fn body(&self) -> ContentItem {
+        input_text(format!(
+            "{EXEC_TOOLS_REMOVED_DEFINITIONS_HEADER}\n- {}",
+            self.0.join("\n- ")
+        ))
     }
 }
 

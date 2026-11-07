@@ -4,6 +4,7 @@ use super::*;
 use crate::context::world_state::test_support::render_section_cases;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::session::extension_metrics::from_session_telemetry;
+use codex_code_mode::ExecDefinition;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
@@ -31,6 +32,12 @@ fn item(tools: Vec<Value>) -> ResponseItem {
 
 fn namespace(name: &str, tools: Vec<Value>) -> Value {
     json!({"type": "namespace", "name": name, "description": "Tools.", "tools": tools})
+}
+
+fn exec_declaration(description: &str, grammar: &str) -> Value {
+    json!({"type": "namespace", "name": "functions", "description": "",
+        "tools": [{"type": "custom", "name": "exec", "description": description,
+            "format": {"type": "grammar", "syntax": "lark", "definition": grammar}}]})
 }
 
 #[test]
@@ -278,10 +285,17 @@ fn initial_catalog_preserves_order_and_unchanged_catalog_emits_nothing() {
         vec![item(definitions.clone())]
     );
     let snapshot = snapshot.unwrap();
+    let saved = serde_json::to_value(&snapshot).unwrap();
     assert_eq!(
-        snapshot.keys().map(String::as_str).collect::<Vec<_>>(),
+        saved
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         vec!["alpha", "alpha.lookup", "zebra", "zebra.lookup"]
     );
+    let snapshot: TopLevelToolsSnapshot = serde_json::from_value(saved).unwrap();
     let (unchanged_snapshot, updates) = state.render_diff(PreviousSectionState::Known(&snapshot));
     assert_eq!(unchanged_snapshot, Some(snapshot.clone()));
     assert!(updates.is_empty());
@@ -321,7 +335,10 @@ fn empty_catalog_is_persisted_and_can_add_tools_again() {
     )
     .unwrap();
     let (snapshot, updates) = empty.render_diff(PreviousSectionState::Known(&previous));
-    assert_eq!(snapshot, Some(BTreeMap::new()));
+    assert_eq!(
+        snapshot,
+        Some(TopLevelToolsSnapshot::ToolsOnly(BTreeMap::new()))
+    );
     assert_eq!(
         merge_world_state_updates(updates),
         vec![ContextualUserFragment::into(RemovedTools {
@@ -334,7 +351,7 @@ fn empty_catalog_is_persisted_and_can_add_tools_again() {
     assert_eq!(
         merge_world_state_updates(updates),
         vec![
-            ContextualUserFragment::into(IncrementalToolsHint(
+            ContextualUserFragment::into(IncrementalToolsUpdate(
                 ResolvedIncrementalToolMessages::default().tool_update_hint
             )),
             item(definitions),
@@ -384,7 +401,7 @@ fn namespace_diff_contains_only_changed_and_added_tools() {
     assert_eq!(
         merge_world_state_updates(updates),
         vec![
-            ContextualUserFragment::into(IncrementalToolsHint(
+            ContextualUserFragment::into(IncrementalToolsUpdate(
                 ResolvedIncrementalToolMessages::default().tool_update_hint
             )),
             item(vec![expected]),
@@ -428,7 +445,7 @@ fn new_namespaces_share_one_notice_before_their_declarations() {
     assert_eq!(
         prefix,
         vec![
-            ContextualUserFragment::into(IncrementalToolsHint(
+            ContextualUserFragment::into(IncrementalToolsUpdate(
                 ResolvedIncrementalToolMessages::default().tool_update_hint
             )),
             item(additions.clone()),
@@ -543,7 +560,7 @@ fn tool_type_change_keeps_the_callable_name_available() {
     assert_eq!(
         merge_world_state_updates(updates),
         vec![
-            ContextualUserFragment::into(IncrementalToolsHint(
+            ContextualUserFragment::into(IncrementalToolsUpdate(
                 ResolvedIncrementalToolMessages::default().tool_update_hint
             )),
             item(vec![updated]),
@@ -631,5 +648,160 @@ fn namespace_replaced_by_builtin_keeps_the_replacement_available() {
                 ..Default::default()
             }),
         ],
+    );
+}
+
+#[test]
+fn hidden_exec_is_not_reintroduced_and_returning_exec_restores_full_catalog() {
+    let original = exec_declaration("Shared MCP Types:", "grammar");
+    let exec_definitions = Arc::new(vec![ExecDefinition {
+        key: "Tool: tools.a".to_string(),
+        description: "### a\ndeclare const tools: { a(): Promise<string> };".to_string(),
+    }]);
+    let current = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![original.clone()],
+        /*metrics*/ None,
+    )
+    .unwrap()
+    .with_incremental_exec_tools(Some(Arc::clone(&exec_definitions)));
+    let (baseline, full) = current.render_diff(PreviousSectionState::Absent);
+    assert_eq!(
+        merge_world_state_updates(full),
+        vec![ResponseItem::AdditionalTools {
+            id: None,
+            role: "developer".to_string(),
+            tools: Arc::from(vec![original.clone()])
+        },]
+    );
+    let hidden = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        Vec::new(),
+        /*metrics*/ None,
+    )
+    .unwrap()
+    .with_incremental_exec_tools(Some(exec_definitions));
+    let (empty, updates) = hidden.render_diff(PreviousSectionState::Known(&baseline.unwrap()));
+    assert_eq!(
+        merge_world_state_updates(updates),
+        vec![ContextualUserFragment::into(RemovedTools {
+            namespaces: vec!["functions".to_string()],
+            ..Default::default()
+        })],
+    );
+    // Retain identities for removals on return, but require a fresh exec declaration.
+    let restored: TopLevelToolsSnapshot =
+        serde_json::from_value(serde_json::to_value(empty.unwrap()).unwrap()).unwrap();
+    let namespace_instructions = ContextualUserFragment::into(
+        DeveloperInstructions::new(
+            "The functions namespace no longer has additional instructions.".to_string(),
+        )
+        .with_metadata(ContentItemMetadata::tool(Some(
+            "functions".to_string().into(),
+        ))),
+    );
+    assert_eq!(
+        merge_world_state_updates(
+            current
+                .render_diff(PreviousSectionState::Known(&restored))
+                .1
+        ),
+        vec![
+            namespace_instructions.clone(),
+            ResponseItem::AdditionalTools {
+                id: None,
+                role: "developer".to_string(),
+                tools: Arc::from(vec![original.clone()])
+            }
+        ],
+    );
+
+    // A full restore also withdraws definitions removed while exec was hidden.
+    let without_entries = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![original.clone()],
+        /*metrics*/ None,
+    )
+    .unwrap()
+    .with_incremental_exec_tools(Some(Arc::new(Vec::new())));
+    assert_eq!(
+        merge_world_state_updates(
+            without_entries
+                .render_diff(PreviousSectionState::Known(&restored))
+                .1
+        ),
+        vec![
+            namespace_instructions,
+            ResponseItem::AdditionalTools {
+                id: None,
+                role: "developer".to_string(),
+                tools: Arc::from(vec![original]),
+            },
+            ContextualUserFragment::into(RemovedExecDefinitions(
+                vec!["Tool: tools.a".to_string(),]
+            )),
+        ],
+    );
+}
+
+#[test]
+fn changed_and_added_entries_share_one_update_and_removed_entries_are_withdrawn() {
+    let definition = exec_declaration("Shared MCP Types:", "grammar");
+    let original = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![definition.clone()],
+        /*metrics*/ None,
+    )
+    .unwrap()
+    .with_incremental_exec_tools(Some(Arc::new(vec![
+        ExecDefinition {
+            key: "Tool: tools.a".to_string(),
+            description: "### a\ndeclare const tools: { a(): Promise<string> };".to_string(),
+        },
+        ExecDefinition {
+            key: "Tool: tools.b".to_string(),
+            description: "### b\ndeclare const tools: { b(): Promise<string> };".to_string(),
+        },
+    ])));
+    let baseline = original
+        .render_diff(PreviousSectionState::Absent)
+        .0
+        .unwrap();
+
+    let current = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![definition],
+        /*metrics*/ None,
+    )
+    .unwrap()
+    .with_incremental_exec_tools(Some(Arc::new(vec![
+        ExecDefinition {
+            key: "Tool: tools.a".to_string(),
+            description:
+                "### a\nChanged a.\ndeclare const tools: { a(value: number): Promise<number> };"
+                    .to_string(),
+        },
+        ExecDefinition {
+            key: "Tool: tools.c".to_string(),
+            description: "### c\ndeclare const tools: { c(): Promise<boolean> };".to_string(),
+        },
+    ])));
+    let (snapshot, updates) = current.render_diff(PreviousSectionState::Known(&baseline));
+    assert_eq!(
+        merge_world_state_updates(updates),
+        vec![
+            ContextualUserFragment::into(IncrementalToolsUpdate(
+                "Use these definitions and namespace instructions with `functions.exec`. Each replaces its earlier version in full. Unlisted tools keep their latest definitions and `tools` methods.\n\n## Namespace: functions\n### a\nChanged a.\ndeclare const tools: { a(value: number): Promise<number> };\n\n### c\ndeclare const tools: { c(): Promise<boolean> };".to_string(),
+            )),
+            ContextualUserFragment::into(RemovedExecDefinitions(vec![
+                "Tool: tools.b".to_string(),
+            ])),
+        ]
+    );
+    assert!(
+        current
+            .render_diff(PreviousSectionState::Known(&snapshot.unwrap()))
+            .1
+            .is_empty()
     );
 }
