@@ -26,9 +26,6 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::WindowsSandboxFilesystemOverrides;
 use codex_sandboxing::WindowsSandboxProxySettingsMode;
 use codex_sandboxing::WindowsSandboxSpawnRequest;
-use codex_sandboxing::resolve_windows_elevated_filesystem_overrides;
-use codex_sandboxing::resolve_windows_restricted_token_filesystem_overrides;
-use codex_sandboxing::windows_sandbox_uses_elevated_backend;
 use codex_sandboxing::with_managed_mitm_ca_readable_root;
 #[cfg(windows)]
 use codex_shell_command::shell_detect::fallback_powershell_shell_for_windows_sandbox;
@@ -313,23 +310,13 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
         })?;
         request.arg0 = params.arg0.clone();
         let proxy_enforced = params.enforce_managed_network;
-        let use_elevated = windows_sandbox_uses_elevated_backend(windows_sandbox_level);
-        let filesystem_overrides = if use_elevated {
-            resolve_windows_elevated_filesystem_overrides(
-                sandbox,
-                &permissions,
-                &native_sandbox_policy_cwd,
-                use_elevated,
-                &request.env,
-            )
-        } else {
-            resolve_windows_restricted_token_filesystem_overrides(
-                sandbox,
-                &permissions,
-                &native_sandbox_policy_cwd,
-                windows_sandbox_level,
-            )
-        }
+        let filesystem_overrides = WindowsSandboxFilesystemOverrides::resolve(
+            sandbox,
+            &permissions,
+            &native_sandbox_policy_cwd,
+            windows_sandbox_level,
+            &request.env,
+        )
         .map_err(|err| invalid_params(format!("failed to prepare process sandbox: {err}")))?;
         Some(PreparedWindowsSandboxRequest {
             permission_profile: permissions,

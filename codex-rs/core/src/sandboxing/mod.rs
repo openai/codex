@@ -26,9 +26,6 @@ pub use codex_protocol::models::SandboxPermissions;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::WindowsSandboxFilesystemOverrides;
-use codex_sandboxing::resolve_windows_elevated_filesystem_overrides;
-use codex_sandboxing::resolve_windows_restricted_token_filesystem_overrides;
-use codex_sandboxing::windows_sandbox_uses_elevated_backend;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_string::truncate_middle_with_token_budget;
@@ -142,24 +139,13 @@ impl ExecRequest {
             let sandbox_policy_cwd = windows_sandbox_policy_cwd
                 .to_abs_path()
                 .map_err(|err| CodexErr::InvalidRequest(format!("invalid sandbox cwd: {err}")))?;
-            let use_windows_elevated_backend =
-                windows_sandbox_uses_elevated_backend(windows_sandbox_level);
-            if use_windows_elevated_backend {
-                resolve_windows_elevated_filesystem_overrides(
-                    sandbox,
-                    &permission_profile,
-                    &sandbox_policy_cwd,
-                    use_windows_elevated_backend,
-                    &env,
-                )
-            } else {
-                resolve_windows_restricted_token_filesystem_overrides(
-                    sandbox,
-                    &permission_profile,
-                    &sandbox_policy_cwd,
-                    windows_sandbox_level,
-                )
-            }
+            WindowsSandboxFilesystemOverrides::resolve(
+                sandbox,
+                &permission_profile,
+                &sandbox_policy_cwd,
+                windows_sandbox_level,
+                &env,
+            )
             .map_err(|error| {
                 CodexErr::UnsupportedOperation(
                     truncate_middle_with_token_budget(&error, /*max_tokens*/ 900).0,

@@ -556,6 +556,22 @@ fn windows_sandbox_backend_honors_unelevated_configuration() {
     ));
 }
 
+fn unsupported_windows_restricted_token_sandbox_reason(
+    sandbox: SandboxType,
+    permission_profile: &PermissionProfile,
+    sandbox_policy_cwd: &AbsolutePathBuf,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> Option<String> {
+    WindowsSandboxFilesystemOverrides::resolve(
+        sandbox,
+        permission_profile,
+        sandbox_policy_cwd,
+        windows_sandbox_level,
+        &HashMap::new(),
+    )
+    .err()
+}
+
 #[test]
 fn windows_restricted_token_rejects_network_only_restrictions() {
     let permission_profile = PermissionProfile::from_runtime_permissions(

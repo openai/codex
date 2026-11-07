@@ -1,18 +1,14 @@
 use self::launch::PreparedLaunchPolicy;
 use crate::LinuxSandboxPidNamespace;
+#[cfg(windows)]
+use crate::WindowsSandboxFilesystemOverrides;
 #[cfg(target_os = "linux")]
 use crate::bwrap::WSL1_BWRAP_WARNING;
 use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
-#[cfg(windows)]
-use crate::resolve_windows_elevated_filesystem_overrides;
-#[cfg(windows)]
-use crate::resolve_windows_restricted_token_filesystem_overrides;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MacosSeatbeltProfile;
-#[cfg(windows)]
-use crate::windows_sandbox_uses_elevated_backend;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -687,23 +683,13 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
                 })
         })
         .transpose()?;
-    let use_elevated = windows_sandbox_uses_elevated_backend(request.windows_sandbox_level);
-    let overrides = if use_elevated {
-        resolve_windows_elevated_filesystem_overrides(
-            request.sandbox,
-            &request.permission_profile,
-            &native_sandbox_policy_cwd,
-            use_elevated,
-            &request.env,
-        )
-    } else {
-        resolve_windows_restricted_token_filesystem_overrides(
-            request.sandbox,
-            &request.permission_profile,
-            &native_sandbox_policy_cwd,
-            request.windows_sandbox_level,
-        )
-    }
+    let overrides = WindowsSandboxFilesystemOverrides::resolve(
+        request.sandbox,
+        &request.permission_profile,
+        &native_sandbox_policy_cwd,
+        request.windows_sandbox_level,
+        &request.env,
+    )
     .map_err(SandboxTransformError::WindowsSandboxPreparation)?;
     let empty_paths: &[AbsolutePathBuf] = &[];
     let read_roots_override = overrides
