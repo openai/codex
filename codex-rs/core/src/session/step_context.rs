@@ -14,7 +14,8 @@ use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_file_system::EnvironmentAccess;
 use codex_mcp::McpBinding;
-use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
 use codex_otel::SessionTelemetry;
 use codex_plugin::ExecutorPluginHookSource;
 use codex_protocol::items::ModelInvocationContext;
@@ -60,8 +61,11 @@ impl StepContext {
         if self.settings.model_info.use_responses_lite {
             Some(Feature::IncrementalTools)
         } else {
-            (self.turn.config.model_provider_id == OPENAI_PROVIDER_ID)
-                .then_some(Feature::IncrementalToolsLegacy)
+            matches!(
+                self.turn.config.model_provider_id.as_str(),
+                AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+            )
+            .then_some(Feature::IncrementalToolsLegacy)
         }
     }
 
