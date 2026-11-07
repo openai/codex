@@ -65,6 +65,8 @@ impl App {
                     (2, "Close tab")
                 }
                 "close_sidebar_tab" => continue,
+                "sidebar_up" => (1, "Previous tab"),
+                "sidebar_down" => (1, "Next tab"),
                 "hide_pane" if side => (2, "Hide pane"),
                 "focus_pane_left" if side && can_switch => (1, "Pane left"),
                 "focus_pane_right" if !side && can_switch && self.open_pane_focus().is_some() => {
@@ -77,21 +79,25 @@ impl App {
                 "focus_conversation_composer" => (2, "Composer"),
                 other => (2, other),
             };
-            let key = keys.join(" / ");
-            groups[group].1.push(
-                vec![
-                    format!("{key:<7} ").fg(crate::style::accent_color()),
-                    label.replace('_', " ").into(),
-                ]
-                .into(),
-            );
+            let key = keys.join(" / ").fg(crate::style::accent_color());
+            groups[group].1.push((key, label.replace('_', " ")));
         }
         let origin = if side { "Sidebar" } else { "Conversation" };
         Some(ShortcutHud::leader(
             format!("{} · {origin}", leader.prefix.display_label()),
             groups
                 .into_iter()
-                .filter(|(_, items)| !items.is_empty())
+                .filter_map(|(title, items)| {
+                    let width = items.iter().map(|(key, _)| key.width()).max()?.max(7);
+                    let lines = items
+                        .into_iter()
+                        .map(|(key, label)| {
+                            let gap = " ".repeat(width - key.width() + 1);
+                            vec![key, gap.into(), label.into()].into()
+                        })
+                        .collect();
+                    Some((title, lines))
+                })
                 .collect(),
         ))
     }

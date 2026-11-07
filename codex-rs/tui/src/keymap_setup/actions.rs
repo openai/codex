@@ -123,6 +123,8 @@ define_keymap_actions! {
         focus_sidebar_content [Workspace] => "Focus the side conversation, or hide it when already focused.",
         hide_pane [Workspace] => "Hide the focused sidebar pane.",
         close_sidebar_tab [Workspace] => "Close the active sidebar tab.",
+        sidebar_up [Workspace] => "Switch to the previous sidebar tab.",
+        sidebar_down [Workspace] => "Switch to the next sidebar tab.",
         focus_pane_left [Workspace] => "Focus the parent conversation.",
         focus_pane_right [Workspace] => "Focus the open side conversation.",
         minimize_pane_width [Workspace] => "Minimize the focused pane width.",

@@ -27,13 +27,11 @@ impl App {
         }
         let pane = self.sidebar()?;
         let tabs = pane.chat_tabs().strip();
-        let (TabTarget::Tab(id), _) = tabs.hit(strip, point)? else {
-            return None;
-        };
+        let id = tabs.hit(strip, point)?.0.tab_id()?;
         if self.conversation_frame.chat_strip.is_some() {
             (tabs.selected != Some(id)).then_some(id)
         } else {
-            pane.creation.is_none().then_some(id)
+            (pane.creation.is_none() && pane.saved_chats_request.is_none()).then_some(id)
         }
     }
 
@@ -90,6 +88,36 @@ impl App {
         Ok(())
     }
 
+    async fn activate_sidebar_tab(
+        &mut self,
+        tui: &mut tui::Tui,
+        server: &mut AppServerSession,
+        id: ThreadId,
+    ) -> Result<()> {
+        let current = self.current_displayed_thread_id();
+        if current == Some(id) {
+            return Ok(());
+        }
+        let zoomed = current.is_some() && self.zoomed_thread == current;
+        let result = self.select_agent_thread(tui, server, id).await;
+        if zoomed && self.current_displayed_thread_id() == Some(id) {
+            self.zoomed_thread = Some(id);
+        }
+        result
+    }
+
+    async fn step_sidebar_tab(
+        &mut self,
+        tui: &mut tui::Tui,
+        server: &mut AppServerSession,
+        step: isize,
+    ) -> Result<()> {
+        if let Some(id) = self.sidebar().and_then(|pane| pane.adjacent_chat(step)) {
+            self.activate_sidebar_tab(tui, server, id).await?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn handle_sidebar_input(
         &mut self,
         tui: &mut tui::Tui,
@@ -103,14 +131,22 @@ impl App {
             && matches!(
                 mouse.kind,
                 MouseEventKind::Down(MouseButton::Left | MouseButton::Middle)
+                    | MouseEventKind::ScrollUp
+                    | MouseEventKind::ScrollDown
             )
         {
             let point = (mouse.column, mouse.row).into();
             let frame = &self.conversation_frame;
+            if frame.hud_contains(*mouse) {
+                return false;
+            }
             let chooser = frame.chooser_area();
             let pane = self.sidebar();
-            if (frame.chat_strip.is_some_and(|area| area.contains(point))
-                || chooser.is_some_and(|area| area.contains(point)))
+            if ((matches!(mouse.kind, MouseEventKind::Down(_))
+                && chooser.is_some_and(|area| area.contains(point)))
+                || frame
+                    .sidebar_tab_strip()
+                    .is_some_and(|area| area.contains(point)))
                 && frame.sidebar_input != pane.map(sidebar::SidebarPane::input_state)
             {
                 // A tab may have closed or the chooser scrolled since this frame was painted.
@@ -125,24 +161,27 @@ impl App {
             {
                 let target = pane.chat_tabs().strip().hit(strip, point);
                 let middle = mouse.kind == MouseEventKind::Down(MouseButton::Middle);
-                let result = if let Some((TabTarget::Tab(id), tab)) = target
-                    && (middle || crate::sidebar_chooser::close_cell(tab).contains(point))
-                {
-                    sidebar_close::request(self, tui, server, id, CloseTab).await
-                } else if !middle && matches!(target, Some((TabTarget::Add, _))) {
-                    self.open_sidebar_tabs(tui, server).await
-                } else if let Some((TabTarget::Tab(id), _)) = target
-                    && self.current_displayed_thread_id() != Some(id)
-                {
-                    let zoomed = self.zoomed_thread.is_some()
-                        && self.zoomed_thread == self.current_displayed_thread_id();
-                    let result = self.select_agent_thread(tui, server, id).await;
-                    if zoomed && self.current_displayed_thread_id() == Some(id) {
-                        self.zoomed_thread = Some(id);
+                let result = match (mouse.kind, target) {
+                    (MouseEventKind::ScrollUp, _) => {
+                        self.step_sidebar_tab(tui, server, /*step*/ -1).await
                     }
-                    result
-                } else {
-                    return true;
+                    (MouseEventKind::ScrollDown, _) => {
+                        self.step_sidebar_tab(tui, server, /*step*/ 1).await
+                    }
+                    (_, Some((TabTarget::Tab(id), area)))
+                        if middle || sidebar_chooser::close_cell(area).contains(point) =>
+                    {
+                        sidebar_close::request(self, tui, server, id, CloseTab).await
+                    }
+                    (_, Some((TabTarget::Add, _))) if !middle => {
+                        self.open_sidebar_tabs(tui, server).await
+                    }
+                    (_, Some((TabTarget::Tab(id) | TabTarget::Overflow { tab: id, .. }, _)))
+                        if !middle =>
+                    {
+                        self.activate_sidebar_tab(tui, server, id).await
+                    }
+                    _ => return true,
                 };
                 if let Err(err) = result {
                     self.chat_widget.add_error_message(err.to_string());
@@ -335,6 +374,14 @@ impl App {
             bindings.close_sidebar_tab.is_pressed(key) && self.side_threads.contains_key(id)
         });
         let left = bindings.focus_pane_left.is_pressed(key);
+        let tab_step = if bindings.sidebar_up.is_pressed(key) {
+            Some(-1)
+        } else if bindings.sidebar_down.is_pressed(key) {
+            Some(1)
+        } else {
+            None
+        }
+        .filter(|_| self.sidebar_has_focus() && self.sidebar_chooser_available());
         let right = bindings.focus_pane_right.is_pressed(key);
         let main =
             bindings.focus_main_composer.is_pressed(key) && self.main_composer_shortcut_available();
@@ -368,6 +415,7 @@ impl App {
         let resize = bindings.resize_panes.is_pressed(key) && can_resize;
         let resizing = resize || width_change != 0 || focused_percent.is_some();
         if !(close.is_some()
+            || tab_step.is_some()
             || tabs
             || left
             || right
@@ -392,6 +440,7 @@ impl App {
             // A matching repeat still belongs to the shortcut. Keep it out of the focused editor.
             return true;
         }
+        let direct_tab_switch = tab_step.is_some() && self.routed_key_activation.is_none();
         let activation = self
             .routed_key_activation
             .take()
@@ -404,6 +453,8 @@ impl App {
                 || self.backtrack.overlay_preview_active);
         let result = if let Some(id) = close {
             sidebar_close::request(self, tui, app_server, id, CloseTab).await
+        } else if let Some(step) = tab_step {
+            self.step_sidebar_tab(tui, app_server, step).await
         } else if tabs {
             self.open_sidebar_tabs(tui, app_server).await
         } else if resize {
@@ -464,10 +515,10 @@ impl App {
         let view_changed = leaves_transcript
             || self.current_displayed_thread_id() != previous_thread
             || (main && chooser == Some(PaneFocus::Sidebar));
-        let suppression = if view_changed {
+        let suppression = if view_changed && !direct_tab_switch {
             ActivationKeySuppression::ViewTransition
         } else {
-            // A no-op leaves the editor in place, so prefer accepting fresh input.
+            // A direct tab shortcut can be pressed repeatedly to cycle through several tabs.
             ActivationKeySuppression::ReportedRepeats
         };
         self.chat_widget.suppress_current_view_key_until_release(

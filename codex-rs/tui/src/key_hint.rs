@@ -92,6 +92,9 @@ impl From<KeyBinding> for ShortcutHint {
 
 impl KeyBinding {
     pub(crate) fn display_label(&self) -> String {
+        if self.key == KeyCode::BackTab {
+            return Self::new(KeyCode::Tab, self.modifiers | KeyModifiers::SHIFT).display_label();
+        }
         let mut label = String::new();
         for (modifier, name) in MODIFIER_LABELS {
             if self.modifiers.contains(modifier) {

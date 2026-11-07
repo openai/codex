@@ -109,6 +109,8 @@ pub(crate) struct AppKeymap {
     pub(crate) focus_sidebar_tabs: Vec<KeyBinding>,
     pub(crate) hide_pane: Vec<KeyBinding>,
     pub(crate) close_sidebar_tab: Vec<KeyBinding>,
+    pub(crate) sidebar_up: Vec<KeyBinding>,
+    pub(crate) sidebar_down: Vec<KeyBinding>,
     pub(crate) focus_pane_left: Vec<KeyBinding>,
     pub(crate) focus_pane_right: Vec<KeyBinding>,
     pub(crate) minimize_pane_width: Vec<KeyBinding>,
@@ -712,6 +714,8 @@ impl RuntimeKeymap {
             classic_keymap.global.focus_sidebar_tabs = None;
             classic_keymap.global.hide_pane = None;
             classic_keymap.global.close_sidebar_tab = None;
+            classic_keymap.global.sidebar_up = None;
+            classic_keymap.global.sidebar_down = None;
             classic_keymap.global.focus_pane_left = None;
             classic_keymap.global.focus_pane_right = None;
             &classic_keymap
@@ -791,6 +795,16 @@ impl RuntimeKeymap {
                 keymap.global.close_sidebar_tab.as_ref(),
                 &[],
                 "tui.keymap.global.close_sidebar_tab",
+            )?,
+            sidebar_up: resolve_bindings(
+                keymap.global.sidebar_up.as_ref(),
+                &[],
+                "tui.keymap.global.sidebar_up",
+            )?,
+            sidebar_down: resolve_bindings(
+                keymap.global.sidebar_down.as_ref(),
+                &[],
+                "tui.keymap.global.sidebar_down",
             )?,
             focus_pane_left: resolve_bindings(
                 keymap.global.focus_pane_left.as_ref(),
@@ -1817,6 +1831,8 @@ impl RuntimeKeymap {
                 focus_sidebar_tabs: Vec::new(),
                 hide_pane: Vec::new(),
                 close_sidebar_tab: Vec::new(),
+                sidebar_up: Vec::new(),
+                sidebar_down: Vec::new(),
                 focus_pane_left: Vec::new(),
                 focus_pane_right: Vec::new(),
                 minimize_pane_width: Vec::new(),
@@ -2198,6 +2214,8 @@ impl RuntimeKeymap {
             ("global.toggle_pane_zoom", &self.app.toggle_pane_zoom),
             ("global.hide_pane", &self.app.hide_pane),
             ("global.close_sidebar_tab", &self.app.close_sidebar_tab),
+            ("global.sidebar_up", &self.app.sidebar_up),
+            ("global.sidebar_down", &self.app.sidebar_down),
             ("chat.open_presets", &self.chat.open_presets),
             ("chat.toggle_voice", &self.chat.toggle_voice),
         ] {
@@ -2249,6 +2267,8 @@ impl RuntimeKeymap {
             ("toggle_pane_zoom", self.app.toggle_pane_zoom.as_slice()),
             ("hide_pane", self.app.hide_pane.as_slice()),
             ("close_sidebar_tab", self.app.close_sidebar_tab.as_slice()),
+            ("sidebar_up", self.app.sidebar_up.as_slice()),
+            ("sidebar_down", self.app.sidebar_down.as_slice()),
             ("open_agents", self.app.open_agents.as_slice()),
             ("open_transcript", self.app.open_transcript.as_slice()),
             ("find_transcript", self.app.find_transcript.as_slice()),
@@ -2437,6 +2457,8 @@ impl RuntimeKeymap {
                 ("toggle_pane_zoom", self.app.toggle_pane_zoom.as_slice()),
                 ("hide_pane", self.app.hide_pane.as_slice()),
                 ("close_sidebar_tab", self.app.close_sidebar_tab.as_slice()),
+                ("sidebar_up", self.app.sidebar_up.as_slice()),
+                ("sidebar_down", self.app.sidebar_down.as_slice()),
                 ("open_agents", self.app.open_agents.as_slice()),
                 ("open_transcript", self.app.open_transcript.as_slice()),
                 ("find_transcript", self.app.find_transcript.as_slice()),
@@ -2597,6 +2619,8 @@ impl RuntimeKeymap {
                     "global.close_sidebar_tab",
                     self.app.close_sidebar_tab.as_slice(),
                 ),
+                ("global.sidebar_up", self.app.sidebar_up.as_slice()),
+                ("global.sidebar_down", self.app.sidebar_down.as_slice()),
                 (
                     "global.select_transcript",
                     self.app.select_transcript.as_slice(),
@@ -2664,6 +2688,8 @@ impl RuntimeKeymap {
                     "global.close_sidebar_tab",
                     self.app.close_sidebar_tab.as_slice(),
                 ),
+                ("global.sidebar_up", self.app.sidebar_up.as_slice()),
+                ("global.sidebar_down", self.app.sidebar_down.as_slice()),
                 ("global.focus_activity", self.app.focus_activity.as_slice()),
                 (
                     "global.find_transcript",

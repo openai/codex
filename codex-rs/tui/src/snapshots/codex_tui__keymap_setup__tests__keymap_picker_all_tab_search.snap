@@ -7,11 +7,11 @@ Focus Sidebar Tabs | leader t (ctrl-x t) | Global focus_sidebar_tabs Focus Sideb
 Focus Sidebar Content | leader s (ctrl-x s) | Global focus_sidebar_content Focus Sidebar Content Focus the side conversation, or hide it when already focused. leader s (ctrl-x s) Default
 Hide Pane | leader - (ctrl-x -) | Global hide_pane Hide Pane Hide the focused sidebar pane. leader - (ctrl-x -) Default
 Close Sidebar Tab | leader w (ctrl-x w) | Global close_sidebar_tab Close Sidebar Tab Close the active sidebar tab. leader w (ctrl-x w) Default
+Sidebar Up | leader shift-tab (ctrl-x shift-tab), leader up (ctrl-x up), leader k (ctrl-x k) | Global sidebar_up Sidebar Up Switch to the previous sidebar tab. leader shift-tab (ctrl-x shift-tab), leader up (ctrl-x up), leader k (ctrl-x k) Default
+Sidebar Down | leader tab (ctrl-x tab), leader down (ctrl-x down), leader j (ctrl-x j) | Global sidebar_down Sidebar Down Switch to the next sidebar tab. leader tab (ctrl-x tab), leader down (ctrl-x down), leader j (ctrl-x j) Default
 Focus Pane Left | leader left (ctrl-x left), leader h (ctrl-x h) | Global focus_pane_left Focus Pane Left Focus the parent conversation. leader left (ctrl-x left), leader h (ctrl-x h) Default
 Focus Pane Right | leader right (ctrl-x right), leader l (ctrl-x l) | Global focus_pane_right Focus Pane Right Focus the open side conversation. leader right (ctrl-x right), leader l (ctrl-x l) Default
 Minimize Pane Width | leader , (ctrl-x ,) | Global minimize_pane_width Minimize Pane Width Minimize the focused pane width. leader , (ctrl-x ,) Default
 Maximize Pane Width | leader . (ctrl-x .) | Global maximize_pane_width Maximize Pane Width Maximize the focused pane width. leader . (ctrl-x .) Default
 Equalize Pane Widths | leader = (ctrl-x =) | Global equalize_pane_widths Equalize Pane Widths Equalize visible pane widths. leader = (ctrl-x =) Default
 Resize Panes | leader r (ctrl-x r) | Global resize_panes Resize Panes Enter keyboard resize mode for visible dividers. leader r (ctrl-x r) Default
-Move Divider Left | leader shift-h (ctrl-x shift-h) | Global move_divider_left Move Divider Left Move the divider left when the side pane has focus. leader shift-h (ctrl-x shift-h) Default
-Move Divider Right | leader shift-l (ctrl-x shift-l) | Global move_divider_right Move Divider Right Move the divider right when the side pane has focus. leader shift-l (ctrl-x shift-l) Default

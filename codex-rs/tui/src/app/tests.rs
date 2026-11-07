@@ -4906,6 +4906,28 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     assert_app_snapshot!("side_chat_tabs", header.trim_end());
     assert_eq!(app.conversation_frame.chat_strip.unwrap().x, sidebar_x);
 
+    // At this width only one tab fits. Use the arrow to go back and the wheel to return.
+    let narrow = Size::new(24, even.height);
+    let narrow_frame = side_frame(&mut app, &mut tui, narrow)?;
+    let header = narrow_frame.lines().next().unwrap();
+    insta::assert_snapshot!("side_chat_tab_overflow", header.trim_end());
+    let arrow = header.chars().position(|c| c == '‹').expect("previous tab");
+    for (kind, expected) in [
+        (MouseEventKind::Down(MouseButton::Left), side_thread_id),
+        (MouseEventKind::ScrollDown, sibling),
+    ] {
+        let event = mouse(
+            kind,
+            arrow as u16,
+            app.conversation_frame.chat_strip.unwrap().y,
+        );
+        boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, event)).await?;
+        drain_app_events(&mut app, &mut tui, &mut app_server, &mut app_event_rx).await?;
+        assert_eq!(app.current_displayed_thread_id(), Some(expected));
+        side_frame(&mut app, &mut tui, narrow)?;
+    }
+    side_frame(&mut app, &mut tui, even)?;
+
     keys!(prefix, chooser_key, up, enter);
     assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
     assert_eq!(app.chat_widget.composer_text_with_pending(), child_draft);
@@ -4921,6 +4943,44 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     assert_eq!(draft, "sibling draft");
     assert!(side_frame(&mut app, &mut tui, even)?.contains("sibling-24"));
 
+    tokio::time::pause();
+    keys!(prefix);
+    tokio::time::advance(super::workspace_hud::REVEAL_DELAY).await;
+    side_frame(&mut app, &mut tui, even)?;
+    insta::assert_snapshot!("sidebar_tab_shortcuts", panel_text(&app, &tui));
+    side_frame(&mut app, &mut tui, Size::new(even.width, /*height*/ 10))?;
+    let overlap = app
+        .conversation_frame
+        .leader_hud
+        .unwrap()
+        .intersection(app.conversation_frame.chat_strip.unwrap());
+    assert!(!overlap.is_empty());
+    let scroll = mouse(MouseEventKind::ScrollUp, overlap.x, overlap.y);
+    boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, scroll)).await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(sibling));
+    side_frame(&mut app, &mut tui, even)?;
+    keys!(KeyCode::Esc.into());
+    tokio::time::resume();
+    for (key, expected, text) in [
+        (KeyCode::Tab, side_thread_id, child_draft.as_str()),
+        (KeyCode::BackTab, sibling, "sibling draft"),
+        (KeyCode::Down, side_thread_id, child_draft.as_str()),
+        (KeyCode::Char('k'), sibling, "sibling draft"),
+        (KeyCode::Char('j'), side_thread_id, child_draft.as_str()),
+        (KeyCode::Up, sibling, "sibling draft"),
+    ] {
+        keys!(prefix, key.into());
+        assert_eq!(app.current_displayed_thread_id(), Some(expected));
+        assert_eq!(app.chat_widget.composer_text_with_pending(), text);
+    }
+    app.local_settings.tui.keymap =
+        toml::from_str("[global]\nleader = 'f12'\nsidebar_down = 'f7'")?;
+    enable_side_retention(&mut app)?;
+    for expected in [side_thread_id, sibling] {
+        keys!(KeyCode::F(7).into());
+        assert_eq!(app.current_displayed_thread_id(), Some(expected));
+    }
+
     let colors = crate::terminal_probe::DefaultColors {
         fg: (224, 224, 224),
         bg: (20, 20, 20),
@@ -4931,14 +4991,16 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         assert_eq!(app.current_displayed_thread_id(), Some(owner));
         side_frame(&mut app, &mut tui, even)?;
         let strip = app.conversation_frame.chat_strip.unwrap();
-        let (tabs, _) = app
+        let tabs = app
             .sidebar()
             .unwrap()
             .chat_tabs()
             .strip()
             .strip_targets(strip);
         let [inactive, selected] = tabs
-            .map(|(_, _, area)| area.x + 1)
+            .filter_map(|(target, area)| {
+                matches!(target, crate::sidebar_tab_strip::TabTarget::Tab(_)).then_some(area.x + 1)
+            })
             .collect::<Vec<_>>()
             .try_into()
             .expect("both side-chat tabs are visible");

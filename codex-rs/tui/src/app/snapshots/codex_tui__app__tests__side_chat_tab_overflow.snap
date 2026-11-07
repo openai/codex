@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 4913
+expression: header.trim_end()
+---
+‹  Fix cache×        +

@@ -5390,6 +5390,8 @@
               "queue": null,
               "resize_panes": null,
               "select_transcript": null,
+              "sidebar_down": null,
+              "sidebar_up": null,
               "submit": null,
               "toggle_fast_mode": null,
               "toggle_pane_zoom": null,
@@ -6374,6 +6376,22 @@
           ],
           "description": "Enter keyboard selection mode for the transcript."
         },
+        "sidebar_down": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch to the next sidebar tab."
+        },
+        "sidebar_up": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch to the previous sidebar tab."
+        },
         "submit": {
           "allOf": [
             {
@@ -6566,6 +6584,8 @@
             "queue": null,
             "resize_panes": null,
             "select_transcript": null,
+            "sidebar_down": null,
+            "sidebar_up": null,
             "submit": null,
             "toggle_fast_mode": null,
             "toggle_pane_zoom": null,

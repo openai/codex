@@ -138,6 +138,13 @@ impl SidebarPane {
         self.visits.iter().rev().copied().find(|id| *id != target)
     }
 
+    pub(super) fn adjacent_chat(&self, step: isize) -> Option<ThreadId> {
+        let selected = self.selected_chat()?;
+        let index = self.tabs.iter().position(|id| *id == selected)?;
+        let next = (index as isize + step).rem_euclid(self.tabs.len() as isize);
+        Some(self.tabs[next as usize])
+    }
+
     pub(super) fn selected_chat(&self) -> Option<ThreadId> {
         self.visits.last().copied()
     }

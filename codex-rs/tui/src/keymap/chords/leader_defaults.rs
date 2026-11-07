@@ -49,6 +49,12 @@ pub(in crate::keymap) fn register(
         (Global, "maximize_pane_width", Char('.'), "."),
         (Global, "close_sidebar_tab", Char('w'), "w"),
         (Global, "focus_sidebar_tabs", Char('t'), "t"),
+        (Global, "sidebar_up", KeyCode::BackTab, "shift-tab"),
+        (Global, "sidebar_down", KeyCode::Tab, "tab"),
+        (Global, "sidebar_up", KeyCode::Up, "up"),
+        (Global, "sidebar_up", Char('k'), "k"),
+        (Global, "sidebar_down", KeyCode::Down, "down"),
+        (Global, "sidebar_down", Char('j'), "j"),
     ] {
         if remaining == 0 {
             break;

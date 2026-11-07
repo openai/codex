@@ -267,6 +267,9 @@ impl App {
             };
         }
         let mut contexts = contexts.with_pane_directions();
+        if self.sidebar_has_focus() && self.sidebar_chooser_available() {
+            contexts = contexts.with_focused_sidebar();
+        }
         if self.open_pane_focus().is_some() {
             contexts = contexts.with_open_pane();
         }

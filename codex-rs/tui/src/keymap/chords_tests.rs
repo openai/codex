@@ -188,7 +188,7 @@ fn allows_shared_prefixes_with_distinct_completions() {
 
     RuntimeKeymap::from_config(&config).expect("prefix trie can branch on the second stroke");
 
-    // With 16 leaders and 56 explicit completions, only eight more aliases fit per leader.
+    // Fill the budget immediately after the existing sidebar chooser shortcut.
     let mut config = TuiKeymap::default();
     config.global.leader = Some(KeybindingsSpec::Many(
         (1..=16)
@@ -201,7 +201,7 @@ fn allows_shared_prefixes_with_distinct_completions() {
             .flat_map(|modifier| {
                 (1..=19).map(move |n| KeybindingSpec(format!("leader {modifier}f{n}")))
             })
-            .take(56)
+            .take(45)
             .collect(),
     ));
     let runtime = RuntimeKeymap::for_session(&config, /*workspace*/ true).unwrap();
@@ -215,12 +215,13 @@ fn allows_shared_prefixes_with_distinct_completions() {
         super::MAX_LEADER_CHORD_BINDINGS
     );
     assert_eq!(
-        crate::keymap_setup::active_binding_specs(&runtime, "global", "focus_pane_left").unwrap(),
-        ["leader left", "leader h"]
+        crate::keymap_setup::active_binding_specs(&runtime, "global", "focus_sidebar_tabs")
+            .unwrap(),
+        ["leader t"]
     );
     assert!(
         runtime
-            .primary_hint(KeymapContext::Global, "focus_pane_right")
+            .primary_hint(KeymapContext::Global, "sidebar_up")
             .is_none()
     );
 }

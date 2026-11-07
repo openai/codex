@@ -1,0 +1,20 @@
+---
+source: tui/src/app/tests.rs
+expression: "panel_text(&app, &tui)"
+---
+─ f12 · Sidebar ────────────────────────────────────────────────────────────────────────────────────
+
+  Panes                                            This pane
+  c       Main composer                            [       Select transcript
+  s       Hide sidebar                             p       Presets ›
+  t       Open in sidebar                          -       Hide pane
+                                                   z       Zoom pane
+  Move                                             ⇧h      Divider left
+  ← / h        Pane left                           ⇧l      Divider right
+  ⇧tab / ↑ / k Previous tab                        =       Equal widths
+  tab / ↓ / j  Next tab                            r       Resize panes
+                                                   ,       Minimum width
+                                                   .       Maximum width
+                                                   w       Close tab
+
+  Esc cancel
