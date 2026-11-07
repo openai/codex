@@ -3619,6 +3619,9 @@ impl Config {
         {
             configured_features.enable(Feature::Collab);
         }
+        let runtime_auth_mode = managed_features::resolve_runtime_auth_mode(
+            &cfg, feature_requirements.as_ref(),
+        )?;
         let features = ManagedFeatures::from_configured_with_warnings(
             configured_features,
             feature_requirements,
@@ -4082,15 +4085,6 @@ impl Config {
             .features
             .as_ref()
             .and_then(|features| features.sleep_tool.as_ref())
-            .and_then(|feature| match feature {
-                FeatureToml::Enabled(_) => None,
-                FeatureToml::Config(config) => config.mode,
-            })
-            .unwrap_or_default();
-        let runtime_auth_mode = cfg
-            .features
-            .as_ref()
-            .and_then(|features| features.runtime_agent_instances.as_ref())
             .and_then(|feature| match feature {
                 FeatureToml::Enabled(_) => None,
                 FeatureToml::Config(config) => config.mode,
@@ -5349,3 +5343,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_loader_tests.rs"]
 mod config_loader_tests;
+
+#[cfg(test)]
+#[path = "runtime_auth_tests.rs"]
+mod runtime_auth_tests;

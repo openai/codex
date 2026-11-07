@@ -20,6 +20,7 @@ fn explicit_catalog_policy_preserves_precedence_over_the_legacy_switch() {
                     Sourced::new(
                         FeatureRequirementsToml {
                             entries: [("guardianv2".to_owned(), enabled)].into(),
+                            ..Default::default()
                         },
                         RequirementSource::Unknown,
                     )

@@ -24,6 +24,8 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
+use core_test_support::runtime_auth::PROBE_SERVER;
+use core_test_support::runtime_auth::run_harness_through_proxy;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -32,15 +34,6 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
-use tokio::process::Command;
-use tokio::task::JoinSet;
-use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -49,7 +42,6 @@ use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const PROBE_SERVER: &str = "CODEX_RUNTIME_AUTH_TEST_SERVER";
 const TEST_NAME: &str = "suite::runtime_auth::harness_shares_runtime_and_honors_thread_auth_config";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -161,7 +153,7 @@ async fn harness_shares_runtime_and_honors_thread_auth_config() -> Result<()> {
         .mount(&server)
         .await;
 
-    run_harness_through_proxy(&server, TEST_NAME).await?;
+    run_harness_through_proxy(&server, TEST_NAME, /*realtime_target*/ None).await?;
 
     let requests = responses.requests();
     let expected = [
@@ -677,87 +669,6 @@ async fn upload_with_harness(
     Ok(())
 }
 
-async fn run_harness_through_proxy(server: &MockServer, test_name: &str) -> Result<()> {
-    // The production destination check stays intact. A test-only CA and CONNECT proxy route
-    // the real host names to wiremock, only inside this isolated test subprocess.
-    codex_utils_rustls_provider::ensure_rustls_crypto_provider();
-    let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec![
-        "api.openai.com".into(),
-        "auth.openai.com".into(),
-        "chatgpt.com".into(),
-        "us.chatgpt.com".into(),
-    ])?;
-    let ca_dir = tempfile::tempdir()?;
-    let ca_path = ca_dir.path().join("ca.pem");
-    std::fs::write(&ca_path, cert.pem())?;
-    let acceptor = TlsAcceptor::from(Arc::new(
-        rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(vec![cert.der().clone()], signing_key.into())?,
-    ));
-    let proxy = TcpListener::bind("127.0.0.1:0").await?;
-    let proxy_url = format!("http://{}", proxy.local_addr()?);
-    let target = *server.address();
-    let proxy_task = tokio::spawn(async move {
-        let mut connections = JoinSet::new();
-        loop {
-            let (mut stream, _) = proxy.accept().await?;
-            let acceptor = acceptor.clone();
-            connections.spawn(async move {
-                let mut headers = Vec::new();
-                while !headers.ends_with(b"\r\n\r\n") && headers.len() < 8192 {
-                    headers.push(stream.read_u8().await?);
-                }
-                let headers = std::str::from_utf8(&headers)?;
-                anyhow::ensure!(
-                    matches!(
-                        headers.lines().next(),
-                        Some(
-                            "CONNECT api.openai.com:443 HTTP/1.1"
-                                | "CONNECT auth.openai.com:443 HTTP/1.1"
-                                | "CONNECT chatgpt.com:443 HTTP/1.1"
-                                | "CONNECT us.chatgpt.com:443 HTTP/1.1"
-                        )
-                    ),
-                    "unexpected proxy destination"
-                );
-                stream
-                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-                    .await?;
-                let mut stream = acceptor.accept(stream).await?;
-                let mut target = TcpStream::connect(target).await?;
-                tokio::io::copy_bidirectional(&mut stream, &mut target).await?;
-                Ok::<_, anyhow::Error>(())
-            });
-        }
-        #[allow(unreachable_code)]
-        Ok::<_, anyhow::Error>(())
-    });
-    let mut command = Command::new(std::env::current_exe()?);
-    command
-        .args(["--exact", test_name, "--nocapture"])
-        .kill_on_drop(true);
-    for &key in codex_network_proxy::PROXY_ENV_KEYS {
-        command.env_remove(key);
-    }
-    command
-        .env(PROBE_SERVER, server.uri())
-        .env("HTTPS_PROXY", proxy_url)
-        .env("NO_PROXY", codex_network_proxy::DEFAULT_NO_PROXY_VALUE)
-        .env("CODEX_CA_CERTIFICATE", ca_path);
-    let output = tokio::time::timeout(Duration::from_secs(90), command.output()).await;
-    proxy_task.abort();
-    let output = output??;
-    assert!(
-        output.status.success(),
-        "harness subprocess failed\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_uploads_follow_a_resumed_actors_runtime() -> Result<()> {
     use core_test_support::apps_test_server::*;
@@ -863,6 +774,7 @@ async fn mcp_uploads_follow_a_resumed_actors_runtime() -> Result<()> {
     run_harness_through_proxy(
         &server,
         "suite::runtime_auth::mcp_uploads_follow_a_resumed_actors_runtime",
+        /*realtime_target*/ None,
     )
     .await?;
     assert_eq!(responses.requests().len(), 9);
@@ -1109,5 +1021,137 @@ async fn exercise_mcp_uploads() -> Result<()> {
         assert!(!request.headers.contains_key("authorization"));
         assert!(!request.headers.contains_key("x-openai-agent-assertion"));
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn daybreak_requests_use_runtime_auth() -> Result<()> {
+    use core_test_support::stdio_server_bin;
+    skip_if_no_network!(Ok(()));
+    let original = mcp_actor_token("user-a");
+    if std::env::var(PROBE_SERVER).is_ok() {
+        let actor = |token: &str| {
+            CodexAuth::from_external_chatgpt_tokens(
+                token,
+                "account_id",
+                /*chatgpt_plan_type*/ None,
+            )
+        };
+        let home = Arc::new(tempfile::TempDir::new()?);
+        let plugin = super::plugins::write_sample_plugin_manifest_and_config(&home);
+        std::fs::write(
+            plugin.join(".mcp.json"),
+            serde_json::to_vec(&json!({
+                "mcpServers":{"sample":{"command":stdio_server_bin()?,"cwd":plugin,
+                    "environment_id":"local","default_tools_approval_mode":"approve",
+                    "env":{"MCP_TEST_DAYBREAK_READ_ONLY":"true"}}}
+            }))?,
+        )?;
+        let server = MockServer::start().await;
+        let test = test_codex()
+            .with_home(home)
+            .with_auth(actor(&original)?)
+            .with_config(|config| {
+                config.chatgpt_base_url = "https://chatgpt.com".into();
+                config
+                    .features
+                    .enable(Feature::RuntimeAgentInstances)
+                    .unwrap();
+                config.features.disable(Feature::Apps).unwrap();
+            })
+            .build_with_remote_and_local_env(&server)
+            .await?;
+        core_test_support::wait_for_mcp_server(&test.codex, "sample").await?;
+        responses::mount_sse_sequence(
+            &server,
+            vec![
+                responses::sse(vec![
+                    responses::ev_tool_search_call(
+                        "search",
+                        &json!({"query":"get_codex_security_daybreak_access"}),
+                    ),
+                    responses::ev_completed("response-1"),
+                ]),
+                responses::sse(vec![
+                    responses::ev_function_call_with_namespace(
+                        "access",
+                        "mcp__sample",
+                        "get_codex_security_daybreak_access",
+                        "{}",
+                    ),
+                    responses::ev_completed("response-2"),
+                ]),
+                responses::sse(vec![
+                    responses::ev_assistant_message("done", "done"),
+                    responses::ev_completed("response-3"),
+                ]),
+            ],
+        )
+        .await;
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Call the sample Daybreak access tool".into(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        let event = wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::McpToolCallEnd(_))
+        })
+        .await;
+        let EventMsg::McpToolCallEnd(event) = event else {
+            unreachable!()
+        };
+        assert!(
+            event.result.is_ok(),
+            "the authenticated tool call must succeed"
+        );
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        test.codex.shutdown_and_wait().await?;
+        return Ok(());
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/agent/register"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "runtime_agent_instance_id":"runtime-access", "agent_host_id":"host-a",
+            "actor":{"kind":"chatgpt","user_id":"user-a","account_id":"account_id"},
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET")).and(path("/accounts/verified_access"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"programs":[{
+            "program":"cyber", "state":"active", "grants":[{"level":"tac1","source":"individual"}]
+        }]}))).expect(1).mount(&server).await;
+    run_harness_through_proxy(
+        &server,
+        "suite::runtime_auth::daybreak_requests_use_runtime_auth",
+        /*realtime_target*/ None,
+    )
+    .await?;
+    let requests = server.received_requests().await.unwrap();
+    let access: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path() == "/accounts/verified_access")
+        .collect();
+    let mut proofs = BTreeSet::new();
+    for request in access {
+        assert_eq!(
+            request.headers["authorization"],
+            format!("Bearer {original}")
+        );
+        assert_eq!(request.headers["chatgpt-account-id"], "account_id");
+        let proof = request.headers["x-openai-agent-assertion"].to_str()?;
+        assert!(proofs.insert(proof.to_string()));
+        let payload: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(2).unwrap())?,
+        )?;
+        assert_eq!(payload["runtime_agent_instance"], "runtime-access");
+    }
+    server.verify().await;
     Ok(())
 }

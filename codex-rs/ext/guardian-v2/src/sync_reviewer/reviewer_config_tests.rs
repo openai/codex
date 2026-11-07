@@ -19,6 +19,7 @@ async fn guardian_review_session_config_allows_pinned_disabled_feature() {
         Some(Sourced {
             value: FeatureRequirementsToml {
                 entries: BTreeMap::from([("multi_agent".to_string(), true)]),
+                ..Default::default()
             },
             source: RequirementSource::Unknown,
         }),

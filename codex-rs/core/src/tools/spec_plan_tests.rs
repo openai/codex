@@ -635,6 +635,7 @@ async fn reviewer_tool_policy_respect_managed_shell_restrictions() {
                 Some(codex_config::Sourced::new(
                     codex_config::FeatureRequirementsToml {
                         entries: BTreeMap::from([(feature.key().to_string(), false)]),
+                        ..Default::default()
                     },
                     codex_config::RequirementSource::Unknown,
                 )),

@@ -14,7 +14,9 @@ use codex_config::config_toml::ConfigToml;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
+use codex_features::FeatureToml;
 use codex_features::Features;
+use codex_features::RuntimeAuthMode;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 
@@ -359,10 +361,42 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     explicit_settings
 }
 
+pub(crate) fn resolve_runtime_auth_mode(
+    cfg: &ConfigToml,
+    requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<RuntimeAuthMode> {
+    let configured = cfg
+        .features
+        .as_ref()
+        .and_then(|features| features.runtime_agent_instances.as_ref())
+        .and_then(|feature| match feature {
+            FeatureToml::Enabled(_) => None,
+            FeatureToml::Config(config) => config.mode,
+        });
+    if let Some(requirements) = requirements
+        && let Some(required) = requirements.value.runtime_auth_mode
+    {
+        if configured.is_some_and(|mode| mode != required) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                ConstraintError::InvalidValue {
+                    field_name: "features.runtime_agent_instances.mode",
+                    candidate: format!("{:?}", configured.unwrap_or_default()),
+                    allowed: format!("{required:?}"),
+                    requirement_source: requirements.source.clone(),
+                },
+            ));
+        }
+        return Ok(required);
+    }
+    Ok(configured.unwrap_or_default())
+}
+
 pub(crate) fn validate_explicit_feature_settings_in_config_toml(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<()> {
+    resolve_runtime_auth_mode(cfg, feature_requirements)?;
     let Some(Sourced {
         value: feature_requirements,
         source,

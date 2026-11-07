@@ -49,6 +49,7 @@ fn resolve_bootstrap_auth_keyring_backend_kind_uses_secret_auth_storage_feature(
     let requirements = Sourced::new(
         FeatureRequirementsToml {
             entries: BTreeMap::from([("secret_auth_storage".to_string(), true)]),
+            ..Default::default()
         },
         RequirementSource::Unknown,
     );

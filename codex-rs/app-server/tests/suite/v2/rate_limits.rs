@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::ChatGptIdTokenClaims;
@@ -5,7 +6,9 @@ use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
+use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
+use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RateLimitReachedType;
@@ -744,4 +747,243 @@ async fn login_with_api_key(mcp: &mut TestAppServer, api_key: &str) -> Result<()
 fn write_chatgpt_base_url(codex_home: &Path, base_url: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(config_toml, format!("chatgpt_base_url = \"{base_url}\"\n"))
+}
+
+#[test_case("disabled"; "disabled")]
+#[test_case("dual_header"; "dual_header")]
+#[test_case("assertion_only"; "assertion_only")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn account_requests_share_runtime_and_rotate_on_restart(mode: &str) -> Result<()> {
+    use base64::Engine;
+    use core_test_support::runtime_auth::PROBE_SERVER;
+    use core_test_support::runtime_auth::run_harness_through_proxy;
+    use std::collections::BTreeSet;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    let enabled = mode != "disabled";
+    let token = format!("e30.{}.c2ln", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "exp": chrono::Utc::now().timestamp() + 3600,
+            "session_id": "session-a", "iss": "https://auth.openai.com",
+            "https://api.openai.com/auth": {"chatgpt_user_id": "user-123", "chatgpt_account_id": "account-123"},
+        }))?
+    ));
+    if std::env::var(PROBE_SERVER).is_ok() {
+        let home = TempDir::new()?;
+        write_chatgpt_auth(
+            home.path(),
+            ChatGptAuthFixture::new(&token)
+                .account_id("account-123")
+                .chatgpt_user_id("user-123")
+                .plan_type("pro"),
+            AuthCredentialsStoreMode::File,
+        )?;
+        let before = std::fs::read(home.path().join("auth.json"))?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            format!(
+                "chatgpt_base_url = \"https://chatgpt.com/backend-api\"\nfeatures.connectors = true\n[features.runtime_agent_instances]\nenabled = {enabled}\nmode = {mode:?}\n",
+                mode = if enabled { mode } else { "dual_header" },
+            ),
+        )?;
+        for _ in 0..2 {
+            let mut app = TestAppServer::builder()
+                .with_codex_home(home.path())
+                .without_auto_env()
+                .with_env_overrides(&[("OPENAI_API_KEY", None)])
+                .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+                .await?;
+            let id = app
+                .send_get_account_request(GetAccountParams {
+                    refresh_token: false,
+                })
+                .await?;
+            let account: GetAccountResponse =
+                timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
+            assert_eq!(
+                account
+                    .workspace_routing
+                    .context("workspace routing")?
+                    .chatgpt_account_id,
+                "account-123"
+            );
+            for _ in 0..2 {
+                let id = app.send_get_account_rate_limits_request().await?;
+                let result: GetAccountRateLimitsResponse =
+                    timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
+                assert_eq!(result.rate_limits.plan_type, Some(AccountPlanType::Pro));
+                assert_eq!(
+                    result
+                        .rate_limits
+                        .primary
+                        .context("primary rate limit")?
+                        .used_percent,
+                    42
+                );
+            }
+            let id = app
+                .send_apps_list_request(codex_app_server_protocol::AppsListParams {
+                    limit: None,
+                    cursor: None,
+                    thread_id: None,
+                    force_refetch: true,
+                })
+                .await?;
+            let apps: codex_app_server_protocol::AppsListResponse =
+                timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
+            assert!(!apps.data.is_empty(), "Apps list must return the mock app");
+            let id = app
+                .send_apps_read_request(codex_app_server_protocol::AppsReadParams {
+                    app_ids: vec!["details-only".into()],
+                    thread_id: None,
+                    include_tools: false,
+                })
+                .await?;
+            let apps: codex_app_server_protocol::AppsReadResponse =
+                timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
+            assert_eq!(apps.apps[0].id, "details-only");
+        }
+        assert_eq!(std::fs::read(home.path().join("auth.json"))?, before);
+        return Ok(());
+    }
+
+    let server = MockServer::start().await;
+    app_test_support::mount_workspace_routing(&server).await;
+    core_test_support::apps_test_server::AppsTestServer::mount(&server).await?;
+    Mock::given(method("GET")).and(wiremock::matchers::path_regex(".*/connectors/directory/(list|list_workspace)$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "apps": [{"id": "directory-app", "name": "Directory app", "description": "An app from the directory"}],
+            "nextToken": null,
+        }))).mount(&server).await;
+    Mock::given(method("POST")).and(wiremock::matchers::path_regex(".*/ps/apps/batch$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"apps": [{
+            "id": "details-only", "name": "Details", "description": "An app read through the public RPC",
+        }]}))).expect(2).mount(&server).await;
+    let registrations = AtomicUsize::new(0);
+    Mock::given(method("POST"))
+        .and(path("/agent/register"))
+        .respond_with(move |_: &wiremock::Request| {
+            let id = registrations.fetch_add(1, Ordering::Relaxed) + 1;
+            ResponseTemplate::new(200).set_body_json(json!({
+                "runtime_agent_instance_id": format!("runtime-{id}"), "agent_host_id": "host-a",
+                "actor": {"kind": "chatgpt", "user_id": "user-123", "account_id": "account-123"},
+            }))
+        })
+        .expect(if enabled { 2 } else { 0 })
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "account_id": "account-123", "user_id": "user-123", "plan_type": "pro",
+            "rate_limit": {"allowed": true, "limit_reached": false, "primary_window": {
+                "used_percent": 42, "limit_window_seconds": 3600,
+                "reset_after_seconds": 120, "reset_at": 1900000000,
+            }},
+        })))
+        .expect(4)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/rate-limit-reset-credits"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "credits": [], "available_count": 0, "total_earned_count": 0,
+        })))
+        .mount(&server)
+        .await;
+    run_harness_through_proxy(
+        &server,
+        &format!(
+            "suite::v2::rate_limits::account_requests_share_runtime_and_rotate_on_restart::{mode}"
+        ),
+        /*realtime_target*/ None,
+    )
+    .await?;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("captured requests")?;
+    let registrations: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path() == "/agent/register")
+        .collect();
+    if enabled {
+        let first: serde_json::Value = registrations[0].body_json()?;
+        let second: serde_json::Value = registrations[1].body_json()?;
+        assert_eq!(first["agent_host_auth"], second["agent_host_auth"]);
+        assert_ne!(first["public_key"], second["public_key"]);
+        assert_ne!(
+            registrations[0].headers["idempotency-key"],
+            registrations[1].headers["idempotency-key"]
+        );
+        for request in registrations {
+            assert!(!request.headers.contains_key("authorization"));
+            assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+        }
+    }
+    let mut proofs = BTreeSet::new();
+    let mut runtimes = BTreeSet::new();
+    for request in requests.iter().filter(|request| {
+        let path = request.url.path();
+        path.starts_with("/backend-api/wham/")
+            || path.contains("/connectors/")
+            || path.contains("/ps/")
+    }) {
+        assert_eq!(request.headers["chatgpt-account-id"], "account-123");
+        let authorization = request.headers["authorization"].to_str()?;
+        let proof = if mode == "assertion_only" {
+            assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+            authorization
+                .strip_prefix("AgentAssertion ")
+                .with_context(|| {
+                    format!(
+                        "assertion-only authentication for {} {}",
+                        request.method,
+                        request.url.path()
+                    )
+                })?
+        } else {
+            assert!(authorization.starts_with("Bearer e30."));
+            if !enabled {
+                assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+                continue;
+            }
+            request
+                .headers
+                .get("x-openai-agent-assertion")
+                .with_context(|| {
+                    format!(
+                        "runtime assertion for {} {}",
+                        request.method,
+                        request.url.path()
+                    )
+                })?
+                .to_str()?
+        };
+        assert!(
+            proofs.insert(proof.to_string()),
+            "each request must get a fresh assertion"
+        );
+        let payload: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(2).context("assertion payload")?)?,
+        )?;
+        runtimes.insert(
+            payload["runtime_agent_instance"]
+                .as_str()
+                .context("runtime ID")?
+                .to_string(),
+        );
+    }
+    if enabled {
+        assert!(proofs.len() >= 4);
+        assert_eq!(
+            runtimes,
+            BTreeSet::from(["runtime-1".to_string(), "runtime-2".to_string()])
+        );
+    }
+    server.verify().await;
+    Ok(())
 }

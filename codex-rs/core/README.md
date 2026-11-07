@@ -96,3 +96,33 @@ instead of running with weaker enforcement.
 Expects the binary containing `codex-core` to simulate the virtual
 `apply_patch` CLI when `arg1` is `--codex-run-as-apply-patch`. See the
 `codex-arg0` crate for details.
+
+## Runtime authentication (experimental)
+
+Runtime authentication is off by default. To enable it in `config.toml`:
+
+```toml
+[features.runtime_agent_instances]
+enabled = true
+mode = "dual_header"
+```
+
+`dual_header` sends the existing actor credential and a fresh agent assertion.
+`assertion_only` sends only the assertion. The latter requires backend support;
+registration failures do not fall back to credential-only requests. Non-OpenAI
+providers and third-party MCP authentication keep their existing behavior.
+
+The same table in `requirements.toml` pins enablement and mode. A conflicting
+explicit mode is rejected. The older boolean `runtime_agent_instances = true`
+still works and uses the default mode (`dual_header`) unless requirements pin it.
+Deliver typed requirements only to client versions that understand them.
+
+The harness owns the runtime and its memory-only signing key. Ordinary token
+refreshes reuse it; a different credential source or actor context requires a new
+runtime. When runtime authentication is selected, legacy `AgentIdentity`
+credentials migrate to saved OAuth credentials for the same actor and remove the
+persisted signing key. If no matching actor credential exists, a supported
+sign-in is required. Ordinary credential loading does not perform this migration.
+
+Cloud-config bundle and requirements fetches retain their endpoint-restricted
+bootstrap authentication, including refreshes after runtime initialization.

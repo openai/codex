@@ -1431,6 +1431,7 @@ personality = true
             .map(|requirements| requirements.value.clone()),
         Some(codex_config::FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
+            ..Default::default()
         })
     );
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
@@ -1471,6 +1472,7 @@ personality = true
             .map(|requirements| requirements.value.clone()),
         Some(codex_config::FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
+            ..Default::default()
         })
     );
     Ok(())

@@ -67,21 +67,5 @@ pub(crate) fn is_openai_realtime_url(base_url: &str) -> CodexResult<bool> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::is_openai_realtime_url;
-
-    #[test]
-    fn realtime_runtime_auth_rejects_unsupported_openai_origins() {
-        for url in [
-            "ws://api.openai.com/v1",
-            "http://api.openai.com/v1",
-            "wss://api.openai.com:8443/v1",
-            "wss://unknown.openai.com/v1",
-        ] {
-            assert!(is_openai_realtime_url(url).is_err(), "{url}");
-        }
-        assert!(is_openai_realtime_url("wss://api.openai.com/v1").unwrap());
-        assert!(is_openai_realtime_url("https://api.openai.org/v1").unwrap());
-        assert!(!is_openai_realtime_url("wss://provider.example.com/v1").unwrap());
-    }
-}
+#[path = "runtime_auth_tests.rs"]
+mod tests;

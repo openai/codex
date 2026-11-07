@@ -468,3 +468,144 @@ async fn requests_await_auth_and_stop_assertion_redirects() -> anyhow::Result<()
     server.verify().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn automatic_event_stream_reconnect_refreshes_request_auth() -> anyhow::Result<()> {
+    use codex_exec_server::RouteAwareHttpClient;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
+    use rmcp::model::ClientCapabilities;
+    use rmcp::model::Implementation;
+    use rmcp::model::InitializeRequestParams;
+    use serde_json::json;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().unwrap();
+            let result = match body["method"].as_str() {
+                Some("initialize") => json!({
+                    "protocolVersion": body["params"]["protocolVersion"],
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "reconnect-test", "version": "1"},
+                }),
+                Some("tools/call") => json!({
+                    "content": [], "structuredContent": {"echo": "after reconnect"},
+                }),
+                _ => return ResponseTemplate::new(202),
+            };
+            ResponseTemplate::new(200)
+                .insert_header("mcp-session-id", "session-a")
+                .set_body_json(json!({"jsonrpc": "2.0", "id": body["id"], "result": result}))
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                concat!(
+                    "retry: 1\nid: event-1\nevent: message\ndata: ",
+                    r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#,
+                    "\n\n",
+                )
+                .as_bytes(),
+                "text/event-stream",
+            ),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    // Leave the reconnect pending until shutdown instead of starting a tight EOF loop.
+    Mock::given(method("GET"))
+        .and(path("/mcp"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_delay(Duration::from_secs(60)),
+        )
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    let client = crate::RmcpClient::new_streamable_http_client(
+        "reconnect-test",
+        &format!("{}/mcp", server.uri()),
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        Default::default(),
+        Default::default(),
+        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        ))),
+        Some(Arc::new(AsyncRequestAuth {
+            requests: Default::default(),
+        })),
+    )
+    .await?;
+    client
+        .initialize(
+            InitializeRequestParams::new(
+                ClientCapabilities::default(),
+                Implementation::new("codex-test", "1"),
+            ),
+            Some(Duration::from_secs(5)),
+            Box::new(|_, _| Box::pin(async { anyhow::bail!("unexpected elicitation") })),
+        )
+        .await?;
+
+    // The server ends the stream. Only the protocol engine, not the test, reopens it.
+    let streams = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let streams: Vec<_> = server
+                .received_requests()
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|request| request.method == "GET")
+                .collect();
+            if streams.len() >= 2 {
+                break streams;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    assert_eq!(streams[0].headers["mcp-session-id"], "session-a");
+    assert_eq!(streams[1].headers["last-event-id"], "event-1");
+    assert_ne!(
+        streams[0].headers["authorization"],
+        streams[1].headers["authorization"]
+    );
+    for request in &streams {
+        assert!(
+            request.headers["authorization"]
+                .to_str()?
+                .starts_with("AgentAssertion proof-")
+        );
+        assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+    }
+    let result = client
+        .call_tool(
+            "echo".to_string(),
+            Some(json!({"message": "after reconnect"})),
+            |_| Ok(None),
+            Some(Duration::from_secs(5)),
+        )
+        .await?;
+    assert_eq!(
+        result.structured_content,
+        Some(json!({"echo": "after reconnect"}))
+    );
+    client.shutdown().await;
+    Ok(())
+}
