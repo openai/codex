@@ -75,6 +75,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigTomlLoadResult;
 use codex_core::config::bootstrap_auth_config;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_toml_with_layer_stack;
 use codex_core::config::resolve_oss_provider;
@@ -100,6 +101,7 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL;
 use codex_protocol::mcp_approval_meta::CANCELLATION_REASON_KEY;
@@ -269,6 +271,11 @@ fn exec_stderr_env_filter() -> EnvFilter {
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    if cli.trust && cli.ignore_user_config {
+        anyhow::bail!(
+            "--trust cannot be combined with --ignore-user-config: saved project trust decisions must be checked"
+        );
+    }
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
@@ -280,6 +287,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         thread_source,
         cyber_access_program,
         skip_git_repo_check,
+        trust,
         ephemeral,
         ignore_user_config,
         ignore_rules,
@@ -356,7 +364,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     };
 
     // Parse `-c` overrides from the CLI.
-    let cli_kv_overrides = match config_overrides.parse_overrides() {
+    let mut cli_kv_overrides = match config_overrides.parse_overrides() {
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
         Err(e) => {
@@ -540,9 +548,36 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             );
         }
     }
-    let run_cli_overrides = cli_kv_overrides.clone();
-    let run_loader_overrides = loader_overrides.clone();
-    let run_cloud_config_bundle = cloud_config_bundle.clone();
+    if trust {
+        // Honor the caller's project discovery settings while checking saved trust.
+        let mut discovery_overrides = cli_kv_overrides.clone();
+        discovery_overrides.retain(|(key, _)| key != "projects" && !key.starts_with("projects."));
+        let saved_config = load_bootstrap_config_or_exit(
+            &codex_home,
+            Some(&config_cwd),
+            discovery_overrides,
+            loader_overrides.clone(),
+            strict_config,
+            cloud_config_bundle.clone(),
+        )
+        .await;
+        if let Some(project) = saved_config.config_layer_stack.project_trust {
+            match project.trust_level {
+                Some(TrustLevel::Untrusted) => anyhow::bail!(
+                    "{} is marked as untrusted. Update its trust setting first.",
+                    project.trust_key
+                ),
+                Some(TrustLevel::Trusted) => {}
+                None => {
+                    let user_config = loader_overrides.user_config_path(&codex_home)?;
+                    ConfigEditsBuilder::for_config_path(user_config.as_path())
+                        .set_project_trust_level(project.trust_key, TrustLevel::Trusted)
+                        .apply()
+                        .await?;
+                }
+            }
+        }
+    }
 
     let model_provider = if oss {
         let bootstrap_config_with_cloud_config;
@@ -636,6 +671,19 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     )
     .await?;
     embedded_network_policy.activate(&mut config);
+    #[allow(clippy::print_stderr)]
+    if config
+        .config_layer_stack
+        .all_layers_low_to_high()
+        .any(|layer| {
+            matches!(layer.name, codex_config::ConfigLayerSource::Project { .. })
+                && layer.disabled_reason.is_some()
+        })
+    {
+        eprintln!(
+            "warning: Untrusted project-local configuration is disabled. Run `codex exec --trust` to allow project configuration and MCP servers for this and future chats in the project, including MCP commands outside the sandbox. Explicitly untrusted projects must have their trust setting updated first."
+        );
+    }
     let daybreak_override = cli_kv_overrides
         .iter()
         .any(|(key, _)| key == "daybreak")
@@ -720,7 +768,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         codex_config::allowed_symlinked_codex_home(&config.config_layer_stack, &config.codex_home),
     );
     let state_db = codex_core::init_state_db(&config).await;
-    let environment_manager = if run_loader_overrides.ignore_user_config {
+    let environment_manager = if loader_overrides.ignore_user_config {
         EnvironmentManager::from_env(
             Some(local_runtime_paths),
             embedded_network_policy.bind(config.http_client_factory()),
@@ -734,14 +782,24 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         )
         .await?
     };
+    if let Some(provider) = &model_provider {
+        // Keep app-server config reloads aligned with the explicit --oss selection.
+        cli_kv_overrides.push(("model_provider".to_string(), provider.clone().into()));
+    }
+
     let in_process_start_args = InProcessClientStartArgs {
         required_human_approval: false,
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),
-        cli_overrides: run_cli_overrides,
-        loader_overrides: run_loader_overrides,
+        cli_overrides: cli_kv_overrides,
+        // An explicit thread/start cwd can grant trust when the sandbox is writable.
+        // Give the embedded server its working directory as a default instead.
+        loader_overrides: LoaderOverrides {
+            default_cwd: Some(config.cwd.clone()),
+            ..loader_overrides
+        },
         strict_config,
-        cloud_config_bundle: run_cloud_config_bundle,
+        cloud_config_bundle,
         embedded_network_policy,
         feedback: CodexFeedback::new(),
         log_db: None,
@@ -1473,7 +1531,6 @@ fn thread_start_params_from_config(
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
-        cwd: Some(config.cwd.to_string_lossy().to_string()),
         runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: Some(config.approvals_reviewer.into()),

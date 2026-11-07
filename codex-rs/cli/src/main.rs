@@ -319,6 +319,11 @@ struct ReviewCommand {
     #[arg(long = "strict-config", default_value_t = false)]
     strict_config: bool,
 
+    /// Save trust for this project and future chats, including MCP commands outside the sandbox.
+    /// Persists even with --ephemeral. Does not override an explicitly untrusted project.
+    #[arg(long)]
+    trust: bool,
+
     #[clap(flatten)]
     args: ReviewArgs,
 }
@@ -1162,10 +1167,12 @@ async fn dispatch_cli(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+            // Keep the exec future out of the shared dispatcher's stack frame.
+            Box::pin(codex_exec::run_main(exec_cli, arg0_paths.clone())).await?;
         }
         Some(Subcommand::Review(ReviewCommand {
             strict_config,
+            trust,
             args: review_args,
         })) => {
             reject_remote_mode_for_subcommand(
@@ -1178,12 +1185,13 @@ async fn dispatch_cli(
                 .shared
                 .inherit_exec_root_options(&interactive.shared);
             exec_cli.command = Some(ExecCommand::Review(review_args));
+            exec_cli.trust = trust;
             exec_cli.strict_config = strict_config || root_strict_config;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+            Box::pin(codex_exec::run_main(exec_cli, arg0_paths.clone())).await?;
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -4280,12 +4288,18 @@ enabled = true
         let cli = MultitoolCli::try_parse_from(["codex", "--strict-config"]).expect("parse");
         assert!(cli.interactive.strict_config);
 
-        let cli =
-            MultitoolCli::try_parse_from(["codex", "review", "--strict-config", "--uncommitted"])
-                .expect("parse");
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "review",
+            "--strict-config",
+            "--trust",
+            "--uncommitted",
+        ])
+        .expect("parse");
         assert_matches!(
             cli.subcommand,
             Some(Subcommand::Review(ReviewCommand {
+                trust: true,
                 strict_config: true,
                 ..
             }))

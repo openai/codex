@@ -342,6 +342,7 @@ pub async fn load_config_layers_state(
 
     let requirements = ConfigRequirements::try_from(config_requirements_toml.clone())?;
     let mut is_projectless = false;
+    let mut project_trust = None;
     if !ignore_project_config && let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
@@ -420,6 +421,23 @@ pub async fn load_config_layers_state(
         is_projectless = !project_trust_context.has_project_root_marker
             && project_trust_context.checkout_root.is_none()
             && project_layers.layers.is_empty();
+        // Match the trust prompt: an explicit cwd decision wins, followed by the
+        // closest disabled layer. A folder with only enabled layers needs no grant.
+        project_trust = if !is_projectless && project_layers.layers.is_empty() {
+            Some(project_trust_context.decision_for_dir(&cwd))
+        } else {
+            normalized_project_trust_keys(cwd.as_path())
+                .iter()
+                .find_map(|key| project_trust_context.saved_decision(key))
+                .or_else(|| {
+                    let layer = project_layers
+                        .layers
+                        .iter()
+                        .rfind(|layer| layer.is_disabled())?;
+                    let dir = layer.config_folder()?.parent()?;
+                    Some(project_trust_context.decision_for_dir(&dir))
+                })
+        };
         layers.extend(project_layers.layers);
         startup_warnings.extend(project_layers.startup_warnings);
     }
@@ -506,6 +524,7 @@ pub async fn load_config_layers_state(
                 ignore_user_and_project_exec_policy_rules,
             );
     config_layer_stack.is_projectless = is_projectless;
+    config_layer_stack.project_trust = project_trust;
     if config_layer_stack.layers_low_to_high().any(|layer| {
         matches!(
             layer.name,
@@ -1083,9 +1102,11 @@ struct ProjectTrustConfigToml {
     projects: Option<std::collections::HashMap<String, ProjectConfig>>,
 }
 
-struct ProjectTrustDecision {
-    trust_level: Option<TrustLevel>,
-    trust_key: String,
+/// Saved decision or the key to write when the user grants project trust.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectTrustDecision {
+    pub trust_level: Option<TrustLevel>,
+    pub trust_key: String,
 }
 
 impl ProjectTrustDecision {
@@ -1095,40 +1116,22 @@ impl ProjectTrustDecision {
 }
 
 impl ProjectTrustContext {
+    fn saved_decision(&self, key: &str) -> Option<ProjectTrustDecision> {
+        let (trust_key, trust_level) = project_trust_for_lookup_key(&self.projects_trust, key)?;
+        Some(ProjectTrustDecision {
+            trust_key,
+            trust_level: Some(trust_level),
+        })
+    }
+
     fn decision_for_dir(&self, dir: &AbsolutePathBuf) -> ProjectTrustDecision {
-        for dir_key in normalized_project_trust_keys(dir.as_path()) {
-            if let Some((trust_key, trust_level)) =
-                project_trust_for_lookup_key(&self.projects_trust, &dir_key)
-            {
-                return ProjectTrustDecision {
-                    trust_level: Some(trust_level),
-                    trust_key,
-                };
-            }
-        }
-
-        for project_root_key in &self.project_root_lookup_keys {
-            if let Some((trust_key, trust_level)) =
-                project_trust_for_lookup_key(&self.projects_trust, project_root_key)
-            {
-                return ProjectTrustDecision {
-                    trust_level: Some(trust_level),
-                    trust_key,
-                };
-            }
-        }
-
-        if let Some(repo_root_lookup_keys) = self.repo_root_lookup_keys.as_ref() {
-            for repo_root_key in repo_root_lookup_keys {
-                if let Some((trust_key, trust_level)) =
-                    project_trust_for_lookup_key(&self.projects_trust, repo_root_key)
-                {
-                    return ProjectTrustDecision {
-                        trust_level: Some(trust_level),
-                        trust_key,
-                    };
-                }
-            }
+        let dir_keys = normalized_project_trust_keys(dir.as_path());
+        let mut keys = dir_keys
+            .iter()
+            .chain(&self.project_root_lookup_keys)
+            .chain(self.repo_root_lookup_keys.iter().flatten());
+        if let Some(decision) = keys.find_map(|key| self.saved_decision(key)) {
+            return decision;
         }
 
         ProjectTrustDecision {

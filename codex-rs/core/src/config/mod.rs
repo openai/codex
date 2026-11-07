@@ -1613,7 +1613,11 @@ impl ConfigBuilder {
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
-        let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
+        let cwd_override = harness_overrides
+            .cwd
+            .as_deref()
+            .or(fallback_cwd.as_deref())
+            .or(loader_overrides.default_cwd.as_deref());
         let cwd = match cwd_override {
             Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
             None => AbsolutePathBuf::current_dir()?,

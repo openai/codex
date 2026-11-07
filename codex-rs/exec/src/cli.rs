@@ -37,6 +37,11 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", global = true, default_value_t = false)]
     pub skip_git_repo_check: bool,
 
+    /// Save trust for this project and future chats, including MCP commands outside the sandbox.
+    /// Persists even with --ephemeral. Does not override an explicitly untrusted project.
+    #[arg(long, global = true)]
+    pub trust: bool,
+
     /// Run without persisting session files to disk.
     #[arg(long = "ephemeral", global = true, default_value_t = false)]
     pub ephemeral: bool,
