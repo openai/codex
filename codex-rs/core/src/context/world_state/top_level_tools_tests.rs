@@ -267,6 +267,7 @@ fn initial_catalog_preserves_order_and_unchanged_catalog_emits_nothing() {
     let definitions = vec![
         namespace("zebra", vec![declaration("lookup")]),
         namespace("alpha", vec![declaration("lookup")]),
+        namespace("exec", vec![declaration("lookup")]),
     ];
     let state = TopLevelToolsState::new(
         /*messages*/ Default::default(),
@@ -293,7 +294,14 @@ fn initial_catalog_preserves_order_and_unchanged_catalog_emits_nothing() {
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>(),
-        vec!["alpha", "alpha.lookup", "zebra", "zebra.lookup"]
+        vec![
+            "alpha",
+            "alpha.lookup",
+            "exec",
+            "exec.lookup",
+            "zebra",
+            "zebra.lookup"
+        ]
     );
     let snapshot: TopLevelToolsSnapshot = serde_json::from_value(saved).unwrap();
     let (unchanged_snapshot, updates) = state.render_diff(PreviousSectionState::Known(&snapshot));

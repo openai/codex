@@ -4026,6 +4026,298 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum ExecCatalogRefresh {
+    Hybrid,
+    Metadata,
+}
+
+#[test_case::test_case(ExecCatalogRefresh::Hybrid; "hybrid mode")]
+#[test_case::test_case(ExecCatalogRefresh::Metadata; "exec metadata refresh")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_async_compaction_preserves_exec_catalog(change: ExecCatalogRefresh) -> Result<()> {
+    use codex_models_manager::manager::RefreshStrategy;
+    use core_test_support::responses::mount_models_once_with_etag;
+
+    skip_if_no_network!(Ok(()));
+    let (release_background, background_gate) = oneshot::channel();
+    let (release_foreground, foreground_gate) = oneshot::channel();
+    let (streaming, _completions) = start_streaming_sse_server(vec![
+        vec![compaction_chunk(
+            /*gate*/ None,
+            vec![
+                ev_assistant_message("draft", "I drafted the launch notes."),
+                ev_completed_with_tokens("draft-response", /*total_tokens*/ 70_000),
+            ],
+        )],
+        vec![compaction_chunk(
+            Some(background_gate),
+            vec![
+                compaction_output("ASYNC_LAUNCH_CHECKPOINT"),
+                ev_completed_with_tokens("compact-response", /*total_tokens*/ 3_000),
+            ],
+        )],
+        vec![
+            compaction_chunk(
+                /*gate*/ None,
+                vec![
+                    ev_response_created("team-response"),
+                    ev_assistant_message("team-check", "I will check who is available."),
+                ],
+            ),
+            compaction_chunk(
+                Some(foreground_gate),
+                vec![
+                    ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
+                    ev_completed_with_tokens("team-response", /*total_tokens*/ 75_000),
+                ],
+            ),
+        ],
+        vec![compaction_chunk(
+            /*gate*/ None,
+            vec![
+                ev_assistant_message("answer", "I can finish the notes myself."),
+                ev_completed_with_tokens("answer-response", /*total_tokens*/ 3_000),
+            ],
+        )],
+    ])
+    .await;
+    let model_server = wiremock::MockServer::start().await;
+    let mut catalog = bundled_models_response()?;
+    let model = catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-6-astra")
+        .expect("bundled Astra model");
+    model.tool_mode = Some(ToolMode::CodeModeOnly);
+    model.supports_image_detail_original = false;
+    mount_models_once_with_etag(&model_server, catalog.clone(), "\"exec-mode-v1\"").await;
+    let model_catalog_url = format!("{}/models", model_server.uri());
+    let (_config_server, test) = async_compaction_test(
+        test_codex(),
+        streaming.uri(),
+        vec![
+            Feature::IncrementalTools,
+            Feature::IncrementalExecTools,
+            Feature::ViewImage,
+        ],
+        move |config| {
+            config
+                .features
+                .disable(Feature::UnifiedImageBudget)
+                .expect("use the model's image detail capability");
+            config.model_catalog = None;
+            config.model_provider.model_catalog_url = Some(model_catalog_url.clone().into());
+            config.code_mode.disable_in_process_fallback = true;
+        },
+    )
+    .await?;
+    test.codex.ensure_rollout_materialized().await;
+
+    test.submit_text_turn("Draft the launch notes.").await?;
+    let timeout = Duration::from_secs(/*secs*/ 20);
+    tokio::time::timeout(timeout, streaming.wait_for_request_count(/*count*/ 2)).await?;
+    // Refresh the same model while the prepared result is still pending.
+    let model = catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-6-astra")
+        .expect("bundled Astra model");
+    match change {
+        ExecCatalogRefresh::Hybrid => model.tool_mode = Some(ToolMode::CodeMode),
+        ExecCatalogRefresh::Metadata => {
+            model.supports_image_detail_original = true;
+            let messages = model
+                .model_messages
+                .get_or_insert_default()
+                .tools
+                .get_or_insert_default()
+                .code_mode
+                .get_or_insert_default();
+            messages.exec.get_or_insert_default().description =
+                Some("Previous exec instructions.".to_string());
+            messages.mcp_typescript_preamble = Some("type PreviousResult = string;".to_string());
+        }
+    }
+    mount_models_once_with_etag(&model_server, catalog.clone(), "\"exec-mode-v2\"").await;
+    test.thread_manager
+        .get_models_manager()
+        .list_models(
+            RefreshStrategy::Online,
+            codex_core::test_support::default_http_client_factory(),
+        )
+        .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Check who can finish the notes.",
+        )]))
+        .await?;
+    tokio::time::timeout(timeout, streaming.wait_for_request_count(/*count*/ 3)).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ItemCompleted(event)
+        if matches!(&event.item, TurnItem::AgentMessage(message) if message.id == "team-check"))
+    })
+    .await;
+    release_background
+        .send(())
+        .expect("release background compaction");
+    // Keep foreground work gated until the prepared result is available for optional adoption.
+    tokio::time::timeout(
+        timeout,
+        test.codex.wait_for_background_compaction_for_test(),
+    )
+    .await?;
+    release_foreground
+        .send(())
+        .expect("release foreground work");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    tokio::time::timeout(
+        timeout,
+        test.codex.wait_for_background_compaction_for_test(),
+    )
+    .await?;
+    let requests = streaming
+        .requests()
+        .await
+        .iter()
+        .map(|body| serde_json::from_slice::<serde_json::Value>(body))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    assert_eq!(requests.len(), 4);
+    let history = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items;
+    let input = requests[3]["input"].as_array().expect("request input");
+    let compaction = input
+        .iter()
+        .position(|item| item["encrypted_content"] == "ASYNC_LAUNCH_CHECKPOINT")
+        .expect("prepared summary was adopted");
+    let user = input
+        .iter()
+        .position(|item| {
+            item["role"] == "user"
+                && item["content"][0]["text"] == "Check who can finish the notes."
+        })
+        .expect("retained user message");
+    let assistant = input
+        .iter()
+        .position(|item| {
+            item["role"] == "assistant"
+                && item["content"][0]["text"] == "I will check who is available."
+        })
+        .expect("retained assistant message");
+    let call = input
+        .iter()
+        .position(|item| item["type"] == "function_call" && item["call_id"] == "team")
+        .expect("retained tool call");
+    let output = input
+        .iter()
+        .position(|item| item["type"] == "function_call_output" && item["call_id"] == "team")
+        .expect("retained tool output");
+    assert!(user < assistant && assistant < call && call < output);
+    let [before_adoption, after_adoption] = [&requests[2], &requests[3]].map(|request| {
+        request["input"]
+            .as_array()
+            .expect("request input")
+            .iter()
+            .filter(|item| item["type"] == "additional_tools")
+            .map(|item| item["tools"].clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(after_adoption, before_adoption);
+    let (exec_positions, exec_declarations): (Vec<_>, Vec<_>) = input
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            core_test_support::responses::namespace_child_tool(item, "functions", "exec")
+                .map(|declaration| (index, declaration))
+        })
+        .unzip();
+    let (adoption_index, adopted) = history
+        .windows(2)
+        .enumerate()
+        .find_map(|(index, pair)| match pair {
+            [RolloutItem::Compacted(_), RolloutItem::WorldState(baseline)] if baseline.full => {
+                Some((index, &baseline.state["top_level_tools"]))
+            }
+            _ => None,
+        })
+        .expect("adopted full checkpoint");
+    let changed_hashes: &[&str] = match change {
+        ExecCatalogRefresh::Hybrid => &["/functions.exec"],
+        ExecCatalogRefresh::Metadata => &["/tools/functions.exec", "/exec/Tool: tools.view_image"],
+    };
+    for path in changed_hashes {
+        let live = history[..adoption_index]
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                RolloutItem::WorldState(patch) if !patch.full => {
+                    patch.state.get("top_level_tools")?.pointer(path)
+                }
+                _ => None,
+            })
+            .and_then(serde_json::Value::as_str)
+            .expect("live exec update before adoption");
+        assert_eq!(
+            adopted.pointer(path).and_then(serde_json::Value::as_str),
+            Some(live),
+            "{path}"
+        );
+    }
+    if matches!(change, ExecCatalogRefresh::Metadata) {
+        let initial_exec = requests[0]["input"]
+            .as_array()
+            .expect("initial input")
+            .iter()
+            .find_map(|item| {
+                core_test_support::responses::namespace_child_tool(item, "functions", "exec")
+            })
+            .expect("initial exec declaration");
+        assert_eq!(exec_declarations, vec![initial_exec]);
+        assert!(exec_positions[0] < compaction && compaction < user);
+        let is_view_image_update = |item: &&serde_json::Value| {
+            item["role"] == "developer"
+                && item["content"][0]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.lines().any(|line| line == "### `view_image`"))
+        };
+        let live_update = requests[2]["input"]
+            .as_array()
+            .expect("input before adoption")
+            .iter()
+            .find(is_view_image_update)
+            .expect("view_image redefinition during background compaction");
+        assert!(
+            live_update["content"][0]["text"]
+                .as_str()
+                .expect("view_image update text")
+                .contains("detail?: \"high\" | \"original\"")
+        );
+        assert_eq!(
+            input
+                .iter()
+                .filter(is_view_image_update)
+                .collect::<Vec<_>>(),
+            vec![live_update]
+        );
+        assert!(input[compaction + 1..].contains(live_update));
+        return Ok(());
+    }
+    assert_eq!(exec_declarations.len(), 2);
+    assert_ne!(exec_declarations[0], exec_declarations[1]);
+    assert!(
+        exec_positions[0] < compaction
+            && compaction < exec_positions[1]
+            && exec_positions[1] < user
+    );
+    Ok(())
+}
+
 #[derive(PartialEq)]
 enum PendingCompactionOutcome {
     Absent,
