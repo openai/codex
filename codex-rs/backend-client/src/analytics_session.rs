@@ -3,11 +3,17 @@
 
 use crate::Client;
 use crate::RequestError;
+use codex_features::RuntimeAuthMode;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::AuthManagerConfig;
 use codex_login::CodexAuth;
 use codex_protocol::account::PlanType;
+use codex_runtime_agent_instance::RegistrationError;
+use codex_runtime_agent_instance::RuntimeAuthError;
+use codex_runtime_agent_instance::RuntimeAuthManager;
+use codex_runtime_agent_instance::resolve_installation_id;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::sync::Arc;
 
 /// Non-secret account metadata associated with an analytics session.
@@ -31,6 +37,7 @@ impl AnalyticsSession {
     pub async fn from_config(
         config: &impl AuthManagerConfig,
         http_client_factory: HttpClientFactory,
+        runtime_auth_mode: Option<RuntimeAuthMode>,
     ) -> Result<Self, String> {
         let auth_manager =
             AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false)
@@ -51,12 +58,53 @@ impl AnalyticsSession {
             email: auth.get_account_email(),
             plan_type: None,
         };
-        let client = Client::new_without_redirects(config.chatgpt_base_url(), http_client_factory)
-            .with_auth_provider(codex_model_provider::auth_provider_from_auth_manager(
-                Arc::clone(&auth_manager),
-                &auth,
-            ))
-            .map_err(|_| "Couldn't initialize local Analytics authentication.")?;
+        let base_url = config.chatgpt_base_url();
+        let runtime_auth_mode = runtime_auth_mode
+            .filter(|_| codex_runtime_agent_instance::is_openai_api_url(&base_url));
+        let client = match runtime_auth_mode {
+            Some(mode) => {
+                let home = AbsolutePathBuf::from_absolute_path(config.codex_home())
+                    .map_err(|_| "Couldn't initialize local Analytics authentication.")?;
+                let installation_id = resolve_installation_id(&home)
+                    .await
+                    .map_err(|_| "Couldn't initialize local Analytics authentication.")?;
+                let runtime = (
+                    Arc::new(RuntimeAuthManager::for_codex(
+                        Arc::clone(&auth_manager),
+                        &base_url,
+                        &installation_id,
+                    )),
+                    mode,
+                );
+                Client::from_auth_with_runtime_without_redirects(
+                    &base_url,
+                    &auth,
+                    http_client_factory,
+                    Some(&runtime),
+                    /*headers*/ &Default::default(),
+                )
+                .await
+                .map_err(|error| {
+                    match error.downcast_ref::<RuntimeAuthError>() {
+                        Some(
+                            RuntimeAuthError::RefreshFailed
+                            | RuntimeAuthError::RefreshTokenFailed(_)
+                            | RuntimeAuthError::Registration(RegistrationError::Rejected {
+                                status: http::StatusCode::UNAUTHORIZED,
+                                ..
+                            }),
+                        ) => "Sign in again to load Analytics.",
+                        _ => "Couldn't authenticate the Analytics request.",
+                    }
+                })?
+            }
+            None => Client::new_without_redirects(base_url, http_client_factory)
+                .with_auth_provider(codex_model_provider::auth_provider_from_auth_manager(
+                    Arc::clone(&auth_manager),
+                    &auth,
+                ))
+                .map_err(|_| "Couldn't initialize local Analytics authentication.")?,
+        };
         let mut session = Self {
             client,
             auth_manager,

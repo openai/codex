@@ -7,7 +7,6 @@ use crate::config::RolloutBudgetConfig;
 use crate::config::ThreadStoreConfig;
 use crate::config::test_config;
 use crate::init_state_db;
-use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::mcp::McpEnvironmentScope;
 use crate::mcp::McpThreadIdentity;
 use crate::rollout::RolloutRecorder;
@@ -2899,7 +2898,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
         .await
         .expect("start thread with explicit installation id");
 
-    assert!(!config.codex_home.join(INSTALLATION_ID_FILENAME).exists());
+    assert!(!config.codex_home.join("installation_id").exists());
     assert_eq!(thread.thread.session.installation_id, installation_id);
 
     thread

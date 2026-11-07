@@ -34,15 +34,10 @@ fn realtime_rejects_a_different_registration_environment() {
         ("https://chatgpt.com/backend-api", false),
         ("https://chatgpt-staging.com/backend-api", true),
     ] {
-        let runtime = RuntimeAuthManager::for_chatgpt(
+        let runtime = RuntimeAuthManager::for_codex(
             AuthManager::from_auth_for_testing(codex_login::CodexAuth::from_api_key("test-key")),
-            uuid::Uuid::nil().to_string(),
-            chatgpt_base_url.to_owned(),
-            RuntimeRegistrationMetadata {
-                harness: None,
-                harness_version: None,
-                role: RuntimeRole::Orchestrator,
-            },
+            chatgpt_base_url,
+            &uuid::Uuid::nil().to_string(),
         );
         for (destination, staging) in [
             ("wss://api.openai.com/v1", false),

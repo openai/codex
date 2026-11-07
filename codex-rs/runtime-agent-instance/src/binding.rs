@@ -386,12 +386,16 @@ pub enum RuntimeAuthError {
     Unsupported,
     #[error("organization and project selection requires an OpenAI API key")]
     UnsupportedResourceSelection,
+    #[error("invalid {0} resource selector")]
+    InvalidResourceSelection(&'static str),
     #[error("credentials changed during runtime registration; try again")]
     Changed,
     #[error("runtime registration could not refresh actor credentials")]
     RefreshFailed,
     #[error(transparent)]
     RefreshTokenFailed(#[from] RefreshTokenFailedError),
+    #[error("runtime auth task failed: {0}")]
+    Task(#[from] tokio::task::JoinError),
     #[error("failed to generate runtime signing key")]
     KeyGeneration,
     #[error(transparent)]

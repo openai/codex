@@ -10,6 +10,7 @@ use crate::legacy_core::config::Config;
 use codex_backend_client::AnalyticsReport;
 use codex_backend_client::AnalyticsSession;
 use codex_backend_client::RequestError;
+use codex_features::Feature;
 use codex_protocol::account::PlanType;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -73,6 +74,10 @@ impl Live {
                 let session = AnalyticsSession::from_config(
                     self.config.as_ref(),
                     self.config.http_client_factory(),
+                    self.config
+                        .features
+                        .enabled(Feature::RuntimeAgentInstances)
+                        .then_some(self.config.runtime_auth_mode),
                 )
                 .await?;
                 let credit_groups = Grouping::credit_groupings(session.account().plan_type)
@@ -280,3 +285,7 @@ mod connection_tests;
 #[cfg(test)]
 #[path = "account_plan_tests.rs"]
 mod account_plan_tests;
+
+#[cfg(test)]
+#[path = "runtime_auth_tests.rs"]
+mod runtime_auth_tests;

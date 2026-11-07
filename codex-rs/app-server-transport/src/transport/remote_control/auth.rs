@@ -110,7 +110,7 @@ impl RemoteControlConnectionAuth {
             &HeaderMap::new(),
         ))
         .await
-        .map_err(auth_error)?;
+        .map_err(|error| auth_error(error.into()))?;
         let factory = resolved
             .bind_http_client_factory(self.http_client_factory.clone())
             .map_err(auth_error)?;

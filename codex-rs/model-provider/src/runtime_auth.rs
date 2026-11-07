@@ -26,8 +26,7 @@ pub(crate) async fn select_runtime_auth(
     manager: &Arc<RuntimeAuthBinding>,
     headers: &HeaderMap,
 ) -> CodexResult<RuntimeAuth> {
-    let selection =
-        resource_selection(headers).map_err(|error| codex_api::map_api_error(error.into()))?;
+    let selection = resource_selection(headers).map_err(map_runtime_auth_error)?;
     manager
         .auth_with_selection(&selection)
         .await
@@ -40,8 +39,7 @@ pub async fn select_runtime_auth_for(
     auth: &CodexAuth,
     headers: &HeaderMap,
 ) -> CodexResult<RuntimeAuth> {
-    let selection =
-        resource_selection(headers).map_err(|error| codex_api::map_api_error(error.into()))?;
+    let selection = resource_selection(headers).map_err(map_runtime_auth_error)?;
     binding
         .auth_for(auth, &selection)
         .await
@@ -67,21 +65,19 @@ pub(crate) async fn select_runtime_auth_for_source(
         async move { manager.auth_for_source(source_generation, &selection).await },
     )
     .await
+    .map_err(AuthError::from)
 }
 
 // Once token rotation begins, let it finish persisting even if the request is cancelled.
 pub(crate) async fn finish_runtime_selection(
     selection: impl Future<Output = Result<RuntimeAuth, RuntimeAuthError>> + Send + 'static,
-) -> Result<RuntimeAuth, AuthError> {
-    tokio::spawn(selection)
-        .await
-        .map_err(|error| AuthError::Build(format!("runtime auth task failed: {error}")))?
-        .map_err(AuthError::from)
+) -> Result<RuntimeAuth, RuntimeAuthError> {
+    tokio::spawn(selection).await?
 }
 
 pub(crate) fn resource_selection(
     headers: &HeaderMap,
-) -> Result<PlatformResourceSelection, AuthError> {
+) -> Result<PlatformResourceSelection, RuntimeAuthError> {
     let selector = |name| {
         headers
             .get(name)
@@ -89,7 +85,7 @@ pub(crate) fn resource_selection(
                 value
                     .to_str()
                     .map(str::to_owned)
-                    .map_err(|_| AuthError::Build(format!("invalid {name} resource selector")))
+                    .map_err(|_| RuntimeAuthError::InvalidResourceSelection(name))
             })
             .transpose()
     };

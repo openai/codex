@@ -218,6 +218,27 @@ async fn client_registers_in_requested_organization_when_default_is_denied() {
             HeaderName::from_static("openai-organization"),
             HeaderValue::from_static("org-b"),
         )]);
+        for name in ["openai-organization", "openai-project"] {
+            let mut invalid_headers = headers.clone();
+            invalid_headers.insert(
+                HeaderName::from_static(name),
+                HeaderValue::from_bytes(b"\xff")
+                    .expect("non-ASCII selector is a valid header value"),
+            );
+            assert!(
+                Client::from_auth_with_selected_runtime(
+                    server.uri(),
+                    &auth,
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                    Some(&runtime),
+                    &invalid_headers,
+                    Client::new,
+                )
+                .await
+                .is_err(),
+                "invalid selectors must not fall back to the default resource"
+            );
+        }
         let client = Client::from_auth_with_selected_runtime(
             server.uri(),
             &auth,

@@ -181,9 +181,11 @@ impl From<RuntimeAuthError> for AuthError {
             RuntimeAuthError::Unavailable
             | RuntimeAuthError::Unsupported
             | RuntimeAuthError::UnsupportedResourceSelection
+            | RuntimeAuthError::InvalidResourceSelection(_)
             | RuntimeAuthError::Changed
             | RuntimeAuthError::RefreshFailed
             | RuntimeAuthError::RefreshTokenFailed(_)
+            | RuntimeAuthError::Task(_)
             | RuntimeAuthError::KeyGeneration
             | RuntimeAuthError::Registration(
                 RegistrationError::InvalidEndpoint

@@ -14,7 +14,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::fs;
 use uuid::Uuid;
 
-pub(crate) const INSTALLATION_ID_FILENAME: &str = "installation_id";
+const INSTALLATION_ID_FILENAME: &str = "installation_id";
 
 pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<String> {
     let path = codex_home.join(INSTALLATION_ID_FILENAME);
@@ -76,7 +76,7 @@ pub async fn resolve_installation_id(codex_home: &AbsolutePathBuf) -> Result<Str
 mod tests {
     use super::INSTALLATION_ID_FILENAME;
     use super::resolve_installation_id;
-    use core_test_support::PathExt;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -87,7 +87,8 @@ mod tests {
     #[tokio::test]
     async fn resolve_installation_id_generates_and_persists_uuid() {
         let codex_home = TempDir::new().expect("create temp dir");
-        let codex_home_abs = codex_home.path().abs();
+        let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home.path())
+            .expect("absolute temporary directory");
         let persisted_path = codex_home.path().join(INSTALLATION_ID_FILENAME);
 
         let installation_id = resolve_installation_id(&codex_home_abs)
@@ -114,7 +115,8 @@ mod tests {
     #[tokio::test]
     async fn resolve_installation_id_reuses_existing_uuid() {
         let codex_home = TempDir::new().expect("create temp dir");
-        let codex_home_abs = codex_home.path().abs();
+        let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home.path())
+            .expect("absolute temporary directory");
         let existing = Uuid::new_v4().to_string().to_uppercase();
         std::fs::write(
             codex_home.path().join(INSTALLATION_ID_FILENAME),
@@ -163,7 +165,8 @@ mod tests {
     #[tokio::test]
     async fn resolve_installation_id_rewrites_invalid_file_contents() {
         let codex_home = TempDir::new().expect("create temp dir");
-        let codex_home_abs = codex_home.path().abs();
+        let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home.path())
+            .expect("absolute temporary directory");
         std::fs::write(
             codex_home.path().join(INSTALLATION_ID_FILENAME),
             "not-a-uuid",

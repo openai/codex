@@ -24,6 +24,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::SessionSource;
 use codex_runtime_agent_instance::RuntimeAuth;
+use codex_runtime_agent_instance::RuntimeAuthError;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -470,7 +471,7 @@ pub async fn auth_provider_for_request(
     auth: &CodexAuth,
     runtime: Option<&(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
     headers: &HeaderMap,
-) -> Result<ResolvedProviderAuth, AuthError> {
+) -> Result<ResolvedProviderAuth, RuntimeAuthError> {
     observe_auth_selection(runtime.map(|(_, mode)| *mode), "request", async {
         match runtime {
             Some((manager, mode)) => {

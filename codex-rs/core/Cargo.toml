@@ -142,6 +142,7 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 openssl-sys = { workspace = true, features = ["vendored"] }
 
 [dev-dependencies]
+codex-backend-client = { workspace = true }
 codex-message-board = { workspace = true }
 codex-agent-message-board-host = { workspace = true }
 assert_cmd = { workspace = true }

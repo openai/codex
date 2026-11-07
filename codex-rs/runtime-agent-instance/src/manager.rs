@@ -80,6 +80,24 @@ impl RuntimeAuthManager {
         }
     }
 
+    /// Construct a Codex runtime owner without registering it or generating its key.
+    pub fn for_codex(
+        credentials: Arc<AuthManager>,
+        chatgpt_base_url: &str,
+        installation_id: &str,
+    ) -> Self {
+        Self::for_chatgpt(
+            credentials,
+            installation_id.to_owned(),
+            chatgpt_base_url.to_owned(),
+            RuntimeRegistrationMetadata {
+                harness: Some("codex".to_string()),
+                harness_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                role: crate::RuntimeRole::Orchestrator,
+            },
+        )
+    }
+
     pub fn registration_url(&self) -> Result<Url, RegistrationError> {
         self.login.registration_url()
     }

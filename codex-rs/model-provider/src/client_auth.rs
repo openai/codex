@@ -43,7 +43,7 @@ impl ClientAuth {
         runtime: Option<&(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
         factory: HttpClientFactory,
         headers: &HeaderMap,
-    ) -> Result<(Self, HttpClientFactory), AuthError> {
+    ) -> anyhow::Result<(Self, HttpClientFactory)> {
         let resolved = crate::auth_provider_for_request(auth, runtime, headers).await?;
         let factory = resolved.bind_http_client_factory(factory)?;
         let source = match (runtime, resolved.runtime) {

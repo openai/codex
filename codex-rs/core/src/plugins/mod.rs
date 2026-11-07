@@ -61,8 +61,7 @@ pub async fn plugins_manager_for_config_with_runtime(
     if !codex_runtime_agent_instance::is_openai_api_url(&config.chatgpt_base_url) {
         return Ok(plugins_manager_for_config(config, auth_manager));
     }
-    let installation_id =
-        crate::installation_id::resolve_installation_id(&config.codex_home).await?;
+    let installation_id = crate::resolve_installation_id(&config.codex_home).await?;
     let runtime = crate::runtime_auth::build_runtime_auth_manager(
         config,
         Arc::clone(&auth_manager),

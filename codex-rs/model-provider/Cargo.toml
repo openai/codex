@@ -13,6 +13,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 codex-utils-process = { workspace = true }
 chrono = { workspace = true }
 codex-api = { workspace = true }
