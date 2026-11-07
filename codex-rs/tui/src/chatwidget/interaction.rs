@@ -12,7 +12,10 @@ use crate::clipboard_copy::worker::CopyResult;
 pub(crate) enum KeyEventAction {
     None,
     CopyLastResponse(Arc<str>),
-    PasteImage { text_fallback: Option<KeyCode> },
+    PasteImage {
+        text_fallback: Option<KeyCode>,
+        context: ClipboardPasteContext,
+    },
 }
 
 impl ChatWidget {
@@ -250,12 +253,7 @@ impl ChatWidget {
                 self.on_ctrl_c();
                 return KeyEventAction::None;
             }
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                kind: KeyEventKind::Press,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'d') => {
+            key if Self::is_ctrl_d_press(key) => {
                 if self.on_ctrl_d() {
                     return KeyEventAction::None;
                 }
@@ -264,7 +262,9 @@ impl ChatWidget {
                 self.quit_shortcut_key = None;
             }
             _ => {
-                if let Some(action) = self.image_paste_key_action(key_event) {
+                if let Some(action) =
+                    self.image_paste_key_action(key_event, ClipboardPasteContext::Composer)
+                {
                     return action;
                 }
                 if key_event.kind == KeyEventKind::Press {
@@ -363,12 +363,12 @@ impl ChatWidget {
         KeyEventAction::None
     }
 
-    /// Attach a local image to the composer when the active model supports image inputs.
+    /// Attach a local image, deferring model validation while the draft awaits its destination.
     ///
-    /// When the model does not advertise image support, we keep the draft unchanged and surface a
-    /// warning event so users can switch models or remove attachments.
-    pub(crate) fn attach_image(&mut self, path: PathBuf) {
-        if !self.current_model_supports_images() {
+    /// Ordinary paste still checks the active model. Handoff only retains the attachment locally;
+    /// submission validates the destination model and backend before admission.
+    pub(crate) fn attach_image(&mut self, path: PathBuf, context: ClipboardPasteContext) {
+        if context == ClipboardPasteContext::Composer && !self.current_model_supports_images() {
             self.add_to_history(history_cell::new_warning_event(
                 self.image_inputs_not_supported_message(),
             ));
@@ -376,6 +376,9 @@ impl ChatWidget {
             return;
         }
         tracing::info!("attach_image path={path:?}");
+        if context == ClipboardPasteContext::DraftHandoff && !self.has_active_view() {
+            self.bottom_pane.settle_before_handoff_image();
+        }
         self.bottom_pane.attach_image(path);
         self.refresh_startup_recovery();
         self.request_redraw();
@@ -608,6 +611,11 @@ impl ChatWidget {
         self.finish_paste_burst_tick(frame_requester, flushed)
     }
 
+    pub(crate) fn handle_handoff_paste_tick(&mut self, frame_requester: FrameRequester) -> bool {
+        let flushed = self.bottom_pane.flush_handoff_paste_if_due();
+        self.finish_paste_burst_tick(frame_requester, flushed)
+    }
+
     fn finish_paste_burst_tick(&mut self, frame_requester: FrameRequester, flushed: bool) -> bool {
         if flushed {
             self.refresh_startup_recovery();
@@ -700,11 +708,23 @@ impl ChatWidget {
         }
     }
 
+    pub(super) fn is_ctrl_d_press(key: KeyEvent) -> bool {
+        matches!(
+            key,
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'d')
+        )
+    }
+
     /// Handles a Ctrl+D press at the chat-widget layer.
     ///
     /// Ctrl-D only participates in quit when the composer is empty and no modal/popup is active.
     /// Otherwise it should be routed to the active view and not attempt to quit.
-    fn on_ctrl_d(&mut self) -> bool {
+    pub(super) fn on_ctrl_d(&mut self) -> bool {
         let key = key_hint::ctrl(KeyCode::Char('d'));
         if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
             if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active()

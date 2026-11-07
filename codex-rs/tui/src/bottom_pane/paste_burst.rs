@@ -358,6 +358,22 @@ impl PasteBurst {
                 .is_some_and(|t| now.duration_since(t) <= PASTE_BURST_CHAR_INTERVAL)
     }
 
+    /// Keep input in this composer while keys can still belong to its paste.
+    pub(super) fn handoff_deadline(&self) -> Option<Instant> {
+        let interval = if self.is_active_internal() {
+            PASTE_BURST_ACTIVE_IDLE_TIMEOUT
+        } else {
+            PASTE_BURST_CHAR_INTERVAL
+        };
+        self.last_plain_char_time
+            .map(|last_key| last_key + interval)
+            .max(self.burst_window_until)
+    }
+
+    pub(super) fn preserve_window_until(&mut self, deadline: Instant) {
+        self.burst_window_until = self.burst_window_until.max(Some(deadline));
+    }
+
     /// Keep the burst window alive.
     pub fn extend_window(&mut self, now: Instant) {
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);

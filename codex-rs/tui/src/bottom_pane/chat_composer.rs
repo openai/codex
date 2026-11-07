@@ -46,6 +46,8 @@
 //! popup-specific handler if a popup is visible and otherwise to
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
+//! A pending backend handoff uses the basic editor and paste detection while holding submission.
+//! Redraws preserve the paste detector's window so trailing keys stay with the outgoing composer.
 //! Fresh Vim drafts start in Insert; Normal `/` and `?` search the composer.
 //! On an empty draft, a standalone Normal `/` enters Insert and opens command completion.
 //! Backspace on an empty Vim search query cancels search and any pending operator.
@@ -290,6 +292,8 @@
 //!   pasted text. This preserves the order when a paste arrives before the next burst-flush tick;
 //!   buffered keys have already been classified and go directly through `apply_paste`.
 //!   Image detection probes only regular files. Pasted device and FIFO paths stay literal.
+//! - Accepted clipboard images during Cloud handoff settle buffered typing before inserting their
+//!   placeholder. This edit keeps a newly settled leading bang literal if navigation fails.
 //! - Startup recovery previews held keys with the live Vim Replace policy without consuming them.
 //!   Buffered pastes remain literal in recovery so large-paste and image classification stays with
 //!   the live paste path.
@@ -710,6 +714,7 @@ pub(super) struct ComposerDraft {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ComposerDraftSnapshot {
+    pub(crate) vim_normal_mode: bool,
     pub(crate) text: String,
     pub(crate) shell_mode: Option<bool>,
     pub(crate) cursor: usize,

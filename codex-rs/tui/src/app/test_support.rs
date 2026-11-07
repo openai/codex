@@ -12,6 +12,9 @@ use crate::test_support::boxed_future;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 
+pub(crate) use super::cloud_switch_wait::ClipboardHandoff;
+pub(crate) use super::cloud_switch_wait::wait_for_cloud_switch;
+
 pub(super) fn enable_side_retention(app: &mut App) -> Result<()> {
     app.config.features.enable(Feature::TuiWorkspace)?;
     app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;

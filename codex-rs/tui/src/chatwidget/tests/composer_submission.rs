@@ -417,6 +417,99 @@ async fn parent_owned_thread_preserves_queued_input_before_draining() {
     assert_no_submit_op(&mut op_rx);
 }
 
+#[tokio::test]
+async fn handoff_image_survives_model_rejection_and_submission_failure() {
+    let (mut source, _events, mut source_ops) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    source.thread_id = Some(ThreadId::new());
+    let mut models = source.model_catalog.try_list_models().unwrap();
+    for model in &mut models {
+        model
+            .input_modalities
+            .retain(|modality| *modality != InputModality::Image);
+    }
+    source.model_catalog = Arc::new(ModelCatalog::new(models));
+    source.sync_image_paste_enabled();
+    let path = PathBuf::from("image.png");
+    let action = source.handle_restricted_key(
+        KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT),
+        RestrictedInputMode::DraftHandoff,
+    );
+    let KeyEventAction::PasteImage { context, .. } = action else {
+        panic!("expected handoff image paste");
+    };
+    source.attach_image(path.clone(), context);
+    let draft = source.composer_draft_snapshot();
+    assert_eq!(
+        draft.local_images,
+        vec![LocalImageAttachment {
+            placeholder: "[Image #1]".into(),
+            path,
+        }],
+    );
+    insta::assert_snapshot!(source.bottom_pane.composer_text(), @"[Image #1]");
+    source.handle_restricted_key(KeyCode::Enter.into(), RestrictedInputMode::DraftHandoff);
+    assert_no_submit_op(&mut source_ops);
+
+    // A failed switch leaves the source active: submission must reject but retain the image.
+    source.handle_key_event(KeyCode::Enter.into());
+    assert_no_submit_op(&mut source_ops);
+    assert_eq!(
+        source.bottom_pane.composer_draft_snapshot().local_images,
+        draft.local_images
+    );
+
+    let (mut destination, _events, mut destination_ops) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    destination.thread_id = Some(ThreadId::new());
+    destination.restore_startup_draft(draft.clone());
+    let mut supported_models = destination.model_catalog.try_list_models().unwrap();
+    let current_model = destination.current_model().to_string();
+    let model = supported_models
+        .iter_mut()
+        .find(|model| model.model == current_model)
+        .expect("current model");
+    if !model.input_modalities.contains(&InputModality::Image) {
+        model.input_modalities.push(InputModality::Image);
+    }
+    let mut unsupported_models = supported_models.clone();
+    for model in &mut unsupported_models {
+        model
+            .input_modalities
+            .retain(|modality| *modality != InputModality::Image);
+    }
+    destination.model_catalog = Arc::new(ModelCatalog::new(unsupported_models));
+    destination.handle_key_event(KeyCode::Enter.into());
+    assert_no_submit_op(&mut destination_ops);
+    assert_eq!(
+        destination
+            .bottom_pane
+            .composer_draft_snapshot()
+            .local_images,
+        draft.local_images
+    );
+
+    // A capable destination admits the image; a subsequent submission failure restores it.
+    destination.model_catalog = Arc::new(ModelCatalog::new(supported_models));
+    destination.handle_key_event(KeyCode::Enter.into());
+    assert_matches!(next_submit_op(&mut destination_ops), Op::UserTurn { .. });
+    let client_id = destination
+        .input_queue
+        .pending_user_message_client_id
+        .clone()
+        .expect("pending submission");
+    destination.restore_rejected_user_message(&client_id, "submission failed".into());
+    assert_eq!(
+        destination
+            .bottom_pane
+            .composer_draft_snapshot()
+            .local_images,
+        draft.local_images
+    );
+    insta::assert_snapshot!(destination.bottom_pane.composer_text(), @"[Image #1]");
+    assert_no_submit_op(&mut destination_ops);
+}
+
 #[tokio::test(start_paused = true)]
 async fn local_clipboard_image_does_not_turn_a_held_bang_into_a_shell_command() {
     let (mut chat, _events, mut operations) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -427,11 +520,11 @@ async fn local_clipboard_image_does_not_turn_a_held_bang_into_a_shell_command() 
     assert_eq!(chat.bottom_pane.composer_recovery_snapshot().text, "!");
 
     let paste = chat.handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
-    let KeyEventAction::PasteImage { .. } = paste else {
+    let KeyEventAction::PasteImage { context, .. } = paste else {
         panic!("expected a clipboard image request");
     };
     let image_path = PathBuf::from("image.png");
-    chat.attach_image(image_path.clone());
+    chat.attach_image(image_path.clone(), context);
     chat.handle_key_event(KeyCode::Enter.into());
 
     let draft = chat.bottom_pane.composer_recovery_snapshot();

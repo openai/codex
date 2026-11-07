@@ -2,6 +2,7 @@
 
 use codex_app_server_protocol as protocol;
 use codex_cloud_client as cloud;
+use codex_protocol::models::ImageDetail;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::bail;
 
@@ -92,15 +93,49 @@ pub(super) fn item_summary(item: cloud::ItemSummary) -> Option<protocol::ThreadI
         cloud::ItemSummary::UserMessage {
             id,
             client_id,
-            text,
+            content,
         } => protocol::ThreadItemPayload::UserMessage {
             id,
             client_id,
-            content: text
+            content: content
                 .into_iter()
-                .map(|text| protocol::UserInput::Text {
-                    text,
-                    text_elements: Vec::new(),
+                .map(|item| match item {
+                    cloud::UserMessageInput::Text {
+                        text,
+                        text_elements,
+                    } => protocol::UserInput::Text {
+                        text,
+                        text_elements: text_elements
+                            .into_iter()
+                            .map(|element| {
+                                protocol::TextElement::new(
+                                    protocol::ByteRange {
+                                        start: element.start,
+                                        end: element.end,
+                                    },
+                                    element.placeholder,
+                                )
+                            })
+                            .collect(),
+                    },
+                    cloud::UserMessageInput::Image { image, detail } => {
+                        protocol::UserInput::Image {
+                            image: match image {
+                                cloud::ImageReference::Url(url) => {
+                                    protocol::ImageReference::Inline { url }
+                                }
+                                cloud::ImageReference::FileId(file_id) => {
+                                    protocol::ImageReference::File { file_id }
+                                }
+                            },
+                            detail: detail.map(|detail| match detail {
+                                cloud::ImageDetail::Auto => ImageDetail::Auto,
+                                cloud::ImageDetail::Low => ImageDetail::Low,
+                                cloud::ImageDetail::High => ImageDetail::High,
+                                cloud::ImageDetail::Original => ImageDetail::Original,
+                            }),
+                        }
+                    }
                 })
                 .collect(),
         },

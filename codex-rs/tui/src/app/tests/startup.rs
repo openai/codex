@@ -2160,3 +2160,22 @@ async fn check_provider_resume_retries(reopen_via: ProviderResumeRoute) -> Resul
     server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn cloud_switch_wait_applies_navigation_before_polling_terminal_input() -> Result<()> {
+    let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+    app.config.features.enable(Feature::TuiMultiBackend)?;
+    let tui = crate::tui::test_support::make_test_tui()?;
+    while events.try_recv().is_ok() {}
+
+    for navigation in [
+        AppEvent::CycleNewConversationBackend,
+        AppEvent::ChooseNewSessionCheckout { name: None },
+    ] {
+        assert!(app.can_read_terminal_after_thread_switch(&tui, &events));
+        app.app_event_tx.send(navigation);
+        assert!(!app.can_read_terminal_after_thread_switch(&tui, &events));
+        assert!(events.try_recv().is_ok());
+    }
+    Ok(())
+}

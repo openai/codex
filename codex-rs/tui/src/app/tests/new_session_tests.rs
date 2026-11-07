@@ -1056,3 +1056,230 @@ async fn backend_cycling_waits_for_foreground_and_parked_voice_calls() -> Result
     }
     Ok(())
 }
+
+#[tokio::test(start_paused = true)]
+async fn cloud_switch_wait_keeps_draft_editable_without_submitting_to_local() -> Result<()> {
+    use crate::app::cloud_switch_wait::ClipboardHandoff;
+    use crate::app::cloud_switch_wait::wait_for_cloud_switch;
+
+    let (mut app, mut app_events, mut operations) = make_test_app_with_channels().await;
+    let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    app.chat_widget.handle_thread_session(session);
+    app.chat_widget
+        .set_new_backend_control(Some("Cloud".into()));
+    app.chat_widget
+        .apply_external_edit("/review first draft".into());
+    app.keymap
+        .composer
+        .queue
+        .push(crate::key_hint::plain(KeyCode::Char('q')));
+    app.chat_widget
+        .apply_keymap_update(codex_config::types::TuiKeymap::default(), &app.keymap);
+    while operations.try_recv().is_ok() {}
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+    let late_input_at = std::cell::Cell::new(None);
+    let input = [
+        TuiEvent::Key(KeyCode::Enter.into()),
+        TuiEvent::Key(KeyCode::Char('q').into()),
+        TuiEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT)),
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+        TuiEvent::Key(KeyCode::Char('b').into()),
+        TuiEvent::Paste(" more".into()),
+        TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+        TuiEvent::Key(KeyCode::Char('a').into()),
+        TuiEvent::Key(KeyCode::Char('a').into()),
+    ];
+    let paste_keys = [
+        KeyCode::Char('b'),
+        KeyCode::Char('b'),
+        KeyCode::Tab,
+        KeyCode::Char('c'),
+        KeyCode::Char('c'),
+        KeyCode::Char('?'),
+    ];
+    let events = tokio_stream::iter(input)
+        .chain(futures::stream::once(async move {
+            finish_tx.send(()).expect("finish Cloud switch");
+            TuiEvent::Draw
+        }))
+        .chain(futures::stream::once(async {
+            tokio::time::sleep(std::time::Duration::from_millis(70)).await;
+            TuiEvent::Draw
+        }))
+        .chain(futures::stream::once(async {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            late_input_at.set(Some(std::time::Instant::now()));
+            TuiEvent::Key(KeyCode::Enter.into())
+        }))
+        .chain(tokio_stream::iter(
+            paste_keys.map(|key| TuiEvent::Key(key.into())),
+        ));
+    let result = wait_for_cloud_switch(
+        &mut app,
+        &mut tui,
+        async {
+            finish_rx.await.expect("release Cloud switch");
+            Err::<(), _>("Cloud unavailable")
+        },
+        Box::pin(events),
+        ClipboardHandoff::SettleBeforeNextView,
+    )
+    .await;
+
+    assert_eq!(result, Err("Cloud unavailable"));
+    let rendered = buffer_text(tui.terminal.previous_buffer());
+    insta::assert_snapshot!(
+        rendered
+            .lines()
+            .find(|line| line.contains("Cloud conversation did not open"))
+            .unwrap_or_default()
+            .trim(),
+        @"Cloud conversation did not open draft kept"
+    );
+    let draft = app.chat_widget.composer_draft_snapshot();
+    assert_eq!(draft.text, "/review first draft more\naa\nbb\tcc?");
+    assert!(
+        draft.last_composer_activity_at
+            >= Some(late_input_at.get().expect("late input was delivered"))
+    );
+    assert!(operations.try_recv().is_err());
+    assert!(
+        !std::iter::from_fn(|| app_events.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::CodexOp(AppCommand::UserTurn { .. }) | AppEvent::UpdateReasoningEffort(_)
+        ))
+    );
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn cloud_switch_wait_routes_ctrl_d_to_the_draft_or_queues_shutdown() -> Result<()> {
+    use crate::app::cloud_switch_wait::ClipboardHandoff;
+    use crate::app::cloud_switch_wait::wait_for_cloud_switch;
+    use crate::app_event::ExitMode;
+
+    let (mut app, mut app_events, _operations) = make_test_app_with_channels().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let ctrl_d = TuiEvent::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    let input = [
+        TuiEvent::Key(KeyCode::Char('a').into()),
+        ctrl_d.clone(), // Buffered typing counts as draft content.
+        TuiEvent::Key(KeyCode::Home.into()),
+        ctrl_d.clone(), // Forward-delete the draft's only character.
+        ctrl_d,         // The draft is now empty.
+    ];
+    {
+        let wait = wait_for_cloud_switch(
+            &mut app,
+            &mut tui,
+            std::future::pending::<Result<(), std::convert::Infallible>>(),
+            tokio_stream::iter(input).chain(tokio_stream::pending()),
+            ClipboardHandoff::SettleBeforeNextView,
+        );
+        tokio::pin!(wait);
+        assert!(futures::poll!(&mut wait).is_pending());
+    }
+    assert_eq!(app.chat_widget.composer_draft_snapshot().text, "");
+    let exits: Vec<_> = std::iter::from_fn(|| app_events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::Exit(mode) => Some(mode),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(exits, [ExitMode::ShutdownFirst]);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cloud_switch_wait_preserves_legacy_vim_escape_and_search_acceptance() -> Result<()> {
+    use crate::app::cloud_switch_wait::ClipboardHandoff;
+    use crate::app::cloud_switch_wait::wait_for_cloud_switch;
+
+    let (mut app, _app_events, _operations) = make_test_app_with_channels().await;
+    app.enhanced_keys_supported = false;
+    app.chat_widget.toggle_vim_mode_and_notify();
+    app.chat_widget.insert_str("a");
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    wait_for_cloud_switch(
+        &mut app,
+        &mut tui,
+        std::future::ready(Ok::<(), std::convert::Infallible>(())),
+        tokio_stream::iter([
+            TuiEvent::Key(KeyCode::Char('i').into()),
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT)),
+            TuiEvent::Paste("alpha beta".into()),
+            TuiEvent::Key(KeyCode::Char('?').into()),
+            TuiEvent::Key(KeyCode::Char('l').into()),
+            TuiEvent::Key(KeyCode::Enter.into()),
+            TuiEvent::Key(KeyCode::Char('x').into()),
+        ]),
+        ClipboardHandoff::SettleBeforeNextView,
+    )
+    .await?;
+    assert_eq!(app.chat_widget.composer_draft_snapshot().text, "apha beta");
+    let draft_mode = crate::bottom_pane::RestrictedInputMode::DraftHandoff;
+    for (key, expected) in [
+        (KeyCode::Char('u').into(), "alpha beta"),
+        (
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            "apha beta",
+        ),
+    ] {
+        app.chat_widget.handle_restricted_key(key, draft_mode);
+        assert_eq!(app.chat_widget.composer_draft_snapshot().text, expected);
+    }
+    let draft = app.chat_widget.composer_draft_snapshot();
+    assert!(draft.vim_normal_mode);
+    // Replace the composer as a successful Cloud switch does. Startup adoption alone
+    // would return this draft to Insert, so the next x would insert instead of delete.
+    let (mut destination, _app_events, _operations) = make_test_app_with_channels().await;
+    destination.chat_widget.local_settings.tui.vim_mode_default = true;
+    destination.chat_widget.toggle_vim_mode_and_notify();
+    destination.chat_widget.restore_cloud_switch_draft(draft);
+    destination
+        .chat_widget
+        .handle_restricted_key(KeyCode::Char('x').into(), draft_mode);
+    insta::assert_snapshot!(destination.chat_widget.composer_draft_snapshot().text, @"aha beta");
+    Ok(())
+}
+
+#[tokio::test]
+async fn cloud_switch_wait_displays_pending_submission_hint() -> Result<()> {
+    use crate::app::cloud_switch_wait::ClipboardHandoff;
+    use crate::app::cloud_switch_wait::wait_for_cloud_switch;
+
+    let (mut app, _app_events, _operations) = make_test_app_with_channels().await;
+    let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    app.chat_widget.handle_thread_session(session);
+    app.chat_widget
+        .set_new_backend_control(Some("Cloud".into()));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    {
+        let wait = wait_for_cloud_switch(
+            &mut app,
+            &mut tui,
+            std::future::pending::<Result<(), std::convert::Infallible>>(),
+            tokio_stream::iter([
+                TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+                TuiEvent::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
+                TuiEvent::Draw,
+            ])
+            .chain(tokio_stream::pending()),
+            ClipboardHandoff::SettleBeforeNextView,
+        );
+        tokio::pin!(wait);
+        assert!(futures::poll!(&mut wait).is_pending());
+    }
+    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    insta::assert_snapshot!(
+        rendered
+            .lines()
+            .find(|line| line.contains("Connecting to Cloud"))
+            .expect("Cloud connection hint")
+            .trim(),
+        @"Connecting to Cloud… submit when ready"
+    );
+    Ok(())
+}

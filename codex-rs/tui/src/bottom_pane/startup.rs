@@ -127,6 +127,15 @@ impl BottomPane {
         !self.delayed_approval_requests.is_empty()
     }
 
+    pub(crate) fn composer_paste_deadline(&self) -> Option<Instant> {
+        self.composer.paste_handoff_deadline()
+    }
+
+    pub(crate) fn flush_handoff_paste_if_due(&mut self) -> bool {
+        self.composer
+            .flush_handoff_paste(tokio::time::Instant::now().into_std())
+    }
+
     /// Preserve buffered composer input before its owner or input mode changes.
     pub(crate) fn flush_composer_paste_burst(&mut self) {
         if self.composer.is_in_paste_burst() {

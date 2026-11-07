@@ -67,7 +67,7 @@ impl App {
     ) -> Result<(Config, crate::local_settings::LocalSettings)> {
         let settings = self.backend_settings();
         let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
-        self.load_new_session_config_from(app_server, &settings, cwd)
+        self.load_new_session_config_from(app_server, &settings, cwd, /*cloud_switch*/ None)
             .await
     }
 
@@ -76,6 +76,7 @@ impl App {
         app_server: &AppServerSession,
         settings: &BackendSettings,
         cwd: PathBuf,
+        mut cloud_switch: Option<&mut tui::Tui>,
     ) -> Result<(Config, crate::local_settings::LocalSettings)> {
         let defaults_cwd = match app_server.thread_params_mode() {
             crate::app_server_session::ThreadParamsMode::Embedded => cwd.as_path(),
@@ -84,16 +85,30 @@ impl App {
                 app_server.remote_cwd_override().unwrap_or(Path::new("."))
             }
         };
-        let defaults = crate::config_update::read_effective_config_if_supported(
-            app_server.request_handle(),
-            defaults_cwd,
-        )
-        .await?;
-        // Stage local preferences and permission carryover without changing the active task.
-        let (mut config, local_settings) = match self
-            .rebuild_config_for_cwd_from(&settings.config, cwd)
+        let refresh = self.rebuild_config_for_cwd_from(&settings.config, cwd.clone());
+        let load = async {
+            let defaults = crate::config_update::read_effective_config_if_supported(
+                app_server.request_handle(),
+                defaults_cwd,
+            )
+            .await?;
+            Ok::<_, color_eyre::eyre::Report>((defaults, refresh.await))
+        };
+        let (defaults, refreshed_config) = if let Some(tui) = cloud_switch.as_deref_mut() {
+            let events = tui.event_stream();
+            super::cloud_switch_wait::wait_for_cloud_switch(
+                self,
+                tui,
+                load,
+                events,
+                super::cloud_switch_wait::ClipboardHandoff::ContinueEditing,
+            )
             .await
-        {
+        } else {
+            load.await
+        }?;
+        // Stage local preferences and permission carryover without changing the active task.
+        let (mut config, local_settings) = match refreshed_config {
             Ok(config) => {
                 let local_settings = settings.local_settings.reloaded(&config);
                 (config, local_settings)
@@ -112,11 +127,17 @@ impl App {
                 defaults,
             );
         }
-        self.apply_runtime_policy_overrides_with_reviewer(
+        if let Err(error) = self.apply_runtime_policy_overrides_with_reviewer(
             &mut config,
             RuntimePolicyOverrideScope::ExplicitOnly,
             settings.config.approvals_reviewer,
-        )?;
+        ) {
+            if let Some(tui) = cloud_switch {
+                let events = tui.event_stream();
+                super::cloud_switch_wait::finish_failed_cloud_switch(self, tui, events).await;
+            }
+            return Err(error);
+        }
         if let Some(defaults) = defaults.as_ref() {
             overlay_new_session_defaults(
                 &mut config,

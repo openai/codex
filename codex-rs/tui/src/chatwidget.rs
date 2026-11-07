@@ -305,6 +305,7 @@ mod session_flow;
 mod session_header;
 use self::session_header::SessionHeader;
 mod clipboard;
+pub(crate) use clipboard::ClipboardPasteContext;
 mod copy_picker;
 mod hook_lifecycle;
 mod hooks;

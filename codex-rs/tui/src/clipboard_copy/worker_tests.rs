@@ -13,6 +13,46 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
+#[tokio::test(start_paused = true)]
+async fn cloud_config_completion_does_not_wait_for_the_clipboard() {
+    use crate::app::test_support::ClipboardHandoff;
+    use crate::app::test_support::wait_for_cloud_switch;
+
+    let mut tui = crate::tui::test_support::make_test_tui().unwrap();
+    let mut app = crate::app::test_support::make_test_app().await;
+    let (release, released) = mpsc::channel::<()>();
+    tui.clipboard
+        .start(
+            tui.frame_requester(),
+            |_, _, _| unreachable!("read-only clipboard fixture"),
+            move || {
+                move |_| {
+                    released.recv().map_err(|error| error.to_string())?;
+                    Ok("clipboard draft".into())
+                }
+            },
+        )
+        .unwrap();
+    app.start_clipboard_text_paste(&mut tui, PasteSource::Clipboard, Some(KeyCode::Char('v')));
+    assert!(tui.clipboard.is_busy());
+
+    tokio::time::timeout(
+        Duration::from_millis(/*millis*/ 1),
+        wait_for_cloud_switch(
+            &mut app,
+            &mut tui,
+            std::future::ready(Ok::<(), std::convert::Infallible>(())),
+            tokio_stream::pending(),
+            ClipboardHandoff::ContinueEditing,
+        ),
+    )
+    .await
+    .expect("Cloud can start while the clipboard request is blocked")
+    .unwrap();
+    assert!(tui.clipboard.is_busy());
+    release.send(()).unwrap();
+}
+
 #[tokio::test]
 async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion() {
     let mut tui = crate::tui::test_support::make_test_tui().unwrap();
@@ -509,6 +549,89 @@ fn expired_text_read_rejects_backlog_and_discards_late_completion() {
         worker.take_text_result(),
         Some(Err("clipboard read timed out".into()))
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cloud_handoff_keeps_an_owned_clipboard_read_until_completion_or_input() {
+    use crate::app::test_support::ClipboardHandoff;
+    use codex_config::types::RightClickPaste;
+    use crossterm::event::MouseButton;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
+
+    let shortcut = Some(KeyCode::Char('v'));
+    for (shortcut, cancellation) in [
+        (None, None),
+        (shortcut, None),
+        (shortcut, Some(TuiEvent::FocusLost)),
+        (shortcut, Some(TuiEvent::Key(KeyCode::Enter.into()))),
+    ] {
+        let mut app = crate::app::test_support::make_test_app().await;
+        let mut tui = crate::tui::test_support::make_test_tui().unwrap();
+        app.chat_widget.apply_external_edit("draft ".into());
+        app.local_settings.tui.right_click_paste = RightClickPaste::On;
+        app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Owned;
+        tui.set_owned_screen(shortcut.is_none()).unwrap();
+        let (requests, incoming) = mpsc::channel();
+        tui.clipboard.requests = Some(requests);
+
+        let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
+        if shortcut.is_some() {
+            // Start at the Windows NoImage fallback without accessing the host clipboard.
+            app.start_clipboard_text_paste(&mut tui, PasteSource::Clipboard, shortcut);
+        } else {
+            events_tx
+                .send(TuiEvent::Key(KeyCode::Char('x').into()))
+                .unwrap();
+            events_tx
+                .send(TuiEvent::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Right),
+                    column: 1,
+                    row: 1,
+                    modifiers: KeyModifiers::NONE,
+                }))
+                .unwrap();
+        }
+        let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
+        let events = tokio_stream::wrappers::UnboundedReceiverStream::new(events_rx);
+        let expected = if shortcut.is_none() {
+            "draft xpasted"
+        } else if cancellation.is_some() {
+            "draft "
+        } else {
+            "draft pasted"
+        };
+        {
+            let wait = crate::app::wait_for_cloud_switch(
+                &mut app,
+                &mut tui,
+                prepared_rx,
+                events,
+                ClipboardHandoff::SettleBeforeNextView,
+            );
+            tokio::pin!(wait);
+            assert!(futures::poll!(&mut wait).is_pending());
+            let Request::Read { response, .. } = incoming.try_recv().expect("clipboard text read")
+            else {
+                panic!("expected a clipboard text read");
+            };
+            prepared_tx.send(()).unwrap();
+            assert!(futures::poll!(&mut wait).is_pending());
+            // Let the immediate terminal drain expire while the read is still outstanding.
+            tokio::time::advance(Duration::from_millis(20)).await;
+            assert!(futures::poll!(&mut wait).is_pending());
+            events_tx.send(TuiEvent::Draw).unwrap();
+            assert!(futures::poll!(&mut wait).is_pending());
+
+            if let Some(event) = cancellation {
+                events_tx.send(event).unwrap();
+            }
+            response.send(Ok("pasted".into())).unwrap();
+            events_tx.send(TuiEvent::Draw).unwrap();
+            wait.await.unwrap();
+        }
+        assert_eq!(app.chat_widget.composer_text_with_pending(), expected);
+    }
 }
 
 #[test]

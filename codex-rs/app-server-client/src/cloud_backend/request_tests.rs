@@ -63,7 +63,13 @@ fn user_input_uses_stable_id_and_the_existing_cloud_configuration() {
     let request = cloud_message(message()).unwrap();
     assert_eq!(request.thread_id, "thread-a");
     assert_eq!(request.client_user_message_id, "submission-a");
-    assert_eq!(request.text, "one\ntwo");
+    assert_eq!(
+        request.input,
+        vec![cloud::UserMessageInput::Text {
+            text: "one\ntwo".into(),
+            text_elements: Vec::new(),
+        }]
+    );
     assert_eq!(
         request.turn_trigger.as_deref(),
         Some("safety_recourse_follow_up")
@@ -86,6 +92,51 @@ fn user_input_uses_stable_id_and_the_existing_cloud_configuration() {
             ..message()
         })
         .is_err()
+    );
+}
+
+#[test]
+fn image_submission_keeps_attachment_markers_and_input_order() {
+    let label = "[Image #1]";
+    let request = cloud_message(protocol::TurnStartParams {
+        input: vec![
+            protocol::UserInput::Image {
+                image: protocol::ImageReference::File {
+                    file_id: "file-synthetic".into(),
+                },
+                detail: Some(ImageDetail::High),
+            },
+            protocol::UserInput::Text {
+                text: format!("{label} describe"),
+                text_elements: vec![protocol::TextElement::new(
+                    protocol::ByteRange {
+                        start: 0,
+                        end: label.len(),
+                    },
+                    Some(label.into()),
+                )],
+            },
+        ],
+        ..message()
+    })
+    .unwrap();
+
+    assert_eq!(
+        request.input,
+        vec![
+            cloud::UserMessageInput::Image {
+                image: cloud::ImageReference::FileId("file-synthetic".into()),
+                detail: Some(cloud::ImageDetail::High),
+            },
+            cloud::UserMessageInput::Text {
+                text: format!("{label} describe"),
+                text_elements: vec![cloud::UserMessageTextElement {
+                    start: 0,
+                    end: label.len(),
+                    placeholder: Some(label.into()),
+                }],
+            },
+        ]
     );
 }
 

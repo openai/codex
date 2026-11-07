@@ -93,6 +93,23 @@ impl ChatComposer {
         }
     }
 
+    pub(in crate::bottom_pane) fn paste_handoff_deadline(&self) -> Option<Instant> {
+        if self.draft.disable_paste_burst {
+            return None;
+        }
+        self.draft.paste_burst.handoff_deadline()
+    }
+
+    /// Display flushed text without losing the window for its trailing paste keys.
+    pub(in crate::bottom_pane) fn flush_handoff_paste(&mut self, now: Instant) -> bool {
+        let deadline = self.paste_handoff_deadline();
+        let flushed = self.handle_paste_burst_flush(now);
+        if flushed && let Some(deadline) = deadline.filter(|deadline| *deadline >= now) {
+            self.draft.paste_burst.preserve_window_until(deadline);
+        }
+        flushed
+    }
+
     /// Enable or disable paste-burst handling.
     ///
     /// `disable_paste_burst` is an escape hatch for terminals/platforms where the burst heuristic
@@ -235,11 +252,13 @@ impl ChatComposer {
     }
 
     pub(super) fn handle_paste_tab(&mut self, key: KeyEvent, now: Instant) -> bool {
-        if key.code != KeyCode::Tab
-            || !key.modifiers.is_empty()
-            || self.draft.disable_paste_burst
-            || !self.draft.textarea.allows_paste_burst()
-        {
+        key.code == KeyCode::Tab
+            && key.modifiers.is_empty()
+            && self.append_recent_paste_separator('\t', now)
+    }
+
+    pub(super) fn append_recent_paste_separator(&mut self, separator: char, now: Instant) -> bool {
+        if self.draft.disable_paste_burst || !self.draft.textarea.allows_paste_burst() {
             return false;
         }
 
@@ -247,7 +266,7 @@ impl ChatComposer {
         if self
             .draft
             .paste_burst
-            .append_control_char_if_active('\t', now)
+            .append_control_char_if_active(separator, now)
         {
             return true;
         }
@@ -264,7 +283,7 @@ impl ChatComposer {
             return self
                 .draft
                 .paste_burst
-                .append_control_char_if_active('\t', now);
+                .append_control_char_if_active(separator, now);
         }
 
         false

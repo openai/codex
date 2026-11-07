@@ -6,6 +6,7 @@ use super::send_notification;
 use crate::CloudUserMessageReceipt;
 use codex_app_server_protocol as protocol;
 use codex_cloud_client as cloud;
+use codex_protocol::models::ImageDetail;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::bail;
 use color_eyre::eyre::eyre;
@@ -194,7 +195,15 @@ impl Requests {
             Request::TurnStart { params, .. } => {
                 let mut message = cloud_message(params)?;
                 message.mode = mode;
-                let admission = self.client.add_user_message(&message).await?;
+                let admission = match self.client.add_user_message(&message).await {
+                    Err(cloud::MutationError::InvalidRequest) => {
+                        return Err(PreflightRejection(
+                            "The Cloud message is empty, invalid, or too large.",
+                        )
+                        .into());
+                    }
+                    result => result?,
+                };
                 if matches!(mode, cloud::SubmissionMode::Steer) {
                     serde_json::to_value(admitted_message(admission.outcome)?)?
                 } else {
@@ -299,23 +308,71 @@ fn cloud_message(
             "Changing cloud settings or sending structured input is not supported yet.",
         ));
     }
-    let text = input
-        .into_iter()
-        .map(|item| match item {
+    let mut content = Vec::with_capacity(input.len());
+    for item in input {
+        let item = match item {
             protocol::UserInput::Text {
                 text,
                 text_elements,
-            } if text_elements.is_empty() => Ok(text),
-            _ => Err(PreflightRejection(
-                "Cloud conversations currently accept plain text only.",
-            )),
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .join("\n");
+            } => {
+                // Keep the existing line separation for consecutive plain text parts.
+                if text_elements.is_empty()
+                    && let Some(cloud::UserMessageInput::Text {
+                        text: previous,
+                        text_elements: previous_elements,
+                    }) = content.last_mut()
+                    && previous_elements.is_empty()
+                {
+                    previous.push('\n');
+                    previous.push_str(&text);
+                    continue;
+                }
+                cloud::UserMessageInput::Text {
+                    text,
+                    text_elements: text_elements
+                        .into_iter()
+                        .map(|element| cloud::UserMessageTextElement {
+                            placeholder: element.placeholder().map(str::to_owned),
+                            start: element.byte_range.start,
+                            end: element.byte_range.end,
+                        })
+                        .collect(),
+                }
+            }
+            protocol::UserInput::Image { image, detail } => cloud::UserMessageInput::Image {
+                image: match image {
+                    protocol::ImageReference::Inline { url } => cloud::ImageReference::Url(url),
+                    protocol::ImageReference::File { file_id } => {
+                        cloud::ImageReference::FileId(file_id)
+                    }
+                },
+                detail: detail.map(|detail| match detail {
+                    ImageDetail::Auto => cloud::ImageDetail::Auto,
+                    ImageDetail::Low => cloud::ImageDetail::Low,
+                    ImageDetail::High => cloud::ImageDetail::High,
+                    ImageDetail::Original => cloud::ImageDetail::Original,
+                }),
+            },
+            protocol::UserInput::LocalImage { .. } => {
+                return Err(PreflightRejection(
+                    "Prepare local images before sending them to Cloud.",
+                ));
+            }
+            protocol::UserInput::Audio { .. }
+            | protocol::UserInput::LocalAudio { .. }
+            | protocol::UserInput::Skill { .. }
+            | protocol::UserInput::Mention { .. } => {
+                return Err(PreflightRejection(
+                    "Cloud conversations currently accept text and images.",
+                ));
+            }
+        };
+        content.push(item);
+    }
     Ok(cloud::AddUserMessageRequest {
         thread_id,
         client_user_message_id,
-        text,
+        input: content,
         turn_trigger,
         mode: cloud::SubmissionMode::StartIfIdle,
         shared_access: false,

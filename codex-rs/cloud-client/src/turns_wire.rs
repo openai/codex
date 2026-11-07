@@ -1,4 +1,4 @@
-//! Native plain-text submission and interruption envelopes; omitted settings inherit thread config.
+//! Native text/image submission and interruption envelopes; omitted settings inherit thread config.
 use prost::Message;
 
 #[derive(Clone, Message)]
@@ -30,8 +30,8 @@ pub(super) struct UserInput {
 pub(super) enum Value {
     #[prost(message, tag = "1")]
     Text(Text),
-    #[prost(bytes, tag = "2")]
-    Image(Vec<u8>),
+    #[prost(message, tag = "2")]
+    Image(Image),
     #[prost(bytes, tag = "3")]
     LocalImage(Vec<u8>),
     #[prost(bytes, tag = "4")]
@@ -47,6 +47,47 @@ pub(super) enum Value {
 pub(super) struct Text {
     #[prost(string, optional, tag = "1")]
     pub text: Option<String>,
+    #[prost(message, optional, tag = "2")]
+    pub text_elements: Option<TextElements>,
+}
+#[derive(Clone, Message)]
+pub(super) struct TextElements {
+    #[prost(message, repeated, tag = "1")]
+    pub values: Vec<TextElement>,
+}
+#[derive(Clone, Message)]
+pub(super) struct TextElement {
+    #[prost(message, optional, tag = "1")]
+    pub byte_range: Option<ByteRange>,
+    #[prost(string, optional, tag = "2")]
+    pub placeholder: Option<String>,
+}
+#[derive(Clone, Message)]
+pub(super) struct ByteRange {
+    #[prost(uint64, optional, tag = "1")]
+    pub end: Option<u64>,
+    #[prost(uint64, optional, tag = "2")]
+    pub start: Option<u64>,
+}
+#[derive(Clone, Message)]
+pub(super) struct Image {
+    #[prost(oneof = "ImageValue", tags = "1, 2")]
+    pub value: Option<ImageValue>,
+}
+#[derive(Clone, prost::Oneof)]
+pub(super) enum ImageValue {
+    #[prost(message, tag = "1")]
+    Url(ImageReference),
+    #[prost(message, tag = "2")]
+    FileId(ImageReference),
+}
+// Both native image alternatives have the same field layout.
+#[derive(Clone, Message)]
+pub(super) struct ImageReference {
+    #[prost(int32, optional, tag = "1")]
+    pub detail: Option<i32>,
+    #[prost(string, optional, tag = "2")]
+    pub value: Option<String>,
 }
 #[derive(Clone, Message)]
 pub(super) struct AddResponse {

@@ -519,7 +519,7 @@ async fn queued_start_rejection_restores_the_draft() -> Result<()> {
         (
             ThreadParamsMode::Cloud,
             -32602,
-            "Cloud conversations currently accept plain text only.",
+            "Prepare local images before sending them to Cloud.",
         ),
     ] {
         let (mut app, _events, mut ops) = make_test_app_with_channels().await;

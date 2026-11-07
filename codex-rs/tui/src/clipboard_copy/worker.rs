@@ -311,6 +311,21 @@ impl ClipboardWorker {
         Ok(())
     }
 
+    /// The original budget follows the read until its owner consumes the result.
+    pub(crate) fn text_read_deadline(&self, request: &Arc<()>) -> Option<Instant> {
+        let request = Arc::downgrade(request);
+        self.pending_read
+            .as_ref()
+            .filter(|read| read.owner.ptr_eq(&request))
+            .map(|read| read.deadline)
+            .or_else(|| {
+                self.read_result
+                    .as_ref()
+                    .filter(|(_, owner, _)| owner.ptr_eq(&request))
+                    .map(|(deadline, _, _)| *deadline)
+            })
+    }
+
     pub(crate) fn take_text_result(&mut self) -> Option<Result<String, String>> {
         let (deadline, owner, result) = self.read_result.take()?;
         (owner.strong_count() > 0).then(|| {

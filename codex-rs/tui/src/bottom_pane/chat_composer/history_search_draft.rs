@@ -20,6 +20,7 @@ impl ChatComposer {
         attachments.set_remote_image_urls(draft.remote_image_urls.clone(), &mut textarea);
         attachments.reset_local_images(draft.local_image_paths, &mut textarea);
         ComposerDraftSnapshot {
+            vim_normal_mode: self.draft.textarea.is_vim_normal_mode(),
             text: draft.text,
             shell_mode: self
                 .config

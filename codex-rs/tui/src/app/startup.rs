@@ -159,7 +159,7 @@ impl App {
         self.pending_thread_switch_resets != 0 && self.side_retention_enabled(tui)
     }
 
-    /// Drain a side pair's queued prompts and transcript updates before a key can switch focus.
+    /// Apply queued app events before input can cross a backend or side-chat switch.
     pub(super) fn can_read_terminal_after_thread_switch(
         &self,
         tui: &tui::Tui,
@@ -167,7 +167,8 @@ impl App {
     ) -> bool {
         self.pending_thread_switch_resets == 0
             && (app_event_rx.is_empty()
-                || (!self.side_retention_enabled(tui)
+                || (!self.config.features.enabled(Feature::TuiMultiBackend)
+                    && !self.side_retention_enabled(tui)
                     && self
                         .current_displayed_thread_id()
                         .and_then(|id| self.side_pair_key(id))

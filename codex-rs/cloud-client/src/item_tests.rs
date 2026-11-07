@@ -88,7 +88,75 @@ fn user_message_preserves_client_id_and_text() {
         Some(ItemSummary::UserMessage {
             id: "user-item".into(),
             client_id: Some("client-id".into()),
-            text: vec!["hello".into()],
+            content: vec![UserMessageInput::Text {
+                text: "hello".into(),
+                text_elements: vec![]
+            }],
+        })
+    );
+}
+
+#[test]
+fn user_message_preserves_images_spans_and_client_id() {
+    let url = "data:image/png;base64,AA==";
+    let label = "[Image #1]";
+    let element = [
+        message(/*tag*/ 1, b"\x08\x0d\x10\x03"),
+        message(/*tag*/ 2, label.as_bytes()),
+    ]
+    .concat();
+    let text = [
+        message(/*tag*/ 1, "é [Image #1]".as_bytes()),
+        message(/*tag*/ 2, &message(/*tag*/ 1, &element)),
+    ]
+    .concat();
+    let image_bytes = [vec![0x08, 99], message(/*tag*/ 2, url.as_bytes())].concat();
+    let content = [
+        message(/*tag*/ 1, &message(/*tag*/ 1, &text)),
+        message(
+            /*tag*/ 1,
+            &message(/*tag*/ 2, &message(/*tag*/ 1, &image_bytes)),
+        ),
+    ]
+    .concat();
+    let user = message(
+        /*tag*/ 1,
+        &[
+            message(/*tag*/ 1, b"client-id"),
+            message(/*tag*/ 2, &content),
+            message(/*tag*/ 3, b"user-item"),
+        ]
+        .concat(),
+    );
+    let expected = ItemSummary::UserMessage {
+        id: "user-item".into(),
+        client_id: Some("client-id".into()),
+        content: vec![
+            UserMessageInput::Text {
+                text: "é [Image #1]".into(),
+                text_elements: vec![UserMessageTextElement {
+                    start: 3,
+                    end: 13,
+                    placeholder: Some(label.into()),
+                }],
+            },
+            UserMessageInput::Image {
+                image: ImageReference::Url(url.into()),
+                detail: None,
+            },
+        ],
+    };
+    assert_eq!(summary(&user), Some(expected.clone()));
+    assert_eq!(format!("{expected:?}"), "ItemSummary([redacted])");
+    let event = TranscriptEvent::decode("t", &lifecycle(/*tag*/ 31, &user))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event.update,
+        TranscriptUpdate::ItemCompleted(ItemLifecycle {
+            turn_id: "u".into(),
+            at_ms: 5,
+            item: expected,
         })
     );
 }
@@ -257,6 +325,46 @@ fn unsupported_and_incomplete_items_stay_opaque() {
     for item in opaque {
         assert!(
             TranscriptEvent::decode("t", &lifecycle(/*tag*/ 27, &item))
+                .unwrap()
+                .is_none()
+        );
+    }
+    for input in [
+        message(/*tag*/ 8, b""),                              // Future input variant.
+        message(/*tag*/ 2, &message(/*tag*/ 3, b"")),         // Future image reference.
+        message(/*tag*/ 2, &message(/*tag*/ 1, b"\x08\x01")), // Missing URL.
+        message(/*tag*/ 2, &message(/*tag*/ 2, b"")),         // Missing file ID.
+        message(
+            /*tag*/ 1,
+            &[
+                message(/*tag*/ 1, b"hello"),
+                message(/*tag*/ 2, &message(/*tag*/ 1, b"")), // Missing byte range.
+            ]
+            .concat(),
+        ),
+        message(
+            /*tag*/ 1,
+            &[
+                message(/*tag*/ 1, b"hello"),
+                message(
+                    /*tag*/ 2,
+                    &message(/*tag*/ 1, &message(/*tag*/ 1, b"\x08\x01")),
+                ), // Missing start.
+            ]
+            .concat(),
+        ),
+    ] {
+        let user = message(
+            /*tag*/ 1,
+            &[
+                message(/*tag*/ 1, b"client-id"),
+                message(/*tag*/ 2, &message(/*tag*/ 1, &input)),
+                message(/*tag*/ 3, b"user-item"),
+            ]
+            .concat(),
+        );
+        assert!(
+            TranscriptEvent::decode("t", &lifecycle(/*tag*/ 27, &user))
                 .unwrap()
                 .is_none()
         );

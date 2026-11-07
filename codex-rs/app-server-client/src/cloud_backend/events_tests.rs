@@ -4,11 +4,25 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn text_receipt_preserves_submission_identity() {
+fn image_receipt_preserves_submission_identity_and_attachment() {
+    let label = "[Image #1]";
     let actual = item_summary(cloud::ItemSummary::UserMessage {
         id: "item-1".into(),
         client_id: Some("submission-1".into()),
-        text: vec!["hello".into(), "world".into()],
+        content: vec![
+            cloud::UserMessageInput::Image {
+                image: cloud::ImageReference::FileId("file-synthetic".into()),
+                detail: Some(cloud::ImageDetail::High),
+            },
+            cloud::UserMessageInput::Text {
+                text: format!("{label} describe"),
+                text_elements: vec![cloud::UserMessageTextElement {
+                    start: 0,
+                    end: label.len(),
+                    placeholder: Some(label.into()),
+                }],
+            },
+        ],
     });
     assert_eq!(
         actual,
@@ -17,13 +31,21 @@ fn text_receipt_preserves_submission_identity() {
                 id: "item-1".into(),
                 client_id: Some("submission-1".into()),
                 content: vec![
-                    protocol::UserInput::Text {
-                        text: "hello".into(),
-                        text_elements: Vec::new()
+                    protocol::UserInput::Image {
+                        image: protocol::ImageReference::File {
+                            file_id: "file-synthetic".into(),
+                        },
+                        detail: Some(ImageDetail::High),
                     },
                     protocol::UserInput::Text {
-                        text: "world".into(),
-                        text_elements: Vec::new()
+                        text: format!("{label} describe"),
+                        text_elements: vec![protocol::TextElement::new(
+                            protocol::ByteRange {
+                                start: 0,
+                                end: label.len(),
+                            },
+                            Some(label.into()),
+                        )],
                     },
                 ],
             },

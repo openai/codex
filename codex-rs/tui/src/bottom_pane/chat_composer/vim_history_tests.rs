@@ -12,6 +12,7 @@ use pretty_assertions::assert_eq;
 
 use super::super::super::chat_composer_history::HistoryEntry;
 use super::super::ChatComposer;
+use super::super::ComposerDraftSnapshot;
 use super::super::InputResult;
 use super::super::LARGE_PASTE_CHAR_THRESHOLD;
 use super::super::PasteBurst;
@@ -590,7 +591,13 @@ fn undo_and_redo_restore_deleted_image_attachment() {
     ctrl_r(&mut composer);
     escape(&mut composer);
     let _ = composer.handle_key_event(KeyEvent::from(KeyCode::Backspace));
-    assert_eq!(composer.draft_snapshot(), before);
+    assert_eq!(
+        composer.draft_snapshot(),
+        ComposerDraftSnapshot {
+            vim_normal_mode: false,
+            ..before.clone()
+        }
+    );
     escape(&mut composer);
     composer.draft.textarea.set_cursor("alpha ".len());
     keys(&mut composer, "x");

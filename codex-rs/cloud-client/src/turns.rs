@@ -9,23 +9,58 @@ use bytes::Bytes;
 use prost::Message;
 use std::fmt;
 
+// CCA forwards the envelope through a 4 MiB boundary; reserve 256 KiB for forwarding.
+const MAX_IMAGE_MESSAGE_BYTES: usize = 4 * 1024 * 1024 - 256 * 1024;
+
 #[derive(Clone, Copy, Debug)]
 pub enum SubmissionMode {
     Steer,
     Queue,
     StartIfIdle,
 }
-/// Plain text using the existing thread configuration. Persist the message ID with
+/// Text and images using the existing thread configuration. Persist the message ID with
 /// the input before calling; never reuse it for a different logical submission.
 #[derive(Clone)]
 pub struct AddUserMessageRequest {
     pub thread_id: String,
     pub client_user_message_id: String,
-    pub text: String,
+    pub input: Vec<UserMessageInput>,
     /// Optional classification supplied by the caller for this turn.
     pub turn_trigger: Option<String>,
     pub mode: SubmissionMode,
     pub shared_access: bool,
+}
+/// Ordered input parts for one logical user message.
+#[derive(Clone, PartialEq, Eq)]
+pub enum UserMessageInput {
+    Text {
+        text: String,
+        text_elements: Vec<UserMessageTextElement>,
+    },
+    Image {
+        image: ImageReference,
+        detail: Option<ImageDetail>,
+    },
+}
+/// A placeholder span in the UTF-8 bytes of a text input part.
+#[derive(Clone, PartialEq, Eq)]
+pub struct UserMessageTextElement {
+    pub start: usize,
+    pub end: usize,
+    pub placeholder: Option<String>,
+}
+/// An inline data URL or an uploaded file ID. HTTP image URLs are not supported.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ImageReference {
+    Url(String),
+    FileId(String),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageDetail {
+    Auto,
+    Low,
+    High,
+    Original,
 }
 #[derive(Clone)]
 pub struct InterruptTurnRequest {
@@ -73,6 +108,9 @@ macro_rules! redacted_debug {
 }
 redacted_debug!(
     AddUserMessageRequest,
+    UserMessageInput,
+    UserMessageTextElement,
+    ImageReference,
     InterruptTurnRequest,
     Admission,
     AdmissionOutcome
@@ -87,18 +125,86 @@ impl Client {
     ) -> Result<Admission, MutationError> {
         if request.thread_id.trim().is_empty()
             || request.client_user_message_id.trim().is_empty()
-            || request.text.trim().is_empty()
+            || !request.input.iter().any(|input| match input {
+                UserMessageInput::Text { text, .. } => !text.trim().is_empty(),
+                UserMessageInput::Image { .. } => true,
+            })
+            || request.input.iter().any(|input| match input {
+                UserMessageInput::Text {
+                    text,
+                    text_elements,
+                } => text_elements
+                    .iter()
+                    .any(|element| text.get(element.start..element.end).is_none()),
+                UserMessageInput::Image { image, .. } => match image {
+                    ImageReference::Url(value) => {
+                        value.split_once(',').is_none_or(|(prefix, payload)| {
+                            !prefix
+                                .get(..5)
+                                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+                                || payload.trim().is_empty()
+                        })
+                    }
+                    ImageReference::FileId(value) => value.trim().is_empty(),
+                },
+            })
         {
             return Err(MutationError::InvalidRequest);
         }
         let value = wire::AddRequest {
             client_user_message_id: request.client_user_message_id.clone(),
             input: Some(wire::Input {
-                values: vec![wire::UserInput {
-                    value: Some(wire::Value::Text(wire::Text {
-                        text: Some(request.text.clone()),
-                    })),
-                }],
+                values: request
+                    .input
+                    .iter()
+                    .map(|input| wire::UserInput {
+                        value: Some(match input {
+                            UserMessageInput::Text {
+                                text,
+                                text_elements,
+                            } => wire::Value::Text(wire::Text {
+                                text: Some(text.clone()),
+                                text_elements: (!text_elements.is_empty()).then(|| {
+                                    wire::TextElements {
+                                        values: text_elements
+                                            .iter()
+                                            .map(|element| wire::TextElement {
+                                                byte_range: Some(wire::ByteRange {
+                                                    end: Some(element.end as u64),
+                                                    start: Some(element.start as u64),
+                                                }),
+                                                placeholder: element.placeholder.clone(),
+                                            })
+                                            .collect(),
+                                    }
+                                }),
+                            }),
+                            UserMessageInput::Image { image, detail } => {
+                                let detail = detail.map(|detail| match detail {
+                                    ImageDetail::Auto => 1,
+                                    ImageDetail::Low => 2,
+                                    ImageDetail::High => 3,
+                                    ImageDetail::Original => 4,
+                                });
+                                let value = match image {
+                                    ImageReference::Url(url) => {
+                                        wire::ImageValue::Url(wire::ImageReference {
+                                            detail,
+                                            value: Some(url.clone()),
+                                        })
+                                    }
+                                    ImageReference::FileId(file_id) => {
+                                        wire::ImageValue::FileId(wire::ImageReference {
+                                            detail,
+                                            value: Some(file_id.clone()),
+                                        })
+                                    }
+                                };
+                                wire::Value::Image(wire::Image { value: Some(value) })
+                            }
+                        }),
+                    })
+                    .collect(),
             }),
             thread_id: request.thread_id.clone(),
             turn_trigger: request.turn_trigger.clone(),
@@ -109,6 +215,14 @@ impl Client {
                 SubmissionMode::StartIfIdle => 3,
             }),
         };
+        if request
+            .input
+            .iter()
+            .any(|input| matches!(input, UserMessageInput::Image { .. }))
+            && value.encoded_len() > MAX_IMAGE_MESSAGE_BYTES
+        {
+            return Err(MutationError::InvalidRequest);
+        }
         let payload = self
             .mutate(
                 value,

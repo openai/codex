@@ -93,7 +93,7 @@ async fn pending_primary_paste_survives_release_but_not_other_input() {
             ),
             source: PasteSource::Primary,
             shortcut: None,
-            _request: Arc::new(()),
+            request: Arc::new(()),
         });
         app.invalidate_right_click_paste(&TuiEvent::Mouse(MouseEvent {
             kind,

@@ -1762,6 +1762,7 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
             row: 0,
             modifiers: KeyModifiers::NONE,
         },
+        ClipboardPasteContext::Composer,
     );
     assert!(!tui.clipboard.is_busy());
     app.render_owned_transcript(&mut tui, size)?;
@@ -2051,11 +2052,14 @@ async fn composer_thumbnails_follow_draft_deletion_and_resize() -> Result<()> {
         tui.set_owned_screen(owned)?;
         app.chat_widget
             .set_pet_image_support_for_tests(PetImageSupport::Supported(ImageProtocol::Kitty));
-        app.chat_widget.attach_image(portrait.clone());
+        app.chat_widget
+            .attach_image(portrait.clone(), ClipboardPasteContext::Composer);
         app.chat_widget.handle_key_event(KeyCode::Home.into());
-        app.chat_widget.attach_image(banner.clone());
+        app.chat_widget
+            .attach_image(banner.clone(), ClipboardPasteContext::Composer);
         app.chat_widget.handle_key_event(KeyCode::End.into());
-        app.chat_widget.attach_image(banner.clone());
+        app.chat_widget
+            .attach_image(banner.clone(), ClipboardPasteContext::Composer);
 
         let narrow = Size::new(/*width*/ 20, /*height*/ 24);
         app.render_chat_widget_frame(&mut tui, narrow)?;

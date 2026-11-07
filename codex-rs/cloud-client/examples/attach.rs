@@ -5,6 +5,7 @@ use codex_cloud_client::Client;
 use codex_cloud_client::Credentials;
 use codex_cloud_client::ResumeRequest;
 use codex_cloud_client::SubmissionMode;
+use codex_cloud_client::UserMessageInput;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use futures::StreamExt;
@@ -24,7 +25,10 @@ async fn main() -> anyhow::Result<()> {
         (Some(client_user_message_id), Some(text)) => Some(AddUserMessageRequest {
             thread_id: thread_id.clone(),
             client_user_message_id,
-            text,
+            input: vec![UserMessageInput::Text {
+                text: text,
+                text_elements: vec![],
+            }],
             turn_trigger: None,
             mode: SubmissionMode::StartIfIdle,
             shared_access: false,

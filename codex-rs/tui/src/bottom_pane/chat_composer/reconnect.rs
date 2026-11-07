@@ -2,6 +2,8 @@
 //! Unavailable threads also allow recovery and other local commands.
 //! Connected unavailable threads retain the empty-prompt agents shortcut.
 //! Paste Enter handling is shared with normal submission so buffered newlines survive both paths.
+//! In the draft-only handoff, a recent paste prefix can preserve a raw Enter as a newline.
+//! The submit path still requires an established paste before treating Enter as a newline.
 //! Recovery commands must occupy one line and be visible before the submit key expands pastes.
 //! Offline draft edits also consume the Astra sparkle opportunity before rendering.
 
@@ -11,6 +13,7 @@ use super::*;
 pub(crate) enum RestrictedInputMode {
     Disconnected,
     UnavailableThread,
+    DraftHandoff,
 }
 
 impl ChatComposer {
@@ -60,6 +63,37 @@ impl ChatComposer {
         key: KeyEvent,
         mode: RestrictedInputMode,
     ) -> InputResult {
+        if mode == RestrictedInputMode::DraftHandoff {
+            if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                let now = tokio::time::Instant::now().into_std();
+                self.flush_handoff_paste(now);
+                // Completion does not own keys during the handoff.
+                self.popups.active = ActivePopup::None;
+                if self.draft.textarea.wants_vim_search_key(key) {
+                    self.edit_restricted_draft(key);
+                } else if self.handle_vim_history_key(key) {
+                    self.draft.textarea_state.get_mut().follow_cursor();
+                } else {
+                    // Enter cannot submit here. Preserve a possible legacy paste
+                    // newline after a directly inserted prefix, as we do for Tab.
+                    let paste_separator = (key.code == KeyCode::Enter
+                        && key.modifiers.is_empty()
+                        && (self.append_paste_newline(now)
+                            || self.append_recent_paste_separator('\n', now)))
+                        || self.handle_paste_tab(key, now);
+                    if !paste_separator
+                        && !self.submit_keys.is_pressed(key)
+                        && !self.queue_keys.is_pressed(key)
+                    {
+                        self.edit_restricted_draft(key);
+                    }
+                }
+                // A paste flush can open a popup before the edit changes its text.
+                // Dismiss it before ordinary input resumes, even without a redraw.
+                self.popups.active = ActivePopup::None;
+            }
+            return InputResult::None;
+        }
         if mode == RestrictedInputMode::UnavailableThread && self.handle_agents_navigation(key) {
             return InputResult::None;
         }

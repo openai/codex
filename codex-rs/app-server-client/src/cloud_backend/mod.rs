@@ -225,12 +225,7 @@ async fn run_worker(
             {
                 -32601
             } else if error.is::<PreflightRejection>()
-                || user_message_submission
-                    && (error.is::<MissingReplyAttachment>()
-                        || matches!(
-                            error.downcast_ref::<cloud::MutationError>(),
-                            Some(cloud::MutationError::InvalidRequest)
-                        ))
+                || user_message_submission && error.is::<MissingReplyAttachment>()
             {
                 -32602
             } else {

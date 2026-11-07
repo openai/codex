@@ -6,6 +6,56 @@ use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use pretty_assertions::assert_eq;
 
+#[tokio::test(start_paused = true)]
+async fn draft_handoff_preserves_newline_after_short_unicode_prefix() {
+    let (mut composer, _) = new_test_composer();
+    for key in [KeyCode::Char('猫'), KeyCode::Enter, KeyCode::Char('犬')] {
+        assert_eq!(
+            composer.handle_restricted_key(key.into(), RestrictedInputMode::DraftHandoff),
+            InputResult::None,
+        );
+    }
+    tokio::time::advance(Duration::from_millis(/*millis*/ 100)).await;
+    composer.flush_handoff_paste(tokio::time::Instant::now().into_std());
+    composer.handle_restricted_key(KeyCode::Enter.into(), RestrictedInputMode::DraftHandoff);
+    insta::assert_snapshot!(composer.current_text(), @"猫
+犬");
+
+    let (mut composer, _) = new_test_composer();
+    composer.handle_key_event(KeyCode::Char('猫').into());
+    let (result, _) = composer.handle_key_event(KeyCode::Enter.into());
+    assert!(matches!(result, InputResult::Submitted { text, .. } if text == "猫"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn handoff_edit_discards_stale_command_before_ordinary_enter() {
+    for bracketed_paste in [true, false] {
+        let (mut composer, _) = new_test_composer();
+        if bracketed_paste {
+            composer.handle_paste("/quit".into());
+            assert!(matches!(composer.popups.active, ActivePopup::Command(_)));
+        } else {
+            for ch in "/quit".chars() {
+                composer.handle_restricted_key(
+                    KeyCode::Char(ch).into(),
+                    RestrictedInputMode::DraftHandoff,
+                );
+            }
+            assert!(composer.draft.paste_burst.is_active());
+        }
+
+        composer.handle_restricted_key(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            RestrictedInputMode::DraftHandoff,
+        );
+        assert_eq!(composer.current_text(), "");
+
+        // A failed handoff can return to ordinary input before a redraw.
+        let (result, _) = composer.handle_key_event(KeyCode::Enter.into());
+        assert_eq!(result, InputResult::None);
+    }
+}
+
 #[test]
 fn offline_delete_reveals_the_edited_row_without_moving_the_caret() {
     let (mut composer, _) = new_test_composer();

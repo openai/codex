@@ -1,6 +1,10 @@
 //! Selected item summaries for live start/completion events, without interpreting executor paths.
 use crate::FileUpdate;
+use crate::ImageDetail;
+use crate::ImageReference;
 use crate::TranscriptUpdate;
+use crate::UserMessageInput;
+use crate::UserMessageTextElement;
 use crate::item_wire as wire;
 use crate::transcript::DecodeFailure;
 use crate::transcript::ITEM_STARTED;
@@ -24,7 +28,7 @@ pub enum ItemSummary {
     UserMessage {
         id: String,
         client_id: Option<String>,
-        text: Vec<String>,
+        content: Vec<UserMessageInput>,
     },
     AgentMessage {
         id: String,
@@ -169,17 +173,62 @@ pub(crate) fn decode(
 pub(crate) fn summary(item: wire::Item) -> Result<Option<ItemSummary>, DecodeFailure> {
     let summary = match item.value {
         Some(wire::Value::UserMessage(value)) => {
-            let mut text = Vec::new();
+            let mut content = Vec::new();
             for input in required(value.content)?.values {
-                let Some(crate::turns_wire::Value::Text(input)) = input.value else {
-                    return Ok(None);
+                let input = match input.value {
+                    Some(crate::turns_wire::Value::Text(input)) => {
+                        let text = required(input.text)?;
+                        let text_elements = input
+                            .text_elements
+                            .map_or_else(Vec::new, |elements| elements.values)
+                            .into_iter()
+                            .map(|element| {
+                                let range = required(element.byte_range)?;
+                                let start = usize::try_from(required(range.start)?)
+                                    .map_err(|_| DecodeFailure::MissingField)?;
+                                let end = usize::try_from(required(range.end)?)
+                                    .map_err(|_| DecodeFailure::MissingField)?;
+                                text.get(start..end).ok_or(DecodeFailure::MissingField)?;
+                                Ok(UserMessageTextElement {
+                                    start,
+                                    end,
+                                    placeholder: element.placeholder,
+                                })
+                            })
+                            .collect::<Result<_, DecodeFailure>>()?;
+                        UserMessageInput::Text {
+                            text,
+                            text_elements,
+                        }
+                    }
+                    Some(crate::turns_wire::Value::Image(input)) => {
+                        let (image, detail) = match input.value {
+                            Some(crate::turns_wire::ImageValue::Url(image)) => {
+                                (ImageReference::Url(required(image.value)?), image.detail)
+                            }
+                            Some(crate::turns_wire::ImageValue::FileId(image)) => {
+                                (ImageReference::FileId(required(image.value)?), image.detail)
+                            }
+                            None => return Ok(None),
+                        };
+                        let detail = match detail {
+                            Some(1) => Some(ImageDetail::Auto),
+                            Some(2) => Some(ImageDetail::Low),
+                            Some(3) => Some(ImageDetail::High),
+                            Some(4) => Some(ImageDetail::Original),
+                            // Detail is display metadata. Keep the receipt identity if it is newer.
+                            None | Some(_) => None,
+                        };
+                        UserMessageInput::Image { image, detail }
+                    }
+                    _ => return Ok(None),
                 };
-                text.push(required(input.text)?);
+                content.push(input);
             }
             ItemSummary::UserMessage {
                 id: required(value.id)?,
                 client_id: value.client_id,
-                text,
+                content,
             }
         }
         Some(wire::Value::AgentMessage(value)) => ItemSummary::AgentMessage {

@@ -20,7 +20,10 @@ impl App {
                     .copy(text, CopyFormat::Markdown, tui.frame_requester());
                 self.chat_widget.show_copy_result("last message", result);
             }
-            KeyEventAction::PasteImage { text_fallback } => {
+            KeyEventAction::PasteImage {
+                text_fallback,
+                context,
+            } => {
                 if text_fallback.is_some()
                     && self
                         .right_click_paste_target(tui, PasteSource::Clipboard, text_fallback)
@@ -33,7 +36,7 @@ impl App {
                     self.chat_widget
                         .add_info_message("Clipboard busy; try again".into(), /*hint*/ None);
                 } else {
-                    match self.chat_widget.paste_image() {
+                    match self.chat_widget.paste_image(context, text_fallback) {
                         Ok(()) => {}
                         Err(PasteImageError::NoImage(_)) if text_fallback.is_some() => {
                             self.start_clipboard_text_paste(
