@@ -161,7 +161,7 @@ pub(crate) async fn handle_mcp_tool_call(
     call_id: String,
     originating_call: Option<ToolCallOrigin>,
     advertised_tool: &ToolInfo,
-    prepared_call: Option<PreparedMcpCall>,
+    prepared_call: anyhow::Result<PreparedMcpCall>,
     hook_tool_name: HookToolName,
     invocation_tool_name: ToolName,
     source: &crate::tools::context::ToolCallSource,
@@ -187,40 +187,32 @@ pub(crate) async fn handle_mcp_tool_call(
         arguments: arguments_value.clone(),
     };
 
-    let issued_context = apps_invocation_context(advertised_tool);
-    let context_changed = server == CODEX_APPS_MCP_SERVER_NAME
-        && prepared_call
-            .as_ref()
-            .is_some_and(|call| apps_invocation_context(call.tool_info()) != issued_context);
-    // Only the connection that advertised the context may receive it after a catalog refresh.
-    let Some(prepared_call) = prepared_call
-        .filter(|call| !context_changed || call.uses_connection_from(&step_context.mcp))
-    else {
-        let item_metadata =
-            McpToolCallItemMetadata::from_tool_metadata(&server, /*metadata*/ None);
-        let result = notify_mcp_tool_call_skip(
-            sess.as_ref(),
-            turn_context.as_ref(),
-            &call_id,
-            invocation,
-            item_metadata,
-            format!("MCP tool `{server}/{tool_name}` is not available to the model"),
-            /*already_started*/ false,
-        )
-        .await;
-        return HandledMcpToolCall {
-            result: CallToolResult::from_result(result),
-            tool_input: arguments_value
-                .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new())),
-        };
-    };
-    let mut metadata = match mcp_tool_metadata(
-        prepared_call.tool_info(),
-        prepared_call.plugin_id(),
-        invocation.arguments.as_ref(),
-    ) {
-        Ok(metadata) => metadata,
-        Err(err) => {
+    let prepared = prepared_call.and_then(|call| {
+        let issued_context = apps_invocation_context(advertised_tool);
+        let context_changed = server == CODEX_APPS_MCP_SERVER_NAME
+            && apps_invocation_context(call.tool_info()) != issued_context;
+        // Only the connection that advertised the context may receive it after a catalog refresh.
+        if context_changed && !call.uses_connection_from(&step_context.mcp) {
+            return Err(advertised_tool.unavailable_to_model_error());
+        }
+        let mut metadata = mcp_tool_metadata(
+            call.tool_info(),
+            call.plugin_id(),
+            invocation.arguments.as_ref(),
+        )?;
+        if context_changed {
+            let apps_meta = metadata.codex_apps_meta.get_or_insert_default();
+            if let Some(value) = issued_context {
+                apps_meta.insert(APPS_INVOCATION_CONTEXT.to_string(), value.clone());
+            } else {
+                apps_meta.remove(APPS_INVOCATION_CONTEXT);
+            }
+        }
+        Ok((call, metadata))
+    });
+    let (prepared_call, metadata) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
             let item_metadata =
                 McpToolCallItemMetadata::from_tool_metadata(&server, /*metadata*/ None);
             let result = notify_mcp_tool_call_skip(
@@ -229,7 +221,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 &call_id,
                 invocation,
                 item_metadata,
-                err.to_string(),
+                format!("{error:#}"),
                 /*already_started*/ false,
             )
             .await;
@@ -240,14 +232,6 @@ pub(crate) async fn handle_mcp_tool_call(
             };
         }
     };
-    if context_changed {
-        let apps_meta = metadata.codex_apps_meta.get_or_insert_default();
-        if let Some(value) = issued_context {
-            apps_meta.insert(APPS_INVOCATION_CONTEXT.to_string(), value.clone());
-        } else {
-            apps_meta.remove(APPS_INVOCATION_CONTEXT);
-        }
-    }
     let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, Some(&metadata));
     let connector_id = metadata.connector_id.clone();
     let connector_name = metadata.connector_name.clone();

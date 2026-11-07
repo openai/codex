@@ -60,7 +60,7 @@ impl Session {
     pub(crate) async fn prepare_mcp_call(
         self: &Arc<Self>,
         advertised_tool: &ToolInfo,
-    ) -> Option<PreparedMcpCall> {
+    ) -> anyhow::Result<PreparedMcpCall> {
         self.refresh_mcp_if_dirty().await;
         self.services
             .mcp_runtime

@@ -4512,7 +4512,7 @@ async fn later_tool_list_retries_after_failed_reconnect_and_keeps_cached_tools()
                 &failed_binding.tools()[0],
             )
             .await
-            .is_none()
+            .is_err()
     );
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
 
@@ -4655,7 +4655,7 @@ async fn tool_lists_do_not_block_and_share_codex_apps_startup_reconnect() {
         manager
             .prepare_call_for_tool(Arc::clone(pending_step.config()), &pending_step.tools()[0])
             .await
-            .is_some()
+            .is_ok()
     );
     let tools = manager.list_all_tools().await;
     assert_eq!(
@@ -6173,7 +6173,7 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
         reconciled
             .prepare_call_for_tool(Arc::clone(old_step.config()), &old_step.tools()[0],)
             .await
-            .is_none()
+            .is_err()
     );
     let refreshed = previous.test_client("docs").client().await?;
     assert_eq!(

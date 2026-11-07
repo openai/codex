@@ -55,6 +55,15 @@ pub struct ToolInfo {
 }
 
 impl ToolInfo {
+    /// The model-facing error when this advertised tool cannot be called.
+    pub fn unavailable_to_model_error(&self) -> anyhow::Error {
+        anyhow::anyhow!(
+            "MCP tool `{}/{}` is not available to the model",
+            self.server_name,
+            self.tool.name
+        )
+    }
+
     pub fn canonical_tool_name(&self) -> ToolName {
         ToolName::namespaced(self.callable_namespace.clone(), self.callable_name.clone())
     }

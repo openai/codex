@@ -232,16 +232,15 @@ impl McpHandler {
             .session
             .prepare_mcp_call(&self.definition.tool_info)
             .await;
+        let prepared = prepared_mcp_call.as_ref().ok();
         // Use the executed call's binding; a later catalog refresh must not change eligibility.
         let result_metadata_capture_allowed = invocation
             .session
             .services
             .analytics_events_client
             .is_enabled()
-            && prepared_mcp_call
-                .as_ref()
-                .is_some_and(codex_mcp::PreparedMcpCall::is_host_owned_apps);
-        let mcp_tool = prepared_mcp_call.as_ref().map(|call| {
+            && prepared.is_some_and(codex_mcp::PreparedMcpCall::is_host_owned_apps);
+        let mcp_tool = prepared.map(|call| {
             McpToolContext::from_prepared_call(
                 call,
                 invocation
@@ -276,8 +275,7 @@ impl McpHandler {
         };
 
         // Capture presentation policy from the same config snapshot used for execution.
-        let truncation_policy = prepared_mcp_call
-            .as_ref()
+        let truncation_policy = prepared
             .and_then(codex_mcp::PreparedMcpCall::output_token_limit)
             .map(TruncationPolicy::Tokens)
             .unwrap_or(step_context.settings.model_info.truncation_policy.into());
