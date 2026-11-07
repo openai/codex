@@ -64,6 +64,155 @@ enum LegacyAttribution {
     UnlinkedPullRequest,
 }
 
+#[test_case("dual_header", false; "dual_header")]
+#[test_case("assertion_only", false; "assertion_only")]
+#[test_case("dual_header", true; "dual_header_custom_destination")]
+#[test_case("assertion_only", true; "assertion_only_custom_destination")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn git_attribution_runtime_auth_uses_request_destination(
+    mode: &str,
+    custom_destination: bool,
+) -> Result<()> {
+    use base64::Engine;
+    use core_test_support::runtime_auth::PROBE_SERVER;
+    use core_test_support::runtime_auth::run_harness_through_proxy;
+
+    skip_if_no_network!(Ok(()));
+    let token = format!(
+        "e30.{}.c2ln",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+            "exp": chrono::Utc::now().timestamp() + 3600,
+            "session_id": "session-a", "iss": "https://auth.openai.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": "user-123", "chatgpt_account_id": "workspace-enabled",
+            },
+        }))?)
+    );
+    if let Ok(server_url) = std::env::var(PROBE_SERVER) {
+        let home = TempDir::new()?;
+        let base_url = if custom_destination {
+            format!("{server_url}/backend-api")
+        } else {
+            "https://chatgpt.com/backend-api".into()
+        };
+        write_mock_responses_config_toml_with_chatgpt_base_url(
+            home.path(),
+            &server_url,
+            &base_url,
+        )?;
+        let config_path = home.path().join("config.toml");
+        let config = std::fs::read_to_string(&config_path)?;
+        std::fs::write(
+            config_path,
+            format!(
+                "{config}\n[features.runtime_agent_instances]\nenabled = {}\nmode = {mode:?}\n",
+                !custom_destination
+            ),
+        )?;
+        write_chatgpt_auth(
+            home.path(),
+            ChatGptAuthFixture::new(&token)
+                .account_id("workspace-enabled")
+                .chatgpt_user_id("user-123")
+                .plan_type("enterprise"),
+            AuthCredentialsStoreMode::File,
+        )?;
+        let mut app = TestAppServer::builder()
+            .with_codex_home(home.path())
+            .with_env_overrides(&[("OPENAI_API_KEY", None), ("CODEX_ACCESS_TOKEN", None)])
+            .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+            .await?;
+        let id = app
+            .send_thread_start_request_with_auto_env(ThreadStartParams {
+                // Extensions retain the harness URL, even when a thread overrides it.
+                config: Some(HashMap::from([
+                    (
+                        "chatgpt_base_url".into(),
+                        json!("https://chatgpt.com/backend-api"),
+                    ),
+                    (
+                        "features.runtime_agent_instances".into(),
+                        json!({"enabled": true, "mode": mode}),
+                    ),
+                ])),
+                ..Default::default()
+            })
+            .await?;
+        let ThreadStartResponse { thread, .. } = read_response(&mut app, id).await?;
+        run_turn(&mut app, &thread.id, "Hello").await?;
+        return Ok(());
+    }
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![create_final_assistant_message_sse_response("Done")?],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/agent/register"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "runtime_agent_instance_id": "runtime-a", "agent_host_id": "host-a",
+            "actor": {"kind": "chatgpt", "user_id": "user-123", "account_id": "workspace-enabled"},
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/settings/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "commit_attribution_enabled": true,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let case = if custom_destination {
+        format!("{mode}_custom_destination")
+    } else {
+        mode.into()
+    };
+    run_harness_through_proxy(
+        &server,
+        &format!("suite::v2::git_attribution::git_attribution_runtime_auth_uses_request_destination::{case}"),
+        /*realtime_target*/ None,
+    )
+    .await?;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("captured requests")?;
+    let settings = requests
+        .iter()
+        .find(|request| request.url.path() == "/backend-api/wham/settings/user")
+        .context("git-attribution settings request")?;
+    let authorization = settings.headers["authorization"].to_str()?;
+    if custom_destination || mode == "dual_header" {
+        assert!(authorization.starts_with("Bearer e30."));
+    } else {
+        assert!(authorization.starts_with("AgentAssertion 1."));
+    }
+    assert_eq!(
+        settings.headers.contains_key("x-openai-agent-assertion"),
+        !custom_destination && mode == "dual_header",
+    );
+    let model_requests = response_mock.requests();
+    assert_eq!(model_requests.len(), 1);
+    assert!(
+        model_requests[0]
+            .message_input_texts("developer")
+            .join("\n")
+            .contains(COMMIT_ATTRIBUTION)
+    );
+    server.verify().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn git_attribution_follows_authenticated_workspace_policy() -> Result<()> {
     skip_if_no_network!(Ok(()));

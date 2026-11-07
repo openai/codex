@@ -11,6 +11,7 @@ use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
+use codex_model_provider::ProviderAuthContext;
 
 use crate::policy::GitAttributionPolicy;
 use crate::policy::GitAttributionRetry;
@@ -35,8 +36,15 @@ impl ContextContributor for GitAttributionExtension {
         input: WorldStateContributionInput<'a>,
     ) -> ExtensionFuture<'a, Vec<WorldStateSectionContribution>> {
         Box::pin(async move {
+            let auth_context = input.thread_store.get::<ProviderAuthContext>();
+            let auth_manager = auth_context
+                .as_ref()
+                .map_or(&self.auth_manager, |context| &context.credentials);
+            let runtime_auth = auth_context
+                .as_ref()
+                .and_then(|context| context.runtime_auth.as_ref());
             let enabled = loop {
-                let current_auth_generation = auth_generation(self.auth_manager.as_ref());
+                let current_auth_generation = auth_generation(auth_manager.as_ref());
                 let policy = match cached_attribution_policy(
                     input.thread_store,
                     input.turn_store,
@@ -51,9 +59,10 @@ impl ContextContributor for GitAttributionExtension {
                     }
                     None => {
                         match resolve_attribution_policy(
-                            &self.auth_manager,
+                            auth_manager,
                             &self.base_url,
                             &self.http_client_factory,
+                            runtime_auth,
                         )
                         .await
                         {
@@ -62,30 +71,26 @@ impl ContextContributor for GitAttributionExtension {
                                 policy
                             }
                             Ok(None) => {
-                                let policy = GitAttributionPolicy {
+                                input.turn_store.insert(GitAttributionPolicy {
                                     auth_generation: current_auth_generation,
                                     enabled: false,
-                                };
-                                input.turn_store.insert(policy.clone());
-                                policy
+                                });
+                                break false;
                             }
                             Err(_) => {
-                                let auth_generation = auth_generation(self.auth_manager.as_ref());
+                                let auth_generation = auth_generation(auth_manager.as_ref());
                                 if auth_generation == current_auth_generation {
                                     input.thread_store.insert(GitAttributionRetry {
                                         auth_generation,
                                         retry_at: Instant::now() + POLICY_RETRY_DELAY,
                                     });
                                 }
-                                GitAttributionPolicy {
-                                    auth_generation: current_auth_generation,
-                                    enabled: false,
-                                }
+                                break false;
                             }
                         }
                     }
                 };
-                if policy.auth_generation == auth_generation(self.auth_manager.as_ref()) {
+                if policy.auth_generation == auth_generation(auth_manager.as_ref()) {
                     break policy.enabled;
                 }
             };

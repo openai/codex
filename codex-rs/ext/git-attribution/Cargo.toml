@@ -15,8 +15,11 @@ workspace = true
 [dependencies]
 codex-backend-client = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-features = { workspace = true }
 codex-http-client = { workspace = true }
 codex-login = { workspace = true }
+codex-model-provider = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 
