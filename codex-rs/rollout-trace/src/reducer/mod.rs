@@ -265,7 +265,7 @@ impl TraceReducer {
         let payload_path = self.bundle_dir.join(&payload.path);
         let file = File::open(&payload_path)
             .with_context(|| format!("open payload {}", payload.raw_payload_id))?;
-        serde_json::from_reader(file)
+        serde_json::from_reader(BufReader::new(file))
             .with_context(|| format!("parse payload {}", payload.raw_payload_id))
     }
 
