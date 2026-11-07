@@ -61,6 +61,10 @@ impl App {
                 "toggle_pane_zoom" if self.zoomed_thread.is_some() => (2, "Restore layout"),
                 "toggle_pane_zoom" => (2, "Zoom pane"),
                 "move_divider_left" | "move_divider_right" => continue,
+                "close_sidebar_tab" if self.active_side_parent_thread_id().is_some() => {
+                    (2, "Close tab")
+                }
+                "close_sidebar_tab" => continue,
                 "hide_pane" if side => (2, "Hide pane"),
                 "focus_pane_left" if side && can_switch => (1, "Pane left"),
                 "focus_pane_right" if !side && can_switch && self.open_pane_focus().is_some() => {

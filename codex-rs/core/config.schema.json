@@ -5368,6 +5368,7 @@
             "global": {
               "change_host": null,
               "clear_terminal": null,
+              "close_sidebar_tab": null,
               "copy": null,
               "equalize_pane_widths": null,
               "find_transcript": null,
@@ -6197,6 +6198,14 @@
           ],
           "description": "Clear the terminal UI."
         },
+        "close_sidebar_tab": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Close the active sidebar tab."
+        },
         "copy": {
           "allOf": [
             {
@@ -6535,6 +6544,7 @@
           "default": {
             "change_host": null,
             "clear_terminal": null,
+            "close_sidebar_tab": null,
             "copy": null,
             "equalize_pane_widths": null,
             "find_transcript": null,

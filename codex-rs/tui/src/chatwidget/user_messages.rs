@@ -893,6 +893,12 @@ impl ThreadInputState {
         );
     }
 
+    pub(crate) fn has_unsent_input(&self) -> bool {
+        self.composer.is_some()
+            || !self.queued_user_messages.is_empty()
+            || !self.rejected_steers_queue.is_empty()
+    }
+
     pub(crate) fn has_unconfirmed_messages(&self) -> bool {
         self.queued_user_messages
             .iter()

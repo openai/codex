@@ -5,10 +5,17 @@ use super::App;
 use super::pane_motion::PaneMotion;
 use super::side_pane;
 use super::side_pane::SidePaneLayout;
+use crate::app_server_session::SideChat;
+use crate::app_server_session::SideChatStorage;
+use crate::app_server_session::side_chat_prompt_preview;
 use crate::sidebar_chooser::ChatTabs;
 use crate::tui::Tui;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_protocol::ThreadId;
 use ratatui::layout::Rect;
+use std::collections::HashMap;
+use tokio::task::JoinHandle;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum SidebarContent {
@@ -52,8 +59,13 @@ impl SideCreation {
 #[derive(Default)]
 pub(super) struct SidebarPane {
     pub(super) creation: Option<SideCreation>,
+    pub(super) close: Option<super::sidebar_close::Confirmation>,
     content: SidebarContent,
     tabs: Vec<ThreadId>,
+    // The chooser keeps the same order when an attached chat becomes a live tab.
+    choices: Vec<SideChat>,
+    pub(super) saved_chats_request: Option<uuid::Uuid>,
+    pub(super) closing_chats: HashMap<ThreadId, JoinHandle<()>>,
     // Visit order is independent of the order in which tabs appear.
     visits: Vec<ThreadId>,
     pub(super) choice: usize,
@@ -66,18 +78,12 @@ impl SidebarPane {
     pub(super) fn show(&mut self, content: SidebarContent, focus: PaneFocus) {
         match content {
             SidebarContent::Chat(id) => {
-                if !self.tabs.contains(&id) {
-                    self.tabs.push(id);
-                    self.tabs_revision += 1;
-                }
+                self.add_tab(id);
                 self.visits.retain(|visited| *visited != id);
                 self.visits.push(id);
             }
             SidebarContent::Chooser if self.content != content || self.focus.is_none() => {
-                self.choice = self
-                    .selected_chat()
-                    .and_then(|id| self.chat_tabs().choice_index(id))
-                    .unwrap_or(0);
+                self.reset_choice();
             }
             SidebarContent::Chooser => {}
         }
@@ -88,8 +94,48 @@ impl SidebarPane {
     pub(super) fn chat_tabs(&self) -> ChatTabs<'_> {
         ChatTabs {
             ids: &self.tabs,
+            choices: &self.choices,
             selected: self.selected_chat(),
         }
+    }
+
+    pub(super) fn set_saved_chats_request(&mut self, request: Option<uuid::Uuid>) {
+        self.saved_chats_request = request;
+        self.tabs_revision += 1;
+    }
+
+    pub(super) fn update_saved_chats(&mut self, mut chats: Vec<SideChat>) {
+        for chat in &mut self.choices {
+            if !self.tabs.contains(&chat.id) {
+                continue;
+            }
+            if let Some(saved) = chats.iter_mut().find(|saved| saved.id == chat.id) {
+                std::mem::swap(saved, chat);
+            } else {
+                chats.push(std::mem::replace(chat, chat.id.into()));
+            }
+        }
+        let reordered = self
+            .choices
+            .iter()
+            .map(|chat| chat.id)
+            .ne(chats.iter().map(|chat| chat.id));
+        self.choices = chats;
+        if reordered {
+            self.tabs_revision += 1;
+            self.reset_choice();
+        }
+    }
+
+    fn reset_choice(&mut self) {
+        self.choice = self
+            .selected_chat()
+            .and_then(|id| self.chat_tabs().choice_index(id))
+            .unwrap_or(usize::from(!self.choices.is_empty()));
+    }
+
+    pub(super) fn previous_chat(&self, target: ThreadId) -> Option<ThreadId> {
+        self.visits.iter().rev().copied().find(|id| *id != target)
     }
 
     pub(super) fn selected_chat(&self) -> Option<ThreadId> {
@@ -100,11 +146,20 @@ impl SidebarPane {
         (self.tabs_revision, self.selected_chat(), self.choice)
     }
 
+    fn add_tab(&mut self, id: ThreadId) {
+        if !self.tabs.contains(&id) {
+            if self.chat_tabs().choice_index(id).is_none() {
+                self.choices.push(id.into());
+            }
+            self.tabs.push(id);
+            self.tabs_revision += 1;
+        }
+    }
+
     pub(super) fn chat_ready(&mut self, child: ThreadId) {
         self.creation = None;
         if !self.tabs.contains(&child) {
-            self.tabs.push(child);
-            self.tabs_revision += 1;
+            self.add_tab(child);
             // A completed background fork must not replace the user's selection.
             self.visits.insert(0, child);
         }
@@ -119,17 +174,17 @@ impl SidebarPane {
         self.focus = None;
     }
 
-    pub(super) fn remove_chat(&mut self, id: ThreadId) {
+    pub(super) fn remove_chat(&mut self, id: ThreadId, storage: SideChatStorage) {
         let Some(index) = self.tabs.iter().position(|tab| *tab == id) else {
             return;
         };
+        self.close.take_if(|close| close.target == id);
         self.tabs.remove(index);
         self.tabs_revision += 1;
         self.visits.retain(|visited| *visited != id);
-        if index + 1 < self.choice {
-            self.choice -= 1;
+        if storage == SideChatStorage::Temporary {
+            self.remove_choice(id);
         }
-        self.choice = self.choice.min(self.tabs.len());
         if self.content == SidebarContent::Chat(id) {
             self.content = match self.selected_chat() {
                 Some(child) => SidebarContent::Chat(child),
@@ -142,12 +197,55 @@ impl SidebarPane {
         }
     }
 
+    pub(super) fn remove_choice(&mut self, id: ThreadId) {
+        if let Some(index) = self.chat_tabs().choice_index(id) {
+            self.choices.remove(index - 1);
+            if index < self.choice {
+                self.choice -= 1;
+            }
+            self.choice = self.choice.min(self.choices.len());
+        }
+    }
+
     pub(super) fn visible_content(&self) -> Option<SidebarContent> {
         self.focus.map(|_| self.content)
     }
 }
 
 impl App {
+    pub(super) fn track_side_chat_title(
+        &mut self,
+        id: ThreadId,
+        notification: &ServerNotification,
+    ) {
+        let (name, prompt) = match notification {
+            ServerNotification::ThreadNameUpdated(update) => (Some(&update.thread_name), None),
+            ServerNotification::ItemCompleted(update) => match &update.item.payload {
+                ThreadItemPayload::UserMessage { content, .. } => (None, Some(content)),
+                _ => return,
+            },
+            _ => return,
+        };
+        let Some(chat) = self
+            .sidebars
+            .values_mut()
+            .find_map(|pane| pane.choices.iter_mut().find(|chat| chat.id == id))
+        else {
+            return;
+        };
+
+        if let Some(name) = name {
+            chat.name.clone_from(name);
+        } else if chat.preview.is_empty()
+            && let Some(preview) = prompt.and_then(|content| side_chat_prompt_preview(content))
+        {
+            chat.preview = preview.to_owned();
+        } else {
+            return;
+        }
+        self.chat_widget.request_redraw();
+    }
+
     fn side_creation_pending(&self, owner: crate::backend_id::BackendId) -> bool {
         self.sidebars.values().any(|pane| {
             pane.creation

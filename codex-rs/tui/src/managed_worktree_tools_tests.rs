@@ -1,5 +1,7 @@
 use super::*;
+use crate::app_server_session::SideChatStorage;
 use crate::legacy_core::config::ConfigOverrides;
+use crate::local_settings::LocalSettings;
 use crate::test_support::boxed_future;
 use codex_config::LoaderOverrides;
 use pretty_assertions::assert_eq;
@@ -140,16 +142,29 @@ async fn creation_attaches_to_original_task_and_survives_service_restart_scenari
     let mut ephemeral_config = config.clone();
     ephemeral_config.ephemeral = true;
     let ephemeral = Box::pin(server.start_thread(&ephemeral_config)).await?;
-    let refused = tools
-        .execute(
-            server.request_handle(),
-            ephemeral.session.thread_id.to_string(),
-            "create_worktree",
-            json!({"allowAsync":true}),
-        )
-        .await;
-    assert!(!refused.success, "{refused:?}");
-    assert!(format!("{refused:?}").contains("Ephemeral side conversations"));
+    let saved_side = Box::pin(server.fork_side_thread(
+        &LocalSettings::from(&config),
+        config.clone(),
+        started.session.thread_id,
+        /*selected_profile*/ None,
+        SideChatStorage::Attached,
+    ))
+    .await?;
+    for blocked in [ephemeral, saved_side] {
+        let refused = tools
+            .execute(
+                server.request_handle(),
+                blocked.session.thread_id.to_string(),
+                "create_worktree",
+                json!({"allowAsync":true}),
+            )
+            .await;
+        assert!(!refused.success, "{refused:?}");
+        assert!(
+            format!("{refused:?}")
+                .contains("Side conversations cannot retain worktree attachments")
+        );
+    }
     assert!(!tools.manager.settings().root.exists());
     assert!(tools.operations.lock().await.is_empty());
     let call = |tool: &'static str, arguments| {

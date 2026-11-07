@@ -169,6 +169,7 @@ stream_max_retries = 0
                         session_config,
                         thread_id,
                         /*selected_profile*/ None,
+                        crate::app_server_session::SideChatStorage::Temporary,
                     )
                     .await?;
                 assert_eq!(side.session.runtime_workspace_roots, expected_roots);

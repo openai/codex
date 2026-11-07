@@ -5,6 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
@@ -53,12 +54,14 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
         (targets, Rect::new(area.x + available, area.y, plus, height))
     }
 
-    pub(crate) fn hit(self, area: Rect, point: Position) -> Option<TabTarget<Id>> {
+    pub(crate) fn hit(self, area: Rect, point: Position) -> Option<(TabTarget<Id>, Rect)> {
         let (mut tabs, add) = self.strip_targets(area);
         if add.contains(point) {
-            Some(TabTarget::Add)
+            Some((TabTarget::Add, add))
         } else {
-            tabs.find_map(|(_, id, rect)| rect.contains(point).then_some(TabTarget::Tab(id)))
+            tabs.find_map(|(_, id, rect)| {
+                rect.contains(point).then_some((TabTarget::Tab(id), rect))
+            })
         }
     }
 
@@ -69,7 +72,7 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
         add_state: TabState,
         selected_state: TabState,
         hovered_tab: Option<Id>,
-        label: impl Fn(usize, Id) -> Line<'a>,
+        paint: impl Fn(Id, Rect, Style, &mut Buffer),
     ) {
         let (tabs, add) = self.strip_targets(area);
         let style = |state| match state {
@@ -80,7 +83,7 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
                 .not_underlined()
                 .not_reversed(),
         };
-        for (index, id, rect) in tabs {
+        for (_, id, rect) in tabs {
             let tab_style = if selected_state != TabState::Absent && Some(id) == self.selected {
                 style(selected_state)
             } else if hovered_tab == Some(id) {
@@ -95,7 +98,7 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
             } else {
                 style(TabState::Absent)
             };
-            label(index, id).style(tab_style).render(rect, buf);
+            paint(id, rect, tab_style, buf);
         }
         Line::from(" + ").style(style(add_state)).render(add, buf);
     }

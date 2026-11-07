@@ -140,7 +140,7 @@ async fn next_turn_started(
     }
 }
 
-async fn wait_for_turn_completed(
+pub(super) async fn wait_for_turn_completed(
     app: &mut App,
     app_server: &mut AppServerSession,
     thread_id: ThreadId,

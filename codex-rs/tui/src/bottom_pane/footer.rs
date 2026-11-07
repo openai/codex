@@ -633,7 +633,7 @@ pub(crate) fn side_conversation_context_line(label: &str) -> Line<'static> {
         if index > 0 {
             line.push_span(" · ".set_style(secondary_text_style()));
         }
-        if let Some((keys, action)) = [" to switch", " to close", " for side"]
+        if let Some((keys, action)) = [" to switch", " to close", " to archive", " for side"]
             .into_iter()
             .find_map(|action| part.strip_suffix(action).map(|keys| (keys, action)))
         {

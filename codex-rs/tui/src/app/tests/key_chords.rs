@@ -18,6 +18,7 @@ use crate::keymap::KeymapContext;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::test_support::test_path_display;
 use crate::tui::Tui;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
@@ -1239,6 +1240,7 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
     super::enable_side_retention(&mut app)?;
     tui.set_owned_screen(/*owned*/ true)?;
     let parent = ThreadId::new();
+    server.remember_thread_history_mode(parent, ThreadHistoryMode::Legacy);
     app.chat_widget
         .handle_thread_session(test_thread_session(parent, app.config.cwd.to_path_buf()));
     app.chat_widget.local_settings.tui.status_line = Some(vec!["model-with-reasoning".into()]);

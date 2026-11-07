@@ -424,6 +424,7 @@ async fn custom_permission_selection_scenario() -> Result<()> {
             app.agents_overview
                 .requested_permission_profiles
                 .get(&thread_id),
+            crate::app_server_session::SideChatStorage::Temporary,
         ),
     )
     .await?;

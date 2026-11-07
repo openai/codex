@@ -164,6 +164,7 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
             client_config,
             thread_id,
             /*selected_profile*/ None,
+            crate::app_server_session::SideChatStorage::Temporary,
         )
         .await?;
     assert_eq!(

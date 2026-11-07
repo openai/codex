@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/slash_commands.rs
 expression: popup
 ---
       Delete this session?
-› As  Cannot be undone. Subagent threads will also be deleted.
+› As  Also deletes subagents and saved side chats. Cannot be undone.
 
   GP
     › 1. No, keep this session                     Return to the current

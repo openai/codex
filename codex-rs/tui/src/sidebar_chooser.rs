@@ -1,9 +1,11 @@
 //! The sidebar chooser belongs to its parent conversation and can remain open without taking input.
 
+use crate::app_server_session::SideChat;
 use crate::footer_hint;
 use crate::keymap::KeymapContext;
 use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::sidebar_tab_strip::TabState;
 use crate::sidebar_tab_strip::TabStrip;
 use codex_protocol::ThreadId;
@@ -92,25 +94,36 @@ pub(crate) fn footer(
 
 const CHAT_TAB: &str = " Side chat ";
 
+pub(crate) fn close_cell(tab: Rect) -> Rect {
+    Rect::new(
+        tab.right().saturating_sub(1),
+        tab.y,
+        u16::from(tab.width >= 3),
+        tab.height,
+    )
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ChatTabs<'a> {
     pub(crate) ids: &'a [ThreadId],
+    // Chooser index zero is reserved for New side chat.
+    pub(crate) choices: &'a [SideChat],
     pub(crate) selected: Option<ThreadId>,
 }
 
 impl<'a> ChatTabs<'a> {
     pub(crate) fn choice_count(self) -> usize {
-        self.ids.len() + 1
+        self.choices.len() + 1
     }
 
     pub(crate) fn choice(self, index: usize) -> Option<ThreadId> {
-        self.ids.get(index.checked_sub(1)?).copied()
+        Some(self.choices.get(index.checked_sub(1)?)?.id)
     }
 
     pub(crate) fn choice_index(self, id: ThreadId) -> Option<usize> {
-        self.ids
+        self.choices
             .iter()
-            .position(|choice| *choice == id)
+            .position(|choice| choice.id == id)
             .map(|index| index + 1)
     }
 
@@ -131,14 +144,40 @@ pub(crate) fn tab_strip(
     hovered_tab: Option<ThreadId>,
     buf: &mut Buffer,
 ) {
-    tabs.strip()
-        .render(area, buf, chooser, chat, hovered_tab, |index, _| {
-            if tabs.ids.len() > 1 {
-                Line::from(format!(" Side {} ", index + 1))
-            } else {
-                Line::from(CHAT_TAB)
-            }
-        });
+    tabs.strip().render(
+        area,
+        buf,
+        chooser,
+        chat,
+        hovered_tab,
+        |id, area, style, buf| {
+            let close = close_cell(area);
+            let label = Rect::new(area.x, area.y, area.width - close.width, area.height);
+            let title = match tabs.choice_index(id) {
+                Some(number) => match side_chat_label(&tabs.choices[number - 1]) {
+                    Some(name) => truncate_line_with_ellipsis_if_overflow(
+                        Line::from(format!(" {name}")),
+                        usize::from(label.width),
+                    ),
+                    None if tabs.choices.len() > 1 => Line::from(format!(" Side {number} ")),
+                    None => Line::from(CHAT_TAB),
+                },
+                None => Line::from(CHAT_TAB),
+            };
+            title.style(style).render(label, buf);
+            Line::from("×").style(style).render(close, buf);
+        },
+    );
+}
+
+pub(crate) fn side_chat_label(chat: &SideChat) -> Option<&str> {
+    chat.name
+        .as_deref()
+        .unwrap_or(&chat.preview)
+        .trim()
+        .lines()
+        .next()
+        .map(str::trim)
 }
 
 struct ChoiceRows {
@@ -245,24 +284,28 @@ pub(crate) fn paint(
         );
     }
     for (offset, index) in rows.chats.enumerate() {
-        let id = tabs.ids[index - 1];
+        let chat = &tabs.choices[index - 1];
         let selected = index == choice && focused;
         let (marker, fill) = row_style(index);
-        let title = if count == 2 {
+        let title = if let Some(label) = side_chat_label(chat) {
+            label.to_owned()
+        } else if count == 2 {
             "Side chat".to_string()
         } else {
             format!("Side chat {index}")
         };
         let title = if use_theme_colors && !selected {
-            let identity = crate::thread_color::thread_color(id);
+            let identity = crate::thread_color::thread_color(chat.id);
             title.fg(crate::style::readable_color_on(identity, fill.bg))
         } else {
             title.into()
         };
         let symbol = Span::styled("○ ", if selected { style } else { secondary });
+        let y = rows.chat_start + offset as u16;
+        let line = Line::from(vec![format!("{marker} ").into(), symbol, title]).style(fill);
         paint(
-            rows.chat_start + offset as u16,
-            Line::from(vec![format!("{marker} ").into(), symbol, title]).style(fill),
+            y,
+            truncate_line_with_ellipsis_if_overflow(line, usize::from(row(area.y).width)),
         );
     }
     if footer_y > area.y {

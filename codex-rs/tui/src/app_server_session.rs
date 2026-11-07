@@ -20,6 +20,8 @@ mod read_state;
 mod realtime;
 mod rollout_history;
 pub(crate) use read_state::unread_revision;
+mod side_chat_history;
+use side_chat_history::side_context_checkpoint;
 mod startup_launch;
 mod thread_list;
 pub(crate) mod user_message_submission;
@@ -35,6 +37,8 @@ pub(crate) use history::HISTORY_ITEM_SCAN_LIMIT;
 pub(crate) use history::HistoryHydrationScope;
 pub(crate) use history::INITIAL_HISTORY_TURN_LIMIT;
 pub(crate) use history::thread_items_page_params;
+pub(crate) use side_chat_history::SideChat;
+pub(crate) use side_chat_history::side_chat_prompt_preview;
 pub(crate) use startup_launch::StartupLaunchChoices;
 
 use crate::app_event::PermissionProfileSelection;
@@ -202,7 +206,32 @@ enum EmptyCatalogFallback {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ForkPresentation {
     Regular,
-    SideConversation,
+    SideConversation(SideChatStorage),
+}
+
+pub(crate) const ATTACHED_SIDE_CHAT_SOURCE: &str = "tui_side_chat";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SideChatStorage {
+    Temporary,
+    Attached,
+}
+
+impl SideChatStorage {
+    fn policy(self) -> SideConversationPolicy {
+        match self {
+            Self::Temporary => SideConversationPolicy::Temporary,
+            Self::Attached => SideConversationPolicy::Attached,
+        }
+    }
+
+    pub(crate) fn configure_fork(self, config: &mut Config) {
+        config.ephemeral = self == Self::Temporary;
+        config.developer_instructions = Some(
+            self.policy()
+                .instructions(config.developer_instructions.as_deref()),
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -427,6 +456,8 @@ pub(crate) enum ResumeModelSettings {
     RestoreFromThread,
     /// Rejoins a loaded thread without changing any of its existing settings.
     PreserveExistingThread,
+    /// Restore the saved settings and reapply the side-chat instructions on cold resume.
+    PreserveSideConversation,
 }
 
 impl ThreadParamsMode {
@@ -452,6 +483,7 @@ pub(crate) struct SidebarFork {
     pub(crate) thread: AppServerStartedThread,
     pub(crate) boundary: Result<(), String>,
     pub(crate) inherited_profile: bool,
+    pub(crate) storage: SideChatStorage,
     legacy: bool,
 }
 
@@ -1216,6 +1248,7 @@ impl AppServerSession {
         config: Config,
         parent: ThreadId,
         profile: Option<PermissionProfileSelection>,
+        preferred_storage: SideChatStorage,
     ) -> impl Future<Output = Result<SidebarFork>> + Send + use<> {
         let mut view = self
             .request_view()
@@ -1224,21 +1257,58 @@ impl AppServerSession {
             view.remember_task_tool_thread(parent);
         }
         async move {
-            let thread = view
-                .fork_side_thread(&settings, config, parent, profile.as_ref())
-                .await?;
-            let boundary = view
-                .thread_inject_items(
-                    thread.session.thread_id,
-                    SideConversationPolicy::Temporary.fork_items(),
-                )
-                .await
-                .map(|_| ())
-                .map_err(|err| err.to_string());
+            let mut storage = SideChatStorage::Temporary;
+            if preferred_storage == SideChatStorage::Attached
+                && view.attached_side_chat_query(parent).await?.is_some()
+                && {
+                    let thread = view.thread_read(parent, /*include_turns*/ false).await?;
+                    !thread.ephemeral && thread.history_mode == ThreadHistoryMode::Paginated
+                }
+            {
+                storage = SideChatStorage::Attached;
+            }
+            let fork = view
+                .fork_side_thread(&settings, config.clone(), parent, profile.as_ref(), storage)
+                .await;
+            let thread = match fork {
+                Err(err)
+                    if storage == SideChatStorage::Attached
+                        && side_chat_history::is_attached_thread_store_unsupported(&err) =>
+                {
+                    storage = SideChatStorage::Temporary;
+                    view.fork_side_thread(&settings, config, parent, profile.as_ref(), storage)
+                        .await?
+                }
+                result => result?,
+            };
+            let child = thread.session.thread_id;
+            let items = storage.policy().fork_items();
+            let boundary = match view.thread_inject_items(child, items).await {
+                Ok(_) if storage == SideChatStorage::Attached => {
+                    match side_context_checkpoint(thread.session.rollout_path.as_deref()).await {
+                        Ok(Some(_)) => Ok(()),
+                        Ok(None) => Err("Side conversation context was not saved".to_string()),
+                        Err(err) => Err(err.to_string()),
+                    }
+                }
+                result => result.map(|_| ()).map_err(|err| err.to_string()),
+            };
+            if let Err(message) = &boundary
+                && storage == SideChatStorage::Attached
+            {
+                if let Err(error) = view.thread_delete(child).await {
+                    tracing::warn!(%child, %error, "failed to roll back attached side chat");
+                } else {
+                    color_eyre::eyre::bail!(
+                        "Failed to prepare side conversation {child}: {message}"
+                    );
+                }
+            }
             Ok(SidebarFork {
                 thread,
                 boundary,
                 inherited_profile: profile.is_some(),
+                storage,
                 legacy: view.history_support == ThreadHistorySupport::LegacyOnly,
             })
         }
@@ -1256,10 +1326,12 @@ impl AppServerSession {
     pub(crate) async fn fork_side_thread(
         &mut self,
         local_settings: &LocalSettings,
-        config: Config,
+        mut config: Config,
         thread_id: ThreadId,
         selected_profile: Option<&PermissionProfileSelection>,
+        storage: SideChatStorage,
     ) -> Result<AppServerStartedThread> {
+        storage.configure_fork(&mut config);
         self.fork_thread_at_with_presentation(
             local_settings,
             config,
@@ -1267,7 +1339,7 @@ impl AppServerSession {
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
             ForkGoalContinuation::StartIfIdle,
-            ForkPresentation::SideConversation,
+            ForkPresentation::SideConversation(storage),
             selected_profile,
             ForkPermissionMode::InheritSaved,
             ForkConfigSource::Session,
@@ -1301,13 +1373,13 @@ impl AppServerSession {
                 .thread_read(thread_id, /*include_turns*/ false)
                 .await
                 .ok(),
-            ForkPresentation::SideConversation => None,
+            ForkPresentation::SideConversation(_) => None,
         };
         let exclude_turns = self.history_support == ThreadHistorySupport::Paginated
             && (fork_parent
                 .as_ref()
                 .is_some_and(|thread| thread.history_mode == ThreadHistoryMode::Paginated)
-                || presentation == ForkPresentation::SideConversation);
+                || presentation != ForkPresentation::Regular);
         let request_id = self.next_request_id();
         let session_config = if config.model.is_none() {
             // Avoid inferring a tier from the stale client default model.
@@ -1316,6 +1388,8 @@ impl AppServerSession {
             self.session_config_with_effective_service_tier(&config)
         };
         let mut params = ThreadForkParams {
+            attach_to_source: presentation
+                == ForkPresentation::SideConversation(SideChatStorage::Attached),
             last_turn_id,
             before_turn_id,
             defer_goal_continuation: goal_continuation == ForkGoalContinuation::DeferUntilNextTurn,
@@ -1327,6 +1401,10 @@ impl AppServerSession {
                 self.remote_cwd_override.as_deref(),
             )
         };
+        if params.attach_to_source {
+            params.thread_source =
+                Some(ThreadSource::Feature(ATTACHED_SIDE_CHAT_SOURCE.to_string()));
+        }
         params.model_provider = match config_source {
             ForkConfigSource::Local => self
                 .model_provider_override
@@ -1374,7 +1452,9 @@ impl AppServerSession {
         {
             Ok(response) => response,
             Err(TypedRequestError::Server { source, .. })
-                if params.exclude_turns && is_history_pagination_unsupported(&source) =>
+                if params.exclude_turns
+                    && !params.attach_to_source
+                    && is_history_pagination_unsupported(&source) =>
             {
                 self.history_support = ThreadHistorySupport::LegacyOnly;
                 params.exclude_turns = false;
@@ -1430,7 +1510,7 @@ impl AppServerSession {
         if let Some(permissions) = selected_permissions {
             started.session.permission_profile = permissions;
         }
-        if presentation == ForkPresentation::SideConversation {
+        if presentation != ForkPresentation::Regular {
             started.session.daybreak_enabled = false;
         }
         started.session.fork_parent_title = fork_parent.and_then(|thread| thread.name);
@@ -2569,10 +2649,24 @@ fn thread_resume_params_from_config(
     permission_overrides: crate::resume_permissions::ResumePermissions,
 ) -> ThreadResumeParams {
     if thread_params_mode.settings_owner() == ThreadSettingsOwner::Server
-        || model_settings == ResumeModelSettings::PreserveExistingThread
+        || matches!(
+            model_settings,
+            ResumeModelSettings::PreserveExistingThread
+                | ResumeModelSettings::PreserveSideConversation
+        )
     {
         return ThreadResumeParams {
             thread_id: thread_id.to_string(),
+            developer_instructions: if model_settings
+                == ResumeModelSettings::PreserveSideConversation
+            {
+                with_terminal_visualization_instructions(
+                    &config,
+                    config.developer_instructions.clone(),
+                )
+            } else {
+                None
+            },
             ..ThreadResumeParams::default()
         };
     }
@@ -2600,9 +2694,9 @@ fn thread_resume_params_from_config(
             config.model.clone(),
             provider_selection::explicit_provider(&config),
         ),
-        ResumeModelSettings::RestoreFromThread | ResumeModelSettings::PreserveExistingThread => {
-            (None, None)
-        }
+        ResumeModelSettings::RestoreFromThread
+        | ResumeModelSettings::PreserveExistingThread
+        | ResumeModelSettings::PreserveSideConversation => (None, None),
     };
     let mut params = ThreadResumeParams {
         thread_id: thread_id.to_string(),
@@ -4476,6 +4570,7 @@ mod tests {
                 ephemeral_config,
                 source_thread_id,
                 /*selected_profile*/ None,
+                crate::app_server_session::SideChatStorage::Temporary,
             )
             .await?;
 
@@ -4603,6 +4698,7 @@ mod tests {
                 side_config,
                 source_thread_id,
                 /*selected_profile*/ None,
+                crate::app_server_session::SideChatStorage::Temporary,
             )
             .await?;
 
@@ -4706,6 +4802,7 @@ mod tests {
                 config,
                 thread_id,
                 /*selected_profile*/ None,
+                crate::app_server_session::SideChatStorage::Temporary,
             )
             .await?;
 

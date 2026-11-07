@@ -322,6 +322,12 @@ impl ChatWidget {
         None
     }
 
+    pub(crate) fn has_unsent_input(&self) -> bool {
+        !self.composer_is_empty()
+            || self.pending_image_submission.is_some()
+            || self.has_queued_follow_up_messages()
+    }
+
     pub(crate) fn has_queued_follow_up_messages(&self) -> bool {
         self.input_queue.has_queued_follow_up_messages()
     }

@@ -222,6 +222,18 @@ impl App {
         else {
             return;
         };
+        if matches!(notification, ServerNotification::ThreadArchived(_))
+            && (self.side_threads.contains_key(&thread_id)
+                || self
+                    .sidebars
+                    .values()
+                    .any(|pane| pane.chat_tabs().choice_index(thread_id).is_some()))
+        {
+            self.app_event_tx.send(AppEvent::SideChatArchived {
+                backend_id: app_server.backend_id(),
+                target: thread_id,
+            });
+        }
         let refresh_uncached_thread = matches!(visibility, AgentPickerThreadVisibility::Visible)
             && self.agent_navigation.get(&thread_id).is_none();
         self.set_agent_picker_thread_visibility(thread_id, visibility);

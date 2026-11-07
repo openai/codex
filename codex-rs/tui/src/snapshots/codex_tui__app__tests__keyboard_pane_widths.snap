@@ -3,7 +3,7 @@ source: tui/src/app/tests.rs
 expression: "format!(\"Zoomed\\n{zoomed}\\nRestored\\n{restored}\\nEqualized\\n{equalized}\")"
 ---
 Zoomed
- Side chat                                                                                                                                                                                                                                                                                               +
+ Side chat×                                                                                                                                                                                                                                                                                              +
 • unfinished answer
 
 
@@ -22,7 +22,7 @@ Zoomed
   GPT-6.1-Sol default · Agent
   tab to queue message                                                                                                                                                                                                                                  Side from main thread · ⌃/ to switch · ⌃c to close
 Restored
-parent-24                                                                                                                                                                                            │ Side chat                                                                                         +
+parent-24                                                                                                                                                                                            │ Side chat×                                                                                        +
                                                                                                                                                                                                      │• unfinished answer
 parent-25                                                                                                                                                                                            │
                                                                                                                                                                                                      │
@@ -41,7 +41,7 @@ parent-29                                                                       
   GPT-6.1-Sol default                                                                                                                                                                                │  GPT-6.1-Sol default · Agent
                                                                                                                                                                                                      │  tab to queue message                            Side from main thread · ⌃/ to switch · ⌃c to close
 Equalized
-parent-24                                                                                          │ Side chat                                                                                       +
+parent-24                                                                                          │ Side chat×                                                                                      +
                                                                                                    │• unfinished answer
 parent-25                                                                                          │
                                                                                                    │

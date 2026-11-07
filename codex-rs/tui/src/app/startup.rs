@@ -1532,7 +1532,8 @@ See the Codex keymap documentation for supported actions and examples."
                                 parked_side_completions.entry(*backend_id).or_default().push(event);
                                 continue;
                             }
-                            AppEvent::StartupThreadStarted { backend_id, .. } => {
+                            AppEvent::SavedSideChatsLoaded { backend_id, .. }
+                            | AppEvent::StartupThreadStarted { backend_id, .. } => {
                                 backends.slot(*backend_id).unwrap_or(displayed_session)
                             }
                             _ => displayed_session,

@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests.rs
+expression: dialog.trim_end()
+---
+
+ This will discard unsent input and lose this temporary chat’s history. Close “Fix cache”?
+
+  Cancel    Close
+
+ ←/→ choose · Enter confirm · Esc cancel

@@ -208,7 +208,7 @@ impl App {
             ),
             AgentsOverviewAction::Delete => (
                 format!("Permanently delete “{name}”?"),
-                "This stops any running work in this task and its child agents, then permanently deletes their history. This cannot be undone.",
+                "Tasks with saved side chats stay intact. Otherwise, deleting this task stops its running work and permanently deletes its history and its child agents’ history.",
                 "Permanently delete task and child agents",
             ),
         };

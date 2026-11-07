@@ -11,7 +11,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use core_test_support::responses;
 
 /// Captures one real model request and waits until its turn can be inherited by a fork.
-async fn ask(
+pub(super) async fn ask(
     server: &mut AppServerSession,
     model: &wiremock::MockServer,
     thread: ThreadId,
@@ -77,6 +77,7 @@ async fn temporary_side_chat_sends_policy_on_its_first_request() -> Result<()> {
             app.side_fork_config(),
             parent,
             /*profile*/ None,
+            crate::app_server_session::SideChatStorage::Temporary,
         )
         .await?;
     fork.boundary.expect("side-chat context injection");

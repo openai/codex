@@ -2,6 +2,7 @@
 //! Durable ownership and attachments survive the bounded, process-local operation registry.
 //! Creation does not change the caller's cwd or grant filesystem permissions.
 
+use crate::app_server_session::ATTACHED_SIDE_CHAT_SOURCE;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use codex_app_server_client::AppServerRequestHandle;
@@ -15,6 +16,7 @@ use codex_app_server_protocol::ThreadAttachmentListParams;
 use codex_app_server_protocol::ThreadAttachmentListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSource;
 use codex_worktree::CreateWorktree;
 use codex_worktree::WorktreeManager;
 use codex_worktree::WorktreeSettings;
@@ -185,8 +187,13 @@ impl ManagedWorktreeTools {
                     })
                     .await
                     .map_err(|error| error.to_string())?;
-                if response.thread.ephemeral {
-                    return Err("Ephemeral side conversations cannot retain worktree attachments. Request a new worktree in the main conversation.".to_owned());
+                if response.thread.ephemeral
+                    || matches!(
+                        response.thread.thread_source.as_ref(),
+                        Some(ThreadSource::Feature(source)) if source == ATTACHED_SIDE_CHAT_SOURCE
+                    )
+                {
+                    return Err("Side conversations cannot retain worktree attachments. Request a new worktree in the main conversation.".to_owned());
                 }
                 // Verify capability before allocating a checkout, including SQLite availability.
                 attachments(&handle, &thread_id, /*cursor*/ None).await?;

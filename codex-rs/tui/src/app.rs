@@ -281,6 +281,7 @@ mod side_companion;
 mod side_focus;
 mod side_pane;
 mod sidebar;
+mod sidebar_close;
 mod startup;
 pub(crate) mod startup_bootstrap;
 mod startup_prompts;
@@ -853,13 +854,23 @@ impl App {
         self.transcript_view
             .sync_patch_approval(self.chat_widget.current_patch_approval());
         // A chooser action must never decide a modal that has not been painted yet.
-        if self.conversation_frame.chooser_area().is_some()
+        if (self.conversation_frame.chooser_area().is_some()
+            || self.sidebar().is_some_and(|pane| pane.close.is_some()))
             && self.chat_widget.has_active_modal()
             && matches!(
                 &event,
                 TuiEvent::Key(_) | TuiEvent::Mouse(_) | TuiEvent::Paste(_)
             )
         {
+            if let TuiEvent::Key(key) = &event
+                && key.kind != KeyEventKind::Release
+            {
+                self.chat_widget.suppress_current_view_key_until_release(
+                    KeyBinding::from_event(*key),
+                    Instant::now(),
+                    crate::activation_key_guard::ActivationKeySuppression::ViewTransition,
+                );
+            }
             tui.frame_requester().schedule_frame();
             return Ok(AppRunControl::Continue);
         }
@@ -870,6 +881,9 @@ impl App {
             && self.hovered_sidebar_tab(previous) != self.hovered_sidebar_tab(current)
         {
             tui.frame_requester().schedule_frame();
+        }
+        if Box::pin(sidebar_close::handle(self, tui, app_server, &event)).await {
+            return Ok(AppRunControl::Continue);
         }
         if self.handle_pane_resize(tui, &event).await {
             return Ok(AppRunControl::Continue);
