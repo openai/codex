@@ -342,6 +342,7 @@ pub(crate) fn apply_answer_moderation(
     {
         answer.moderation = Some(codex_protocol::items::AgentMessageModeration {
             moderated: decision.moderated,
+            display: decision.display.clone(),
         });
     }
 }

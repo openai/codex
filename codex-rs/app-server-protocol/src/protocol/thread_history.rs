@@ -638,6 +638,7 @@ impl ThreadHistoryBuilder {
                 .as_ref()
                 .map(|decision| AgentMessageModeration {
                     moderated: decision.moderated,
+                    display: decision.display.clone().map(Into::into),
                 }),
             id,
             text: payload.message.clone(),

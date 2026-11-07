@@ -161,6 +161,7 @@ pub(super) fn completed_item(
                 moderation: event.moderation.as_ref().map(|decision| {
                     codex_protocol::items::AgentMessageModeration {
                         moderated: decision.moderated,
+                        display: decision.display.clone(),
                     }
                 }),
                 id: event

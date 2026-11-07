@@ -2400,6 +2400,9 @@ pub struct ModelVerificationEvent {
 pub struct TargetedAnswerModeration {
     pub item_id: String,
     pub moderated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub display: Option<crate::items::AgentMessageDisplay>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

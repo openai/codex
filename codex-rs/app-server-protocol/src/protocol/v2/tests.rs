@@ -3171,6 +3171,35 @@ fn audio_references_round_trip_through_core_and_json() {
 }
 
 #[test]
+fn answer_moderation_exposes_nullable_display_fields() {
+    for (stored, expected) in [
+        (
+            json!({"moderated": false}),
+            json!({"moderated": false, "display": null}),
+        ),
+        (
+            json!({"moderated": true, "display": {
+                "action": "answerHelpline",
+                "checkTrustedContacts": false,
+            }}),
+            json!({"moderated": true, "display": {
+                "action": "answerHelpline",
+                "blockType": null,
+                "cyberTrustedAccess": null,
+                "checkTrustedContacts": false,
+            }}),
+        ),
+    ] {
+        let core: codex_protocol::items::AgentMessageModeration =
+            serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            serde_json::to_value(AgentMessageModeration::from(core)).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn core_turn_item_into_thread_item_converts_supported_variants() {
     let user_item = TurnItem::UserMessage(UserMessageItem {
         id: "user-1".to_string(),
@@ -3297,7 +3326,10 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let agent_item_with_phase = TurnItem::AgentMessage(AgentMessageItem {
-        moderation: Some(codex_protocol::items::AgentMessageModeration { moderated: true }),
+        moderation: Some(codex_protocol::items::AgentMessageModeration {
+            moderated: true,
+            display: None,
+        }),
         id: "agent-2".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "final".to_string(),
@@ -3319,7 +3351,10 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     assert_eq!(
         ThreadItemPayload::from(agent_item_with_phase),
         ThreadItemPayload::AgentMessage {
-            moderation: Some(AgentMessageModeration { moderated: true }),
+            moderation: Some(AgentMessageModeration {
+                moderated: true,
+                display: None
+            }),
             id: "agent-2".to_string(),
             text: "final".to_string(),
             phase: Some(MessagePhase::FinalAnswer),

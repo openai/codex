@@ -28,6 +28,7 @@ use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianA
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 pub use codex_protocol::items::AgentMessageDelivery;
+use codex_protocol::items::AgentMessageDisplay as CoreAgentMessageDisplay;
 use codex_protocol::items::AgentMessageModeration as CoreAgentMessageModeration;
 pub use codex_protocol::items::AsyncUserInputQuestion;
 use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
@@ -150,17 +151,42 @@ pub enum CommandAction {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AgentMessageModeration {
     pub moderated: bool,
+    pub display: Option<AgentMessageDisplay>,
 }
 
 impl From<CoreAgentMessageModeration> for AgentMessageModeration {
     fn from(value: CoreAgentMessageModeration) -> Self {
         Self {
             moderated: value.moderated,
+            display: value.display.map(Into::into),
+        }
+    }
+}
+
+/// A presentation instruction for Chat to apply to this answer when recovering history.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AgentMessageDisplay {
+    /// Unknown actions must be left for the producing client to handle.
+    pub action: String,
+    pub block_type: Option<String>,
+    pub cyber_trusted_access: Option<bool>,
+    pub check_trusted_contacts: Option<bool>,
+}
+
+impl From<CoreAgentMessageDisplay> for AgentMessageDisplay {
+    fn from(value: CoreAgentMessageDisplay) -> Self {
+        Self {
+            action: value.action,
+            block_type: value.block_type,
+            cyber_trusted_access: value.cyber_trusted_access,
+            check_trusted_contacts: value.check_trusted_contacts,
         }
     }
 }

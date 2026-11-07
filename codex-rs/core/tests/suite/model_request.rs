@@ -470,7 +470,7 @@ async fn final_answer_carries_its_moderation_decision() -> Result<()> {
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
             json!({"type":"response.metadata","metadata":{"openai_chatgpt_moderation_metadata":{
-                "final_answer_moderation":{"item_id":"msg-42","moderated":true},
+                "final_answer_moderation":{"item_id":"msg-42","moderated":true,"display":{"action":"answerHelpline"}},
                 "generation":{"private":"classifier details"}
             }}}),
             answer,
@@ -494,13 +494,16 @@ async fn final_answer_carries_its_moderation_decision() -> Result<()> {
         panic!("expected assistant answer");
     };
     let public = serde_json::to_value(&message)?;
-    assert_eq!(public["moderation"], json!({"moderated": true}));
+    assert_eq!(
+        public["moderation"],
+        json!({"moderated": true,"display":{"action":"answerHelpline"}})
+    );
     let [EventMsg::AgentMessage(legacy)] = &message.as_legacy_events()[..] else {
         panic!("expected one legacy answer");
     };
     assert_eq!(
         serde_json::to_value(&legacy.moderation)?,
-        json!({"item_id":"msg-42","moderated":true})
+        json!({"item_id":"msg-42","moderated":true,"display":{"action":"answerHelpline"}})
     );
     Ok(())
 }

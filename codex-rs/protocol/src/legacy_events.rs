@@ -139,13 +139,14 @@ impl AgentMessageItem {
                 questions: self.questions.clone(),
             })
         };
-        if let Some(decision) = self.moderation {
+        if let Some(decision) = &self.moderation {
             // The canonical answer has one ID even when the model supplied multiple text parts.
             return vec![event(
                 texts.collect(),
                 Some(crate::protocol::TargetedAnswerModeration {
                     item_id: self.id.clone(),
                     moderated: decision.moderated,
+                    display: decision.display.clone(),
                 }),
             )];
         }
