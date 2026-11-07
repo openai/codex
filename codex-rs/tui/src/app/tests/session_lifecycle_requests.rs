@@ -20,6 +20,7 @@ use codex_app_server_protocol::ThreadItemsListCursor;
 use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_context_fragments::side_conversation_boundary;
 use codex_protocol::AgentPath;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
@@ -1798,7 +1799,7 @@ async fn external_transport_registers_dynamic_tools_and_finds_task_mentions() ->
     }
     let target_id = started.session.thread_id;
     app_server
-        .thread_inject_items(target_id, vec![App::side_boundary_prompt_item()])
+        .thread_inject_items(target_id, vec![side_conversation_boundary()])
         .await?;
     crate::init_state_db_for_app_server_target(&app.config, &crate::AppServerTarget::Embedded)
         .await?

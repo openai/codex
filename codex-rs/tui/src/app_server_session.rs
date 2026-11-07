@@ -142,6 +142,7 @@ use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
 use codex_config::ConfigLayerSource;
+use codex_context_fragments::SideConversationPolicy;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -1215,7 +1216,6 @@ impl AppServerSession {
         config: Config,
         parent: ThreadId,
         profile: Option<PermissionProfileSelection>,
-        boundary: ResponseItem,
     ) -> impl Future<Output = Result<SidebarFork>> + Send + use<> {
         let mut view = self
             .request_view()
@@ -1228,7 +1228,10 @@ impl AppServerSession {
                 .fork_side_thread(&settings, config, parent, profile.as_ref())
                 .await?;
             let boundary = view
-                .thread_inject_items(thread.session.thread_id, vec![boundary])
+                .thread_inject_items(
+                    thread.session.thread_id,
+                    SideConversationPolicy::Temporary.fork_items(),
+                )
                 .await
                 .map(|_| ())
                 .map_err(|err| err.to_string());

@@ -3336,6 +3336,106 @@ async fn prediction_fork_preserves_context_above_compaction_threshold() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attached_side_chat_preserves_model_context_on_cold_resume() -> Result<()> {
+    use codex_context_fragments::SideConversationPolicy;
+    use codex_history::InitialHistory;
+    use codex_history::ResumedHistory;
+    use codex_protocol::protocol::ThreadHistoryMode;
+    use codex_thread_store::ForkBoundary;
+    use codex_thread_store::LoadThreadHistoryParams;
+    use codex_thread_store::PrepareForkParams;
+
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        [
+            ("parent", "The migration is scheduled for Thursday."),
+            ("side", "Stage a rollback before migration."),
+            ("resumed", "Keep the rollback script close."),
+        ]
+        .into_iter()
+        .map(|(id, reply)| sse(vec![ev_assistant_message(id, reply), ev_completed(id)]))
+        .collect(),
+    )
+    .await;
+    let mut test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config.workspace_roots = vec![config.cwd.clone()];
+            config.developer_instructions = Some("Use plain language.".to_string());
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("Plan a database migration.").await?;
+    test.codex.flush_rollout().await?;
+
+    let prepared = test
+        .thread_store
+        .prepare_fork(PrepareForkParams {
+            thread_id: test.session_configured.thread_id,
+            boundary: ForkBoundary::Latest,
+        })
+        .await?;
+    let mut options = test.start_thread_options().await;
+    options.attached_thread = true;
+    options.config.developer_instructions = Some(
+        SideConversationPolicy::Attached
+            .instructions(options.config.developer_instructions.as_deref()),
+    );
+    let mut resume_options = StartThreadOptions::new(options.config.clone());
+    resume_options.environments = options.environments.clone();
+    let child = test
+        .thread_manager
+        .fork_prepared_thread(options, prepared)
+        .await?;
+    child
+        .thread
+        .inject_response_items(SideConversationPolicy::Attached.fork_items())
+        .await?;
+    test.codex.shutdown_and_wait().await?;
+    test.codex = child.thread;
+    test.submit_text_turn("What is the safest rollback plan?")
+        .await?;
+
+    // Unload the child and resume from disk with the same policy as the TUI.
+    test.codex.shutdown_and_wait().await?;
+    test.thread_manager.remove_thread(&child.thread_id).await;
+    let saved = test
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: child.thread_id,
+            include_archived: false,
+        })
+        .await?;
+    resume_options.initial_history = InitialHistory::Resumed(ResumedHistory {
+        history_revision: saved.revision,
+        conversation_id: saved.thread_id,
+        history: Arc::new(saved.items),
+        rollout_path: test.codex.rollout_path(),
+    });
+    resume_options.client_mcp_extensions = test.codex.client_mcp_extensions();
+    test.codex = test
+        .thread_manager
+        .start_thread(resume_options)
+        .await?
+        .thread;
+    test.submit_text_turn("What did you recommend before I closed the chat?")
+        .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "A side chat receives the parent turn as reference, adds its own turn, and resumes from disk with the policy and prior answer intact.",
+        &requests,
+        &ContextSnapshotOptions::default(),
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_checkpoint_migration_request_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
     use super::guardian_checkpoint_migration::migration_scenario;
