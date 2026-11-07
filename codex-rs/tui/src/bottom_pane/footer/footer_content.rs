@@ -19,6 +19,12 @@ pub(crate) enum FooterContent {
     Extension { content: UiTree },
 }
 
+impl From<UiTree> for FooterContent {
+    fn from(content: UiTree) -> Self {
+        Self::Extension { content }
+    }
+}
+
 impl FooterContent {
     /// Natural display width, before the footer allocates space for the right indicator.
     pub(crate) fn width(&self) -> u16 {

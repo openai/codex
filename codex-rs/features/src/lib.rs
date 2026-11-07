@@ -128,7 +128,7 @@ pub enum Feature {
     TuiMultiBackend,
     /// Enable workspace behavior for side conversations in the owned TUI.
     TuiWorkspace,
-    /// Render the configured status line through the experimental TUI Extensions renderer.
+    /// Enable experimental MCP status line providers.
     TuiExtensionsStatusLine,
     /// Enable negotiated zstd compression for app-server WebSocket and UDS connections.
     AppServerWebSocketCompression,

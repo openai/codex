@@ -163,6 +163,7 @@ async fn status_surface_preview_lines_live_only_snapshot() {
 #[tokio::test]
 async fn status_line_setup_popup_live_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::TuiExtensionsStatusLine, /*enabled*/ true);
     cache_project_root(&mut chat, "preview-live-root");
     chat.status_line_branch = Some("feature/live-preview-branch".to_string());
     chat.thread_name = Some("Live preview thread".to_string());

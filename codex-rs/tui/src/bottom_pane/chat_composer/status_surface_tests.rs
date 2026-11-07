@@ -25,7 +25,7 @@ fn composer() -> ChatComposer {
 #[test]
 fn extension_status_line_clips_links_to_footer_layout() {
     let mut composer = composer();
-    let tree = r#"{
+    let tree: crate::ui_tree::UiTree = r#"{
         "type": "row", "props": {"gap": 1}, "children": [
             "plain",
             { "type": "row", "props": {"gap": 1}, "children": [
@@ -38,7 +38,7 @@ fn extension_status_line_clips_links_to_footer_layout() {
     }"#
     .parse()
     .unwrap();
-    composer.set_status_line(Some(FooterContent::Extension { content: tree }));
+    composer.set_status_line(Some(FooterContent::from(tree)));
 
     for separate_status_line in [false, true] {
         for width in [12, 40] {

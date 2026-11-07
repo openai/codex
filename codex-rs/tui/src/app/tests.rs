@@ -2246,9 +2246,8 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
             token_usage_notification(thread_id, "turn-1", Some(window)),
         )));
         assert!(matches!(
-            (extensions, app.chat_widget.status_line_content()),
-            (false, Some(FooterContent::HyperlinkLine(_)))
-                | (true, Some(FooterContent::Extension { .. }))
+            app.chat_widget.status_line_content(),
+            Some(FooterContent::HyperlinkLine(_))
         ));
         let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 60);
         assert!(
