@@ -1,6 +1,10 @@
 ---
 source: tui/src/bottom_pane/chat_composer/status_surface_tests.rs
-expression: "format!(\"{wide}\\n{narrow}\")"
+expression: shared
 ---
-branch PR #42             Plan mode (⇧tab to cycle)
-branch…    Plan mode
+16 | Ready PR 12345
+15 | Ready
+15 | PR 12345
+16 | Ready PR 12345
+25 | Ready
+25 | PR 12345    Plan mode

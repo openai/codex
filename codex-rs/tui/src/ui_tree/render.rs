@@ -48,7 +48,6 @@ impl PreparedUiTree {
         })
     }
 
-    #[cfg_attr(not(test), expect(dead_code))] // Used by composer layout in the next change.
     pub(crate) fn measure(&self, bounds: Size) -> Size {
         layout(self.0.as_ref(), bounds, /*draw*/ None)
     }

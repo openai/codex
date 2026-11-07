@@ -3,6 +3,9 @@
 //! Shortcut help grows above the input, preserving status and close rows below it even when clipped.
 
 use super::*;
+use ratatui::layout::Size;
+
+const MAX_FOOTER_ROWS: u16 = 4;
 
 impl ChatComposer {
     pub(crate) fn set_status_line(&mut self, status_line: Option<FooterContent>) -> bool {
@@ -12,6 +15,7 @@ impl ChatComposer {
         if matches!(status_line, Some(FooterContent::Extension { .. })) {
             self.effort_status_line_transition = None;
         }
+        self.footer.measured_status_line.set(None);
         self.footer.status_line_value = status_line;
         true
     }
@@ -44,8 +48,44 @@ impl ChatComposer {
             && self.footer_mode().shows_passive_line(self.is_task_running)
     }
 
-    pub(super) fn status_surface_height(&self, options: ComposerRenderOptions<'_>) -> u16 {
-        u16::from(self.has_separate_status(options))
+    pub(super) fn status_surface_height(
+        &self,
+        width: u16,
+        options: ComposerRenderOptions<'_>,
+    ) -> u16 {
+        if self.has_separate_status(options) {
+            self.status_line_height(width, options)
+        } else {
+            0
+        }
+    }
+
+    pub(super) fn status_line_height(&self, width: u16, options: ComposerRenderOptions<'_>) -> u16 {
+        // The unfocused composer paints one dim status line.
+        if options.unfocused {
+            return 1;
+        }
+        let Some(FooterContent::Extension { content }) = &self.footer.status_line_value else {
+            return 1;
+        };
+        let mut area = Rect::new(/*x*/ 0, /*y*/ 0, width, /*height*/ 1);
+        if !options.separate_status_line {
+            let warning = self.warning_notice_layout(inset_footer_hint_area(area), options);
+            area = warning_notice::before_warning(area, warning.map(|(rect, _)| rect));
+        }
+        let (_, width) = self.status_line_layout(area, options, content.measure_natural().width);
+        let cache = &self.footer.measured_status_line;
+        if let Some((previous_width, height)) = cache.get()
+            && previous_width == width
+        {
+            return height;
+        }
+        let height = content
+            .measure(Size::new(width, MAX_FOOTER_ROWS))
+            .height
+            .max(1);
+        cache.set(Some((width, height)));
+        height
     }
 
     pub(super) fn hint_footer_props(&self, options: ComposerRenderOptions<'_>) -> FooterProps {

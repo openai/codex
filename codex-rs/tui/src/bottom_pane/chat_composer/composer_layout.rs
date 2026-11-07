@@ -41,9 +41,23 @@ impl ChatComposer {
         area: Rect,
         options: ComposerRenderOptions<'_>,
     ) -> ComposerLayout {
-        let footer_hint_height = self.footer_hint_height(area.width, options);
-        // Preserve input and hints before allocating the persistent status row.
-        let status_height = self.status_surface_height(options).min(
+        let mut footer_hint_height = self.footer_hint_height(area.width, options);
+        let mut status_height = self.status_surface_height(area.width, options);
+        let shared = footer_hint_height > 1 && self.shows_shared_status(options);
+        if shared || status_height > 1 {
+            // Extra status rows yield to the draft, voice strip and other composer surfaces.
+            let desired =
+                self.height_with_rows(area.width, options, footer_hint_height, status_height);
+            let rows = if shared {
+                &mut footer_hint_height
+            } else {
+                &mut status_height
+            };
+            *rows = rows
+                .saturating_sub(desired.saturating_sub(area.height))
+                .max(1);
+        }
+        let status_height = status_height.min(
             area.height
                 .saturating_sub(footer_hint_height.saturating_add(/*rhs*/ 3)),
         );
@@ -195,7 +209,21 @@ impl ChatComposer {
         width: u16,
         options: ComposerRenderOptions<'_>,
     ) -> u16 {
-        let footer_hint_height = self.footer_hint_height(width, options);
+        self.height_with_rows(
+            width,
+            options,
+            self.footer_hint_height(width, options),
+            self.status_surface_height(width, options),
+        )
+    }
+
+    fn height_with_rows(
+        &self,
+        width: u16,
+        options: ComposerRenderOptions<'_>,
+        footer_hint_height: u16,
+        status_height: u16,
+    ) -> u16 {
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
         let inner_width =
             width.saturating_sub(COLS_WITH_MARGIN.saturating_add(options.textarea_right_reserve));
@@ -206,22 +234,22 @@ impl ChatComposer {
             .try_into()
             .unwrap_or(u16::MAX);
         let remote_images_separator = u16::from(remote_images_height > 0);
-        self.draft.textarea.desired_height(inner_width)
-            + remote_images_height
-            + self.thumbnail_height(inner_width, options)
-            + remote_images_separator
-            + self.status_surface_height(options)
-            + if self.shortcuts_above_composer(options) {
+        [
+            self.draft.textarea.desired_height(inner_width),
+            remote_images_height,
+            self.thumbnail_height(inner_width, options),
+            remote_images_separator,
+            status_height,
+            if self.shortcuts_above_composer(options) {
                 footer_height(&self.hint_footer_props(options), width)
             } else {
                 0
-            }
-            + 2
-            + self
-                .voice_strip
-                .as_ref()
-                .map_or(0, |strip| strip.desired_height(width) + 1)
-            + if self.popups.active.is_above_composer()
+            },
+            2,
+            self.voice_strip.as_ref().map_or(/*default*/ 0, |strip| {
+                strip.desired_height(width).saturating_add(1)
+            }),
+            if self.popups.active.is_above_composer()
                 && options.command_popup_placement != CommandPopupPlacement::AboveComposer
             {
                 footer_hint_height
@@ -229,6 +257,9 @@ impl ChatComposer {
                 self.popups
                     .active
                     .required_height(width, footer_hint_height)
-            }
+            },
+        ]
+        .into_iter()
+        .fold(0, u16::saturating_add)
     }
 }

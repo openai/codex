@@ -1,9 +1,16 @@
 //! Fit warning counts and the configured warnings shortcut into the existing passive hint row.
-//! Interactive hints retain priority; warning delivery never changes composer geometry.
+//! Interactive hints retain priority. Shared status content wraps beside the warning.
 //! Only the count and warning label receive an amber accent; surrounding hints stay muted.
 
 use super::*;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+
+pub(super) fn before_warning(mut area: Rect, warning: Option<Rect>) -> Rect {
+    if let Some(warning) = warning {
+        area.width = warning.x.saturating_sub(area.x).saturating_sub(/*rhs*/ 2);
+    }
+    area
+}
 
 impl ChatComposer {
     pub(crate) fn warning_notice_contains(&self, position: ratatui::layout::Position) -> bool {

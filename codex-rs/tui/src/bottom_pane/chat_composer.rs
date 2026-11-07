@@ -789,6 +789,7 @@ impl ChatComposer {
                 goal_status_indicator: None,
                 ide_context_active: false,
                 status_line_value: None,
+                measured_status_line: Default::default(),
                 status_line_enabled: false,
                 side_conversation_context_label: None,
                 active_agent_label: None,
@@ -4679,17 +4680,7 @@ impl ChatComposer {
                     .render(transcript_hint_area, buf);
             }
             None => {
-                let hint_rect = if let Some(warning_area) = warning_area {
-                    Rect {
-                        width: warning_area
-                            .x
-                            .saturating_sub(footer_rect.x)
-                            .saturating_sub(/*rhs*/ 2),
-                        ..footer_rect
-                    }
-                } else {
-                    footer_rect
-                };
+                let hint_rect = warning_notice::before_warning(footer_rect, warning_area);
                 if let Some(input) = self.draft.textarea.vim_query() {
                     input.render(inset_footer_hint_area(hint_rect), buf);
                 } else if let Some(line) = self.history_search_footer_line() {
