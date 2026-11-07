@@ -1,0 +1,12 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: "screen(&widget, 8)"
+---
+  Base URL*  https://team.example.test/v1?
+  API key variable  $TEAM_KEY
+› Save
+Enter an HTTP(S) base URL without credentials, a query, or a fragment.
+
+* Required
+Enter the environment variable name on the app server.
+tab move · enter next/save · esc back

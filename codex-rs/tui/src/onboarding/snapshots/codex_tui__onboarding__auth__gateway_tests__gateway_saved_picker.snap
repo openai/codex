@@ -2,11 +2,11 @@
 source: tui/src/onboarding/gateway_tests.rs
 expression: screen(&widget)
 ---
-  Use a custom gateway
+  Use a custom provider or gateway
 
 
-› ○ Office  office
-
+› ○ Office                             office
+  Create a custom provider or gateway
 
 
   Press enter to use as default or esc to go back

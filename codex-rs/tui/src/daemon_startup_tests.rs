@@ -414,6 +414,10 @@ fn daemon_exclusion_warning_snapshot() {
             "Running without the shared background server: {} requires embedded mode.",
             daemon_startup::WSL_DRVFS_EXCLUSION
         ),
+        format!(
+            "Running without the shared background server: {} requires embedded mode.",
+            daemon_startup::GATEWAY_SIGN_IN_EXCLUSION
+        ),
     ]);
     let text = cell
         .transcript_lines(/*width*/ 80)

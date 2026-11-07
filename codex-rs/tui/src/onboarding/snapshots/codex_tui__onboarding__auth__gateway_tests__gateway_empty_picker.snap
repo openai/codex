@@ -1,0 +1,12 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: screen(&widget)
+---
+  Use a custom provider or gateway
+
+
+› Create a custom provider or gateway
+
+
+
+  Press enter to create or esc to go back

@@ -6,9 +6,9 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
   Current chat: test-provider · Default for new chats: gateway
 
 
-› 1. ● Example Gateway    gateway
-  2. ○ OpenAI             openai
-  3. Add custom provider
+› 1. ● Example Gateway                    gateway
+  2. ○ OpenAI                             openai
+  3. Create a custom provider or gateway
 
   /new now uses gateway. Restart the app server and TUI to refresh /model.
   enter details · esc back

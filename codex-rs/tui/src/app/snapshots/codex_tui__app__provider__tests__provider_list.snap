@@ -6,8 +6,8 @@ expression: "render_bottom_popup(&chat, 80)"
   Current chat: ollama · Default for new chats: lmstudio
 
 
-› 1. ○ OpenAI             openai
-  2. Add custom provider
+› 1. ○ OpenAI                             openai
+  2. Create a custom provider or gateway
 
   Use /new to start a chat with the selected provider.
   enter details · space set default · esc back

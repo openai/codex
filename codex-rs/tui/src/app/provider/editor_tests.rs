@@ -135,10 +135,10 @@ async fn entering_a_key_for_a_legacy_gateway_prompts_for_its_address() {
       Base URL*  https://gateway.example/v1
       API key variable  $TEAM_KEY
     › Save
+    Enter a base URL to use this API key variable.
 
     * Required
     Enter the environment variable name on the app server.
-    Enter a base URL to use this API key variable.
     tab move · enter next/save · esc back
     ");
 }

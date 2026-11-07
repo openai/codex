@@ -6,3 +6,5 @@ expression: text
   embedded mode.
 ⚠ Running without the shared background server: a Windows-mounted WSL CODEX_HOME
   (DrvFS/9p) requires embedded mode.
+⚠ Running without the shared background server: custom provider or gateway sign-
+  in requires embedded mode.

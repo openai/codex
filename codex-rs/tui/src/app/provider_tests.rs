@@ -452,7 +452,7 @@ async fn adding_a_custom_provider_saves_to_the_server_and_preserves_the_default(
     );
     let chat = &mut app.chat_widget;
     insta::assert_snapshot!(render_bottom_popup(chat, /*width*/ 72), @r"
-    Add custom provider
+    Create a custom provider or gateway
 
     › Name*  Team gateway
       Base URL*  https://gateway.example/v1

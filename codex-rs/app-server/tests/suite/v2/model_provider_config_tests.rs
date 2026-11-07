@@ -157,6 +157,11 @@ async fn custom_provider_edits_preserve_other_fields_and_respect_policy() -> Res
             "configValidationError",
         ),
         ("basic", json!({"envKey": null}), "configValidationError"),
+        (
+            "ollama-chat",
+            json!({"name": "Renamed"}),
+            "configValidationError",
+        ),
         ("ollama", json!({}), "configValidationError"),
         ("gcp", json!({}), "configValidationError"),
     ] {
@@ -171,6 +176,12 @@ async fn custom_provider_edits_preserve_other_fields_and_respect_policy() -> Res
         let error = server
             .read_stream_until_error_message(RequestId::Integer(edit))
             .await?;
+        if id == "ollama-chat" {
+            insta::assert_snapshot!(
+                error.error.message,
+                @"A custom provider or gateway cannot use a built-in provider ID."
+            );
+        }
         assert_eq!(
             error.error.data,
             Some(json!({"config_write_error_code": error_code}))

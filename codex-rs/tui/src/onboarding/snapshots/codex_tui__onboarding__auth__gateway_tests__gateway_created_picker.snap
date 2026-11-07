@@ -1,0 +1,12 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: screen(&widget)
+---
+  Use a custom provider or gateway
+
+
+  ○ Office                             office
+› ○ Team gateway                       team-gateway
+  Create a custom provider or gateway
+
+  Press enter to use as default or esc to go back

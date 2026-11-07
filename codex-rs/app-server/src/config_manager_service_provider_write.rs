@@ -91,7 +91,7 @@ fn provider_edits(
                 .is_some_and(|id| builtins.contains_key(id) || id == LEGACY_OLLAMA_CHAT_PROVIDER_ID)
             {
                 return Err(invalid(
-                    "A custom gateway cannot use a built-in provider ID.",
+                    "A custom provider or gateway cannot use a built-in provider ID.",
                 ));
             }
             let existing = target.and_then(|id| configured?.get(id));

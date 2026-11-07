@@ -1,9 +1,10 @@
 ---
 source: tui/src/onboarding/gateway_tests.rs
-expression: "screen(&widget, 8)"
+expression: error
 ---
-  Use a custom gateway
-  No custom gateways are configured.
+  Use a custom provider or gateway
+  The default provider is set by configuration policy or a launch
+  override.
 
 
 › 1. Back

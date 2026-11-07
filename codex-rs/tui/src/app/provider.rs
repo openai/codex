@@ -24,6 +24,8 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 mod editor;
+pub(crate) use editor::Draft;
+pub(crate) use editor::ProviderForm;
 mod fields;
 pub(crate) mod rpc;
 mod write;
@@ -32,6 +34,7 @@ use fields::provider_fields;
 
 const LOADING_VIEW: &str = "model_provider_loading";
 pub(super) const LIST_VIEW: &str = "model_provider_list";
+pub(crate) const CREATE_CUSTOM_PROVIDER: &str = "Create a custom provider or gateway";
 
 #[derive(Debug)]
 pub(crate) enum Event {
@@ -314,7 +317,7 @@ fn list(
         })
         .collect();
     items.push(SelectionItem {
-        name: "Add custom provider".into(),
+        name: CREATE_CUSTOM_PROVIDER.into(),
         footer_hint: Some(crate::bottom_pane::popup_consts::picker_hint_line_for_keymap(keymap)),
         actions: vec![Box::new({
             let catalog = Arc::clone(&catalog);

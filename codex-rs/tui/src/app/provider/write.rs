@@ -14,14 +14,9 @@ use super::progress;
 use super::rpc;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
-use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ModelProviderConfigWriteParams;
-use codex_app_server_protocol::ModelProviderConfigWriteResponse;
-use codex_app_server_protocol::ProviderSettingsPatch;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WriteStatus;
 use tokio::sync::watch;
-use uuid::Uuid;
 
 const SAVING_VIEW: &str = "model_provider_saving";
 
@@ -94,29 +89,16 @@ impl Write {
         provider_changed: &mut bool,
     ) -> Result<SaveNotice, String> {
         match self {
-            Self::Settings(settings) => handle
-                .request_typed::<ModelProviderConfigWriteResponse>(
-                    ClientRequest::ModelProviderConfigWrite {
-                        request_id: RequestId::String(Uuid::new_v4().to_string()),
-                        params: settings.1.clone(),
-                    },
-                )
-                .await
-                .map(|_| SaveNotice::Saved("Saved provider configuration.".into()))
-                .or_else(|error| {
-                    let create = matches!(&settings.1.settings,
-                        ProviderSettingsPatch::CustomGateway(gateway) if gateway.provider_id.is_none());
-                    // The server can report an internal error reading back a committed provider.
-                    let uncertain = match &error {
-                        TypedRequestError::Server { source, .. } => source.code == -32603,
-                        TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. } => true,
-                    };
-                    if create && uncertain {
-                        Ok(SaveNotice::UnconfirmedCreate)
-                    } else {
-                        Err(error.to_string())
-                    }
-                }),
+            Self::Settings(settings) => {
+                rpc::write_provider(handle, settings.1.clone())
+                    .await
+                    .map(|result| match result {
+                        rpc::ProviderWrite::Saved(_) => {
+                            SaveNotice::Saved("Saved provider configuration.".into())
+                        }
+                        rpc::ProviderWrite::UnconfirmedCreate => SaveNotice::UnconfirmedCreate,
+                    })
+            }
             Self::Default(id) => {
                 let response = rpc::set_default_provider(handle, id)
                     .await
@@ -168,7 +150,7 @@ impl Completion {
                         message
                     }
                     SaveNotice::UnconfirmedCreate => {
-                        let message = "Could not confirm the save. Check the provider list before adding it again.".to_string();
+                        let message = rpc::UNCONFIRMED_CREATE.to_string();
                         app.chat_widget.add_error_message(message.clone());
                         message
                     }

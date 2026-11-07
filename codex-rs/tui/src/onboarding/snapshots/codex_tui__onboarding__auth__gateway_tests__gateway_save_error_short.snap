@@ -1,0 +1,8 @@
+---
+source: tui/src/onboarding/gateway_tests.rs
+expression: "screen(&widget, 4)"
+---
+› Save
+Enter an environment variable name such as TEAM_API_KEY.
+
+* Required

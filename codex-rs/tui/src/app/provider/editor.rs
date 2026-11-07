@@ -1,10 +1,10 @@
 //! Single-screen provider form. Validation preserves the draft and each field owns its editing history.
 
+use super::CREATE_CUSTOM_PROVIDER;
 use super::Field;
 use crate::app::App;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
-use crate::bottom_pane::TextArea;
 use crate::bottom_pane::ViewCompletion;
 use crate::key_hint;
 use crate::keymap::KeymapContextSet;
@@ -25,7 +25,6 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
-use std::sync::MutexGuard;
 
 mod form;
 pub(crate) use form::Draft;
@@ -38,40 +37,62 @@ pub(crate) fn view(
     error: Option<String>,
     on_save: impl Fn(Draft, ModelProviderConfigWriteParams) + Send + 'static,
 ) -> Box<dyn BottomPaneView> {
-    let mut inputs = Vec::new();
-    for (field, original) in draft.fields() {
-        let input = ProviderInput::from(draft.value(field, original));
+    let form = ProviderForm::new(draft, error);
+    for (_, input) in &form.inputs {
         let mut editor = input.editor();
         editor.set_keymap_bindings(&app.keymap);
         if app.chat_widget.composer_is_vim_enabled() {
             editor.set_vim_enabled(/*enabled*/ true);
             editor.enter_vim_insert_mode();
         }
-        drop(editor);
-        inputs.push((field, input));
     }
     Box::new(Editor {
-        inputs,
-        draft,
+        form,
         on_save: Box::new(on_save),
-        error,
         completion: None,
     })
 }
 
 struct Editor {
-    inputs: Vec<(Field, ProviderInput)>,
-    draft: Draft,
+    form: ProviderForm,
     on_save: Box<dyn Fn(Draft, ModelProviderConfigWriteParams) + Send>,
-    error: Option<String>,
     completion: Option<ViewCompletion>,
 }
 
-impl Editor {
-    fn active_input(&self) -> Option<MutexGuard<'_, TextArea>> {
+pub(crate) struct ProviderForm {
+    inputs: Vec<(Field, ProviderInput)>,
+    draft: Draft,
+    pub(crate) error: Option<String>,
+}
+
+struct FormLayout {
+    paragraph: Paragraph<'static>,
+    focus_row: u16,
+    cursor: Option<(u16, u16)>,
+}
+
+impl ProviderForm {
+    pub(crate) fn new(draft: Draft, error: Option<String>) -> Self {
+        let inputs = draft
+            .fields()
+            .into_iter()
+            .map(|(field, original)| (field, ProviderInput::from(draft.value(field, original))))
+            .collect();
+        Self {
+            inputs,
+            draft,
+            error,
+        }
+    }
+
+    pub(crate) fn active_input_mut(&mut self) -> Option<&mut ProviderInput> {
         self.inputs
-            .get(self.draft.selected)
-            .map(|(_, input)| input.editor())
+            .get_mut(self.draft.selected)
+            .map(|(_, input)| input)
+    }
+
+    pub(crate) fn active_input(&self) -> Option<&ProviderInput> {
+        self.inputs.get(self.draft.selected).map(|(_, input)| input)
     }
 
     fn changes(&self) -> impl Iterator<Item = (Field, String)> {
@@ -87,12 +108,43 @@ impl Editor {
             })
     }
 
-    fn save(&mut self) {
-        self.draft.changes = self.changes().collect();
-        match self.draft.patch() {
-            Ok(params) => (self.on_save)(self.draft.clone(), params),
-            Err(error) => self.error = Some(error.to_owned()),
+    pub(crate) fn input(&mut self, key: KeyEvent) -> Option<ModelProviderConfigWriteParams> {
+        if move_provider_field(key, &mut self.draft.selected, self.inputs.len() + 1) {
+            return None;
         }
+        // Holding Enter on a field must not carry its activation onto Save.
+        if key.kind == KeyEventKind::Press && key_hint::plain(KeyCode::Enter).is_press(key) {
+            if self.draft.selected == self.inputs.len() {
+                self.draft.changes = self.changes().collect();
+                match self.draft.patch() {
+                    Ok(params) => return Some(params),
+                    Err(message) => self.error = Some(message.into()),
+                }
+            } else {
+                self.draft.selected += 1;
+            }
+            return None;
+        }
+        if key_hint::ctrl(KeyCode::Char(' ')).is_press(key)
+            && let Some(suggestion) = self.suggestion()
+        {
+            let mut editor = self.inputs[self.draft.selected].1.editor();
+            let suffix = &suggestion[editor.cursor()..];
+            editor.insert_str(suffix);
+            return None;
+        }
+        if let Some((_, input)) = self.inputs.get_mut(self.draft.selected) {
+            input.input(key);
+        }
+        None
+    }
+
+    fn prefer_esc_to_handle_key_event(&self) -> bool {
+        self.active_input().is_some_and(|input| {
+            input
+                .editor()
+                .should_handle_vim_insert_escape(KeyCode::Esc.into())
+        })
     }
 
     fn suggestion(&self) -> Option<&str> {
@@ -111,15 +163,16 @@ impl Editor {
             .find(|name| *name != prefix && name.starts_with(prefix))
     }
 
-    fn layout(&self, width: u16) -> (Paragraph<'static>, Option<(u16, u16)>) {
+    fn layout(&self, width: u16) -> FormLayout {
         let title = self.draft.provider.as_ref().map_or_else(
-            || "Add custom provider".to_owned(),
+            || CREATE_CUSTOM_PROVIDER.to_owned(),
             |p| format!("Edit {}", p.name),
         );
         let wrap_width = usize::from(width.max(1));
         let mut lines = word_wrap_lines([Line::from(title.bold())], wrap_width);
         lines.push(Line::default());
         let mut cursor = None;
+        let mut focus_row = 0;
         let key_needs_url = !self.draft.required(Field::Url)
             && self
                 .changes()
@@ -157,6 +210,7 @@ impl Editor {
             let x = line.width() as u16;
             let area = Rect::new(x, lines.len() as u16, width.saturating_sub(x), 1);
             if focused {
+                focus_row = area.y;
                 cursor = input.editor().cursor_pos(area);
             }
             let value = input.line("", example, display, area.width);
@@ -164,10 +218,14 @@ impl Editor {
             lines.push(truncate_line_to_width(line, usize::from(width)));
         }
         lines.push(if self.draft.selected == self.inputs.len() {
+            focus_row = lines.len() as u16;
             "› Save".bold().into()
         } else {
             "  Save".into()
         });
+        if let Some(error) = &self.error {
+            lines.push(error.clone().red().into());
+        }
         lines.push(Line::default());
         let has = |field| self.inputs.iter().any(|(key, _)| *key == field);
         if has(Field::Name) {
@@ -184,9 +242,6 @@ impl Editor {
                 format!(" complete {suggestion}").dim(),
             ]));
         }
-        if let Some(error) = &self.error {
-            lines.push(error.clone().red().into());
-        }
         lines.push(Line::from(vec![
             key_hint::plain(KeyCode::Tab).into(),
             " move · ".dim(),
@@ -200,33 +255,73 @@ impl Editor {
             }
             .dim(),
         ]));
-        (Paragraph::new(lines).wrap(Wrap { trim: false }), cursor)
+        FormLayout {
+            paragraph: Paragraph::new(lines).wrap(Wrap { trim: false }),
+            focus_row,
+            cursor,
+        }
+    }
+
+    fn visible_layout(&self, area: Rect) -> (Paragraph<'static>, Option<(u16, u16)>) {
+        let FormLayout {
+            paragraph,
+            cursor,
+            focus_row,
+        } = self.layout(area.width);
+        // Show as much feedback below Save as fits while keeping the active action visible.
+        let top = if self.draft.selected == self.inputs.len() {
+            paragraph
+                .desired_height(area.width)
+                .saturating_sub(area.height)
+                .min(focus_row)
+        } else {
+            focus_row.saturating_add(1).saturating_sub(area.height)
+        };
+        (
+            paragraph.scroll((top, 0)),
+            cursor.map(|(x, y)| (x, y.saturating_sub(top))),
+        )
     }
 }
 
-impl Renderable for Editor {
+impl Renderable for ProviderForm {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.layout(area.width).0.render(area, buf);
+        self.visible_layout(area).0.render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.layout(width).0.desired_height(width)
+        self.layout(width).paragraph.desired_height(width)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let (x, y) = self.layout(area.width).1?;
+        let (x, y) = self.visible_layout(area).1?;
         (y < area.height).then(|| (area.x.saturating_add(x), area.y.saturating_add(y)))
     }
 
     fn cursor_style(&self, _area: Rect) -> SetCursorStyle {
         if self
             .active_input()
-            .is_some_and(|editor| editor.uses_vim_insert_cursor())
+            .is_some_and(|input| input.editor().uses_vim_insert_cursor())
         {
             SetCursorStyle::SteadyBar
         } else {
             SetCursorStyle::DefaultUserShape
         }
+    }
+}
+
+impl Renderable for Editor {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.form.render(area, buf);
+    }
+    fn desired_height(&self, width: u16) -> u16 {
+        self.form.desired_height(width)
+    }
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.form.cursor_pos(area)
+    }
+    fn cursor_style(&self, area: Rect) -> SetCursorStyle {
+        self.form.cursor_style(area)
     }
 }
 
@@ -236,33 +331,13 @@ impl BottomPaneView for Editor {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {
-        if move_provider_field(key, &mut self.draft.selected, self.inputs.len() + 1) {
-            return;
-        }
-        // Holding Enter on a field must not carry its activation onto Save.
-        if key.kind == KeyEventKind::Press && key_hint::plain(KeyCode::Enter).is_press(key) {
-            if self.draft.selected == self.inputs.len() {
-                self.save();
-            } else {
-                self.draft.selected += 1;
-            }
-            return;
-        }
-        if key_hint::ctrl(KeyCode::Char(' ')).is_press(key)
-            && let Some(suggestion) = self.suggestion()
-        {
-            let mut editor = self.inputs[self.draft.selected].1.editor();
-            let suffix = &suggestion[editor.cursor()..];
-            editor.insert_str(suffix);
-            return;
-        }
-        if let Some((_, input)) = self.inputs.get_mut(self.draft.selected) {
-            input.input(key);
+        if let Some(params) = self.form.input(key) {
+            (self.on_save)(self.form.draft.clone(), params);
         }
     }
 
     fn handle_paste(&mut self, pasted: String) -> bool {
-        if let Some((_, input)) = self.inputs.get_mut(self.draft.selected) {
+        if let Some(input) = self.form.active_input_mut() {
             input.paste(&pasted);
             return true;
         }
@@ -270,14 +345,14 @@ impl BottomPaneView for Editor {
     }
 
     fn keymap_contexts(&self) -> KeymapContextSet {
-        self.active_input()
-            .map(|editor| KeymapContextSet::new(editor.keymap_context()))
+        self.form
+            .active_input()
+            .map(|input| KeymapContextSet::new(input.editor().keymap_context()))
             .unwrap_or_default()
     }
 
     fn prefer_esc_to_handle_key_event(&self) -> bool {
-        self.active_input()
-            .is_some_and(|editor| editor.should_handle_vim_insert_escape(KeyCode::Esc.into()))
+        self.form.prefer_esc_to_handle_key_event()
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {

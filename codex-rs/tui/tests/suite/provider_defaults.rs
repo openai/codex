@@ -189,7 +189,7 @@ requires_openai_auth = true
         .with_context(|| terminal.screen_contents())?;
     // Startup drains input after its first draw. Retry the menu shortcut until it is accepted.
     let deadline = std::time::Instant::now() + Duration::from_secs(/*secs*/ 30);
-    while !terminal.screen_contains("Use a custom gateway") {
+    while !terminal.screen_contains("Use a custom provider or gateway") {
         ensure!(
             std::time::Instant::now() < deadline,
             "gateway option missing: {}",
