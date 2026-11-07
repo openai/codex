@@ -39,6 +39,8 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+base64 = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-protocol-test-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

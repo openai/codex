@@ -85,7 +85,7 @@ pub struct ResolvedResponsesProvider {
 }
 
 /// Effective destination and credentials that permit reusing a Responses socket.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResponsesConnectionKey {
     base_url: String,
     routing_header: Option<HeaderValue>,

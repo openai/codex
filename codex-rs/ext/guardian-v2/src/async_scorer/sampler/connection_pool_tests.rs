@@ -653,3 +653,255 @@ async fn http_cache_preserves_no_constraint_redirect_policy_and_configured_heade
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn runtime_transports_authenticate_each_classification() -> Result<()> {
+    use base64::Engine;
+    use codex_features::RuntimeAuthMode;
+    use codex_login::CodexAuth;
+    use codex_runtime_agent_instance::AgentHostAuthorization;
+    use codex_runtime_agent_instance::RuntimeAuthManager;
+    use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
+    use codex_runtime_agent_instance::RuntimeRole;
+    use serde_json::json;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    struct MutableAuth(Mutex<CodexAuth>);
+    impl codex_login::ExternalAuth for MutableAuth {
+        fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+            Box::pin(async { Ok(self.0.lock().unwrap().clone()) })
+        }
+
+        fn refresh(
+            &self,
+            _context: codex_login::ExternalAuthRefreshContext,
+        ) -> codex_login::ExternalAuthFuture<'_, CodexAuth> {
+            self.resolve()
+        }
+    }
+
+    skip_if_no_network!(Ok(()));
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        for transport in [
+            "http",
+            "websocket",
+            "upgrade_required",
+            "legacy_endpoint",
+            "changed_auth",
+            "denied",
+        ] {
+            let websocket = transport == "websocket";
+            let denied = transport == "denied";
+            let changed_auth = transport == "changed_auth";
+            let source = Arc::new(MutableAuth(Mutex::new(CodexAuth::from_api_key(
+                "guardian-key",
+            ))));
+            let registration = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/register"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "runtime_agent_instance_id": "runtime-guardian",
+                    "agent_host_id": "host-guardian",
+                    "actor": {"kind": "platform", "user_id": "actor", "organization_id": "org", "project_id": null},
+                })))
+                .expect(1)
+                .mount(&registration)
+                .await;
+            let response = vec![
+                responses::ev_output_text_delta("low"),
+                responses::ev_completed("score"),
+            ];
+            let ws = if websocket {
+                // Each peer leaves another response available, so closure cannot force the retry.
+                Some(
+                    responses::start_websocket_server(vec![
+                        vec![response.clone(), response.clone()],
+                        vec![response.clone(), response.clone()],
+                    ])
+                    .await,
+                )
+            } else {
+                None
+            };
+            let http = MockServer::start().await;
+            let upgrade_response = if denied {
+                ResponseTemplate::new(403).set_body_json(json!({"error": {
+                    "code": "runtime_instance_paused", "type": "runtime_agent_error",
+                    "message": "The runtime agent instance is paused."
+                }}))
+            } else if transport == "legacy_endpoint" {
+                ResponseTemplate::new(404)
+            } else {
+                ResponseTemplate::new(426)
+            };
+            let handshake_source = Arc::clone(&source);
+            Mock::given(method("GET"))
+                .and(path("/responses"))
+                .respond_with(move |_request: &wiremock::Request| {
+                    if changed_auth {
+                        *handshake_source.0.lock().unwrap() =
+                            CodexAuth::from_api_key("replacement-key");
+                    }
+                    upgrade_response.clone()
+                })
+                .expect(match transport {
+                    "upgrade_required" | "legacy_endpoint" => 2,
+                    "changed_auth" | "denied" => 1,
+                    _ => 0,
+                })
+                .mount(&http)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/responses"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(responses::sse(response)),
+                )
+                .expect(if websocket || denied {
+                    0
+                } else if changed_auth {
+                    1
+                } else {
+                    2
+                })
+                .mount(&http)
+                .await;
+            let url = ws.as_ref().map_or_else(
+                || http.uri(),
+                |ws| ws.uri().replacen("ws://", "http://", /*count*/ 1),
+            );
+            let mut config = sampler_config(url);
+            let credentials =
+                AuthManager::from_auth_for_testing(CodexAuth::from_api_key("guardian-key"));
+            if changed_auth {
+                credentials.set_external_auth(source.clone()).await?;
+            }
+            let runtime = Arc::new(RuntimeAuthManager::new(
+                Arc::clone(&credentials),
+                AgentHostAuthorization::InstallationId {
+                    installation_id: uuid::Uuid::nil(),
+                },
+                RuntimeRegistrationMetadata {
+                    harness: Some("codex".into()),
+                    harness_version: None,
+                    role: RuntimeRole::Orchestrator,
+                },
+                format!("{}/register", registration.uri()).parse()?,
+            ));
+            let mut info = config.provider.info().clone();
+            info.supports_websockets = transport != "http";
+            config.provider = codex_model_provider::test_support::runtime_model_provider(
+                info,
+                Arc::clone(&credentials),
+                (runtime, mode),
+            );
+            let sampler = LunaSampler::new(config);
+            sampler.prewarm().await;
+            if let Some(ws) = &ws {
+                assert!(
+                    ws.handshakes().is_empty(),
+                    "prewarming must not admit runtime work"
+                );
+            }
+            if denied {
+                let error = sampler.sample(sample_request("denied")).await.unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        LunaSamplerError::Api(ApiError::Transport(TransportError::Http {
+                            status: http::StatusCode::FORBIDDEN,
+                            ..
+                        }))
+                    ),
+                    "{error:?}"
+                );
+            } else {
+                assert_eq!(sampler.sample(sample_request("first")).await?, "low");
+                if changed_auth {
+                    assert_eq!(
+                        credentials.auth().await.unwrap().get_token()?,
+                        "replacement-key"
+                    );
+                } else {
+                    assert_eq!(sampler.sample(sample_request("second")).await?, "low");
+                }
+            }
+            let headers = if let Some(ws) = &ws {
+                assert_eq!(
+                    ws.connections().iter().map(Vec::len).collect::<Vec<_>>(),
+                    vec![1, 1]
+                );
+                ws.handshakes()
+                    .iter()
+                    .map(|h| {
+                        (
+                            h.header("authorization").unwrap(),
+                            h.header("x-openai-agent-assertion"),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                http.received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|request| {
+                        (
+                            request.headers["authorization"]
+                                .to_str()
+                                .unwrap()
+                                .to_owned(),
+                            request
+                                .headers
+                                .get("x-openai-agent-assertion")
+                                .map(|value| value.to_str().unwrap().to_owned()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let expected_attempts = match transport {
+                "upgrade_required" | "legacy_endpoint" => 4,
+                "denied" => 1,
+                _ => 2,
+            };
+            assert_eq!(headers.len(), expected_attempts);
+            let mut proofs = std::collections::BTreeSet::new();
+            for (authorization, supplemental) in headers {
+                let proof = match mode {
+                    RuntimeAuthMode::DualHeader => {
+                        assert_eq!(authorization, "Bearer guardian-key");
+                        supplemental.unwrap()
+                    }
+                    RuntimeAuthMode::AssertionOnly => {
+                        assert!(supplemental.is_none());
+                        authorization
+                            .strip_prefix("AgentAssertion ")
+                            .unwrap()
+                            .to_owned()
+                    }
+                };
+                let payload: serde_json::Value = serde_json::from_slice(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(proof.split('.').nth(/*n*/ 2).unwrap())?,
+                )?;
+                assert_eq!(payload["runtime_agent_instance"], "runtime-guardian");
+                assert!(
+                    proofs.insert(proof),
+                    "each attempt must authenticate afresh"
+                );
+            }
+            registration.verify().await;
+            http.verify().await;
+            drop(sampler);
+            if let Some(ws) = ws {
+                ws.shutdown().await;
+            }
+        }
+    }
+    Ok(())
+}

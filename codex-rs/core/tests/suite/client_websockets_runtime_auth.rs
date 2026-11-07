@@ -308,8 +308,9 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
     ];
     let server = start_websocket_server(vec![
         // Leave one unread response on each old connection so the server does not close it.
-        // Reconnection must follow runtime replacement, not a peer-initiated close.
-        vec![response.clone(), response.clone(), response.clone()],
+        // Runtime admission must happen again even when the peer keeps the socket open.
+        vec![response.clone(), response.clone()],
+        vec![response.clone(), response.clone()],
         vec![response.clone(), response.clone()],
         vec![response],
     ])
@@ -341,7 +342,7 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
     stream_until_complete(&mut session, &harness, &prompt_with_input(input.clone())).await;
     input.push(message_item("second"));
     stream_until_complete(&mut session, &harness, &prompt_with_input(input.clone())).await;
-    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.handshakes().len(), 2);
 
     *credentials.0.write().unwrap() = CodexAuth::from_api_key("key-b");
     session
@@ -353,18 +354,23 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
         )
         .await
         .unwrap();
+    assert_eq!(
+        server.handshakes().len(),
+        2,
+        "preconnect must not admit work"
+    );
     input.push(message_item("third"));
     stream_until_complete(&mut session, &harness, &prompt_with_input(input.clone())).await;
-    assert_eq!(server.handshakes().len(), 2);
+    assert_eq!(server.handshakes().len(), 3);
 
     *credentials.0.write().unwrap() = CodexAuth::from_api_key("key-other-user");
     input.push(message_item("fourth"));
     stream_until_complete(&mut session, &harness, &prompt_with_input(input)).await;
     let handshakes = server.handshakes();
-    assert_eq!(handshakes.len(), 3);
+    assert_eq!(handshakes.len(), 4);
     let runtime_ids: Vec<_> = handshakes
         .iter()
-        .zip(["key-a", "key-b", "key-other-user"])
+        .zip(["key-a", "key-a", "key-b", "key-other-user"])
         .map(|(h, credential)| {
             assert_eq!(
                 h.header("cookie").as_deref(),
@@ -384,30 +390,31 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
                 .clone()
         })
         .collect();
-    assert_ne!(runtime_ids[0], runtime_ids[1]);
+    assert_eq!(runtime_ids[0], runtime_ids[1]);
     assert_ne!(runtime_ids[1], runtime_ids[2]);
+    assert_ne!(runtime_ids[2], runtime_ids[3]);
     assert_eq!(
         server
             .connections()
             .iter()
             .map(Vec::len)
             .collect::<Vec<_>>(),
-        vec![2, 1, 1]
+        vec![1, 1, 1, 1]
     );
-    let connections = server.connections();
-    assert_eq!(
-        connections[0][1].body_json()["previous_response_id"],
-        "resp-1"
-    );
-    assert_eq!(
-        connections[0][1].body_json()["client_metadata"]["x-codex-turn-state"],
-        "runtime-state"
-    );
-    for (index, requests) in connections.iter().enumerate().skip(1) {
+    for (index, requests) in server.connections().iter().enumerate() {
         let body = requests[0].body_json();
         assert_eq!(body["previous_response_id"], Value::Null);
-        assert_eq!(body["client_metadata"]["x-codex-turn-state"], Value::Null);
-        assert_eq!(body["input"].as_array().unwrap().len(), index + 2);
+        // Reconnecting with the same actor preserves turn routing.
+        let expected_turn_state = if index == 1 {
+            json!("runtime-state")
+        } else {
+            Value::Null
+        };
+        assert_eq!(
+            body["client_metadata"]["x-codex-turn-state"],
+            expected_turn_state
+        );
+        assert_eq!(body["input"].as_array().unwrap().len(), index + 1);
     }
     for request in registration.received_requests().await.unwrap() {
         let body: Value = request.body_json().unwrap();
@@ -562,4 +569,131 @@ async fn model_runtime_auth_strips_credentials_on_cross_origin_redirects(mode: R
             .headers
             .contains_key("x-openai-agent-assertion")
     );
+}
+
+#[test_case(RuntimeAuthMode::DualHeader; "dual_header")]
+#[test_case(RuntimeAuthMode::AssertionOnly; "assertion_only")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn paused_runtime_cannot_continue_on_an_admitted_websocket(mode: RuntimeAuthMode) {
+    use futures::SinkExt;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use tokio_tungstenite::accept_hdr_async_with_config;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::extensions::ExtensionsConfig;
+    use tokio_tungstenite::tungstenite::extensions::compression::deflate::DeflateConfig;
+    use tokio_tungstenite::tungstenite::handshake::server::Request as HandshakeRequest;
+    use tokio_tungstenite::tungstenite::handshake::server::Response as HandshakeResponse;
+    use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+
+    skip_if_no_network!();
+    let registration = MockServer::start().await;
+    Mock::given(path("/register"))
+        .respond_with(registered)
+        .expect(1)
+        .mount(&registration)
+        .await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut provider = ModelProviderInfo::create_openai_provider(Some(format!(
+        "ws://{}/v1",
+        listener.local_addr().unwrap()
+    )));
+    provider.request_max_retries = Some(0);
+    let (harness, _) = runtime_harness(&registration, provider, mode).await;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let proofs = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server_requests = Arc::clone(&requests);
+    let server_proofs = Arc::clone(&proofs);
+    let server = tokio::spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
+        for paused in [false, true, true, false] {
+            let (stream, _) = listener.accept().await.unwrap();
+            let proofs = Arc::clone(&server_proofs);
+            let requests = Arc::clone(&server_requests);
+            connections.spawn(async move {
+                let handshake = move |request: &HandshakeRequest, response: HandshakeResponse| {
+                    proofs.lock().unwrap().push(assertion_payload(
+                        request.headers()["authorization"].to_str().unwrap(),
+                        request
+                            .headers()
+                            .get("x-openai-agent-assertion")
+                            .map(|value| value.to_str().unwrap().to_string()),
+                        mode,
+                        "key-a",
+                    ));
+                    if paused {
+                        let body = json!({"error": {
+                            "message": "The runtime agent instance is paused.",
+                            "code": "runtime_instance_paused", "type": "runtime_agent_error"
+                        }})
+                        .to_string();
+                        return Err(HandshakeResponse::builder()
+                            .status(403)
+                            .header("content-type", "application/json")
+                            .header("content-length", body.len())
+                            .body(Some(body))
+                            .unwrap());
+                    }
+                    Ok(response)
+                };
+                let mut extensions = ExtensionsConfig::default();
+                extensions.permessage_deflate = Some(DeflateConfig::default());
+                let mut config = WebSocketConfig::default();
+                config.extensions = extensions;
+                let Ok(mut socket) =
+                    accept_hdr_async_with_config(stream, handshake, Some(config)).await
+                else {
+                    return;
+                };
+                // Keep admitted sockets usable: only another handshake observes the pause.
+                while let Some(Ok(message)) = socket.next().await {
+                    if message.is_text() {
+                        requests.fetch_add(/*val*/ 1, Ordering::SeqCst);
+                        for event in [ev_response_created("resp-1"), ev_completed("resp-1")] {
+                            socket
+                                .send(Message::Text(event.to_string().into()))
+                                .await
+                                .unwrap();
+                        }
+                    }
+                }
+            });
+        }
+        while connections.join_next().await.is_some() {}
+    });
+
+    let assert_paused = |error: &codex_protocol::error::CodexErr| {
+        let codex_protocol::error::CodexErrorDetails::UnexpectedStatus(response) = error.details()
+        else {
+            panic!("expected a paused-runtime HTTP response: {error:?}");
+        };
+        assert_eq!(response.status.as_u16(), 403);
+        let body: Value = serde_json::from_str(&response.body).unwrap();
+        assert_eq!(body["error"]["code"], "runtime_instance_paused");
+    };
+    let mut session = harness.client.new_session();
+    complete(&mut session, &harness).await.unwrap();
+    let error = complete(&mut session, &harness).await.unwrap_err();
+    assert_paused(&error);
+    drop(session);
+    let mut next_turn = harness.client.new_session();
+    let error = complete(&mut next_turn, &harness).await.unwrap_err();
+    assert_paused(&error);
+    // An authorized unpause permits the original registration to run again.
+    complete(&mut next_turn, &harness).await.unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    let proofs = proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 4);
+    for proof in proofs.iter().skip(1) {
+        assert_eq!(
+            proof["runtime_agent_instance"],
+            proofs[0]["runtime_agent_instance"]
+        );
+    }
+    let distinct_proofs = proofs
+        .iter()
+        .map(|proof| proof["id"].as_str().expect("assertion proof ID"))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(distinct_proofs.len(), proofs.len());
+    server.abort();
 }
