@@ -1,5 +1,6 @@
 use codex_config::NetworkConstraints;
 use codex_execpolicy::Policy;
+use codex_mcp::NetworkPolicyMetadata;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigReloaderFuture;
@@ -8,6 +9,7 @@ use codex_network_proxy::EnvironmentNetworkPolicy;
 use codex_network_proxy::LocalBindingPolicy;
 use codex_network_proxy::ManagedProxyRouting;
 use codex_network_proxy::NetworkDecision;
+use codex_network_proxy::NetworkDomainPermission;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
@@ -22,8 +24,9 @@ use codex_network_proxy::managed_proxy_ports;
 use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::AskForApproval;
 use codex_utils_path_uri::Platform;
-use std::collections::HashSet;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +36,14 @@ pub struct NetworkProxySpec {
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
     hard_deny_allowlist_misses: bool,
+}
+
+/// The primary attachment controls the shared proxy. The executor handling the call
+/// supplies local-binding semantics even when it inherits the controller policy.
+pub(crate) struct McpNetworkRoute<'a> {
+    pub(crate) primary_allows_proxy: bool,
+    pub(crate) local_binding: LocalBindingPolicy,
+    pub(crate) owner: Option<&'a EnvironmentNetworkPolicy>,
 }
 
 pub struct StartedNetworkProxy {
@@ -270,13 +281,29 @@ impl NetworkProxySpec {
         exec_policy: &Policy,
         local_binding_policy: LocalBindingPolicy,
     ) -> std::io::Result<Self> {
-        if matches!(permission_profile, PermissionProfile::Disabled) {
+        Self::compose_environment_policy(
+            controller,
+            policy,
+            permission_profile,
+            exec_policy,
+            Some(local_binding_policy),
+        )
+    }
+
+    fn compose_environment_policy(
+        controller: Option<&Self>,
+        policy: &EnvironmentNetworkPolicy,
+        permission_profile: &PermissionProfile,
+        exec_policy: &Policy,
+        routed_binding: Option<LocalBindingPolicy>,
+    ) -> std::io::Result<Self> {
+        if routed_binding.is_some() && matches!(permission_profile, PermissionProfile::Disabled) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "environment network policy requires managed network enforcement",
             ));
         }
-        if controller.is_some_and(|controller| !controller.enabled()) {
+        if routed_binding.is_some() && controller.is_some_and(|controller| !controller.enabled()) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "environment network policy cannot override a disabled controller proxy",
@@ -297,7 +324,8 @@ impl NetworkProxySpec {
             )?,
         };
         policy.apply_to(&mut spec.config);
-        spec.config.allow_local_binding = Some(local_binding_policy.resolve(&spec.config));
+        spec.config.allow_local_binding =
+            Some(routed_binding.unwrap_or_default().resolve(&spec.config));
         let protected_denials = spec.config.denied_domains().unwrap_or_default();
 
         // A fixed controller allowlist remains a ceiling; an expandable one is only a baseline.
@@ -318,19 +346,34 @@ impl NetworkProxySpec {
 
         // Saved grants can extend a reviewable owner policy; owner denials are restored last.
         let (allowed_domains, denied_domains) = exec_policy.compiled_network_domains();
-        if allow_owner_grants {
-            upsert_network_domains(&mut spec.config, allowed_domains, /*allow*/ true);
+        spec.config.apply_saved_domain_rules(
+            if allow_owner_grants {
+                allowed_domains
+            } else {
+                Vec::new()
+            },
+            &denied_domains,
+        );
+        for host in protected_denials {
+            spec.config.upsert_domain_permission(
+                host,
+                NetworkDomainPermission::Deny,
+                normalize_host,
+            );
         }
-        upsert_network_domains(&mut spec.config, denied_domains, /*allow*/ false);
-        upsert_network_domains(&mut spec.config, protected_denials, /*allow*/ false);
         spec.constraints.denied_domains = spec.config.denied_domains();
-
-        validate_policy_against_constraints(&spec.config, &spec.constraints).map_err(|error| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("environment network policy violates managed requirements: {error}"),
-            )
-        })?;
+        if routed_binding.is_some() {
+            validate_policy_against_constraints(&spec.config, &spec.constraints).map_err(
+                |error| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "environment network policy violates managed requirements: {error}"
+                        ),
+                    )
+                },
+            )?;
+        }
         tracing::debug!(
             controller_policy = ?controller.map(Self::environment_policy),
             controller_allow_all_unix_sockets = ?controller.and_then(|spec| spec.config.dangerously_allow_all_unix_sockets),
@@ -341,12 +384,101 @@ impl NetworkProxySpec {
         Ok(spec)
     }
 
+    /// Derives the network restrictions a trusted MCP server may apply to a call.
+    #[cfg_attr(not(test), expect(dead_code, reason = "used by the next PR"))]
+    pub(crate) fn mcp_network_policy(
+        controller: Option<&Self>,
+        controller_profile: &PermissionProfile,
+        route: McpNetworkRoute<'_>,
+        permission_profile: &PermissionProfile,
+        approval_policy: AskForApproval,
+        exec_policy: &Policy,
+    ) -> std::io::Result<NetworkPolicyMetadata> {
+        let direct_network = permission_profile.network_sandbox_policy().is_enabled();
+        // An owner can supply its own proxy when the controller is absent. A disabled
+        // controller vetoes that route, so file tools receive an offline policy.
+        let proxy_active = match route.owner {
+            Some(owner) => controller.map_or(owner.requires_proxy || direct_network, Self::enabled),
+            None => route.primary_allows_proxy && controller.is_some_and(Self::enabled),
+        };
+        let network_enabled = proxy_active || (route.owner.is_none() && direct_network);
+        let spec = if let Some(owner) = route.owner {
+            // Offline file tools retain the owner's traffic rules without needing a startable proxy.
+            Self::compose_environment_policy(
+                controller,
+                owner,
+                permission_profile,
+                exec_policy,
+                proxy_active.then_some(route.local_binding),
+            )?
+        } else if let Some(controller) = controller
+            && proxy_active
+        {
+            // The routed controller uses the thread's profile even for calls from another executor.
+            let spec = controller.recompute_for_permission_profile(controller_profile)?;
+            spec.with_exec_policy_network_rules(exec_policy)
+                .unwrap_or(spec)
+        } else {
+            // Direct calls retain administrative policy, without importing unused proxy settings.
+            Self::from_config_and_constraints(
+                Default::default(),
+                controller.and_then(|controller| controller.requirements.clone()),
+                controller_profile,
+            )?
+        };
+
+        let config = spec.config;
+        // The native decider reviews fresh misses only for managed calls with approvals enabled.
+        let can_review = (route.owner.is_some() || spec.requirements.is_some())
+            && Self::managed_sandbox_active(permission_profile)
+            && approval_policy != AskForApproval::Never;
+        // The domain-only MCP contract cannot check DNS answers at connect time.
+        // With local access restricted, only explicit IP grants are safe to forward.
+        let require_ip_literal = proxy_active && !route.local_binding.resolve(&config);
+        // An MXC executor cannot launch an active proxy with an explicit local-binding denial.
+        let can_route =
+            !(require_ip_literal && route.local_binding == LocalBindingPolicy::RequireTrue);
+        let mut allowed_domains = config.allowed_domains().unwrap_or_default();
+        if require_ip_literal {
+            allowed_domains.retain(|rule| {
+                !rule.contains(['*', '?']) && normalize_host(rule).parse::<IpAddr>().is_ok()
+            });
+        }
+        let denied_domains = config.denied_domains().unwrap_or_default();
+        // The receiver cannot prompt for review or enforce a proxy hook's per-request restrictions.
+        let mut additional_denials = config.review_domains;
+        if proxy_active {
+            additional_denials.extend(
+                config
+                    .mitm_hooks
+                    .iter()
+                    .map(|hook| normalize_host(&hook.host)),
+            );
+        }
+        Ok(NetworkPolicyMetadata {
+            enabled: network_enabled && can_route && spec.constraints.enabled != Some(false),
+            mode: config.mode,
+            allowed_domains,
+            denied_domains: Self::merge_domain_lists(denied_domains, &additional_denials),
+            hard_deny_allowlist_misses: require_ip_literal
+                || spec.hard_deny_allowlist_misses
+                || (proxy_active && !can_review),
+        })
+    }
+
     pub(crate) fn with_exec_policy_network_rules(
         &self,
         exec_policy: &Policy,
     ) -> std::io::Result<Self> {
         let mut spec = self.clone();
-        apply_exec_policy_network_rules(&mut spec.config, exec_policy);
+        let (allowed, denied) = exec_policy.compiled_network_domains();
+        spec.config.apply_saved_domain_rules(allowed, &denied);
+        if validate_policy_against_constraints(&spec.config, &spec.constraints).is_ok() {
+            return Ok(spec);
+        }
+        // A stale grant cannot invalidate saved denials. Fixed deny lists retain their configured set.
+        spec.config.domains.clone_from(&self.config.domains);
+        spec.config.apply_saved_domain_rules(Vec::new(), &denied);
         validate_policy_against_constraints(&spec.config, &spec.constraints).map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -540,28 +672,9 @@ impl NetworkProxySpec {
     }
 }
 
-fn apply_exec_policy_network_rules(config: &mut NetworkProxyConfig, exec_policy: &Policy) {
-    let (allowed_domains, denied_domains) = exec_policy.compiled_network_domains();
-    upsert_network_domains(config, allowed_domains, /*allow*/ true);
-    upsert_network_domains(config, denied_domains, /*allow*/ false);
-}
-
-fn upsert_network_domains(config: &mut NetworkProxyConfig, hosts: Vec<String>, allow: bool) {
-    let mut incoming = HashSet::new();
-    for host in hosts {
-        if incoming.insert(host.clone()) {
-            config.upsert_domain_permission(
-                host,
-                if allow {
-                    codex_network_proxy::NetworkDomainPermission::Allow
-                } else {
-                    codex_network_proxy::NetworkDomainPermission::Deny
-                },
-                normalize_host,
-            );
-        }
-    }
-}
+#[cfg(test)]
+#[path = "mcp_network_policy_tests.rs"]
+mod mcp_network_policy_tests;
 
 #[cfg(test)]
 #[path = "network_proxy_spec_tests.rs"]

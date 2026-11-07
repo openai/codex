@@ -137,6 +137,8 @@ use tokio::time::Instant;
 use tokio::time::sleep;
 use wiremock::MockServer;
 
+#[path = "mcp_network_policy_compat_tests.rs"]
+mod network_policy_compat_tests;
 #[path = "mcp_oauth_refresh_tests.rs"]
 mod oauth_refresh_tests;
 #[path = "mcp_sandbox_tests.rs"]

@@ -1595,28 +1595,37 @@ impl NetworkProxy {
         Ok(addrs)
     }
 
-    pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
-        let current_cfg = self.state.current_cfg().await?;
+    /// Verifies that an in-place reload preserves the running proxy's listeners.
+    pub fn validate_config_update(
+        current_cfg: &config::NetworkProxyConfig,
+        next: &config::NetworkProxyConfig,
+    ) -> Result<()> {
         anyhow::ensure!(
-            new_state.config.enabled == current_cfg.enabled,
+            next.enabled == current_cfg.enabled,
             "cannot update network.enabled on a running proxy"
         );
         anyhow::ensure!(
-            new_state.config.proxy_url == current_cfg.proxy_url,
+            next.proxy_url == current_cfg.proxy_url,
             "cannot update network.proxy_url on a running proxy"
         );
         anyhow::ensure!(
-            new_state.config.socks_url == current_cfg.socks_url,
+            next.socks_url == current_cfg.socks_url,
             "cannot update network.socks_url on a running proxy"
         );
         anyhow::ensure!(
-            new_state.config.enable_socks5 == current_cfg.enable_socks5,
+            next.enable_socks5 == current_cfg.enable_socks5,
             "cannot update network.enable_socks5 on a running proxy"
         );
         anyhow::ensure!(
-            new_state.config.enable_socks5_udp == current_cfg.enable_socks5_udp,
+            next.enable_socks5_udp == current_cfg.enable_socks5_udp,
             "cannot update network.enable_socks5_udp on a running proxy"
         );
+        Ok(())
+    }
+
+    pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
+        let current_cfg = self.state.current_cfg().await?;
+        Self::validate_config_update(&current_cfg, &new_state.config)?;
         let config = self
             .state
             .local_binding_policy
