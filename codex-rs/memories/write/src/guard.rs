@@ -1,28 +1,41 @@
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
-use codex_login::AuthManager;
+use codex_model_provider::ProviderAuthContext;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use tracing::info;
 use tracing::warn;
 
-pub(crate) async fn rate_limits_ok(auth_manager: &AuthManager, config: &Config) -> bool {
-    rate_limits_check(auth_manager, config)
+pub(crate) async fn rate_limits_ok(auth_context: &ProviderAuthContext, config: &Config) -> bool {
+    rate_limits_check(auth_context, config)
         .await
         .unwrap_or(true)
 }
 
-async fn rate_limits_check(auth_manager: &AuthManager, config: &Config) -> Option<bool> {
-    let auth = auth_manager.auth().await?;
+async fn rate_limits_check(auth_context: &ProviderAuthContext, config: &Config) -> Option<bool> {
+    let (auth, captured_factory) = auth_context
+        .credentials
+        .auth_with_http_client_factory()
+        .await?;
     if !auth.uses_codex_backend() {
         return None;
     }
 
-    let client = BackendClient::from_auth(
+    let factory = config.http_client_factory();
+    let policy = factory
+        .network_policy()
+        .clone()
+        .with_account_binding(captured_factory.network_policy())?;
+    let client = BackendClient::from_auth_with_runtime(
         config.chatgpt_base_url.clone(),
         &auth,
-        config.http_client_factory(),
-    );
+        factory.with_network_policy(policy),
+        auth_context.runtime_auth.as_ref(),
+        /*headers*/ &Default::default(),
+    )
+    .await
+    .map_err(|error| warn!(%error, "failed to prepare memory rate-limit authentication"))
+    .ok()?;
 
     let snapshots = client
         .get_rate_limits_many()

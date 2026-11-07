@@ -22,14 +22,28 @@ pub async fn run_harness_through_proxy(
     test_name: &str,
     realtime_target: Option<std::net::SocketAddr>,
 ) -> Result<()> {
+    run_harness_through_proxy_with_env(server, test_name, realtime_target, &[]).await
+}
+
+/// Adds process-local auth inputs without changing the test runner's environment.
+pub async fn run_harness_through_proxy_with_env(
+    server: &MockServer,
+    test_name: &str,
+    realtime_target: Option<std::net::SocketAddr>,
+    environment: &[(&str, Option<&str>)],
+) -> Result<()> {
     // The production destination check stays intact. A test-only CA and CONNECT proxy route
     // the real host names to wiremock, only inside this isolated test subprocess.
     codex_utils_rustls_provider::ensure_rustls_crypto_provider();
     let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec![
         "api.openai.com".into(),
+        "api.openai.org".into(),
         "auth.openai.com".into(),
         "chatgpt.com".into(),
         "us.chatgpt.com".into(),
+        "chatgpt-staging.com".into(),
+        "us.chatgpt-staging.com".into(),
+        "auth.api.openai.org".into(),
     ])?;
     let ca_dir = tempfile::tempdir()?;
     let ca_path = ca_dir.path().join("ca.pem");
@@ -58,9 +72,13 @@ pub async fn run_harness_through_proxy(
                         headers.lines().next(),
                         Some(
                             "CONNECT api.openai.com:443 HTTP/1.1"
+                                | "CONNECT api.openai.org:443 HTTP/1.1"
                                 | "CONNECT auth.openai.com:443 HTTP/1.1"
                                 | "CONNECT chatgpt.com:443 HTTP/1.1"
                                 | "CONNECT us.chatgpt.com:443 HTTP/1.1"
+                                | "CONNECT chatgpt-staging.com:443 HTTP/1.1"
+                                | "CONNECT us.chatgpt-staging.com:443 HTTP/1.1"
+                                | "CONNECT auth.api.openai.org:443 HTTP/1.1"
                         )
                     ),
                     "unexpected proxy destination"
@@ -118,6 +136,12 @@ pub async fn run_harness_through_proxy(
         .env("HTTPS_PROXY", proxy_url)
         .env("NO_PROXY", codex_network_proxy::DEFAULT_NO_PROXY_VALUE)
         .env("CODEX_CA_CERTIFICATE", ca_path);
+    for (key, value) in environment {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
     let output = tokio::time::timeout(Duration::from_secs(90), command.output()).await;
     proxy_task.abort();
     let output = output??;

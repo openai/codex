@@ -3765,6 +3765,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "codex-agent-identity",
  "codex-analytics",
  "codex-api",
  "codex-config",
@@ -4221,6 +4222,7 @@ name = "codex-memories-write"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "codex-backend-client",
  "codex-config",
@@ -4235,6 +4237,7 @@ dependencies = [
  "codex-protocol",
  "codex-rollout",
  "codex-rollout-trace",
+ "codex-runtime-agent-instance",
  "codex-secrets",
  "codex-state",
  "codex-terminal-detection",

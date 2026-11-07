@@ -2,6 +2,7 @@ use super::*;
 use crate::async_scorer::authorization::ScoreAuthorization;
 use crate::async_scorer::conversation::ConversationBackend;
 use crate::async_scorer::conversation::ConversationRequest;
+use crate::async_scorer::decisions::DecisionsCredential;
 use crate::async_scorer::sampler::LunaSampler;
 use crate::async_scorer::sampler::LunaSamplerError;
 use crate::async_scorer::sampler::LunaSamplingRequest;
@@ -80,7 +81,8 @@ async fn pending_request(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn configured_reset_limit_rebuilds_history_without_rejecting_fresh_evidence() -> Result<()> {
     use crate::async_scorer::decisions::DecisionsSampler;
-    use codex_http_client::HttpClientBuilder;
+    use codex_http_client::HttpClientFactory;
+    use codex_http_client::OutboundProxyPolicy;
 
     skip_if_no_network!(Ok(()));
     for (limit, reused) in [(1, false), (100_000, true)] {
@@ -112,9 +114,10 @@ async fn configured_reset_limit_rebuilds_history_without_rejecting_fresh_evidenc
         }]])
         .await;
         store.insert(DecisionsSampler::new(
-            HttpClientBuilder::new().build_direct()?,
-            "synthetic-key".into(),
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            DecisionsCredential::ApiKey("synthetic-key".into()),
             format!("{}/v1/responses", decisions_server.uri()),
+            /*auth_context*/ None,
         )?);
         let (mut request, score) = pending_request(&fixture, "parent").await?;
         request.metrics = Some(metrics.clone());

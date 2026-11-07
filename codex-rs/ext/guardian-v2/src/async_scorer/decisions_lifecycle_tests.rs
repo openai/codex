@@ -1,8 +1,10 @@
 //! Decisions outcomes cannot affect the real baseline score/publication path.
 use super::*;
 use crate::async_scorer::conversation::ConversationBackend;
+use crate::async_scorer::decisions::DecisionsCredential;
 use crate::async_scorer::decisions::DecisionsSampler;
-use codex_http_client::HttpClientBuilder;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -80,9 +82,10 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
             store.remove::<DecisionsSampler>();
         } else if enabled {
             store.insert(DecisionsSampler::new(
-                HttpClientBuilder::new().build_direct()?,
-                "synthetic-key".into(),
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                DecisionsCredential::ApiKey("synthetic-key".into()),
                 decisions_server.uri(),
+                /*auth_context*/ None,
             )?);
         } else {
             assert!(store.get::<DecisionsSampler>().is_none());
@@ -219,9 +222,10 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
         ));
         if enabled {
             store.insert(DecisionsSampler::new(
-                HttpClientBuilder::new().build_direct()?,
-                "synthetic-key".into(),
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                DecisionsCredential::ApiKey("synthetic-key".into()),
                 server.uri(),
+                /*auth_context*/ None,
             )?);
         }
         fixture.score_tool(ToolName::plain("read_file")).await;
@@ -269,5 +273,214 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
             RecordedMetric::Histogram(name, _, _)
                 if name == "codex.guardian_v2.decisions_comparison.duration_ms")));
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn decisions_startup_uses_thread_runtime_and_staging_destination() -> anyhow::Result<()> {
+    use base64::Engine;
+    use codex_features::RuntimeAuthMode;
+    use codex_history::ResponseItemEnvelope;
+    use codex_login::AuthManager;
+    use codex_login::CodexAuth;
+    use codex_model_provider::ProviderAuthContext;
+    use codex_runtime_agent_instance::AgentHostAuthorization;
+    use codex_runtime_agent_instance::RuntimeAuthManager;
+    use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
+    use codex_runtime_agent_instance::RuntimeRole;
+    use core_test_support::runtime_auth::PROBE_SERVER;
+    use core_test_support::runtime_auth::run_harness_through_proxy;
+    use std::collections::BTreeSet;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    if let Ok(server) = std::env::var(PROBE_SERVER) {
+        let fixture = GuardianFailureFixture::new().await?;
+        let credentials =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("thread-api-key"));
+        let runtime = Arc::new(RuntimeAuthManager::new(
+            Arc::clone(&credentials),
+            AgentHostAuthorization::InstallationId {
+                installation_id: uuid::Uuid::nil(),
+            },
+            RuntimeRegistrationMetadata {
+                harness: Some("codex".into()),
+                harness_version: None,
+                role: RuntimeRole::Orchestrator,
+            },
+            "https://auth.api.openai.org/agent/register".parse()?,
+        ));
+        let request = crate::async_scorer::sampler::tests::sample_request("runtime-auth");
+        let (input, _) = LunaSampler::prepare_input(
+            &request,
+            /*history*/ None,
+            request
+                .input
+                .iter()
+                .cloned()
+                .map(ResponseItemEnvelope::new)
+                .collect(),
+        );
+        for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+            let context = ProviderAuthContext {
+                credentials: Arc::clone(&credentials),
+                runtime_auth: Some((Arc::clone(&runtime), mode)),
+            };
+            let mut config = fixture.test.config.clone();
+            config.model_provider_id = "openai".into();
+            config.model_provider =
+                ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+            config.chatgpt_base_url = "https://chatgpt-staging.com/backend-api".into();
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config.features.enable(Feature::GuardianApproval)?;
+            config.features.enable(Feature::GuardianV2)?;
+            config
+                .features
+                .enable(Feature::GuardianV2DecisionsComparison)?;
+            let store = fixture.test.codex.thread_extension_data();
+            store.insert(context.clone());
+            fixture.registry.thread_lifecycle_contributors()[0]
+                .on_thread_start(ThreadStartInput {
+                    config: &config,
+                    session_source: &SessionSource::Exec,
+                    persistent_thread_state_available: false,
+                    environments: &[],
+                    mcp_resource_client: None,
+                    extension_metrics: None,
+                    session_store: &fixture.session_store,
+                    thread_store: store,
+                })
+                .await;
+            let sampler = store
+                .get::<DecisionsSampler>()
+                .expect("thread startup should initialize Decisions");
+            for _ in 0..2 {
+                let outcome = sampler
+                    .start_conversation_comparison(&input)
+                    .finish()
+                    .await?
+                    .0?;
+                assert_eq!(outcome, "low");
+            }
+            let custom = Arc::new(DecisionsSampler::new(
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                DecisionsCredential::ApiKey("comparison-key".into()),
+                format!("{server}/custom-decisions"),
+                Some(&context),
+            )?);
+            assert_eq!(
+                custom
+                    .start_conversation_comparison(&input)
+                    .finish()
+                    .await?
+                    .0?,
+                "low"
+            );
+        }
+        return Ok(());
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/agent/register"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "actor_auth": {"type": "platform_api_key", "credential": "thread-api-key"}
+        })))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "runtime_agent_instance_id": "runtime-decisions", "agent_host_id": "host",
+            "actor": {"kind": "platform", "user_id": "actor", "organization_id": "org", "project_id": null}
+        }))).expect(/*r*/ 1).mount(&server).await;
+    let response =
+        json!({"answers": [{"type": "choice", "name": "guardian_risk", "choice": "low"}]});
+    for (url, destination) in [
+        (
+            "/v1/decisions",
+            "https://api.openai.org/v1/decisions-same-origin",
+        ),
+        (
+            "/v1/decisions-same-origin",
+            "https://api.openai.com/v1/decisions-final",
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(url))
+            .respond_with(ResponseTemplate::new(/*s*/ 307).insert_header("Location", destination))
+            .expect(/*r*/ 4)
+            .mount(&server)
+            .await;
+    }
+    for (url, count) in [("/v1/decisions-final", 4), ("/custom-decisions", 2)] {
+        Mock::given(method("POST"))
+            .and(path(url))
+            .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(response.clone()))
+            .expect(count)
+            .mount(&server)
+            .await;
+    }
+    run_harness_through_proxy(
+        &server,
+        "async_scorer::extension::tests::decisions_lifecycle_tests::decisions_startup_uses_thread_runtime_and_staging_destination",
+        /*realtime_target*/ None,
+    )
+    .await?;
+    let requests = server.received_requests().await.unwrap();
+    let mut proofs = BTreeSet::new();
+    let mut dual = 0;
+    let mut assertion_only = 0;
+    for request in requests.iter().filter(|r| r.url.path() == "/v1/decisions") {
+        assert_eq!(request.headers["host"], "api.openai.org");
+        let authorization = request.headers["authorization"].to_str()?;
+        let proof = if let Some(proof) = request.headers.get("x-openai-agent-assertion") {
+            assert_eq!(authorization, "Bearer thread-api-key");
+            dual += 1;
+            proof.to_str()?.to_owned()
+        } else {
+            assertion_only += 1;
+            authorization
+                .strip_prefix("AgentAssertion ")
+                .unwrap()
+                .to_owned()
+        };
+        let payload: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(/*n*/ 2).unwrap())?,
+        )?;
+        assert_eq!(payload["runtime_agent_instance"], "runtime-decisions");
+        assert!(
+            proofs.insert(proof),
+            "each classification needs a fresh assertion"
+        );
+    }
+    assert_eq!((dual, assertion_only), (2, 2));
+    for request in requests
+        .iter()
+        .filter(|r| r.url.path() == "/v1/decisions-same-origin")
+    {
+        assert_eq!(request.headers["host"], "api.openai.org");
+        assert!(requests.iter().any(|initial| {
+            initial.url.path() == "/v1/decisions"
+                && request.headers.get("authorization") == initial.headers.get("authorization")
+                && request.headers.get("x-openai-agent-assertion")
+                    == initial.headers.get("x-openai-agent-assertion")
+        }));
+    }
+    for request in requests
+        .iter()
+        .filter(|r| r.url.path() == "/v1/decisions-final")
+    {
+        assert_eq!(request.headers["host"], "api.openai.com");
+        assert!(!request.headers.contains_key("authorization"));
+        assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+    }
+    for request in requests
+        .iter()
+        .filter(|r| r.url.path() == "/custom-decisions")
+    {
+        assert_eq!(request.headers["authorization"], "Bearer comparison-key");
+        assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+    }
+    server.verify().await;
     Ok(())
 }

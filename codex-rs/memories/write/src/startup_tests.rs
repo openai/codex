@@ -692,7 +692,10 @@ async fn memories_startup_phase1_uses_live_thread_service_tier_and_detached_meta
 
     let context = crate::runtime::MemoryStartupContext::new(
         Arc::clone(&test.thread_manager),
-        test.thread_manager.auth_manager(),
+        test.codex
+            .thread_extension_data()
+            .get::<codex_model_provider::ProviderAuthContext>()
+            .expect("session startup installs the provider auth context"),
         test.session_configured.thread_id,
         Arc::clone(&test.codex),
         &test.config,
@@ -1228,7 +1231,6 @@ async fn trigger_memories_startup(test: &TestCodex) {
     let parent_permission_profile = config.permissions.effective_permission_profile();
     start_memories_startup_task(
         Arc::clone(&test.thread_manager),
-        test.thread_manager.auth_manager(),
         test.session_configured.thread_id,
         Arc::clone(&test.codex),
         Arc::new(config),
@@ -1638,5 +1640,177 @@ async fn memories_startup_phase2_v2_consolidates_without_a_handbook() -> anyhow:
     memories.consolidation_service_tier = "flex".to_string();
     let request = run_memory_phase_two_model_request_test(&server, home, memories).await?;
     assert_eq!(request.body_json()["service_tier"], "flex");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn memories_startup_uses_thread_runtime_and_keeps_custom_destinations_independent()
+-> anyhow::Result<()> {
+    use base64::Engine;
+    use codex_features::RuntimeAuthMode;
+    use codex_login::AuthManager;
+    use codex_login::CodexAuth;
+    use codex_model_provider::ProviderAuthContext;
+    use codex_runtime_agent_instance::AgentHostAuthorization;
+    use codex_runtime_agent_instance::RuntimeAuthManager;
+    use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
+    use codex_runtime_agent_instance::RuntimeRole;
+    use core_test_support::runtime_auth::PROBE_SERVER;
+    use core_test_support::runtime_auth::run_harness_through_proxy;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::sync::Arc;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        json!({
+            "iss": "https://auth.openai.com/", "session_id": "memory-login",
+            "https://api.openai.com/auth": {"user_id": "actor", "chatgpt_account_id": "account_id"}
+        })
+        .to_string(),
+    );
+    let token = format!("header.{claims}.signature");
+    if let Ok(server) = std::env::var(PROBE_SERVER) {
+        let credentials =
+            AuthManager::from_auth_for_testing(CodexAuth::from_external_chatgpt_tokens(
+                &token,
+                "account_id",
+                /*chatgpt_plan_type*/ None,
+            )?);
+        let runtime = Arc::new(RuntimeAuthManager::new(
+            Arc::clone(&credentials),
+            AgentHostAuthorization::InstallationId {
+                installation_id: uuid::Uuid::nil(),
+            },
+            RuntimeRegistrationMetadata {
+                harness: Some("codex".into()),
+                harness_version: None,
+                role: RuntimeRole::Orchestrator,
+            },
+            "https://auth.openai.com/agent/register".parse()?,
+        ));
+        for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+            let auth = ProviderAuthContext {
+                credentials: Arc::clone(&credentials),
+                runtime_auth: Some((Arc::clone(&runtime), mode)),
+            };
+            for base_url in [
+                "https://chatgpt.com/backend-api".to_owned(),
+                format!("{server}/custom/backend-api"),
+            ] {
+                let model_server = MockServer::start().await;
+                let home = Arc::new(TempDir::new()?);
+                let mut test = test_codex()
+                    .with_home(Arc::clone(&home))
+                    .with_auth(CodexAuth::from_api_key("ambient-key"))
+                    .with_config(|config| {
+                        config
+                            .features
+                            .enable(Feature::Sqlite)
+                            .expect("enable state database");
+                        config.memories = startup_test_memories_config();
+                        config.memories.version = codex_protocol::MemoryVersion::V1;
+                        config.memories.dual_write = false;
+                    })
+                    .build(&model_server)
+                    .await?;
+                test.config.chatgpt_base_url = base_url;
+                test.codex.thread_extension_data().insert(auth.clone());
+                let db = test.codex.state_db().expect("startup state database");
+                seed_stage1_output(
+                    db.as_ref(),
+                    home.path(),
+                    chrono::Utc::now(),
+                    "source memory",
+                    "source summary",
+                    "quota-auth",
+                )
+                .await?;
+                let root = home.path().join("memories");
+                tokio::fs::create_dir_all(&root).await?;
+                seed_required_memory_artifacts(&root).await?;
+                let phase2 = mount_sse_once(
+                    &model_server,
+                    sse(vec![
+                        ev_response_created("quota-consolidation"),
+                        ev_assistant_message("quota-result", "memory complete"),
+                        ev_completed("quota-consolidation"),
+                    ]),
+                )
+                .await;
+                trigger_memories_startup(&test).await;
+                // Consolidation starts only after the startup quota request finishes.
+                wait_for_single_request(&phase2).await;
+                shutdown_test_codex(&test).await?;
+            }
+        }
+        return Ok(());
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/agent/register"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "runtime_agent_instance_id": "runtime-memory", "agent_host_id": "host",
+            "actor": {"kind": "chatgpt", "user_id": "actor", "account_id": "account_id"}
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+    let quota = json!({"plan_type": "plus", "rate_limit": {
+        "allowed": true, "limit_reached": false,
+        "primary_window": {"used_percent": 0, "limit_window_seconds": 300,
+            "reset_after_seconds": 60, "reset_at": 2000000000}
+    }});
+    for url in ["/backend-api/wham/usage", "/custom/backend-api/wham/usage"] {
+        Mock::given(method("GET"))
+            .and(path(url))
+            .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(quota.clone()))
+            .expect(/*r*/ 2)
+            .mount(&server)
+            .await;
+    }
+    run_harness_through_proxy(
+        &server,
+        "startup_tests::memories_startup_uses_thread_runtime_and_keeps_custom_destinations_independent",
+        /*realtime_target*/ None,
+    )
+    .await?;
+    let requests = server.received_requests().await.unwrap();
+    let quota_requests = requests
+        .iter()
+        .filter(|r| r.url.path() == "/backend-api/wham/usage")
+        .collect::<Vec<_>>();
+    assert_eq!(quota_requests.len(), 2);
+    let mut dual = 0;
+    for request in quota_requests {
+        assert_eq!(request.headers["chatgpt-account-id"], "account_id");
+        let authorization = request.headers["authorization"].to_str()?;
+        let proof = if let Some(proof) = request.headers.get("x-openai-agent-assertion") {
+            dual += 1;
+            assert_eq!(authorization, format!("Bearer {token}"));
+            proof.to_str()?
+        } else {
+            authorization.strip_prefix("AgentAssertion ").unwrap()
+        };
+        let payload: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(/*n*/ 2).unwrap())?,
+        )?;
+        assert_eq!(payload["runtime_agent_instance"], "runtime-memory");
+    }
+    assert_eq!(dual, 1);
+    for request in requests
+        .iter()
+        .filter(|r| r.url.path().starts_with("/custom/"))
+    {
+        assert_eq!(request.headers["authorization"], format!("Bearer {token}"));
+        assert!(!request.headers.contains_key("x-openai-agent-assertion"));
+    }
+    server.verify().await;
     Ok(())
 }

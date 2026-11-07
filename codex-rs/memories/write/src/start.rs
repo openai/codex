@@ -9,7 +9,7 @@ use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_features::Feature;
-use codex_login::AuthManager;
+use codex_model_provider::ProviderAuthContext;
 use codex_protocol::MemoryVersion;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
@@ -23,7 +23,6 @@ use tracing::warn;
 /// subagent sessions.
 pub fn start_memories_startup_task(
     thread_manager: Arc<ThreadManager>,
-    auth_manager: Arc<AuthManager>,
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
     config: Arc<Config>,
@@ -37,6 +36,14 @@ pub fn start_memories_startup_task(
         return;
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "Core installs provider auth before starting memories"
+    )]
+    let auth = thread
+        .thread_extension_data()
+        .get::<ProviderAuthContext>()
+        .expect("session startup installs the provider auth context");
     // Dual-write warms v2 while v1 is selected; it is no longer needed after cutover.
     let versions = if config.memories.dual_write && config.memories.version == MemoryVersion::V1 {
         vec![MemoryVersion::V1, MemoryVersion::V2]
@@ -47,11 +54,11 @@ pub fn start_memories_startup_task(
         let mut pipeline_config = config.as_ref().clone();
         pipeline_config.memories.version = version;
         let config = Arc::new(pipeline_config);
-        let auth_manager = Arc::clone(&auth_manager);
+        let auth = Arc::clone(&auth);
         let parent_permission_profile = parent_permission_profile.clone();
         let context = Arc::new(MemoryStartupContext::new(
             Arc::clone(&thread_manager),
-            Arc::clone(&auth_manager),
+            Arc::clone(&auth),
             thread_id,
             Arc::clone(&thread),
             config.as_ref(),
@@ -77,7 +84,7 @@ pub fn start_memories_startup_task(
             // done before the quota check.
             phase1::prune(context.as_ref(), &config).await;
 
-            if !guard::rate_limits_ok(&auth_manager, &config).await {
+            if !guard::rate_limits_ok(&auth, &config).await {
                 context.counter(
                     MEMORY_STARTUP,
                     /*inc*/ 1,

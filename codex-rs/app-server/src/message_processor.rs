@@ -559,7 +559,7 @@ impl MessageProcessor {
             Arc::clone(&thread_list_state_permit),
         );
         let thread_processor = ThreadRequestProcessor::new(
-            auth_manager.clone(),
+            auth_manager,
             Arc::clone(&thread_manager),
             outgoing.clone(),
             arg0_paths.clone(),
@@ -579,7 +579,6 @@ impl MessageProcessor {
             sample_responses,
         );
         let turn_processor = TurnRequestProcessor::new(
-            auth_manager,
             Arc::clone(&thread_manager),
             outgoing.clone(),
             analytics_events_client.clone(),

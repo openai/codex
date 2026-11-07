@@ -40,6 +40,8 @@ tracing = { workspace = true, features = ["log"] }
 uuid = { workspace = true, features = ["v4", "v5"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
 core_test_support = { workspace = true }

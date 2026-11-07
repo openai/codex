@@ -7,7 +7,8 @@ use codex_context_fragments::RenderedFragment;
 use codex_features::Feature::RuntimeAgentInstances;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::TrustedToolSource;
-use codex_http_client::HttpClientBuilder;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::ProviderAuthContext;
@@ -110,7 +111,7 @@ fn decisions_api_key(
 fn current_key(credential: DecisionsCredential) -> Result<String, DecisionsError> {
     credential
         .resolve(credential.source_generation())
-        .map(Cow::into_owned)
+        .and_then(|auth| auth.api_key().map(str::to_owned))
         .ok_or(DecisionsError::Credentials)
 }
 
@@ -278,9 +279,10 @@ async fn http_contract_and_untrusted_response_validation() {
         .mount(&server)
         .await;
     let sampler = DecisionsSampler::new(
-        HttpClientBuilder::new().build_direct().unwrap(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         "synthetic-key".into(),
         format!("{}/v1/decisions", server.uri()),
+        /*auth_context*/ None,
     )
     .unwrap();
     let mut sampler = Arc::new(sampler);
@@ -337,9 +339,10 @@ async fn decisions_admits_newest_request_by_cancelling_oldest() {
         .await;
     let sampler = Arc::new(
         DecisionsSampler::new(
-            HttpClientBuilder::new().build_direct().unwrap(),
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             DecisionsCredential::SavedLogin(Arc::clone(&manager)),
             server.uri(),
+            /*auth_context*/ None,
         )
         .unwrap(),
     );
@@ -445,9 +448,10 @@ async fn cancelling_a_decisions_request_releases_thread_capacity() {
         .await;
     let sampler = Arc::new(
         DecisionsSampler::new(
-            HttpClientBuilder::new().build_direct().unwrap(),
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             "synthetic-key".into(),
             server.uri(),
+            /*auth_context*/ None,
         )
         .unwrap(),
     );
@@ -484,4 +488,330 @@ async fn cancelling_a_decisions_request_releases_thread_capacity() {
     .unwrap()
     .unwrap();
     drop(permit);
+}
+
+#[tokio::test]
+async fn decisions_reuses_saved_runtime_and_isolates_an_identical_explicit_key()
+-> anyhow::Result<()> {
+    use base64::Engine;
+    use codex_features::RuntimeAuthMode;
+    use codex_model_provider::ProviderAuthContext;
+    use codex_runtime_agent_instance::AgentHostAuthorization;
+    use codex_runtime_agent_instance::RuntimeAuthManager;
+    use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
+    use codex_runtime_agent_instance::RuntimeRole;
+    use core_test_support::runtime_auth::PROBE_SERVER;
+    use core_test_support::runtime_auth::run_harness_through_proxy;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    if std::env::var_os(PROBE_SERVER).is_some() {
+        let credentials = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("same-key"));
+        let runtime = Arc::new(RuntimeAuthManager::new(
+            Arc::clone(&credentials),
+            AgentHostAuthorization::InstallationId {
+                installation_id: uuid::Uuid::nil(),
+            },
+            RuntimeRegistrationMetadata {
+                harness: Some("codex".into()),
+                harness_version: None,
+                role: RuntimeRole::Orchestrator,
+            },
+            "https://auth.openai.com/agent/register".parse()?,
+        ));
+        let _primary = runtime.auth().await?;
+        for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+            let context = ProviderAuthContext {
+                credentials: Arc::clone(&credentials),
+                runtime_auth: Some((Arc::clone(&runtime), mode)),
+            };
+            let source_generation = credentials
+                .auth_change_state_receiver()
+                .borrow()
+                .source_generation;
+            for (source, credential) in [
+                (
+                    "saved",
+                    DecisionsCredential::RuntimeLogin(Arc::clone(&credentials), source_generation),
+                ),
+                ("explicit", DecisionsCredential::ApiKey("same-key".into())),
+            ] {
+                let sampler = DecisionsSampler::new(
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                    credential,
+                    URL.to_owned(),
+                    Some(&context),
+                )?;
+                assert_eq!(
+                    sampler
+                        .request(json!({
+                            "model": MODEL,
+                            "input": [{"role": "user", "content": [{"type": "input_text", "text": source}]}],
+                            "questions": [{
+                                "type": "choice", "name": "guardian_risk", "instructions": "Classify risk.",
+                                "choices": [{"value": "low"}, {"value": "high"}]
+                            }]
+                        }), sampler.credential.source_generation())
+                        .await?,
+                    "low"
+                );
+            }
+        }
+        return Ok(());
+    }
+    let server = MockServer::start().await;
+    let registrations = AtomicUsize::new(0);
+    Mock::given(method("POST"))
+        .and(path("/agent/register"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "actor_auth": {"type": "platform_api_key", "credential": "same-key"}
+        })))
+        .respond_with(move |_: &wiremock::Request| {
+            let index = registrations.fetch_add(1, Ordering::SeqCst) + 1;
+            ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+                "runtime_agent_instance_id": format!("runtime-{index}"),
+                "agent_host_id": "host",
+                "actor": {"kind": "platform", "user_id": "actor", "organization_id": "org", "project_id": null}
+            }))
+        })
+        .expect(/*r*/ 2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/decisions"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "answers": [{"type": "choice", "name": "guardian_risk", "choice": "low"}]
+        })))
+        .expect(/*r*/ 4)
+        .mount(&server)
+        .await;
+    run_harness_through_proxy(
+        &server,
+        "async_scorer::decisions::tests::decisions_reuses_saved_runtime_and_isolates_an_identical_explicit_key",
+        /*realtime_target*/ None,
+    )
+    .await?;
+    let requests = server
+        .received_requests()
+        .await
+        .expect("requests were recorded");
+    let mut modes = [0; 2];
+    for request in requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/decisions")
+    {
+        let body: Value = serde_json::from_slice(&request.body)?;
+        let expected = match body["input"][0]["content"][0]["text"].as_str() {
+            Some("saved") => "runtime-1",
+            Some("explicit") => "runtime-2",
+            source => anyhow::bail!("unexpected test source {source:?}"),
+        };
+        let authorization = request.headers["authorization"].to_str()?;
+        let assertion = if let Some(assertion) = request.headers.get("x-openai-agent-assertion") {
+            assert_eq!(authorization, "Bearer same-key");
+            modes[0] += 1;
+            assertion.to_str()?
+        } else {
+            modes[1] += 1;
+            authorization
+                .strip_prefix("AgentAssertion ")
+                .expect("assertion-only auth must carry the assertion")
+        };
+        let payload = assertion
+            .split('.')
+            .nth(2)
+            .expect("assertion has a payload");
+        let payload: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload)?,
+        )?;
+        assert_eq!(payload["runtime_agent_instance"], expected);
+    }
+    assert_eq!(modes, [2, 2]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn decisions_preserves_platform_wif_credentials() -> anyhow::Result<()> {
+    use base64::Engine;
+    use codex_features::RuntimeAuthMode;
+    use codex_login::AuthConfig;
+    use codex_login::AuthCredentialsStoreMode;
+    use codex_login::AuthRouteConfig;
+    use codex_model_provider::ProviderAuthContext;
+    use codex_runtime_agent_instance::AgentHostAuthorization;
+    use codex_runtime_agent_instance::RuntimeAuthManager;
+    use codex_runtime_agent_instance::RuntimeRegistrationMetadata;
+    use codex_runtime_agent_instance::RuntimeRole;
+    use core_test_support::runtime_auth::PROBE_SERVER;
+    use core_test_support::runtime_auth::run_harness_through_proxy_with_env;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    if std::env::var_os(PROBE_SERVER).is_some() {
+        let home = tempfile::tempdir()?;
+        let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
+        let credentials = AuthManager::shared_from_auth_config(
+            AuthConfig {
+                codex_home: home.path().to_path_buf(),
+                auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+                keyring_backend_kind: Default::default(),
+                forced_login_method: None,
+                chatgpt_base_url: None,
+                forced_chatgpt_workspace_id: None,
+                managed_auth_policy: Default::default(),
+                auth_route_config: AuthRouteConfig::from_http_client_factory(factory.clone()),
+            },
+            /*enable_codex_api_key_env*/ false,
+        )
+        .await?;
+        assert!(
+            credentials.is_workload_identity_selected(),
+            "the request must use WIF"
+        );
+        let runtime = Arc::new(RuntimeAuthManager::new(
+            Arc::clone(&credentials),
+            AgentHostAuthorization::InstallationId {
+                installation_id: uuid::Uuid::nil(),
+            },
+            RuntimeRegistrationMetadata {
+                harness: Some("codex".into()),
+                harness_version: None,
+                role: RuntimeRole::Orchestrator,
+            },
+            "https://auth.openai.com/agent/register".parse()?,
+        ));
+        for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+            let context = ProviderAuthContext {
+                credentials: Arc::clone(&credentials),
+                runtime_auth: Some((Arc::clone(&runtime), mode)),
+            };
+            let sampler = DecisionsSampler::new(
+                factory.clone(),
+                select_api_key(
+                    "openai",
+                    /*base_url*/ None,
+                    Some(&context),
+                    &credentials,
+                )?,
+                URL.to_owned(),
+                Some(&context),
+            )?;
+            assert_eq!(
+                sampler
+                    .request(json!({
+                        "model": MODEL,
+                        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Classify this action."}]}],
+                        "questions": [{
+                            "type": "choice", "name": "guardian_risk", "instructions": "Classify risk.",
+                            "choices": [{"value": "low"}, {"value": "high"}]
+                        }]
+                    }), sampler.credential.source_generation())
+                    .await?,
+                "low"
+            );
+        }
+        return Ok(());
+    }
+
+    let claims = json!({
+        "iss": "https://auth.openai.com",
+        "sub": "service-account",
+        "session_id": "family-one",
+        "jti": "token-one",
+        "https://api.openai.com/auth": {
+            "user_id": "service-account",
+            "wif_product": "api",
+            "wif_identity_provider_id": "provider-one",
+            "wif_federation_rule_id": "platform-rule",
+            "wif_runtime_authorization_version": 1,
+            "wif_provider_trust_version": "trust-one",
+            "wif_provider_revision": "provider-revision-one",
+            "wif_mapping_revision": "mapping-revision-one"
+        }
+    });
+    let access_token = format!(
+        "e30.{}.sig",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?)
+    );
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "expires_in": 600,
+            "wif_product": "api",
+            "api_organization_id": "org",
+            "api_project_id": "proj",
+            "user_id": "service-account"
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/agent/register"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "actor_auth": {"type": "platform_api_key", "credential": access_token}
+        })))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "runtime_agent_instance_id": "runtime-wif",
+            "agent_host_id": "host",
+            "actor": {"kind": "platform", "user_id": "service-account", "organization_id": "org", "project_id": "proj"}
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/decisions"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "answers": [{"type": "choice", "name": "guardian_risk", "choice": "low"}]
+        })))
+        .expect(/*r*/ 2)
+        .mount(&server)
+        .await;
+
+    let identity = tempfile::NamedTempFile::new()?;
+    std::fs::write(identity.path(), "external-identity-proof")?;
+    run_harness_through_proxy_with_env(
+        &server,
+        "async_scorer::decisions::tests::decisions_preserves_platform_wif_credentials",
+        /*realtime_target*/ None,
+        &[
+            ("OPENAI_FEDERATION_RULE_ID", Some("platform-rule")),
+            (
+                "OPENAI_IDENTITY_TOKEN_FILE",
+                Some(identity.path().to_str().expect("test path is UTF-8")),
+            ),
+            ("CODEX_GUARDIAN_DECISIONS_API_KEY", None),
+        ],
+    )
+    .await?;
+
+    let requests = server.received_requests().await.expect("requests recorded");
+    let decisions = requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/decisions")
+        .collect::<Vec<_>>();
+    assert_eq!(decisions.len(), 2);
+    assert_eq!(
+        decisions[0].headers["authorization"],
+        format!("Bearer {access_token}")
+    );
+    assert!(
+        decisions[0]
+            .headers
+            .contains_key("x-openai-agent-assertion")
+    );
+    assert!(
+        decisions[1].headers["authorization"]
+            .to_str()?
+            .starts_with("AgentAssertion ")
+    );
+    assert!(
+        !decisions[1]
+            .headers
+            .contains_key("x-openai-agent-assertion")
+    );
+    Ok(())
 }

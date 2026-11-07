@@ -25,20 +25,29 @@ pub(super) fn decisions_sampler(
     input: &ThreadStartInput<'_, Config>,
     auth_manager: &Arc<AuthManager>,
 ) -> Option<DecisionsSampler> {
-    use codex_http_client::ClientRouteClass;
+    use codex_agent_identity::ChatGptEnvironment;
+    let auth_context = input.thread_store.get::<ProviderAuthContext>();
     let result = decisions_api_key(
         &input.config.model_provider_id,
         input.config.model_provider.base_url.as_deref(),
-        input.thread_store.get::<ProviderAuthContext>().as_deref(),
+        auth_context.as_deref(),
         auth_manager,
     )
     .and_then(|key| {
-        let client = input
-            .config
-            .http_client_factory()
-            .build_client_without_request_logging(URL, ClientRouteClass::Api)
-            .map_err(|_| DecisionsError::ClientSetup)?;
-        DecisionsSampler::new(client, key, URL.to_owned())
+        let url = if matches!(
+            ChatGptEnvironment::from_chatgpt_base_url(&input.config.chatgpt_base_url),
+            Ok(ChatGptEnvironment::Staging)
+        ) {
+            "https://api.openai.org/v1/decisions"
+        } else {
+            URL
+        };
+        DecisionsSampler::new(
+            input.config.http_client_factory(),
+            key,
+            url.to_owned(),
+            auth_context.as_deref(),
+        )
     });
     match result {
         Ok(sampler) => Some(sampler),

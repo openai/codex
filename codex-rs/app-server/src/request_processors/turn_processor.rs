@@ -80,7 +80,6 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
-    auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     analytics_events_client: AnalyticsEventsClient,
@@ -139,7 +138,6 @@ struct ThreadSettingsBuildParams {
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         analytics_events_client: AnalyticsEventsClient,
@@ -152,7 +150,6 @@ impl TurnRequestProcessor {
         turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
     ) -> Self {
         Self {
-            auth_manager,
             thread_manager,
             outgoing,
             analytics_events_client,
@@ -745,7 +742,6 @@ impl TurnRequestProcessor {
             if config_snapshot.is_primary_environment_configured() {
                 codex_memories_write::start_memories_startup_task(
                     Arc::clone(&self.thread_manager),
-                    Arc::clone(&self.auth_manager),
                     thread_id,
                     Arc::clone(&thread),
                     thread.config().await,
