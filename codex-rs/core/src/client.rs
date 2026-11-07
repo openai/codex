@@ -2068,11 +2068,8 @@ impl ResponsesHttpExecutor<'_> {
             options.extra_headers.extend(responses_headers);
             let thread_id = self.client.state.thread_id.to_string();
             let kind = codex_extension_api::ModelRequestKind::Generation;
-            crate::model_request::check_budget(
-                &self.client.request_contributors,
-                &thread_id,
-                kind,
-            )?;
+            crate::model_request::check_budget(&self.client.request_contributors, &thread_id, kind)
+                .await?;
             let interceptors = crate::model_request::prepare(
                 &self.client.request_contributors,
                 &thread_id,
@@ -2197,11 +2194,8 @@ impl ModelClientSession {
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            crate::model_request::check_budget(
-                &self.client.request_contributors,
-                &thread_id,
-                kind,
-            )?;
+            crate::model_request::check_budget(&self.client.request_contributors, &thread_id, kind)
+                .await?;
             let client_setup = self
                 .client
                 .current_client_setup(ClientRouting::Workspace)
@@ -2297,11 +2291,18 @@ impl ModelClientSession {
             }
 
             // The budget can be exhausted while the connection is being established.
-            crate::model_request::check_budget(
-                &self.client.request_contributors,
-                &thread_id,
-                kind,
-            )?;
+            if !warmup && !self.client.request_contributors.is_empty() {
+                crate::model_request::check_budget(
+                    &self.client.request_contributors,
+                    &thread_id,
+                    kind,
+                )
+                .await?;
+                // An account switch during the check requires fresh request setup and a new socket.
+                if self.websocket_session.auth_owner != self.client.auth_owner() {
+                    continue;
+                }
+            }
 
             let mut client_metadata = self.client.build_ws_client_metadata(
                 responses_metadata,

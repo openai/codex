@@ -72,13 +72,13 @@ use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::test_codex;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
+use futures::FutureExt;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Instrument;
@@ -742,7 +742,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
 
     let mut provider = websocket_provider(&server);
     provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
-    let budget = Arc::new(BudgetCache(true.into()));
+    let budget = Arc::new(BudgetCache::default());
     let harness = websocket_harness_with_provider_factory(
         provider,
         /*runtime_metrics_enabled*/ true,
@@ -755,19 +755,24 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     .await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
-    let Err(error) = client_session
-        .stream(
-            &prompt,
-            &harness.model_info,
-            &harness.session_telemetry,
-            harness.effort.clone(),
-            harness.summary,
-            /*service_tier*/ None,
-            &turn_metadata(&harness, /*turn_id*/ None),
-            &InferenceTraceContext::disabled(),
-        )
-        .await
-    else {
+    let responses_metadata = turn_metadata(&harness, /*turn_id*/ None);
+    let inference_trace = InferenceTraceContext::disabled();
+    let mut generation = Box::pin(client_session.stream(
+        &prompt,
+        &harness.model_info,
+        &harness.session_telemetry,
+        harness.effort.clone(),
+        harness.summary,
+        /*service_tier*/ None,
+        &responses_metadata,
+        &inference_trace,
+    ));
+    {
+        let mut exhausted = budget.0.lock().await;
+        assert!(generation.as_mut().now_or_never().is_none());
+        *exhausted = true;
+    }
+    let Err(error) = generation.await else {
         panic!("exhausted generation unexpectedly succeeded");
     };
     assert!(
@@ -789,7 +794,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
         )
         .await
         .expect("websocket prewarm failed");
-    budget.0.store(false, Ordering::Relaxed);
+    *budget.0.lock().await = false;
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     assert_eq!(server.handshakes().len(), 1);

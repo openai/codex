@@ -1,6 +1,7 @@
 //! Output gates allow inference immediately, hold complete output, and cancel with the turn.
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::GuardianAssessment;
 use codex_extension_api::ModelRequestContributor;
@@ -29,8 +30,7 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::time::Duration;
 use tokio::time::timeout;
@@ -130,15 +130,15 @@ impl Drop for Permit {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct BudgetCache(pub(super) AtomicBool);
+pub(super) struct BudgetCache(pub(super) Mutex<bool>);
 
 impl ModelRequestContributor for BudgetCache {
     fn request(&self, _input: ModelRequestInput<'_>) -> Option<Box<dyn ModelResponseInterceptor>> {
         None
     }
 
-    fn budget_exhausted(&self, _thread_id: &str) -> bool {
-        self.0.load(Ordering::Relaxed)
+    fn budget_exhausted<'a>(&'a self, _thread_id: &'a str) -> ExtensionFuture<'a, bool> {
+        Box::pin(async { *self.0.lock().await })
     }
 }
 
@@ -177,7 +177,7 @@ async fn budget_is_checked_again_after_tool_call(exhausted: bool) -> Result<()> 
         |event| matches!(event, EventMsg::DynamicToolCallRequest(call) if call.call_id == CALL_ID),
     )
     .await;
-    budget.0.store(exhausted, Ordering::Relaxed);
+    *budget.0.lock().await = exhausted;
     thread
         .submit(Op::DynamicToolResponse {
             id: CALL_ID.into(),

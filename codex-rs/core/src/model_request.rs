@@ -9,17 +9,18 @@ use codex_protocol::error::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub(crate) fn check_budget(
+pub(crate) async fn check_budget(
     contributors: &[Arc<dyn ModelRequestContributor>],
     thread_id: &str,
     kind: ModelRequestKind,
 ) -> Result<()> {
-    if kind == ModelRequestKind::Generation
-        && contributors
-            .iter()
-            .any(|contributor| contributor.budget_exhausted(thread_id))
-    {
-        return Err(CodexErr::SessionBudgetExceeded);
+    if kind == ModelRequestKind::Warmup {
+        return Ok(());
+    }
+    for contributor in contributors {
+        if contributor.budget_exhausted(thread_id).await {
+            return Err(CodexErr::SessionBudgetExceeded);
+        }
     }
     Ok(())
 }

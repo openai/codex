@@ -1,4 +1,5 @@
 //! Request-scoped interception of model response streams.
+use crate::ExtensionFuture;
 pub use codex_api::ApiError as ModelResponseError;
 pub use codex_api::GuardianAssessment;
 pub use codex_api::ResponseEvent;
@@ -31,11 +32,11 @@ pub struct ModelRequestInput<'a> {
 
 /// Checks model requests and creates request-scoped response interceptors.
 pub trait ModelRequestContributor: Send + Sync + std::fmt::Debug {
-    /// Reads the local budget state for a managed thread before submitting generation to the transport.
+    /// Core awaits this check before submitting generation to the transport.
     /// Return true to fail with `SessionBudgetExceeded`. Requests already handed to the
     /// transport can still complete or retry. WebSocket warmup skips this check.
-    fn budget_exhausted(&self, _thread_id: &str) -> bool {
-        false
+    fn budget_exhausted<'a>(&'a self, _thread_id: &'a str) -> ExtensionFuture<'a, bool> {
+        Box::pin(async { false })
     }
 
     /// Return None for requests this contributor does not intercept.
