@@ -42,6 +42,7 @@ pub(super) struct Chunk<'a> {
 
 #[derive(Default)]
 pub(super) struct PreparedText<'a> {
+    pub(super) has_authored_break: bool,
     pub(super) lines: Vec<Vec<Chunk<'a>>>,
 }
 
@@ -83,6 +84,7 @@ impl<'a> InlineText<'a> {
     }
 
     pub(super) fn finish(mut self) -> PreparedText<'a> {
+        self.text.has_authored_break = !self.text.lines.is_empty();
         if !self.line.is_empty() {
             self.text.lines.push(chunks(self.line));
         }

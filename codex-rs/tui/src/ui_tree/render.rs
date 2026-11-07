@@ -1,13 +1,14 @@
 //! Render the visible prefix of a horizontal display tree into one terminal line.
 
+mod prepare;
 mod text;
 
-use self::text::InlineText;
-use self::text::Paint;
+use self::prepare::NodeKind;
+use self::prepare::PreparedNode;
+
 use super::MAX_TEXT_BYTES;
 use super::TextProps;
 use super::TextWeight;
-use super::UiNode;
 use super::UiTree;
 use super::theme::RenderTheme;
 use crate::line_truncation::truncate_line_with_ellipsis;
@@ -23,22 +24,29 @@ use vtparse::CollectingVTActor;
 use vtparse::VTAction;
 use vtparse::VTParser;
 
+pub(crate) struct PreparedUiTree<'a>(Option<PreparedNode<'a>>);
+
 impl UiTree {
-    /// Render one row. On overflow, fit an unlinked ellipsis inside the supplied width.
+    pub(crate) fn prepare(&self, theme: &Theme) -> PreparedUiTree<'_> {
+        let theme = RenderTheme::new(theme);
+        PreparedUiTree(self.0.as_ref().and_then(|node| {
+            PreparedNode::from_node(node, Style::default(), /*href*/ None, &theme)
+        }))
+    }
+
     pub(crate) fn render_line(&self, width: u16, theme: &Theme) -> HyperlinkLine {
-        let width = usize::from(width);
+        self.prepare(theme).render_line(width)
+    }
+}
+
+impl PreparedUiTree<'_> {
+    pub(crate) fn render_line(&self, width: u16) -> HyperlinkLine {
         let Some(root) = self.0.as_ref().filter(|_| width > 0) else {
             return HyperlinkLine::default();
         };
-        let output = LineBuilder::from_node(
-            root,
-            width,
-            Style::default(),
-            /*href*/ None,
-            &RenderTheme::new(theme),
-        );
-        let mut line = output.line;
-        if output.used > width {
+        let width = usize::from(width);
+        let mut line = first_line(root, width);
+        if line.width() > width {
             line.line = truncate_line_with_ellipsis(line.line, width);
             line.clip_hyperlinks_to_width(line.width() - 1);
         }
@@ -46,122 +54,53 @@ impl UiTree {
     }
 }
 
-struct LineBuilder<'a> {
-    inline: InlineText<'a>,
-    line: HyperlinkLine,
-    used: usize,
-    width: usize,
-    saw_row: bool,
-}
-
-impl<'a> LineBuilder<'a> {
-    fn from_node(
-        node: &'a UiNode,
-        width: usize,
-        style: Style,
-        href: Option<&'a str>,
-        theme: &RenderTheme<'_>,
-    ) -> Self {
-        let mut output = Self {
-            inline: InlineText::default(),
-            line: HyperlinkLine::default(),
-            used: 0,
-            width,
-            saw_row: false,
-        };
-        output.visit(node, style, href, theme);
-        output.flush_runs();
-        output
-    }
-
-    fn visit(
-        &mut self,
-        node: &'a UiNode,
-        mut style: Style,
-        mut href: Option<&'a str>,
-        theme: &RenderTheme<'_>,
-    ) {
-        let children = match node {
-            UiNode::String(raw) => {
-                self.inline.push_leaf(raw, Paint { style, href });
-                return;
+fn first_line(node: &PreparedNode<'_>, width: usize) -> HyperlinkLine {
+    let mut line = HyperlinkLine::default();
+    match &node.kind {
+        NodeKind::Text(text) => {
+            if let Some(first) = text.lines.first() {
+                text::paint_chunks(first, &mut line, /*start*/ 0);
             }
-            UiNode::Row { props, children } => {
-                self.saw_row = true;
-                self.flush_runs();
-                if let Some(color) = &props.background {
-                    style = style.bg(color.resolve(theme));
+        }
+        NodeKind::Row {
+            children,
+            gap,
+            paint,
+        } => {
+            let mut used = 0;
+            for child in children {
+                let fragment = first_line(child, width - used);
+                let child_width = fragment.width();
+                if child_width == 0 {
+                    continue;
                 }
-                let start = self.used;
-                for child in children.iter().flatten() {
-                    if self.used > self.width {
-                        break;
-                    }
-                    let child = Self::from_node(child, self.width - self.used, style, href, theme);
-                    if child.used == 0 {
-                        continue;
-                    }
-                    if self.used > start && props.gap > 0 {
-                        let gap = props.gap.min((self.width + 1 - self.used) as u64) as usize;
-                        self.line
-                            .line
-                            .push_span(Span::styled(" ".repeat(gap), style));
-                        if let Some(url) = href {
-                            push_link(&mut self.line, self.used..self.used + gap, url);
+                if used > 0 {
+                    let gap = (*gap).min((width + 1 - used) as u64) as usize;
+                    if gap != 0 {
+                        line.line
+                            .push_span(Span::styled(" ".repeat(gap), paint.style));
+                        if let Some(href) = paint.href {
+                            push_link(&mut line, used..used + gap, href);
                         }
-                        self.used += gap;
+                        used += gap;
                     }
-                    self.line.line.spans.extend(child.line.line.spans);
-                    for mut link in child.line.hyperlinks {
-                        link.columns = self.used + link.columns.start..self.used + link.columns.end;
-                        push_link(&mut self.line, link.columns, &link.destination);
-                    }
-                    self.used += child.used;
                 }
-                return;
+                line.line.spans.extend(fragment.line.spans);
+                for link in fragment.hyperlinks {
+                    push_link(
+                        &mut line,
+                        used + link.columns.start..used + link.columns.end,
+                        &link.destination,
+                    );
+                }
+                used += child_width;
+                if used > width {
+                    break;
+                }
             }
-            UiNode::Text { props, children } => {
-                style = props.style(style, theme);
-                children
-            }
-            UiNode::Link { props, children } => {
-                href = Some(&props.href.0);
-                style = style.underlined();
-                children
-            }
-            UiNode::Bold { children } => {
-                style = style.bold();
-                children
-            }
-            UiNode::Italic { children } => {
-                style = style.italic();
-                children
-            }
-            UiNode::Underline { children } => {
-                style = style.underlined();
-                children
-            }
-        };
-        for node in children.iter().flatten() {
-            if self.used > self.width {
-                break;
-            }
-            self.visit(node, style, href, theme);
         }
     }
-
-    fn flush_runs(&mut self) {
-        let start = self.used;
-        let first_span = self.line.line.spans.len();
-        let text = std::mem::take(&mut self.inline).finish();
-        if let Some(first) = text.lines.first() {
-            self.used += text::paint_chunks(first, &mut self.line, self.used);
-        }
-        // A zero-cell fragment between row children must not style a later ellipsis.
-        if self.saw_row && self.used == start {
-            self.line.line.spans.truncate(first_span);
-        }
-    }
+    line
 }
 
 fn sanitize_leaf(raw: &str) -> Cow<'_, str> {
