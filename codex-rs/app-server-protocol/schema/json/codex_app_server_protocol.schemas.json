@@ -2308,6 +2308,29 @@
             },
             "method": {
               "enum": [
+                "account/securitySetup/read"
+              ],
+              "title": "Account/securitySetup/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/securitySetup/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/rateLimits/read"
               ],
               "title": "Account/rateLimits/readRequestMethod",
@@ -7015,6 +7038,48 @@
           "us_cr"
         ],
         "type": "string"
+      },
+      "AccountSecuritySetupAction": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object"
+      },
+      "AccountSecuritySetupNotice": {
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "action": {
+            "$ref": "#/definitions/v2/AccountSecuritySetupAction"
+          },
+          "description": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountId",
+          "action",
+          "description",
+          "title",
+          "userId"
+        ],
+        "type": "object"
       },
       "AccountSession": {
         "properties": {
@@ -13397,6 +13462,24 @@
           "requiresOpenaiAuth"
         ],
         "title": "GetAccountResponse",
+        "type": "object"
+      },
+      "GetAccountSecuritySetupResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Optional security reminder bound to the account that fetched it. Unavailable or ineligible accounts return no notice; this read never changes account security.",
+        "properties": {
+          "notice": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AccountSecuritySetupNotice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "GetAccountSecuritySetupResponse",
         "type": "object"
       },
       "GetAccountTokenUsageParams": {

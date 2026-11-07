@@ -52,6 +52,25 @@ class AccountRoutingOverride(Enum):
     us_cr = "us_cr"
 
 
+class AccountSecuritySetupAction(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    label: str
+    url: str
+
+
+class AccountSecuritySetupNotice(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_id: Annotated[str, Field(alias="accountId")]
+    action: AccountSecuritySetupAction
+    description: str
+    title: str
+    user_id: Annotated[str, Field(alias="userId")]
+
+
 class AccountSessionWorkspaceKind(Enum):
     personal = "personal"
     workspace = "workspace"
@@ -1917,6 +1936,13 @@ class GetAccountRateLimitsParams(BaseModel):
             description="The client supports automatic Luna Reserve fallback. For eligible ChatGPT CLI users, allow the backend to record experiment exposure after ordinary usage is blocked.",
         ),
     ] = None
+
+
+class GetAccountSecuritySetupResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    notice: AccountSecuritySetupNotice | None = None
 
 
 class GetAccountTokenUsageParams(BaseModel):
@@ -8148,6 +8174,18 @@ class AccountLogoutRequest(BaseModel):
     params: Annotated[None, Field(None)] = None
 
 
+class AccountSecuritySetupReadRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/securitySetup/read"],
+        Field(title="Account/securitySetup/readRequestMethod"),
+    ]
+    params: Annotated[None, Field(None)] = None
+
+
 class AccountRateLimitsReadRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -13699,6 +13737,7 @@ class ClientRequest(
         | AccountLoginStartRequest
         | AccountLoginCancelRequest
         | AccountLogoutRequest
+        | AccountSecuritySetupReadRequest
         | AccountRateLimitsReadRequest
         | AccountRateLimitResetCreditConsumeRequest
         | AccountUsageReadRequest
@@ -13810,6 +13849,7 @@ class ClientRequest(
         | AccountLoginStartRequest
         | AccountLoginCancelRequest
         | AccountLogoutRequest
+        | AccountSecuritySetupReadRequest
         | AccountRateLimitsReadRequest
         | AccountRateLimitResetCreditConsumeRequest
         | AccountUsageReadRequest

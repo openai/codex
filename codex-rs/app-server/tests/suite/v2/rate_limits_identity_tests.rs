@@ -140,3 +140,97 @@ async fn identity_is_rechecked_after_backend_response(
     assert_eq!(response, expected);
     Ok(())
 }
+
+#[test_case(false; "same_login")]
+#[test_case(true; "same_user_external_login")]
+#[tokio::test]
+async fn security_setup_rechecks_login_mode_after_backend_response(
+    change_login: bool,
+) -> Result<()> {
+    use codex_app_server_protocol::GetAccountSecuritySetupResponse;
+
+    let token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .chatgpt_account_id("workspace-a")
+            .chatgpt_user_id("user-a"),
+    )?;
+    let home = TempDir::new()?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new(&token)
+            .account_id("workspace-a")
+            .chatgpt_user_id("user-a")
+            .plan_type("team"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let request_entered = Arc::clone(&entered);
+    let response_release = Arc::clone(&release);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "chatgpt_base_url = \"http://{}/backend-api\"\n",
+            listener.local_addr()?
+        ),
+    )?;
+    let expected_authorization = format!("Bearer {token}");
+    let router = Router::new().route(
+        "/backend-api/wham/security-setup",
+        get(move |headers: HeaderMap| {
+            let expected_authorization = expected_authorization.clone();
+            let entered = Arc::clone(&request_entered);
+            let release = Arc::clone(&response_release);
+            async move {
+                assert_eq!(headers["authorization"], expected_authorization);
+                assert_eq!(headers["chatgpt-account-id"], "workspace-a");
+                entered.notify_one();
+                release.notified().await;
+                Json(json!({"notice": {
+                    "title": "Set up security",
+                    "description": "Account security reminder",
+                    "action": {"label": "Settings", "url": "https://chatgpt.com/cyber"}
+                }}))
+            }
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(READ_TIMEOUT)
+        .await?;
+    let request = app
+        .send_request("account/securitySetup/read", /*params*/ None)
+        .await?;
+    timeout(READ_TIMEOUT, entered.notified()).await?;
+    if change_login {
+        let login = app
+            .send_chatgpt_auth_tokens_login_request(
+                token,
+                "workspace-a".into(),
+                Some("team".into()),
+            )
+            .await?;
+        let response: LoginAccountResponse =
+            timeout(READ_TIMEOUT, app.read_response(login)).await??;
+        assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
+    }
+    release.notify_one();
+    let response: GetAccountSecuritySetupResponse =
+        timeout(READ_TIMEOUT, app.read_response(request)).await??;
+    server.abort();
+    if change_login {
+        assert_eq!(response.notice, None);
+    } else {
+        let notice = response
+            .notice
+            .expect("unchanged saved login gets its notice");
+        assert_eq!(notice.account_id, "workspace-a");
+        assert_eq!(notice.user_id, "user-a");
+        assert_eq!(notice.title, "Set up security");
+    }
+    Ok(())
+}

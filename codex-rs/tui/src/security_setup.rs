@@ -6,13 +6,9 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::app_server_session::AppServerSession;
 use crate::legacy_core::config::Config;
-use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::GetAuthStatusParams;
-use codex_app_server_protocol::GetAuthStatusResponse;
+use codex_app_server_protocol::GetAccountSecuritySetupResponse;
 use codex_app_server_protocol::RequestId;
-use codex_http_client::ClientRouteClass;
-use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
 use serde::Deserialize;
 use std::time::Duration;
@@ -31,10 +27,6 @@ pub(crate) struct Action {
     pub url: String,
 }
 
-#[derive(Deserialize)]
-struct Response {
-    notice: Option<Notice>,
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Identity {
     pub account: String,
@@ -81,58 +73,26 @@ pub(crate) fn prefetch(
     let request_handle = server.request_handle();
     tokio::spawn(async move {
         let result = tokio::time::timeout(Duration::from_secs(3), async {
-            // Saved credentials must match the connected server, which may use external auth.
-            let status: GetAuthStatusResponse = request_handle
-                .request_typed(ClientRequest::GetAuthStatus {
+            let response: GetAccountSecuritySetupResponse = request_handle
+                .request_typed(ClientRequest::GetAccountSecuritySetup {
                     request_id: RequestId::String(Uuid::new_v4().to_string()),
-                    params: GetAuthStatusParams {
-                        include_token: Some(true),
-                        refresh_token: Some(false),
-                    },
+                    params: None,
                 })
                 .await
                 .ok()?;
-            let auth = config
-                .auth_config()
-                .load_auth(/*enable_codex_api_key_env*/ false)
-                .await
-                .ok()
-                .flatten()?;
-            if !matches!(auth, CodexAuth::Chatgpt(_)) || auth.is_fedramp_account() {
-                return None;
-            }
-            let saved_token = auth.get_token().ok()?;
-            if status.auth_method != Some(AuthMode::Chatgpt)
-                || status.auth_token.as_deref() != Some(saved_token.as_str())
-            {
-                return None;
-            }
-            let identity = Identity::from_auth(&auth)?;
-            let client = RouteAwareClientPool::new_without_redirects(
-                config.http_client_factory(),
-                ClientRouteClass::Api,
-            );
-            let response = client
-                .get(format!(
-                    "{}/wham/security-setup",
-                    config.chatgpt_base_url.trim_end_matches('/')
-                ))
-                .headers(
-                    codex_model_provider::auth_provider_from_auth(&auth)
-                        .to_auth_headers()
-                        .ok()?,
-                )
-                .header(
-                    "User-Agent",
-                    codex_login::default_client::get_codex_user_agent(),
-                )
-                .send()
-                .await
-                .ok()?;
-            if !response.status().is_success() {
-                return None;
-            }
-            let notice = response.json::<Response>().await.ok()?.notice?;
+            let fetched = response.notice?;
+            let identity = Identity {
+                account: fetched.account_id,
+                user: fetched.user_id,
+            };
+            let notice = Notice {
+                title: fetched.title,
+                description: fetched.description,
+                action: Action {
+                    label: fetched.action.label,
+                    url: fetched.action.url,
+                },
+            };
             tracing::debug!(valid = notice.valid(), "received security setup notice");
             if !notice.valid() {
                 return None;

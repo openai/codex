@@ -8669,6 +8669,29 @@
         },
         "method": {
           "enum": [
+            "account/securitySetup/read"
+          ],
+          "title": "Account/securitySetup/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/securitySetup/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "account/rateLimits/read"
           ],
           "title": "Account/rateLimits/readRequestMethod",

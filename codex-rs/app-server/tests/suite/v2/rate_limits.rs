@@ -843,6 +843,24 @@ async fn account_requests_share_runtime_and_rotate_on_restart(mode: &str) -> Res
             let apps: codex_app_server_protocol::AppsReadResponse =
                 timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
             assert_eq!(apps.apps[0].id, "details-only");
+            let id = app
+                .send_request("account/securitySetup/read", /*params*/ None)
+                .await?;
+            let response: codex_app_server_protocol::GetAccountSecuritySetupResponse =
+                timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
+            assert_eq!(
+                response.notice,
+                Some(codex_app_server_protocol::AccountSecuritySetupNotice {
+                    account_id: "account-123".into(),
+                    user_id: "user-123".into(),
+                    title: "Set up security".into(),
+                    description: "Account security reminder".into(),
+                    action: codex_app_server_protocol::AccountSecuritySetupAction {
+                        label: "Settings".into(),
+                        url: "https://chatgpt.com/cyber".into(),
+                    },
+                })
+            );
         }
         assert_eq!(std::fs::read(home.path().join("auth.json"))?, before);
         return Ok(());
@@ -890,6 +908,17 @@ async fn account_requests_share_runtime_and_rotate_on_restart(mode: &str) -> Res
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "credits": [], "available_count": 0, "total_earned_count": 0,
         })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/security-setup"))
+        .respond_with(
+            ResponseTemplate::new(/*s*/ 200).set_body_json(json!({"notice": {
+                "title": "Set up security", "description": "Account security reminder",
+                "action": {"label": "Settings", "url": "https://chatgpt.com/cyber"},
+            }})),
+        )
+        .expect(/*r*/ 2)
         .mount(&server)
         .await;
     run_harness_through_proxy(
@@ -984,6 +1013,83 @@ async fn account_requests_share_runtime_and_rotate_on_restart(mode: &str) -> Res
             BTreeSet::from(["runtime-1".to_string(), "runtime-2".to_string()])
         );
     }
+    server.verify().await;
+    Ok(())
+}
+
+#[test_case("api_key")]
+#[test_case("fedramp")]
+#[test_case("external_token")]
+#[test_case("signed_out")]
+#[tokio::test]
+async fn security_setup_requires_matching_saved_chatgpt_login(kind: &str) -> Result<()> {
+    use base64::Engine;
+    let token = format!("e30.{}.c2ln", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        json!({"exp": chrono::Utc::now().timestamp() + 3600,
+            "https://api.openai.com/auth": {"chatgpt_user_id": "user-123", "chatgpt_account_id": "account-123"}}).to_string()));
+    let home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_chatgpt_base_url(home.path(), &format!("{}/backend-api", server.uri()))?;
+    if kind != "signed_out" {
+        write_chatgpt_auth(
+            home.path(),
+            ChatGptAuthFixture::new(&token)
+                .account_id("account-123")
+                .claims(ChatGptIdTokenClaims {
+                    chatgpt_account_id: Some("account-123".into()),
+                    chatgpt_user_id: Some("user-123".into()),
+                    chatgpt_account_is_fedramp: kind == "fedramp",
+                    ..Default::default()
+                }),
+            AuthCredentialsStoreMode::File,
+        )?;
+    }
+    app_test_support::mount_workspace_routing(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/security-setup"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({"notice": null})))
+        .expect(/*r*/ 0)
+        .mount(&server)
+        .await;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    if kind == "api_key" {
+        let id = app
+            .send_request(
+                "account/login/start",
+                Some(json!({
+                    "type": "apiKey", "apiKey": "selected-api-key",
+                })),
+            )
+            .await?;
+        let response: serde_json::Value =
+            timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
+        assert_eq!(response["type"], "apiKey");
+    }
+    if kind == "external_token" {
+        let id = app
+            .send_request(
+                "account/login/start",
+                Some(json!({
+                    "type": "chatgptAuthTokens", "accessToken": token,
+                    "chatgptAccountId": "account-123", "chatgptPlanType": "pro",
+                })),
+            )
+            .await?;
+        let response: serde_json::Value =
+            timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
+        assert_eq!(response["type"], "chatgptAuthTokens");
+    }
+    let id = app
+        .send_request("account/securitySetup/read", /*params*/ None)
+        .await?;
+    let response: codex_app_server_protocol::GetAccountSecuritySetupResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app.read_response(id)).await??;
+    assert_eq!(response.notice, None);
     server.verify().await;
     Ok(())
 }
