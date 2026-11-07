@@ -2843,6 +2843,9 @@ async fn tool_catalog_cache_sanitizes_tools_and_tracks_environment_generation() 
 
     let older = first_context.begin_fetch();
     let newer = first_context.begin_fetch();
+    let mut discovery = first_context.clone();
+    discovery.before_stdio_discovery = true;
+    discovery.record_modern_stdio_discovery(&discovery.begin_fetch());
     first_context.publish_if_newest(
         newer,
         &[create_test_tool("docs", "new")],
@@ -2856,6 +2859,10 @@ async fn tool_catalog_cache_sanitizes_tools_and_tracks_environment_generation() 
     assert_eq!(
         first_context.current_tools().expect("cached tools")[0].callable_name,
         "new"
+    );
+    assert!(
+        !discovery.has_tools(),
+        "older legacy fetches cannot undo modern discovery"
     );
 
     tokio::time::advance(Duration::from_secs(30 * 60 + 1)).await;

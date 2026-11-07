@@ -681,6 +681,8 @@ impl McpConnectionSet {
                     Some((&connection_identity, cache_mode, server.is_agent_plugin())),
                 )?;
                 context.track_tool_list_changes = config.mcp_tool_list_changed;
+                context.before_stdio_discovery =
+                    expected_protocol_mode == Some(McpProtocolMode::DiscoverLocalStdio);
                 Some(context)
             });
             let defer_startup = allow_deferred_startup
@@ -695,14 +697,6 @@ impl McpConnectionSet {
                         })
                     })
                     .is_some();
-            // A subagent using legacy tool definitions must launch with the same handshake.
-            let expected_protocol_mode = if defer_startup
-                && expected_protocol_mode == Some(McpProtocolMode::DiscoverLocalStdio)
-            {
-                Some(McpProtocolMode::Legacy)
-            } else {
-                expected_protocol_mode
-            };
             let protocol_mode = expected_protocol_mode.unwrap_or(protocol_mode);
             let connection_pool = runtime_context.connection_pool.as_ref().filter(|_| {
                 // Sharing a signed-in helper requires tracking account changes.
@@ -954,6 +948,7 @@ impl McpConnectionSet {
                     })
                     .map(|manager| manager.auth_change_state_receiver()),
                 protocol_mode,
+                defer_startup,
                 catalog_item_limit,
                 connection_pool,
                 publish_apps,

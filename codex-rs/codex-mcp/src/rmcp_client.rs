@@ -495,6 +495,7 @@ impl AsyncManagedClient {
         client_mcp_extensions: ClientMcpExtensions,
         auth_changes: Option<watch::Receiver<AuthChangeState>>,
         protocol_mode: McpProtocolMode,
+        defer_startup: bool,
         catalog_item_limit: usize,
         connection_pool: Option<(crate::McpConnectionPool, ConnectionKey)>,
         publish_apps: Option<watch::Sender<Option<std::sync::Weak<RmcpClient>>>>,
@@ -523,6 +524,17 @@ impl AsyncManagedClient {
             .as_ref()
             .and_then(|auth| auth.as_ref().ok())
             .map(|auth| auth.authority.clone());
+        // Startup may publish a legacy catalog after negotiation. Only a dormant chat can
+        // advertise it beforehand, and the pool must never put modern tools in that catalog.
+        let pool_catalog = tool_catalog_cache_context
+            .as_ref()
+            .filter(|_| protocol_mode != McpProtocolMode::DiscoverLocalStdio)
+            .cloned();
+        let advertised_catalog = if defer_startup {
+            tool_catalog_cache_context.clone()
+        } else {
+            pool_catalog.clone()
+        };
         let startup = Arc::new(ManagedClientStartup {
             ema_auth,
             originator: AuthStorageOriginator::current(),
@@ -534,7 +546,7 @@ impl AsyncManagedClient {
             tx_event,
             elicitation_requests,
             codex_apps_tools_cache_context: codex_apps_tools_cache_context.clone(),
-            tool_catalog_cache_context: tool_catalog_cache_context.clone(),
+            tool_catalog_cache_context,
             runtime_context,
             resolved_environment,
             runtime_auth_provider,
@@ -547,10 +559,6 @@ impl AsyncManagedClient {
             startup_complete: Arc::clone(&startup_complete),
             server_capabilities: Arc::clone(&server_capabilities),
         });
-        // A discovery attempt may publish a legacy catalog. It cannot read that catalog
-        // before negotiation or publish a modern joiner's tool list into it.
-        let tool_catalog_cache_context = tool_catalog_cache_context
-            .filter(|_| protocol_mode != McpProtocolMode::DiscoverLocalStdio);
         let (client, connection_slot) = if let Some((pool, key)) = connection_pool {
             let slot = Arc::new(ConnectionSlot::default());
             let connection_slot = Arc::clone(&slot);
@@ -558,14 +566,13 @@ impl AsyncManagedClient {
             let cancel_token = cancel_token.clone();
             let startup_complete = Arc::clone(&startup_complete);
             let server_capabilities = Arc::clone(&server_capabilities);
-            let tool_catalog_cache_context = tool_catalog_cache_context.clone();
             let client = async move {
                 let outcome = pool
                     .connect(
                         slot,
                         key,
                         server_capabilities,
-                        tool_catalog_cache_context,
+                        pool_catalog,
                         cancel_token,
                         |cancellation, sharing_declined| {
                             let mut shared_startup = (*startup).clone();
@@ -614,7 +621,7 @@ impl AsyncManagedClient {
             cached_server_info,
             server_capabilities,
             codex_apps_tools_cache_context,
-            tool_catalog_cache_context,
+            tool_catalog_cache_context: advertised_catalog,
             startup_complete,
             startup_reconnect,
             connection_slot,
@@ -1183,7 +1190,7 @@ async fn start_server_task(
         && let Some(context) = tool_catalog_cache_context.take()
         && let Some(ticket) = &tool_catalog_fetch_ticket
     {
-        context.invalidate_if_newest(ticket);
+        context.record_modern_stdio_discovery(ticket);
     }
     let connection_sharing = sharing_negotiation
         .map(|negotiation| negotiation.finish(&initialize_result.protocol_version))
