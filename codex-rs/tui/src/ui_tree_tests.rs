@@ -388,3 +388,21 @@ fn paint_semantic_samples() -> String {
     }
     samples.join("\n")
 }
+
+#[test]
+fn terminal_commands_are_sanitized_within_each_string() {
+    let url = "https://example.com/ready";
+    let node = tree(json!({"type":"text","children":[
+        "\u{1b}[31mre\rd\u{1b}[0m \u{1b}]8;;https://example.com\u{7}label\u{1b}]8;;\u{1b}\\\u{7}",
+        " \u{1b}[31", {"type":"link","props":{"href":url},"children":["Ready"]}
+    ]}));
+    let line = node.render_line(/*width*/ 40, &Theme::default());
+    assert_eq!(
+        line.hyperlinks,
+        [crate::terminal_hyperlinks::TerminalHyperlink::web(
+            10..15,
+            url.to_owned()
+        )]
+    );
+    insta::assert_snapshot!(line.line.to_string(), @"red label Ready");
+}

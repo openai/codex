@@ -129,6 +129,7 @@ syntect = { version = "5", default-features = false, features = ["parsing", "pli
 two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
+vtparse = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 webbrowser = { workspace = true }

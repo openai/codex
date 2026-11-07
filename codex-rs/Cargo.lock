@@ -5281,6 +5281,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "vt100",
+ "vtparse",
  "webbrowser",
  "which 8.0.0",
  "windows-sys 0.61.2",

@@ -6,14 +6,17 @@ use super::TextWeight;
 use super::UiNode;
 use super::UiTree;
 use super::theme::RenderTheme;
-use crate::history_cell::sanitize_user_text;
 use crate::line_truncation::truncate_line_with_ellipsis;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::TerminalHyperlink;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
+use std::borrow::Cow;
 use syntect::highlighting::Theme;
+use vtparse::CollectingVTActor;
+use vtparse::VTAction;
+use vtparse::VTParser;
 
 impl UiTree {
     /// Render one row. On overflow, fit an unlinked ellipsis inside the supplied width.
@@ -34,10 +37,9 @@ impl UiTree {
 fn node_line(node: &UiNode, width: usize, style: Style, theme: &RenderTheme<'_>) -> HyperlinkLine {
     let (children, gap, style) = match node {
         UiNode::String(raw) => {
-            // Built-in values are constructed directly, bypassing the wire decoder.
-            let raw = &raw[..raw.floor_char_boundary(MAX_TEXT_BYTES)];
-            let first = raw.split('\n').next().unwrap_or_default();
-            let visible = sanitize_user_text(first.into()).replace('\t', "    ");
+            let text = sanitize_leaf(raw);
+            let first = text.split('\n').next().unwrap_or_default();
+            let visible = first.replace('\t', "    ");
             return HyperlinkLine::new(Span::styled(visible, style).into());
         }
         UiNode::Link { props, children } => {
@@ -61,6 +63,27 @@ fn node_line(node: &UiNode, width: usize, style: Style, theme: &RenderTheme<'_>)
         UiNode::Underline { children } => (children, 0, style.underlined()),
     };
     row_line(children, gap, width, style, theme)
+}
+
+fn sanitize_leaf(raw: &str) -> Cow<'_, str> {
+    // Built-in values can bypass the wire decoder's text limit.
+    let raw = &raw[..raw.floor_char_boundary(MAX_TEXT_BYTES)];
+    if raw
+        .chars()
+        .all(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
+    {
+        return Cow::Borrowed(raw);
+    }
+    let mut actions = CollectingVTActor::default();
+    VTParser::new().parse(raw.as_bytes(), &mut actions);
+    actions
+        .into_iter()
+        .filter_map(|action| match action {
+            VTAction::Print(ch) if !ch.is_control() => Some(ch),
+            VTAction::ExecuteC0orC1(ch @ (b'\n' | b'\t')) => Some(char::from(ch)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn row_line(
