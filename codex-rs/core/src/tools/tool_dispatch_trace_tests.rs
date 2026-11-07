@@ -249,7 +249,7 @@ async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> any
     attach_test_trace(&mut session, &turn, temp.path())?;
 
     let registry = ToolRegistry::with_handler_for_test(Arc::new(TestHandler {
-        tool_name: codex_tools::ToolName::plain("test_tool"),
+        tool_name: codex_tools::ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME),
     }));
     let session = Arc::new(session);
     let turn = Arc::new(turn);
@@ -260,7 +260,7 @@ async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> any
                 session,
                 turn,
                 "incompatible-call",
-                codex_tools::ToolName::plain("test_tool"),
+                codex_tools::ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME),
                 ToolCallSource::Direct,
                 ToolPayload::Custom {
                     input: "{}".to_string(),
@@ -275,6 +275,7 @@ async fn dispatch_lifecycle_trace_records_incompatible_payload_failures() -> any
     let tool_call = &replayed.tool_calls["incompatible-call"];
     assert_eq!(tool_call.execution.status, ExecutionStatus::Failed);
     assert!(tool_call.raw_result_payload_id.is_some());
+    assert!(replayed.code_cells.is_empty());
 
     Ok(())
 }

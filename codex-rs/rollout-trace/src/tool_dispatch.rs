@@ -137,17 +137,15 @@ impl ToolDispatchTraceContext {
     /// Returns whether caller-side result conversion would be recorded.
     ///
     /// Core uses this to avoid formatting or cloning tool outputs when the
-    /// dispatch lifecycle is suppressed or tracing is disabled.
+    /// dispatch lifecycle is disabled.
     pub fn is_enabled(&self) -> bool {
         matches!(self.state, ToolDispatchTraceContextState::Enabled(_))
     }
 
     /// Starts one dispatch-level lifecycle and returns the handle for its result.
     pub(crate) fn start(writer: Arc<TraceWriter>, invocation: ToolDispatchInvocation) -> Self {
-        if suppresses_tool_dispatch_trace(&invocation) {
-            return Self::disabled();
-        }
-
+        // An exec request can fail before a CodeCellStarted event. Record the
+        // dispatch independently so its caller-facing error survives in that case.
         let context = EnabledToolDispatchTraceContext {
             writer,
             thread_id: invocation.thread_id.clone(),
@@ -189,12 +187,6 @@ impl ToolDispatchTraceContext {
             },
         );
     }
-}
-
-fn suppresses_tool_dispatch_trace(invocation: &ToolDispatchInvocation) -> bool {
-    matches!(invocation.payload, ToolDispatchPayload::Custom { .. })
-        && invocation.tool_namespace.is_none()
-        && invocation.tool_name == codex_code_mode::PUBLIC_TOOL_NAME
 }
 
 fn record_started(context: &EnabledToolDispatchTraceContext, invocation: ToolDispatchInvocation) {
@@ -392,40 +384,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn suppresses_only_noncanonical_dispatch_boundaries() {
-        assert!(suppresses_tool_dispatch_trace(&invocation(
-            codex_code_mode::PUBLIC_TOOL_NAME,
-            /*tool_namespace*/ None,
-            ToolDispatchRequester::Model {
-                model_visible_call_id: "call-exec".to_string(),
-            },
-            ToolDispatchPayload::Custom {
-                input: "1 + 1".to_string(),
-            },
-        )));
-        assert!(!suppresses_tool_dispatch_trace(&invocation(
-            "custom_tool",
-            /*tool_namespace*/ None,
-            ToolDispatchRequester::Model {
-                model_visible_call_id: "call-custom".to_string(),
-            },
-            ToolDispatchPayload::Custom {
-                input: "payload".to_string(),
-            },
-        )));
-        assert!(!suppresses_tool_dispatch_trace(&invocation(
-            codex_code_mode::PUBLIC_TOOL_NAME,
-            Some("mcp__server".to_string()),
-            ToolDispatchRequester::Model {
-                model_visible_call_id: "call-namespaced".to_string(),
-            },
-            ToolDispatchPayload::Custom {
-                input: "payload".to_string(),
-            },
-        )));
-    }
-
-    #[test]
     fn classifies_interrupt_agent_as_close_agent() {
         assert_eq!(
             dispatched_tool_kind(
@@ -449,22 +407,5 @@ mod tests {
             ),
             ToolCallKind::ImageGeneration
         );
-    }
-
-    fn invocation(
-        tool_name: &str,
-        tool_namespace: Option<String>,
-        requester: ToolDispatchRequester,
-        payload: ToolDispatchPayload,
-    ) -> ToolDispatchInvocation {
-        ToolDispatchInvocation {
-            thread_id: "thread-1".to_string(),
-            codex_turn_id: "turn-1".to_string(),
-            tool_call_id: "tool-call-1".to_string(),
-            tool_name: tool_name.to_string(),
-            tool_namespace,
-            requester,
-            payload,
-        }
     }
 }
