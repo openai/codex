@@ -14,6 +14,8 @@ use crate::context::DeveloperInstructions;
 use codex_code_mode::ExecDefinition;
 use codex_code_mode::PUBLIC_TOOL_NAME;
 use codex_extension_api::ExtensionMetrics;
+use codex_otel::EXEC_TOOL_ENTRY_UPDATES_METRIC;
+use codex_otel::EXEC_TOOL_UPDATE_BYTES_METRIC;
 use codex_otel::TOOL_INCREMENTAL_UPDATES_METRIC;
 use codex_otel::TOOL_SPEC_DESCRIPTION_BYTES_METRIC;
 use codex_otel::TOOL_SPEC_DESCRIPTION_BYTES_METRIC_BUCKETS;
@@ -389,9 +391,35 @@ impl TopLevelToolsState {
                     })
                     .collect::<Vec<_>>();
                 if !changed.is_empty() {
-                    updates.push(
-                        WorldStateUpdate::fragment(render_exec_update(&changed)).standalone(),
-                    );
+                    let update = render_exec_update(&changed);
+                    if let Some(metrics) = self.metrics.as_deref() {
+                        let added = changed
+                            .iter()
+                            .filter(|entry| {
+                                !previous_exec
+                                    .is_some_and(|previous| previous.contains_key(&entry.key))
+                            })
+                            .count();
+                        for (action, count) in [
+                            (ACTION_ADDED, added),
+                            (ACTION_SCHEMA_CHANGED, changed.len() - added),
+                        ] {
+                            if count > 0 {
+                                metrics.counter(
+                                    EXEC_TOOL_ENTRY_UPDATES_METRIC,
+                                    i64::try_from(count).unwrap_or(i64::MAX),
+                                    &[("action", action)],
+                                );
+                            }
+                        }
+                        metrics.histogram_with_boundaries(
+                            EXEC_TOOL_UPDATE_BYTES_METRIC,
+                            i64::try_from(update.0.len()).unwrap_or(i64::MAX),
+                            TOOL_SPEC_DESCRIPTION_BYTES_METRIC_BUCKETS.as_slice(),
+                            &[],
+                        );
+                    }
+                    updates.push(WorldStateUpdate::fragment(update).standalone());
                 }
             } else if previous.is_some() {
                 // Install the full catalog when enabling granular updates or restoring exec.
@@ -422,6 +450,13 @@ impl TopLevelToolsState {
                     .cloned()
                     .collect::<Vec<_>>();
                 if !removed.is_empty() {
+                    if let Some(metrics) = self.metrics.as_deref() {
+                        metrics.counter(
+                            EXEC_TOOL_ENTRY_UPDATES_METRIC,
+                            i64::try_from(removed.len()).unwrap_or(i64::MAX),
+                            &[("action", ACTION_REMOVED)],
+                        );
+                    }
                     updates.push(
                         WorldStateUpdate::fragment(RemovedExecDefinitions(removed)).standalone(),
                     );

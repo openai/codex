@@ -170,7 +170,7 @@ async fn snapshots_namespace_transitions() {
             "functions",
             vec![declaration("unchanged"), declaration("restored")],
         )],
-        Some(telemetry),
+        Some(Arc::clone(&telemetry)),
     )
     .unwrap();
 
@@ -258,6 +258,101 @@ async fn snapshots_namespace_transitions() {
             1,
             "Look up a value.".len() as f64
         )],
+    );
+    // Granular exec entries have separate metrics; full catalogs never count as entry deltas.
+    let [exec_original, exec_updated] = [
+        [
+            ("Tool: tools.a", "Original a."),
+            ("Tool: tools.b", "Original b."),
+            ("Namespace instructions: example", "Original guidance."),
+        ],
+        [
+            ("Tool: tools.a", "Updated a: é."),
+            ("Tool: tools.c", "Added c."),
+            ("Namespace instructions: example", "Updated guidance."),
+        ],
+    ]
+    .map(|entries| {
+        TopLevelToolsState::new(
+            /*messages*/ Default::default(),
+            vec![exec_declaration("Full exec catalog.", "grammar")],
+            Some(Arc::clone(&telemetry)),
+        )
+        .unwrap()
+        .with_incremental_exec_tools(Some(Arc::new(
+            entries
+                .into_iter()
+                .map(|(key, description)| ExecDefinition {
+                    key: key.to_string(),
+                    description: description.to_string(),
+                })
+                .collect(),
+        )))
+    });
+    let initial = exec_original.render_diff(Absent).0.unwrap();
+    let (updated, updates) = exec_updated.render_diff(Known(&initial));
+    let rendered = merge_world_state_updates(updates);
+    let ResponseItem::Message { content, .. } = &rendered[0] else {
+        panic!("exec update must be a message");
+    };
+    let ContentItem::InputText { text } = &content[0] else {
+        panic!("exec update must contain text");
+    };
+    let update_bytes = text.len();
+    let hidden = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        Vec::new(),
+        Some(telemetry),
+    )
+    .unwrap()
+    .with_incremental_exec_tools(/*exec_definitions*/ None);
+    let hidden = hidden.render_diff(Known(&updated.unwrap())).0.unwrap();
+    // Returning to the original catalog sends a full declaration and withdraws c.
+    let restored = exec_original.render_diff(Known(&hidden)).0.unwrap();
+    assert!(exec_original.render_diff(Known(&restored)).1.is_empty());
+
+    let snapshot = metrics.snapshot().unwrap();
+    let counter = snapshot
+        .scope_metrics()
+        .flat_map(ScopeMetrics::metrics)
+        .find(|metric| metric.name() == EXEC_TOOL_ENTRY_UPDATES_METRIC)
+        .expect("exec entry update counter");
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = counter.data() else {
+        panic!("exec entry updates must be a counter");
+    };
+    assert_eq!(
+        sum.data_points()
+            .map(|point| {
+                let tags = point
+                    .attributes()
+                    .map(|tag| (tag.key.as_str(), tag.value.to_string()))
+                    .collect::<BTreeMap<_, _>>();
+                assert_eq!(tags.len(), 1);
+                (tags["action"].clone(), point.value())
+            })
+            .collect::<BTreeMap<_, _>>(),
+        [
+            ("added".to_string(), 1),
+            ("schema_changed".to_string(), 2),
+            ("removed".to_string(), 2),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let histogram = snapshot
+        .scope_metrics()
+        .flat_map(ScopeMetrics::metrics)
+        .find(|metric| metric.name() == EXEC_TOOL_UPDATE_BYTES_METRIC)
+        .expect("exec update byte histogram");
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = histogram.data() else {
+        panic!("exec update bytes must be a histogram");
+    };
+    assert_eq!(
+        histogram
+            .data_points()
+            .map(|point| (point.attributes().count(), point.count(), point.sum()))
+            .collect::<Vec<_>>(),
+        vec![(0, 1, update_bytes as f64)],
     );
     metrics.shutdown().unwrap();
 }
