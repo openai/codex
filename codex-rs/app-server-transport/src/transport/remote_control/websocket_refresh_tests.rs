@@ -37,7 +37,7 @@ async fn connect_test_websocket(
     auth_manager: &Arc<AuthManager>,
     current_enrollment: &CurrentRemoteControlEnrollment,
 ) -> io::Result<()> {
-    let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
+    let session_auth = RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0;
     let mut auth_recovery = session_auth.unauthorized_recovery();
     let mut auth_change_rx = auth_manager.auth_change_receiver();
     let (status_publisher, _) = remote_control_status_channel();

@@ -44,7 +44,8 @@ impl RemoteControl {
         {
             return current.session.clone();
         }
-        let (auth, authenticated) = RemoteControlAuth::capture(self.auth_manager.clone());
+        let (auth, authenticated) =
+            RemoteControlAuth::capture(self.auth_manager.clone(), self.config.runtime_auth.clone());
         let desired = match current.take() {
             Some(previous) => {
                 previous.session.shutdown_token.cancel();

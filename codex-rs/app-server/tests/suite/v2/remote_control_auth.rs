@@ -491,3 +491,141 @@ async fn logout_login_enable_recovers_first_unauthorized_enrollment() -> Result<
     let _websocket = timeout(DEFAULT_TIMEOUT, accept_async(stream)).await??;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_client_management_uses_runtime_auth() -> Result<()> {
+    use base64::Engine;
+    use core_test_support::runtime_auth::PROBE_SERVER;
+    use core_test_support::runtime_auth::run_harness_through_proxy;
+    use std::collections::BTreeSet;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    core_test_support::skip_if_no_network!(Ok(()));
+    let claims =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+            "exp": 4102444800_i64, "session_id": "remote-public",
+            "iss": "https://auth.openai.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": "user-123", "chatgpt_account_id": "account-123"
+            },
+        }))?);
+    let token = format!("e30.{claims}.c2ln");
+    if std::env::var(PROBE_SERVER).is_ok() {
+        for mode in ["dual_header", "assertion_only"] {
+            let home = TempDir::new()?;
+            write_chatgpt_auth(
+                home.path(),
+                ChatGptAuthFixture::new(&token)
+                    .account_id("account-123")
+                    .chatgpt_user_id("user-123")
+                    .plan_type("pro"),
+                AuthCredentialsStoreMode::File,
+            )?;
+            std::fs::write(
+                home.path().join("config.toml"),
+                format!(
+                    "chatgpt_base_url = \"https://chatgpt.com/backend-api\"\n[features.runtime_agent_instances]\nenabled = true\nmode = {mode:?}\n"
+                ),
+            )?;
+            let mut app = TestAppServer::builder()
+                .with_codex_home(home.path())
+                .without_auto_env()
+                .with_env_overrides(&[("OPENAI_API_KEY", None)])
+                .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+                .await?;
+            for _ in 0..2 {
+                let id = app
+                    .send_remote_control_clients_list_request(RemoteControlClientsListParams {
+                        environment_id: "environment".into(),
+                        cursor: None,
+                        limit: None,
+                        order: None,
+                    })
+                    .await?;
+                let response: RemoteControlClientsListResponse =
+                    timeout(DEFAULT_TIMEOUT, app.read_response(id)).await??;
+                assert!(response.data.is_empty());
+            }
+            let id = app
+                .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
+                    environment_id: "environment".into(),
+                    client_id: "client".into(),
+                })
+                .await?;
+            let _: RemoteControlClientsRevokeResponse =
+                timeout(DEFAULT_TIMEOUT, app.read_response(id)).await??;
+        }
+        return Ok(());
+    }
+    let server = MockServer::start().await;
+    app_test_support::mount_workspace_routing(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/agent/register"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "runtime_agent_instance_id": "runtime-remote-public", "agent_host_id": "host",
+            "actor": {"kind": "chatgpt", "user_id": "user-123", "account_id": "account-123"}
+        })))
+        .expect(/*r*/ 2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/backend-api/wham/remote/control/environments/environment/clients",
+        ))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "items": [], "cursor": null
+        })))
+        .expect(/*r*/ 4)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/backend-api/wham/remote/control/environments/environment/clients/client",
+        ))
+        .respond_with(ResponseTemplate::new(/*s*/ 204))
+        .expect(/*r*/ 2)
+        .mount(&server)
+        .await;
+    run_harness_through_proxy(
+        &server,
+        "suite::v2::remote_control::auth_tests::public_client_management_uses_runtime_auth",
+        /*realtime_target*/ None,
+    )
+    .await?;
+    let requests = server.received_requests().await.unwrap();
+    let mut proofs = BTreeSet::new();
+    let mut dual = 0;
+    for request in requests
+        .iter()
+        .filter(|r| r.url.path().contains("/wham/remote/control/"))
+    {
+        assert_eq!(request.headers["host"], "chatgpt.com");
+        assert_eq!(request.headers["chatgpt-account-id"], "account-123");
+        let authorization = request.headers["authorization"].to_str()?;
+        let proof = if let Some(proof) = request.headers.get("x-openai-agent-assertion") {
+            dual += 1;
+            assert_eq!(authorization, format!("Bearer {token}"));
+            proof.to_str()?
+        } else {
+            authorization
+                .strip_prefix("AgentAssertion ")
+                .expect("assertion-only auth")
+        };
+        let payload: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(/*n*/ 2).unwrap())?,
+        )?;
+        assert_eq!(payload["runtime_agent_instance"], "runtime-remote-public");
+        assert!(
+            proofs.insert(proof.to_owned()),
+            "each request gets a fresh assertion"
+        );
+    }
+    assert_eq!((dual, proofs.len()), (3, 6));
+    server.verify().await;
+    Ok(())
+}

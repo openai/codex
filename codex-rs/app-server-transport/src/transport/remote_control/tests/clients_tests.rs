@@ -33,7 +33,7 @@ fn client_management_handle(
         current_enrollment: Arc::new(RemoteControlEnrollmentState::new(/*enrollment*/ None)),
         pairing_persistence_key: watch::channel(None).0,
         pairing_persistence_key_required: false,
-        auth_manager: auth::RemoteControlAuth::capture(auth_manager).0,
+        auth_manager: auth::RemoteControlAuth::capture(auth_manager, /*runtime_auth*/ None).0,
     }
 }
 
@@ -225,7 +225,7 @@ async fn list_remote_control_clients_recovers_auth_after_unauthorized() {
 
     let response = list_remote_control_clients(
         &remote_control_url,
-        &auth::RemoteControlAuth::capture(auth_manager.clone()).0,
+        &auth::RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0,
         RemoteControlClientsListParams {
             environment_id: "env-123".to_string(),
             ..Default::default()
@@ -323,7 +323,7 @@ async fn list_remote_control_clients_retries_unauthorized_only_once() {
 
     let err = list_remote_control_clients(
         &remote_control_url,
-        &auth::RemoteControlAuth::capture(auth_manager.clone()).0,
+        &auth::RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0,
         RemoteControlClientsListParams {
             environment_id: "env-123".to_string(),
             ..Default::default()
@@ -363,7 +363,11 @@ async fn revoke_remote_control_client_does_not_retry_forbidden() {
 
     let err = revoke_remote_control_client(
         &remote_control_url,
-        &auth::RemoteControlAuth::capture(remote_control_auth_manager()).0,
+        &auth::RemoteControlAuth::capture(
+            remote_control_auth_manager(),
+            /*runtime_auth*/ None,
+        )
+        .0,
         RemoteControlClientsRevokeParams {
             environment_id: "env-123".to_string(),
             client_id: "client-123".to_string(),
@@ -395,7 +399,11 @@ async fn list_remote_control_clients_preserves_decode_error_context() {
 
     let err = list_remote_control_clients(
         &remote_control_url,
-        &auth::RemoteControlAuth::capture(remote_control_auth_manager()).0,
+        &auth::RemoteControlAuth::capture(
+            remote_control_auth_manager(),
+            /*runtime_auth*/ None,
+        )
+        .0,
         RemoteControlClientsListParams {
             environment_id: "env-123".to_string(),
             ..Default::default()

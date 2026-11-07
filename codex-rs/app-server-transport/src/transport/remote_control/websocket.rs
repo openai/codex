@@ -2166,7 +2166,8 @@ mod tests {
         let codex_home = TempDir::new().expect("temp dir should create");
         let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = remote_control_auth_manager();
-        let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
+        let session_auth =
+            RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(Some(
@@ -2239,7 +2240,8 @@ mod tests {
         let codex_home = TempDir::new().expect("temp dir should create");
         let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = remote_control_auth_manager();
-        let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
+        let session_auth =
+            RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         let next_refresh_at = time::OffsetDateTime::now_utc() + time::Duration::minutes(2);
@@ -2327,7 +2329,8 @@ mod tests {
             codex_login::test_support::transport_default_auth_route_config(),
         )
         .await;
-        let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
+        let session_auth =
+            RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         let current_enrollment = test_current_enrollment(/*enrollment*/ None);
@@ -2428,7 +2431,8 @@ mod tests {
             codex_login::test_support::transport_default_auth_route_config(),
         )
         .await;
-        let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
+        let session_auth =
+            RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         let mut expected_enrollment =
@@ -2516,7 +2520,8 @@ mod tests {
         let remote_control_target = normalize_remote_control_url("http://127.0.0.1:9/backend-api/")
             .expect("target should parse");
         let auth_manager = remote_control_auth_manager();
-        let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
+        let session_auth =
+            RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(Some(
@@ -2567,7 +2572,8 @@ mod tests {
             codex_login::test_support::transport_default_auth_route_config(),
         )
         .await;
-        let session_auth = RemoteControlAuth::capture(auth_manager.clone()).0;
+        let session_auth =
+            RemoteControlAuth::capture(auth_manager.clone(), /*runtime_auth*/ None).0;
         let mut auth_recovery = session_auth.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(Some(
@@ -2648,7 +2654,11 @@ mod tests {
                         server_name: "test-server".to_string(),
                     },
                     /*state_db*/ None,
-                    RemoteControlAuth::capture(remote_control_auth_manager()).0,
+                    RemoteControlAuth::capture(
+                        remote_control_auth_manager(),
+                        /*runtime_auth*/ None,
+                    )
+                    .0,
                     RemoteControlChannels {
                         transport_event_tx,
                         status_publisher,

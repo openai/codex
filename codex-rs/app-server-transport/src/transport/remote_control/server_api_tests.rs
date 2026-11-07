@@ -14,7 +14,8 @@ fn auth() -> RemoteControlConnectionAuth {
         http_client_factory: codex_http_client::HttpClientFactory::new(
             codex_http_client::OutboundProxyPolicy::ReqwestDefault,
         ),
-        auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+        auth: codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        runtime_auth: None,
         account_id: "account-a".to_string(),
     }
 }

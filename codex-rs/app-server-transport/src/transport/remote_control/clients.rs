@@ -2,7 +2,6 @@ use super::auth::RemoteControlAuth;
 use super::auth::RemoteControlConnectionAuth;
 use super::auth::load_remote_control_auth;
 use super::auth::recover_remote_control_auth;
-use super::auth::request_client;
 use super::enroll::format_headers;
 use super::enroll::preview_remote_control_response_body;
 use super::protocol::normalize_remote_control_base_url;
@@ -190,8 +189,7 @@ async fn send_client_management_request_once(
             url.as_str()
         }
     };
-    let client = request_client(&auth.http_client_factory, endpoint).await?;
-    let auth_headers = auth.request_headers()?;
+    let (client, auth_headers) = auth.request_context(endpoint).await?;
     let request = match request {
         ClientManagementRequest::List { url, params } => {
             let mut query = Vec::new();

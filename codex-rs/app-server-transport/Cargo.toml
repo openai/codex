@@ -25,9 +25,11 @@ base64 = { workspace = true }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
+codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
+codex-runtime-agent-instance = { workspace = true }
 codex-state = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -60,6 +62,9 @@ libc = { workspace = true }
 signal-hook = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
+core_test_support = { workspace = true }
+wiremock = { workspace = true }
 chrono = { workspace = true }
 codex-config = { workspace = true }
 pretty_assertions = { workspace = true }

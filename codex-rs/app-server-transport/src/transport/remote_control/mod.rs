@@ -43,7 +43,9 @@ use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RemoteControlPairingStatusParams;
 use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
+use codex_features::RuntimeAuthMode;
 use codex_login::AuthManager;
+use codex_runtime_agent_instance::RuntimeAuthSlot;
 use codex_state::StateRuntime;
 use gethostname::gethostname;
 use std::error::Error;
@@ -64,6 +66,7 @@ use tracing::info;
 use tracing::warn;
 
 pub struct RemoteControlStartConfig {
+    pub runtime_auth: Option<(RuntimeAuthSlot, RuntimeAuthMode)>,
     pub remote_control_url: String,
     pub installation_id: String,
     pub policy: RemoteControlPolicy,
@@ -1005,3 +1008,7 @@ fn same_remote_control_enrollment(
 mod segment_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_auth_tests.rs"]
+mod runtime_auth_tests;

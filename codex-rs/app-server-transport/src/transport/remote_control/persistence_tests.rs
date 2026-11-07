@@ -9,9 +9,10 @@ use tokio::sync::oneshot;
 
 #[tokio::test]
 async fn cancelled_commit_keeps_its_permit_and_is_drained() -> io::Result<()> {
-    let auth = RemoteControlAuth::capture(auth_manager_from_auth(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-    ))
+    let auth = RemoteControlAuth::capture(
+        auth_manager_from_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        /*runtime_auth*/ None,
+    )
     .0;
     let persistence = RemoteControlPersistence::default();
     let writes = Arc::new(tokio::sync::Mutex::new(Vec::new()));

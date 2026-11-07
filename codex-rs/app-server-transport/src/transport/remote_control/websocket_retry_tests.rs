@@ -52,7 +52,7 @@ async fn assert_conflict_recovery(subscribe_cursor: Option<&str>) {
             server_name: "test-server".to_string(),
         },
         Some(state_db),
-        RemoteControlAuth::capture(remote_control_auth_manager()).0,
+        RemoteControlAuth::capture(remote_control_auth_manager(), /*runtime_auth*/ None).0,
         RemoteControlChannels {
             transport_event_tx,
             status_publisher,
