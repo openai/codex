@@ -17,6 +17,7 @@ use codex_login::AuthManager;
 use codex_login::AuthOwner;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
+use codex_login::auth::RefreshTokenFailedError;
 use http::StatusCode;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -169,9 +170,8 @@ impl RuntimeAuthBinding {
             self.check_source(expected_source)?;
             recovery.next().await.map_err(|error| match error {
                 RefreshTokenError::Policy(denied) => RuntimeAuthError::Policy(denied),
-                RefreshTokenError::Permanent(_) | RefreshTokenError::Transient(_) => {
-                    RuntimeAuthError::RefreshFailed
-                }
+                RefreshTokenError::Permanent(error) => RuntimeAuthError::RefreshTokenFailed(error),
+                RefreshTokenError::Transient(_) => RuntimeAuthError::RefreshFailed,
             })?;
             let (auth, http_client_factory) = self
                 .credentials
@@ -340,8 +340,8 @@ impl RuntimeAuthBinding {
             .credentials
             .auth_change_state_for(auth)
             .ok_or(RuntimeAuthError::Changed)?;
-        if self.credentials.refresh_failure_for_auth(auth).is_some() {
-            return Err(RuntimeAuthError::RefreshFailed);
+        if let Some(error) = self.credentials.refresh_failure_for_auth(auth) {
+            return Err(RuntimeAuthError::RefreshTokenFailed(error));
         }
         Ok(state)
     }
@@ -390,6 +390,8 @@ pub enum RuntimeAuthError {
     Changed,
     #[error("runtime registration could not refresh actor credentials")]
     RefreshFailed,
+    #[error(transparent)]
+    RefreshTokenFailed(#[from] RefreshTokenFailedError),
     #[error("failed to generate runtime signing key")]
     KeyGeneration,
     #[error(transparent)]

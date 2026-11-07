@@ -6,6 +6,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_http_client::cache_system_proxy_route_for_test;
@@ -438,4 +439,36 @@ async fn bootstrap_get_recovers_from_stalled_body_before_cloud_startup_timeout()
         .expect("proxy retry must fit inside the cloud startup budget")
         .expect("cloud bundle via proxy");
     proxy.verify().await;
+}
+
+#[tokio::test]
+async fn identity_header_errors_preserve_credential_recovery() {
+    for (code, recoverable) in [
+        ("invalid_agent_instance_assertion", false),
+        ("token_expired", true),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/accounts/check"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .insert_header(
+                        "x-error-json",
+                        base64::engine::general_purpose::STANDARD
+                            .encode(serde_json::json!({"error": {"code": code}}).to_string()),
+                    )
+                    .set_body_json(serde_json::json!({"detail": "Unauthorized"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new(
+            server.uri(),
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
+        let error = client.get_accounts_check().await.unwrap_err();
+        assert_eq!(error.status(), Some(StatusCode::UNAUTHORIZED));
+        assert_eq!(error.is_unauthorized(), recoverable, "{code}");
+        server.verify().await;
+    }
 }

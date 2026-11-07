@@ -66,6 +66,7 @@ pub enum RequestError {
         status: StatusCode,
         content_type: String,
         body: String,
+        identity_error_code: Option<String>,
     },
     Other(anyhow::Error),
 }
@@ -79,7 +80,13 @@ impl RequestError {
     }
 
     pub fn is_unauthorized(&self) -> bool {
-        self.status() == Some(StatusCode::UNAUTHORIZED)
+        matches!(self, Self::UnexpectedStatus { status, body, identity_error_code, .. }
+        if *status == StatusCode::UNAUTHORIZED
+            && !codex_protocol::error::is_runtime_auth_denial(
+            *status,
+            body,
+            identity_error_code.as_deref(),
+        ))
     }
 }
 
@@ -93,6 +100,7 @@ impl fmt::Display for RequestError {
                 status,
                 content_type,
                 body,
+                ..
             } => write!(
                 f,
                 "{method} {url} failed: {status}; content-type={content_type}; body={body}"
@@ -436,6 +444,11 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
+        let identity_error_code =
+            codex_response_debug_context::extract_response_debug_context_from_headers(
+                res.headers(),
+            )
+            .auth_error_code;
         let body = res.text().await?;
         if !status.is_success() {
             return Err(RequestError::UnexpectedStatus {
@@ -444,6 +457,7 @@ impl Client {
                 status,
                 content_type,
                 body,
+                identity_error_code,
             });
         }
         Ok((body, content_type))

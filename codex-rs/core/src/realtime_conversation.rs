@@ -1552,8 +1552,7 @@ async fn prepare_realtime_start(
                     &CodexAuth::from_api_key(&realtime_api_key),
                     &api_provider.headers,
                 )
-                .await
-                .map_err(|error| codex_api::map_api_error(error.into()))?;
+                .await?;
                 codex_model_provider::validate_runtime_selectors(
                     &api_provider.headers,
                     selected.runtime().actor().info(),

@@ -339,6 +339,8 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
         vec![response.clone(), response.clone()],
         vec![response.clone(), response.clone()],
         vec![response.clone(), response.clone()],
+        // The account switches after this handshake, before its request is sent.
+        vec![response.clone()],
         vec![response],
     ])
     .await;
@@ -395,7 +397,7 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
     input.push(message_item("fourth"));
     let prompt = prompt_with_input(input);
     let gate = Arc::new(Barrier::new(2));
-    // Allow the pre-connect check, then pause after Core selects the existing socket.
+    // Allow the pre-connect check, then pause after the old account's socket opens.
     budget.0.lock().unwrap().extend([None, Some(gate.clone())]);
     let generation = stream_until_complete(&mut session, &harness, &prompt);
     tokio::pin!(generation);
@@ -409,10 +411,10 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
     assert!(!previous_owner.is_current());
     tokio::join!(generation, gate.wait());
     let handshakes = server.handshakes();
-    assert_eq!(handshakes.len(), 4);
+    assert_eq!(handshakes.len(), 5);
     let runtime_ids: Vec<_> = handshakes
         .iter()
-        .zip(["key-a", "key-a", "key-b", "key-other-user"])
+        .zip(["key-a", "key-a", "key-b", "key-b", "key-other-user"])
         .map(|(h, credential)| {
             assert_eq!(
                 h.header("cookie").as_deref(),
@@ -434,17 +436,18 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
         .collect();
     assert_eq!(runtime_ids[0], runtime_ids[1]);
     assert_ne!(runtime_ids[1], runtime_ids[2]);
-    assert_ne!(runtime_ids[2], runtime_ids[3]);
+    assert_eq!(runtime_ids[2], runtime_ids[3]);
+    assert_ne!(runtime_ids[3], runtime_ids[4]);
     assert_eq!(
         server
             .connections()
             .iter()
             .map(Vec::len)
             .collect::<Vec<_>>(),
-        vec![1, 1, 1, 1]
+        vec![1, 1, 1, 0, 1]
     );
-    for (index, requests) in server.connections().iter().enumerate() {
-        let body = requests[0].body_json();
+    for (index, request) in server.connections().iter().flatten().enumerate() {
+        let body = request.body_json();
         assert_eq!(body["previous_response_id"], Value::Null);
         // Reconnecting with the same actor preserves turn routing.
         let expected_turn_state = if index == 1 {
@@ -641,7 +644,7 @@ async fn paused_runtime_cannot_continue_on_an_admitted_websocket(mode: RuntimeAu
         listener.local_addr().unwrap()
     )));
     provider.request_max_retries = Some(0);
-    let (harness, _) = runtime_harness(&registration, provider, mode).await;
+    let (harness, _) = runtime_harness(&registration, provider, mode, Vec::new()).await;
     let requests = Arc::new(AtomicUsize::new(0));
     let proofs = Arc::new(std::sync::Mutex::new(Vec::new()));
     let server_requests = Arc::clone(&requests);

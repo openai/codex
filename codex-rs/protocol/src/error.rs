@@ -429,6 +429,15 @@ impl CodexErr {
     /// otherwise use exponential backoff with jitter. Callers enforce their own retry budgets.
     pub fn retry_delay(&self, retry_count: u64) -> Option<Duration> {
         match self.details() {
+            CodexErrorDetails::UnexpectedStatus(error)
+                if is_runtime_auth_denial(
+                    error.status,
+                    &error.body,
+                    error.identity_error_code.as_deref(),
+                ) =>
+            {
+                None
+            }
             CodexErrorDetails::TurnAborted
             | CodexErrorDetails::SessionBudgetExceeded
             | CodexErrorDetails::Interrupted
@@ -627,6 +636,39 @@ pub struct UnexpectedResponseError {
     pub request_id: Option<String>,
     pub identity_authorization_error: Option<String>,
     pub identity_error_code: Option<String>,
+}
+
+/// Runtime denial cannot be repaired by retrying the request or refreshing its original credential.
+/// Keep unavailable verification state and ordinary credential errors on their existing paths.
+pub fn is_runtime_auth_denial(
+    status: StatusCode,
+    body: &str,
+    identity_error_code: Option<&str>,
+) -> bool {
+    if !matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        return false;
+    }
+    let is_terminal = |code| {
+        matches!(
+            code,
+            Some(
+                "runtime_assertion_invalid"
+                    | "runtime_instance_paused"
+                    | "runtime_instance_revoked"
+                    | "invalid_agent_instance_assertion"
+            )
+        )
+    };
+    if is_terminal(identity_error_code) {
+        return true;
+    }
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    is_terminal(
+        body.pointer("/error/code")
+            .and_then(serde_json::Value::as_str),
+    )
 }
 
 const UNEXPECTED_RESPONSE_BODY_MAX_BYTES: usize = 1000;

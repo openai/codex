@@ -17,16 +17,22 @@ pub struct ResponseDebugContext {
 }
 
 pub fn extract_response_debug_context(transport: &TransportError) -> ResponseDebugContext {
+    match transport {
+        TransportError::Http {
+            headers: Some(headers),
+            ..
+        } => extract_response_debug_context_from_headers(headers),
+        _ => ResponseDebugContext::default(),
+    }
+}
+
+pub fn extract_response_debug_context_from_headers(
+    headers: &http::HeaderMap,
+) -> ResponseDebugContext {
     let mut context = ResponseDebugContext::default();
-
-    let TransportError::Http { headers, .. } = transport else {
-        return context;
-    };
-
     let extract_header = |name: &str| {
         headers
-            .as_ref()
-            .and_then(|headers| headers.get(name))
+            .get(name)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string)
     };

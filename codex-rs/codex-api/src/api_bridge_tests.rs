@@ -839,3 +839,57 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
     );
     assert_eq!(err.identity_error_code.as_deref(), Some("token_expired"));
 }
+
+#[test]
+fn runtime_auth_denials_stop_retries_without_losing_http_diagnostics() {
+    for (status, code, retryable) in [
+        (403, "runtime_assertion_invalid", false),
+        (403, "runtime_instance_paused", false),
+        (403, "runtime_instance_revoked", false),
+        (401, "invalid_agent_instance_assertion", false),
+        (503, "runtime_verification_unavailable", true),
+        (503, "agent_instance_authentication_unavailable", true),
+        (401, "token_expired", true),
+        (403, "ordinary_policy_denial", true),
+    ] {
+        for in_header in [false, true] {
+            let status = http::StatusCode::from_u16(status).unwrap();
+            let details = serde_json::json!({"error": {"code": code}}).to_string();
+            let mut headers = http::HeaderMap::from_iter([(
+                "x-request-id".parse().unwrap(),
+                "request-runtime".parse().unwrap(),
+            )]);
+            let body = if in_header {
+                headers.insert(
+                    X_ERROR_JSON_HEADER,
+                    base64::engine::general_purpose::STANDARD
+                        .encode(details)
+                        .parse()
+                        .unwrap(),
+                );
+                r#"{"detail":"Unauthorized"}"#.to_owned()
+            } else {
+                details
+            };
+            let error = map_api_error(ApiError::Transport(TransportError::Http {
+                status,
+                retry_after: None,
+                url: Some("https://api.openai.com/v1/responses".into()),
+                headers: Some(headers),
+                body: Some(body.clone()),
+            }));
+            assert_eq!(
+                error.retry_delay(/*retry_count*/ 1).is_some(),
+                retryable,
+                "{code}, in_header={in_header}"
+            );
+            let CodexErrorDetails::UnexpectedStatus(details) = error.details() else {
+                panic!("missing HTTP diagnostics: {error:?}");
+            };
+            assert_eq!(
+                (&details.body, details.status, details.request_id.as_deref()),
+                (&body, status, Some("request-runtime"))
+            );
+        }
+    }
+}

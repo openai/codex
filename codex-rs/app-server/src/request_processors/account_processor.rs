@@ -1710,6 +1710,7 @@ mod tests {
                 status,
                 content_type: "application/json".to_string(),
                 body: "{}".to_string(),
+                identity_error_code: None,
             };
             assert_eq!(workspace_messages_feature_disabled(&err), expected);
         }

@@ -896,8 +896,7 @@ impl ModelClient {
                 expected_auth,
                 &setup.api_provider.headers,
             )
-            .await
-            .map_err(|error| codex_api::map_api_error(error.into()))?;
+            .await?;
             setup.api_auth = provider
                 .compose_auth(codex_model_provider::ResolvedProviderAuth {
                     credential: Some(selected.auth().clone()),

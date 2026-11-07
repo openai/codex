@@ -2477,6 +2477,7 @@ dependencies = [
  "codex-login",
  "codex-model-provider",
  "codex-protocol",
+ "codex-response-debug-context",
  "codex-runtime-agent-instance",
  "http 1.4.0",
  "pretty_assertions",

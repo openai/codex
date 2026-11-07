@@ -46,9 +46,8 @@ pub(crate) async fn resolve_request_auth(
                     let runtime =
                         crate::select_runtime_provider(&info, manager.as_ref(), &runtime)?;
                     let headers = info.build_header_map()?;
-                    let selected = crate::runtime_auth::select_runtime_auth(&runtime, &headers)
-                        .await
-                        .map_err(|error| codex_api::map_api_error(error.into()))?;
+                    let selected =
+                        crate::runtime_auth::select_runtime_auth(&runtime, &headers).await?;
                     let resolved = ResolvedProviderAuth::for_runtime(selected, mode);
                     resolved.validate_headers(&headers)?;
                     tracing::debug!(runtime_auth_mode = ?mode, "selected runtime authentication");

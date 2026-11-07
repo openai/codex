@@ -25,11 +25,13 @@ use std::sync::Arc;
 pub(crate) async fn select_runtime_auth(
     manager: &Arc<RuntimeAuthBinding>,
     headers: &HeaderMap,
-) -> Result<RuntimeAuth, AuthError> {
+) -> CodexResult<RuntimeAuth> {
+    let selection =
+        resource_selection(headers).map_err(|error| codex_api::map_api_error(error.into()))?;
     manager
-        .auth_with_selection(&resource_selection(headers)?)
+        .auth_with_selection(&selection)
         .await
-        .map_err(AuthError::from)
+        .map_err(map_runtime_auth_error)
 }
 
 /// Select the request's resource scope while preserving captured credential ownership.
@@ -37,11 +39,20 @@ pub async fn select_runtime_auth_for(
     binding: &Arc<RuntimeAuthBinding>,
     auth: &CodexAuth,
     headers: &HeaderMap,
-) -> Result<RuntimeAuth, AuthError> {
+) -> CodexResult<RuntimeAuth> {
+    let selection =
+        resource_selection(headers).map_err(|error| codex_api::map_api_error(error.into()))?;
     binding
-        .auth_for(auth, &resource_selection(headers)?)
+        .auth_for(auth, &selection)
         .await
-        .map_err(AuthError::from)
+        .map_err(map_runtime_auth_error)
+}
+
+fn map_runtime_auth_error(error: RuntimeAuthError) -> CodexErr {
+    match error {
+        RuntimeAuthError::RefreshTokenFailed(error) => CodexErr::RefreshTokenFailed(error),
+        error => codex_api::map_api_error(AuthError::from(error).into()),
+    }
 }
 
 /// Select fresh request auth without allowing a reusable client's source to change.

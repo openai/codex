@@ -529,6 +529,21 @@ impl ConfiguredModelProvider {
 }
 
 impl ModelProvider for ConfiguredModelProvider {
+    fn is_recoverable_auth_error(&self, error: &TransportError) -> bool {
+        let TransportError::Http { status, body, .. } = error else {
+            return false;
+        };
+        *status == http::StatusCode::UNAUTHORIZED
+            && (self.runtime_auth.is_none()
+                || !codex_protocol::error::is_runtime_auth_denial(
+                    *status,
+                    body.as_deref().unwrap_or_default(),
+                    codex_response_debug_context::extract_response_debug_context(error)
+                        .auth_error_code
+                        .as_deref(),
+                ))
+    }
+
     fn info(&self) -> &ModelProviderInfo {
         &self.info
     }
