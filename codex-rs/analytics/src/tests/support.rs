@@ -64,6 +64,7 @@ pub(super) const TEST_PRODUCT_CLIENT_ID: &str = "codex_work_desktop";
 
 pub(super) struct TestTurnMetadata {
     pub(super) root_turn_id: Mutex<Option<String>>,
+    pub(super) turn_trigger: Option<String>,
 }
 
 impl TurnAnalyticsMetadata for TestTurnMetadata {
@@ -72,7 +73,7 @@ impl TurnAnalyticsMetadata for TestTurnMetadata {
     }
 
     fn turn_trigger(&self) -> Option<String> {
-        None
+        self.turn_trigger.clone()
     }
 
     fn codex_turn_source(&self) -> Option<String> {
@@ -83,6 +84,7 @@ impl TurnAnalyticsMetadata for TestTurnMetadata {
 pub(super) fn test_turn_metadata(root_turn_id: Option<&str>) -> Arc<TestTurnMetadata> {
     Arc::new(TestTurnMetadata {
         root_turn_id: Mutex::new(root_turn_id.map(str::to_string)),
+        turn_trigger: None,
     })
 }
 

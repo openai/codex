@@ -15,6 +15,7 @@ use crate::facts::InvocationType;
 use crate::reducer::AnalyticsReducer;
 use crate::tests::support::TEST_PRODUCT_CLIENT_ID;
 use crate::tests::support::test_tracking_context;
+use crate::tests::support::test_turn_metadata;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -54,7 +55,12 @@ fn app_mentioned_event_serializes_expected_shape() {
 
 #[test]
 fn app_used_event_serializes_expected_shape() {
-    let tracking = test_tracking_context("thread-2", "turn-2");
+    let mut tracking = test_tracking_context("thread-2", "turn-2");
+    let mut metadata = test_turn_metadata(/*root_turn_id*/ None);
+    std::sync::Arc::get_mut(&mut metadata)
+        .expect("unique metadata")
+        .turn_trigger = Some("appServer-goal".to_string());
+    tracking.turn_metadata = Some(metadata);
     let event = TrackEventRequest::AppUsed(CodexAppUsedEventRequest {
         event_type: "codex_app_used",
         event_params: CodexAppUsedMetadata {
@@ -78,6 +84,7 @@ fn app_used_event_serializes_expected_shape() {
         json!({
             "event_type": "codex_app_used",
             "event_params": {
+                "turn_trigger": "appServer-goal",
                 "connector_id": "drive",
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
@@ -97,6 +104,14 @@ async fn reducer_ingests_app_facts() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();
     let tracking = test_tracking_context("thread-1", "turn-1");
+    let mut metadata = test_turn_metadata(/*root_turn_id*/ None);
+    std::sync::Arc::get_mut(&mut metadata)
+        .expect("unique metadata")
+        .turn_trigger = Some("automation_cron_run_now".to_string());
+    let tracking = crate::facts::TrackEventsContext {
+        turn_metadata: Some(metadata),
+        ..tracking
+    };
 
     reducer
         .ingest(
@@ -148,6 +163,16 @@ async fn reducer_ingests_app_facts() {
             ("codex_app_mentioned", Some(TEST_PRODUCT_CLIENT_ID)),
             ("codex_app_used", Some(TEST_PRODUCT_CLIENT_ID)),
         ]
+    );
+    assert_eq!(
+        (
+            mention.event_params.turn_trigger.as_deref(),
+            usage.event_params.app.turn_trigger.as_deref()
+        ),
+        (
+            Some("automation_cron_run_now"),
+            Some("automation_cron_run_now")
+        )
     );
     assert_eq!(
         usage.event_params.elicitation_type,

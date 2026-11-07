@@ -110,6 +110,7 @@ use crate::facts::SkillInvocationLocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::TurnAnalyticsMetadata;
 use crate::facts::TurnCodexError;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
@@ -182,6 +183,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 const MAX_TOOL_RESPONSE_ENTRIES: usize = 256;
 const MAX_RECENT_VOICE_SESSION_WINDOWS: usize = 16;
 
@@ -1056,7 +1058,7 @@ impl AnalyticsReducer {
                 self.record_tool_event(
                     &thread_id,
                     &turn_id,
-                    turn_metadata.root_turn_id(),
+                    Some(turn_metadata.as_ref()),
                     event,
                     ToolEventEmission::AwaitResponse,
                     out,
@@ -1133,7 +1135,7 @@ impl AnalyticsReducer {
         self.record_tool_event(
             &thread_id,
             &turn_id,
-            turn_metadata.root_turn_id(),
+            Some(turn_metadata.as_ref()),
             event,
             ToolEventEmission::AwaitResponse,
             out,
@@ -1192,7 +1194,7 @@ impl AnalyticsReducer {
         &mut self,
         thread_id: &str,
         turn_id: &str,
-        root_turn_id: Option<String>,
+        turn_metadata: Option<&dyn TurnAnalyticsMetadata>,
         mut event: TrackEventRequest,
         emission: ToolEventEmission,
         out: &mut Vec<TrackEventRequest>,
@@ -1201,7 +1203,8 @@ impl AnalyticsReducer {
             out.push(event);
             return;
         };
-        base.root_turn_id = root_turn_id;
+        base.root_turn_id = turn_metadata.and_then(TurnAnalyticsMetadata::root_turn_id);
+        base.turn_trigger = turn_metadata.and_then(TurnAnalyticsMetadata::turn_trigger);
         let state = self
             .tool_response_states
             .entry((thread_id.to_string(), turn_id.to_string()))
@@ -1489,12 +1492,14 @@ impl AnalyticsReducer {
                     (skill_id, skill_scope)
                 }
             };
+            let turn = tracking.turn_metadata.as_deref();
             out.push(TrackEventRequest::SkillInvocation(
                 SkillInvocationEventRequest {
                     event_type: "skill_invocation",
                     skill_id,
                     skill_name: invocation.skill_name.clone(),
                     event_params: SkillInvocationEventParams {
+                        turn_trigger: turn.and_then(TurnAnalyticsMetadata::turn_trigger),
                         thread_id: Some(tracking.thread_id.clone()),
                         turn_id: Some(tracking.turn_id.clone()),
                         voice_session_id: self
@@ -2120,11 +2125,11 @@ impl AnalyticsReducer {
                         .get(&(notification.thread_id.clone(), notification.turn_id.clone())),
                     self.code_mode_cells.get(&notification.thread_id),
                 );
-                let root_turn_id = self
+                let turn_metadata = self
                     .turns
                     .get(&notification.turn_id)
                     .and_then(|turn| turn.resolved_config.as_ref())
-                    .and_then(|config| config.turn_metadata.root_turn_id());
+                    .map(|config| config.turn_metadata.as_ref());
                 out.push(TrackEventRequest::CuaToolCallStarted(
                     CodexCuaToolCallStartedEventRequest {
                         event_type: "codex_cua_tool_call_started",
@@ -2132,7 +2137,10 @@ impl AnalyticsReducer {
                             thread_id: notification.thread_id,
                             session_id: thread_metadata.session_id.clone(),
                             turn_id: notification.turn_id,
-                            root_turn_id,
+                            root_turn_id: turn_metadata
+                                .and_then(TurnAnalyticsMetadata::root_turn_id),
+                            turn_trigger: turn_metadata
+                                .and_then(TurnAnalyticsMetadata::turn_trigger),
                             item_id: item_id.to_string(),
                             cell_id: attribution.cell_id,
                             parent_call_id: attribution.parent_call_id,
@@ -2248,11 +2256,11 @@ impl AnalyticsReducer {
                             .get(&notification.turn_id)
                             .and_then(|turn| turn.voice_session_id.clone());
                     }
-                    let root_turn_id = self
+                    let turn_metadata = self
                         .turns
                         .get(&notification.turn_id)
                         .and_then(|turn| turn.resolved_config.as_ref())
-                        .and_then(|config| config.turn_metadata.root_turn_id());
+                        .map(|config| Arc::clone(&config.turn_metadata));
                     // Fast collaborator tools can complete before their sampling response.
                     // Keep the event until that response can supply its originating ID.
                     let emission = if matches!(
@@ -2266,7 +2274,7 @@ impl AnalyticsReducer {
                     self.record_tool_event(
                         &notification.thread_id,
                         &notification.turn_id,
-                        root_turn_id,
+                        turn_metadata.as_deref(),
                         event,
                         emission,
                         out,
@@ -3469,6 +3477,7 @@ fn tool_item_base(
         thread_id: thread_id.to_string(),
         session_id: thread_metadata.session_id.clone(),
         turn_id: turn_id.to_string(),
+        turn_trigger: None,
         root_turn_id: None,
         item_id,
         cell_id: None,

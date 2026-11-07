@@ -155,6 +155,7 @@ fn sample_skill_track_event(thread_id: &str, plugin_id: Option<&str>) -> TrackEv
         skill_id: format!("skill-{thread_id}"),
         skill_name: "doc".to_string(),
         event_params: SkillInvocationEventParams {
+            turn_trigger: None,
             product_client_id: None,
             skill_scope: None,
             plugin_id: plugin_id.map(str::to_string),
@@ -205,6 +206,7 @@ fn sample_mcp_tool_call_event(thread_id: &str, plugin_id: Option<&str>) -> Track
         event_type: "codex_mcp_tool_call_event",
         event_params: CodexMcpToolCallEventParams {
             base: CodexToolItemEventBase {
+                turn_trigger: None,
                 thread_id: thread_id.to_string(),
                 session_id: format!("session-{thread_id}"),
                 turn_id: "turn-1".to_string(),
@@ -261,6 +263,7 @@ fn sample_plugin_used_track_event(thread_id: &str, plugin_id: Option<&str>) -> T
     TrackEventRequest::PluginUsed(CodexPluginUsedEventRequest {
         event_type: "codex_plugin_used",
         event_params: CodexPluginUsedMetadata {
+            turn_trigger: None,
             plugin: CodexPluginMetadata {
                 plugin_id: plugin_id.map(str::to_string),
                 remote_plugin_id: None,
