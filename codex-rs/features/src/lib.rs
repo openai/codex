@@ -286,6 +286,8 @@ pub enum Feature {
     McpToolListChanged,
     /// Discover and share eligible local stdio connections across chats.
     McpConnectionSharing,
+    /// Defer optional stdio server startup in regular chats with a warm tool catalog.
+    McpLazyStdioStartup,
     /// Enable MCP protocol version 2026-07-28 for the host-owned Codex Apps server.
     CodexAppsMcp20260728,
     /// Let host-owned Apps catalog reads overlap the initial tool inventory.
@@ -1739,6 +1741,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::McpConnectionSharing,
         key: "mcp_connection_sharing",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::McpLazyStdioStartup,
+        key: "mcp_lazy_stdio_startup",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

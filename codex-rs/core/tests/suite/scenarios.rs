@@ -357,7 +357,7 @@ fn plugin(name: &str) -> UserInput {
     }
 }
 
-fn configure_scenario_catalog(config: &mut Config) {
+pub(super) fn configure_scenario_catalog(config: &mut Config) {
     // Keep the fixture independent of the checkout's project configuration.
     let stack = &config.config_layer_stack;
     config.config_layer_stack = ConfigLayerStack::new(
@@ -682,6 +682,22 @@ async fn additional_context_tool_outputs(tool_outputs: bool) -> Result<()> {
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cached_stdio_stays_dormant_in_a_new_chat_until_first_use() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server binary");
+    let requests = super::mcp_tool_cache::cached_stdio_first_use_scenario().await?;
+    let entries = requests.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
+    insta::assert_snapshot!(context_snapshot::format_context_snapshot(
+        "A new chat uses a cached MCP catalog for unrelated work, then calls echo. The live server updates the tool definitions and marks cwd as app-only.",
+        &entries,
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .include_request_settings(),
+    ));
     Ok(())
 }
 

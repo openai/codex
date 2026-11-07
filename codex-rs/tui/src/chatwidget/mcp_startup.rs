@@ -7,6 +7,7 @@
 //! compact history hides their full text behind the persistent warning notice.
 
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 use codex_app_server_protocol::McpServerStartupFailureReason;
 use codex_app_server_protocol::McpServerStartupState;
@@ -26,6 +27,23 @@ pub(crate) enum McpStartupStatus {
         failure_reason: Option<McpServerStartupFailureReason>,
     },
     Cancelled,
+}
+
+pub(super) enum ExpectedMcpServers {
+    EveryRound(HashSet<String>),
+    InitialRound(HashSet<String>),
+    ReportedOnly,
+}
+
+impl ExpectedMcpServers {
+    fn iter(&self) -> impl Iterator<Item = &String> {
+        match self {
+            Self::EveryRound(names) | Self::InitialRound(names) => Some(names),
+            Self::ReportedOnly => None,
+        }
+        .into_iter()
+        .flatten()
+    }
 }
 
 impl ChatWidget {
@@ -63,10 +81,9 @@ impl ChatWidget {
             let Some(expected_servers) = &self.mcp_startup_expected_servers else {
                 return;
             };
-            let saw_full_round = expected_servers.is_empty()
-                || expected_servers
-                    .iter()
-                    .all(|name| self.mcp_startup_pending_next_round.contains_key(name));
+            let saw_full_round = expected_servers
+                .iter()
+                .all(|name| self.mcp_startup_pending_next_round.contains_key(name));
             let saw_starting = self
                 .mcp_startup_pending_next_round
                 .values()
@@ -196,7 +213,23 @@ impl ChatWidget {
     where
         I: IntoIterator<Item = String>,
     {
-        self.mcp_startup_expected_servers = Some(server_names.into_iter().collect());
+        self.mcp_startup_expected_servers = Some(ExpectedMcpServers::EveryRound(
+            server_names.into_iter().collect(),
+        ));
+    }
+
+    /// After the initial batch a dormant helper can start a round on its own.
+    pub(crate) fn set_initial_mcp_startup_expected_servers(
+        &mut self,
+        names: impl Iterator<Item = String>,
+    ) {
+        if !matches!(
+            self.mcp_startup_expected_servers,
+            Some(ExpectedMcpServers::ReportedOnly)
+        ) {
+            self.mcp_startup_expected_servers =
+                Some(ExpectedMcpServers::InitialRound(names.collect()));
+        }
     }
 
     pub(super) fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
@@ -224,6 +257,12 @@ impl ChatWidget {
 
         let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
         self.mcp_startup_status = None;
+        if matches!(
+            self.mcp_startup_expected_servers,
+            Some(ExpectedMcpServers::InitialRound(_))
+        ) {
+            self.mcp_startup_expected_servers = Some(ExpectedMcpServers::ReportedOnly);
+        }
         self.mcp_startup_ignore_updates_until_next_start = true;
         self.mcp_startup_allow_terminal_only_next_round = false;
         self.mcp_startup_pending_next_round.clear();

@@ -64,31 +64,41 @@ impl App {
     }
 
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
-        if self
+        let configured_servers = self.config.mcp_servers.get();
+        let is_subagent = self
             .current_displayed_thread_id()
             .zip(self.primary_thread_id)
             .is_some_and(|(thread_id, primary_thread_id)| {
                 self.agent_navigation.is_parent_owned(thread_id)
                     || (thread_id != primary_thread_id
                         && !self.side_threads.contains_key(&thread_id))
-            })
-        {
-            // Subagents can defer cached servers indefinitely, so only servers
-            // that actually report startup should keep their status running.
+            });
+        if is_subagent {
+            // Deferred servers may start in a later round on their own. Track the
+            // servers that actually report startup in each round.
             self.chat_widget
                 .set_mcp_startup_expected_servers(std::iter::empty());
             return;
         }
 
-        let enabled_config_mcp_servers: Vec<String> = self
-            .config
-            .mcp_servers
-            .get()
+        let enabled_servers = configured_servers
             .iter()
-            .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
-            .collect();
-        self.chat_widget
-            .set_mcp_startup_expected_servers(enabled_config_mcp_servers);
+            .filter(|(_, server)| server.enabled);
+        // Plugins can contribute lazy servers outside the explicit configuration.
+        if self
+            .config
+            .features
+            .enabled(codex_features::Feature::McpLazyStdioStartup)
+        {
+            self.chat_widget.set_initial_mcp_startup_expected_servers(
+                enabled_servers
+                    .filter(|(_, server)| !server.can_defer_stdio_startup())
+                    .map(|(name, _)| name.clone()),
+            );
+        } else {
+            self.chat_widget
+                .set_mcp_startup_expected_servers(enabled_servers.map(|(name, _)| name.clone()));
+        }
     }
 
     pub(super) async fn handle_app_server_event(

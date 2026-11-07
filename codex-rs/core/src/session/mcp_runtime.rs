@@ -379,7 +379,13 @@ impl Session {
                     )
                 }),
             startup_policy: if matches!(desired.session_source, SessionSource::SubAgent(_)) {
-                McpStartupPolicy::LazyWhenCached
+                McpStartupPolicy::DeferCachedServers
+            } else if desired
+                .config
+                .features
+                .enabled(Feature::McpLazyStdioStartup)
+            {
+                McpStartupPolicy::DeferCachedStdio
             } else {
                 McpStartupPolicy::Eager
             },

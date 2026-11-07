@@ -329,6 +329,12 @@ impl McpServerConfig {
         });
     }
 
+    /// Whether a regular chat may defer this server when its tool catalog is cached.
+    pub fn can_defer_stdio_startup(&self) -> bool {
+        matches!(&self.transport, McpServerTransportConfig::Stdio { .. })
+            && (!self.required || self.startup_readiness == McpStartupReadiness::Catalog)
+    }
+
     pub fn is_local_environment(&self) -> bool {
         self.environment_id == DEFAULT_MCP_SERVER_ENVIRONMENT_ID
     }

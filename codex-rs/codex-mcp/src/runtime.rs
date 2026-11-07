@@ -76,8 +76,10 @@ use crate::tools::ToolInfo;
 pub enum McpStartupPolicy {
     /// Start configured servers when their task's MCP runtime is published.
     Eager,
-    /// Start servers with cached tool definitions on first use.
-    LazyWhenCached,
+    /// Defer cached stdio servers unless startup requires their live connection.
+    DeferCachedStdio,
+    /// Allow cached tools to satisfy startup for any eligible transport, including required servers.
+    DeferCachedServers,
 }
 
 /// A host-requested tool result and its identity in the published MCP catalog.

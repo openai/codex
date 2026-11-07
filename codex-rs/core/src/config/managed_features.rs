@@ -154,6 +154,7 @@ impl ManagedFeatures {
         for feature in [
             Feature::EnableMcpApps,
             Feature::McpConnectionSharing,
+            Feature::McpLazyStdioStartup,
             Feature::SecretAuthStorage,
             Feature::McpOAuthRefreshCoordination,
         ] {

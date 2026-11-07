@@ -407,10 +407,9 @@ impl McpConnectionSet {
             .collect::<Vec<_>>();
         required_servers.sort();
         let mut reused_ready = Vec::new();
-        let mut join_set = JoinSet::new();
-        // Explicit reconnects have no previous set and must replace their clients eagerly.
-        let allow_deferred_startup =
-            startup_policy == McpStartupPolicy::LazyWhenCached && previous.is_some();
+        let mut eager_starts = Vec::new();
+        let mut eager_workers = Vec::new();
+        let mut deferred_workers = Vec::new();
         // Retained EMA clients keep callbacks attached to this manager even when
         // an explicit reconnect replaces the ordinary clients.
         let elicitation_previous = previous
@@ -685,7 +684,14 @@ impl McpConnectionSet {
                     expected_protocol_mode == Some(McpProtocolMode::DiscoverLocalStdio);
                 Some(context)
             });
-            let defer_startup = allow_deferred_startup
+            let allow_deferred_startup = match startup_policy {
+                McpStartupPolicy::Eager => false,
+                McpStartupPolicy::DeferCachedStdio => configured_config.can_defer_stdio_startup(),
+                McpStartupPolicy::DeferCachedServers => true,
+            };
+            // Explicit reconnects have no previous set and must replace their clients eagerly.
+            let defer_startup = previous.is_some()
+                && allow_deferred_startup
                 && !tool_plugin_context.is_selected_plugin_mcp_server(&server_name)
                 && tool_catalog_cache_context
                     .as_ref()
@@ -750,13 +756,8 @@ impl McpConnectionSet {
                         );
                         if pending {
                             let client = connection.client.clone();
-                            let publication_gate = publication_gate.clone();
-                            join_set.spawn(async move {
-                                if !publication_gate.wait().await {
-                                    return (server_name, Err(StartupOutcomeError::Cancelled));
-                                }
-                                (server_name, client.client().await)
-                            });
+                            eager_workers
+                                .push(async move { (server_name, client.client().await) }.boxed());
                         } else {
                             reused_ready.push(server_name);
                         }
@@ -830,6 +831,7 @@ impl McpConnectionSet {
                         },
                     );
                     if let Some(error) = unchanged_auth_failure {
+                        eager_starts.push(server_name.clone());
                         let reason = connection_identity
                             .oauth_credentials()
                             .ok()
@@ -846,13 +848,9 @@ impl McpConnectionSet {
                         };
                         let tx_event = tx_event.clone();
                         let submit_id = startup_submit_id.clone();
-                        let publication_gate = publication_gate.clone();
-                        join_set.spawn(async move {
-                            if !publication_gate.wait().await {
-                                return (server_name, Err(StartupOutcomeError::Cancelled));
-                            }
-                            if let Some(tx_event) = tx_event.as_ref() {
-                                for status in [McpStartupStatus::Starting, status] {
+                        eager_workers.push(
+                            async move {
+                                if let Some(tx_event) = tx_event.as_ref() {
                                     let _ = emit_update(
                                         submit_id.as_str(),
                                         tx_event,
@@ -863,17 +861,13 @@ impl McpConnectionSet {
                                     )
                                     .await;
                                 }
+                                (server_name, Err(error))
                             }
-                            (server_name, Err(error))
-                        });
+                            .boxed(),
+                        );
                     } else if let Some(client) = pending_client {
-                        let publication_gate = publication_gate.clone();
-                        join_set.spawn(async move {
-                            if !publication_gate.wait().await {
-                                return (server_name, Err(StartupOutcomeError::Cancelled));
-                            }
-                            (server_name, client.client().await)
-                        });
+                        eager_workers
+                            .push(async move { (server_name, client.client().await) }.boxed());
                     } else {
                         reused_ready.push(server_name);
                     }
@@ -989,7 +983,10 @@ impl McpConnectionSet {
             );
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
-            let publication_gate = publication_gate.clone();
+
+            if !defer_startup {
+                eager_starts.push(server_name.clone());
+            }
             let startup = async move {
                 if let Some(mut startup_receiver) = startup_receiver
                     && tokio::select! {
@@ -999,10 +996,7 @@ impl McpConnectionSet {
                 {
                     return (server_name, Err(StartupOutcomeError::Cancelled));
                 }
-                if !publication_gate.wait().await {
-                    return (server_name, Err(StartupOutcomeError::Cancelled));
-                }
-                if let Some(tx_event) = tx_event.as_ref() {
+                if defer_startup && let Some(tx_event) = tx_event.as_ref() {
                     let _ = emit_update(
                         submit_id.as_str(),
                         tx_event,
@@ -1101,9 +1095,9 @@ impl McpConnectionSet {
             let startup = AuthStorageOriginator::current().scope(startup);
             if defer_startup {
                 // Dormant servers must not hold the initial startup summary open.
-                tokio::spawn(startup);
+                deferred_workers.push(startup);
             } else {
-                join_set.spawn(startup);
+                eager_workers.push(startup.boxed());
             }
         }
         let manager = Self {
@@ -1120,13 +1114,30 @@ impl McpConnectionSet {
             elicitation_requests: elicitation_requests.clone(),
             trusted_access,
         };
-        let summary_publication_gate = publication_gate;
         tokio::spawn(async move {
-            let outcomes = join_set.join_all().await;
-            if let Some(tx_event) = tx_event {
-                if !summary_publication_gate.wait().await {
-                    return;
+            if !publication_gate.wait().await {
+                return;
+            }
+            // Announce the complete eager batch before a fast helper can report Ready.
+            // Dormant helpers announce themselves separately when their first caller arrives.
+            if let Some(tx_event) = &tx_event {
+                for server in eager_starts {
+                    let _ = emit_update(
+                        startup_submit_id.as_str(),
+                        tx_event,
+                        McpStartupUpdateEvent {
+                            server,
+                            status: McpStartupStatus::Starting,
+                        },
+                    )
+                    .await;
                 }
+            }
+            for worker in deferred_workers {
+                tokio::spawn(worker);
+            }
+            let outcomes = JoinSet::from_iter(eager_workers).join_all().await;
+            if let Some(tx_event) = tx_event {
                 let mut summary = McpStartupCompleteEvent {
                     ready: reused_ready,
                     ..Default::default()
