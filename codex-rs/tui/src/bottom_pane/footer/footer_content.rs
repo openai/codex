@@ -47,8 +47,7 @@ impl FooterContent {
         match self {
             Self::Line(line) => Widget::render(line, area, buf),
             Self::Extension { content } => {
-                with_syntax_theme(|theme| content.render_line(area.width, theme))
-                    .render_fitted(area, buf)
+                with_syntax_theme(|theme| content.render(area, theme, buf));
             }
             Self::HyperlinkLine(mut line) => {
                 let area = Rect {
@@ -66,7 +65,6 @@ impl FooterContent {
         }
     }
 
-    /// Keep link destinations when handing the status line to the effort transition.
     pub(crate) fn into_hyperlink_line(self) -> HyperlinkLine {
         match self {
             Self::Line(line) => line.into(),

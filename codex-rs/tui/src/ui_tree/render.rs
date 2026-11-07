@@ -5,17 +5,20 @@ mod text;
 
 use self::prepare::NodeKind;
 use self::prepare::PreparedNode;
+use self::text::Chunk;
 use self::text::Paint;
-use super::RowWrap;
-
+use self::text::visit_chunks;
 use super::MAX_TEXT_BYTES;
+use super::RowWrap;
 use super::TextProps;
 use super::TextWeight;
 use super::UiTree;
 use super::theme::RenderTheme;
-use crate::line_truncation::truncate_line_with_ellipsis;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::TerminalHyperlink;
+use crate::terminal_hyperlinks::mark_hyperlink_cells;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Modifier;
 use ratatui::text::Span;
@@ -38,44 +41,172 @@ impl UiTree {
 }
 
 impl PreparedUiTree {
-    pub(crate) fn render_line(&self, width: u16, theme: &Theme) -> HyperlinkLine {
-        self.render_lines(Size::new(width, /*height*/ 1), theme)
-            .pop()
-            .unwrap_or_default()
+    pub(crate) fn measure_natural(&self) -> Size {
+        self.0.as_ref().map_or_else(Size::default, |node| {
+            let width = u16::try_from(node.widths.preferred).unwrap_or(u16::MAX);
+            Size::new(width, node.natural_height)
+        })
     }
 
-    /// Fit the tree to the viewport, marking clipped rows and vertical overflow with an unlinked ellipsis.
-    pub(crate) fn render_lines(&self, size: Size, theme: &Theme) -> Vec<HyperlinkLine> {
-        let Some(item) = &self.0 else {
-            return Vec::new();
-        };
-        if size.width == 0 || size.height == 0 {
-            return Vec::new();
+    #[cfg_attr(not(test), expect(dead_code))] // Used by composer layout in the next change.
+    pub(crate) fn measure(&self, bounds: Size) -> Size {
+        layout(self.0.as_ref(), bounds, /*draw*/ None)
+    }
+
+    pub(crate) fn render(&self, area: Rect, theme: &Theme, buf: &mut Buffer) {
+        let area = area.intersection(buf.area);
+        let mut theme = RenderTheme::new(theme);
+        layout(
+            self.0.as_ref(),
+            area.as_size(),
+            Some(&mut |row, col, text, cells, paint| {
+                let x = area.x + col as u16;
+                let y = area.y + row as u16;
+                buf.set_string(x, y, text, paint.style(&mut theme));
+                if let Some(href) = &paint.href {
+                    mark_hyperlink_cells(buf, Rect::new(x, y, cells as u16, 1), href);
+                }
+            }),
+        );
+    }
+
+    pub(crate) fn render_line(&self, width: u16, theme: &Theme) -> HyperlinkLine {
+        let natural = self.measure_natural();
+        if width == 1 && (natural.width > 1 || natural.height > 1) {
+            return ratatui::text::Line::from("…").into();
         }
-        let width = usize::from(size.width);
-        let height = usize::from(size.height);
-        // The extra row distinguishes an exact fit from vertical overflow.
-        let mut lines = layout_node(item, width, height + 1, &mut RenderTheme::new(theme));
-        let more = lines.len() > height;
-        lines.truncate(height);
-        for (index, line) in lines.iter_mut().enumerate() {
-            if line.width() > width || (more && index + 1 == height) {
-                line.line = truncate_line_with_ellipsis(std::mem::take(&mut line.line), width);
-                line.clip_hyperlinks_to_width(line.width() - 1);
-            }
-        }
-        lines
+        let mut line = HyperlinkLine::default();
+        let mut theme = RenderTheme::new(theme);
+        layout(
+            self.0.as_ref(),
+            Size::new(width, /*height*/ 1),
+            Some(&mut |_, col, text, cells, paint| {
+                line.line
+                    .push_span(Span::styled(text.to_owned(), paint.style(&mut theme)));
+                if cells > 0
+                    && let Some(href) = &paint.href
+                {
+                    push_link(&mut line, col..col + cells, href);
+                }
+            }),
+        );
+        line
     }
 }
 
-fn layout_node(
-    node: &PreparedNode,
+#[derive(Clone, Copy)]
+enum Fragment<'a> {
+    Text(&'a [Chunk], usize),
+    Gap(usize, &'a Paint),
+}
+
+impl<'a> Fragment<'a> {
+    fn width(self) -> usize {
+        match self {
+            Self::Text(_, width) | Self::Gap(width, _) => width,
+        }
+    }
+
+    fn visit(self, limit: usize, mut draw: impl FnMut(usize, &str, usize, &'a Paint)) -> usize {
+        match self {
+            Self::Text(chunks, _) => visit_chunks(chunks, limit, draw),
+            Self::Gap(width, paint) => {
+                const SPACES: &str = "                                ";
+                let end = width.min(limit);
+                for start in (0..end).step_by(SPACES.len()) {
+                    let n = (end - start).min(SPACES.len());
+                    draw(start, &SPACES[..n], n, paint);
+                }
+                end
+            }
+        }
+    }
+}
+
+type Visit<'a, 'b> = dyn FnMut(usize, Fragment<'a>) + 'b;
+
+/// Only the fragment that reaches the right edge must wait until overflow is known.
+#[derive(Default)]
+struct Row<'a> {
+    width: usize,
+    edge: Option<(usize, Fragment<'a>)>,
+    last_paint: Option<&'a Paint>,
+}
+
+type Draw<'a> = dyn FnMut(usize, usize, &str, usize, &Paint) + 'a;
+
+fn layout(root: Option<&PreparedNode>, bounds: Size, mut draw: Option<&mut Draw<'_>>) -> Size {
+    let Some(root) = root else {
+        return Size::default();
+    };
+    let width = usize::from(bounds.width);
+    let height = usize::from(bounds.height);
+    if width == 0 || height == 0 {
+        return Size::default();
+    }
+    let mut rows = Vec::<Row>::new();
+    let total = layout_node(root, width, height + 1, &mut |y, fragment| {
+        if y >= height {
+            return;
+        }
+        if rows.len() <= y {
+            rows.resize_with(y + 1, Row::default);
+        }
+        let row = &mut rows[y];
+        let start = row.width;
+        row.width += fragment.width();
+        if start < width {
+            if row.width >= width {
+                row.edge = Some((start, fragment));
+            } else if let Some(draw) = draw.as_deref_mut() {
+                fragment.visit(usize::MAX, |offset, text, cells, paint| {
+                    draw(y, start + offset, text, cells, paint);
+                    row.last_paint = Some(paint);
+                });
+            }
+        }
+    });
+    let mut measured = Size::new(0, total.min(height) as u16);
+    for (y, row) in rows.into_iter().enumerate() {
+        let clipped = row.width > width || (y + 1 == height && total > height);
+        let mut end = row.width;
+        let mut last_paint = row.last_paint;
+        if clipped && width == 1 {
+            end = 0;
+            last_paint = None;
+        } else if let Some((start, edge)) = row.edge
+            && (clipped || draw.is_some())
+        {
+            let limit = width - usize::from(clipped) - start;
+            end = start
+                + edge.visit(limit, |offset, text, cells, paint| {
+                    if let Some(draw) = draw.as_deref_mut() {
+                        draw(y, start + offset, text, cells, paint);
+                    }
+                    last_paint = Some(paint);
+                });
+        }
+        if clipped {
+            if let Some(draw) = draw.as_deref_mut() {
+                let mut paint = last_paint.cloned().unwrap_or_default();
+                paint.href = None;
+                draw(y, end, "…", 1, &paint);
+            }
+            end += 1;
+        }
+        measured.width = measured.width.max(end as u16);
+    }
+    measured
+}
+
+fn layout_node<'a>(
+    node: &'a PreparedNode,
     width: usize,
     limit: usize,
-    theme: &mut RenderTheme<'_>,
-) -> Vec<HyperlinkLine> {
+    visit: &mut Visit<'a, '_>,
+) -> usize {
     match &node.kind {
-        NodeKind::Text(text) => text.layout(width, limit, theme),
+        NodeKind::Text(text) => text.layout(width, limit, visit),
         NodeKind::Row {
             children,
             gap,
@@ -83,22 +214,22 @@ fn layout_node(
             paint,
         } => {
             let gap = (*gap).min((width + 1) as u64) as usize;
-            let mut lines = Vec::new();
+            let mut y = 0;
             let mut start = 0;
             let mut used = 0;
             for (i, child) in children.iter().enumerate() {
                 let preferred = child.widths.preferred.min((width + 1) as u64) as usize;
                 if *wrap == RowWrap::Wrap && i > start && used + gap + preferred > width {
-                    lines.extend(layout_band(
+                    y += layout_band(
                         &children[start..i],
                         width,
-                        limit - lines.len(),
+                        limit - y,
                         gap,
                         paint,
-                        theme,
-                    ));
-                    if lines.len() == limit {
-                        return lines;
+                        &mut |row, part| visit(y + row, part),
+                    );
+                    if y == limit {
+                        return y;
                     }
                     start = i;
                     used = 0;
@@ -108,78 +239,63 @@ fn layout_node(
                 }
                 used += preferred;
             }
-            lines.extend(layout_band(
+            y + layout_band(
                 &children[start..],
                 width,
-                limit - lines.len(),
+                limit - y,
                 gap,
                 paint,
-                theme,
-            ));
-            lines
+                &mut |row, part| visit(y + row, part),
+            )
         }
     }
 }
 
-fn layout_band(
-    children: &[PreparedNode],
+fn layout_band<'a>(
+    children: &'a [PreparedNode],
     width: usize,
     limit: usize,
     gap: usize,
-    paint: &Paint,
-    theme: &mut RenderTheme<'_>,
-) -> Vec<HyperlinkLine> {
+    paint: &'a Paint,
+    visit: &mut Visit<'a, '_>,
+) -> usize {
     let bounded = |cells: u64| cells.min((width + 1) as u64) as usize;
     let mut reserved = children
         .iter()
         .map(|c| bounded(c.widths.minimum))
         .sum::<usize>()
         + gap * children.len().saturating_sub(1);
-    let mut offset = 0;
-    let mut rows: Vec<(HyperlinkLine, usize)> = Vec::new();
+    let mut offset = 0usize;
+    let mut ends = Vec::new();
     for child in children {
         let minimum = bounded(child.widths.minimum);
         reserved -= minimum;
         let available = bounded(child.widths.preferred)
             .min(width.saturating_sub(offset + reserved))
             .max(minimum);
-        let fragments = layout_node(child, available.clamp(1, width), limit, theme);
-        if rows.len() < fragments.len() {
-            rows.resize_with(fragments.len(), Default::default);
-        }
-        for ((line, end), fragment) in rows.iter_mut().zip(fragments) {
-            // One extra column records overflow without materializing a provider-sized gap.
+        layout_node(child, available.clamp(1, width), limit, &mut |y, part| {
+            if y >= ends.len() {
+                ends.resize(y + 1, 0);
+            }
+            let end = &mut ends[y];
             let start = offset.min(width + 1);
             if start > *end {
-                line.line
-                    .push_span(Span::styled(" ".repeat(start - *end), paint.style(theme)));
-                if let Some(href) = &paint.href {
-                    push_link(line, *end..start, href);
-                }
+                visit(y, Fragment::Gap(start - *end, paint));
                 *end = start;
             }
-            if offset > width {
-                continue;
+            if offset <= width {
+                visit(y, part);
+                *end += part.width();
             }
-            let start = *end;
-            *end += fragment.width();
-            line.line.spans.extend(fragment.line.spans);
-            for link in fragment.hyperlinks {
-                push_link(
-                    line,
-                    start + link.columns.start..start + link.columns.end,
-                    &link.destination,
-                );
-            }
-        }
+        });
         offset += available + gap;
         reserved = reserved.saturating_sub(gap);
     }
-    rows.into_iter().map(|(line, _)| line).collect()
+    ends.len()
 }
 
 fn sanitize_leaf(mut raw: String) -> String {
-    // Built-in values can bypass the wire decoder's text limit.
+    // Directly constructed trees can bypass the wire decoder's text limit.
     if raw.len() > MAX_TEXT_BYTES {
         raw.truncate(raw.floor_char_boundary(MAX_TEXT_BYTES));
         raw.shrink_to_fit();

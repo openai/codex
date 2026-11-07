@@ -1,18 +1,17 @@
 //! Prepared inline text retains styled chunks and their legal line breaks across leaves.
 
+use super::Fragment;
 use super::RenderTheme;
-use super::push_link;
+use super::Visit;
 use super::sanitize_leaf;
 use crate::line_truncation::span_width;
-use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::ui_tree::theme::Color;
+use ratatui::buffer::CellWidth;
 use ratatui::style::Style;
 use ratatui::text::Span;
 use std::ops::Deref;
 use std::ops::Range;
 use std::sync::Arc;
-use textwrap::core::Fragment;
-use textwrap::wrap_algorithms::wrap_first_fit;
 use unicode_linebreak::linebreaks;
 use unicode_linebreak::split_at_safe;
 use unicode_segmentation::GraphemeCursor;
@@ -316,60 +315,81 @@ impl Chunk {
     }
 }
 
-impl Fragment for Chunk {
-    fn width(&self) -> f64 {
-        self.width_cells as f64
-    }
-    fn whitespace_width(&self) -> f64 {
-        f64::from(self.trailing_space.is_some())
-    }
-    fn penalty_width(&self) -> f64 {
-        0.0
-    }
-}
-
 impl PreparedText {
-    pub(super) fn layout(
-        &self,
+    pub(super) fn layout<'a>(
+        &'a self,
         width: usize,
         limit: usize,
-        theme: &mut RenderTheme<'_>,
-    ) -> Vec<HyperlinkLine> {
-        self.lines
-            .iter()
-            .flat_map(|line| wrap_first_fit(line, &[width as f64]))
-            .take(limit)
-            .map(|chunks| paint_chunks(chunks, theme))
-            .collect()
+        visit: &mut Visit<'a, '_>,
+    ) -> usize {
+        let mut y = 0;
+        for line in &self.lines {
+            let mut start = 0;
+            let mut used = 0;
+            let mut space = 0;
+            for (i, chunk) in line.iter().enumerate() {
+                if i > start && used + space + chunk.width_cells > width {
+                    visit(y, Fragment::Text(&line[start..i], used));
+                    y += 1;
+                    if y == limit {
+                        return y;
+                    }
+                    start = i;
+                    used = 0;
+                    space = 0;
+                }
+                used += space + chunk.width_cells;
+                space = usize::from(chunk.trailing_space.is_some());
+            }
+            visit(y, Fragment::Text(&line[start..], used));
+            y += 1;
+            if y == limit {
+                break;
+            }
+        }
+        y
     }
 }
 
-fn paint_chunks(chunks: &[Chunk], theme: &mut RenderTheme<'_>) -> HyperlinkLine {
-    let mut line = HyperlinkLine::default();
-    let mut col = 0;
+pub(super) fn visit_chunks<'a>(
+    chunks: &'a [Chunk],
+    limit: usize,
+    mut draw: impl FnMut(usize, &str, usize, &'a Paint),
+) -> usize {
+    let mut used = 0;
+
     for (index, chunk) in chunks.iter().enumerate() {
         for run in &chunk.runs {
-            let span = Span::styled(run.text.to_string(), run.paint.style(theme));
-            let end = col + span_width(&span);
-            if let Some(url) = &run.paint.href
-                && end > col
-            {
-                push_link(&mut line, col..end, url);
+            let text = &*run.text;
+            let mut bytes = 0;
+            let mut cells = 0;
+            for g in text.graphemes(true) {
+                let w = usize::from(g.cell_width());
+                if used + cells + w > limit {
+                    break;
+                }
+                cells += w;
+                bytes += g.len();
             }
-            line.line.push_span(span);
-            col = end;
+            if bytes > 0 && (used < limit || bytes == text.len()) {
+                draw(used, &text[..bytes], cells, &run.paint);
+            }
+            used += cells;
+            if bytes < text.len() {
+                return used;
+            }
         }
         if index + 1 < chunks.len()
             && let Some(paint) = &chunk.trailing_space
         {
-            line.line.push_span(Span::styled(" ", paint.style(theme)));
-            if let Some(url) = &paint.href {
-                push_link(&mut line, col..col + 1, url);
+            if used == limit {
+                return used;
             }
-            col += 1;
+            draw(used, " ", 1, paint);
+            used += 1;
         }
     }
-    line
+    used
 }
 
 #[cfg(test)]

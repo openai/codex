@@ -1,9 +1,9 @@
 #![cfg(test)]
 
 use super::*;
-use crate::terminal_hyperlinks::TerminalHyperlink;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
+use ratatui::buffer::CellWidth;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use serde_json::Value;
@@ -188,10 +188,23 @@ fn zero_width_fragments_do_not_style_the_ellipsis_or_add_row_gaps() {
             tree(root).render_line(width, &Theme::default())
         );
     }
+    for (children, expected) in [
+        (json!(["A", {"type":"bold","children":["\u{ad}BB"]}]), "A…"),
+        (json!([{"type":"bold","children":["\u{ad}"]}, "AB"]), "…"),
+    ] {
+        let node = tree(json!({"type":"text","children":children}));
+        let expected = Buffer::with_lines([expected]);
+        let mut buf = Buffer::empty(expected.area);
+        node.render(buf.area, &Theme::default(), &mut buf);
+        assert_eq!(buf, expected);
+    }
 }
 
 #[test]
 fn single_line_view_marks_vertical_overflow() {
+    let invisible = tree(json!({"type":"bold","children":["\u{ad}\na"]}));
+    let clipped = invisible.render_line(/*width*/ 1, &Theme::default());
+    assert_eq!(clipped.line.to_string(), "…");
     let multiline = format!("\u{1b}[2Jok\n{}", "x".repeat(1024));
     let tree = tree(json!({"type":"row","props":{"gap":0},"children":[
         &multiline, "!"
@@ -408,8 +421,7 @@ fn paint_semantic_samples() -> String {
                 .fg(TerminalColor::Yellow)
                 .bg(TerminalColor::Blue),
         );
-        node.render_line(area.width, &theme)
-            .render_fitted(area, &mut buffer);
+        node.render(area, &theme, &mut buffer);
         samples.push(format!("{buffer:?}"));
     }
     samples.join("\n")
@@ -489,16 +501,59 @@ fn collapsed_space_keeps_the_first_whitespace_owners_link() {
     );
 }
 
+fn painted_rows(node: &PreparedUiTree, bounds: Size) -> Vec<String> {
+    let area = Rect::from((ratatui::layout::Position::ORIGIN, bounds));
+    let mut buf = Buffer::empty(area);
+    node.render(area, &Theme::default(), &mut buf);
+    (0..node.measure(bounds).height)
+        .map(|y| {
+            let mut text = String::new();
+            let mut x = 0;
+            while x < bounds.width {
+                let cell = &buf[(x, y)];
+                text.push_str(cell.symbol());
+                x += cell.cell_width().max(1);
+            }
+            text.trim_end_matches(' ').to_owned()
+        })
+        .collect()
+}
+
+fn linked_columns(text: &str, columns: std::ops::Range<usize>, href: &str) -> String {
+    text.chars()
+        .enumerate()
+        .map(|(column, ch)| {
+            let symbol = ch.to_string();
+            if columns.contains(&column) {
+                crate::terminal_hyperlinks::osc8_hyperlink(href, &symbol)
+            } else {
+                symbol
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn measures_natural_and_viewport_sizes_in_cells() {
+    let node =
+        tree(json!({"type":"row","props":{"gap":1,"wrap":"wrap"},"children":["ab\ncd","界界"]}));
+    assert_eq!(node.measure_natural(), Size::new(7, 2));
+    assert_eq!(node.measure(Size::new(4, 8)), Size::new(4, 3));
+    let wide = tree(json!("a界\nnext"));
+    assert_eq!(wide.measure(Size::new(3, 1)), Size::new(2, 1));
+    assert_eq!(painted_rows(&wide, Size::new(3, 1)), ["a…"]);
+    let huge =
+        tree(json!({"type":"row","props":{"gap":MAX_GAP,"wrap":"wrap"},"children":["x","y"]}));
+    assert_eq!(huge.measure_natural(), Size::new(u16::MAX, 1));
+    assert_eq!(tree(Value::Null).measure_natural(), Size::default());
+}
+
 #[test]
 fn whitespace_collapses_across_styled_leaves() {
     let node = tree(json!({"type":"text","children":[
         "  build\t", {"type":"bold","children":["  ready  "]}, "\nnext"
     ]}));
-    let lines = node.render_lines(Size::new(/*width*/ 20, /*height*/ 2), &Theme::default());
-    let text: Vec<_> = lines
-        .into_iter()
-        .map(|line| line.line.to_string())
-        .collect();
+    let text = painted_rows(&node, Size::new(20, 2));
     insta::assert_snapshot!(text.join("\n"), @r"
     build ready
     next
@@ -534,18 +589,11 @@ fn wrapped_link_offsets_follow_each_row_and_stop_before_clipping() {
         (Size::new(4, 2), vec![(">12…", 1..3), (" 67", 1..3)]),
         (Size::new(6, 1), vec![(">1234…", 1..5)]),
     ] {
-        let lines = node.render_lines(size, &Theme::default());
-        assert_eq!(lines.len(), expected.len());
-        for (line, (text, columns)) in lines.into_iter().zip(expected) {
-            assert_eq!(line.line.to_string(), text);
-            assert_eq!(
-                line.hyperlinks,
-                [TerminalHyperlink::web(
-                    columns,
-                    "https://example.com".to_owned()
-                )]
-            );
-        }
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(text, columns)| linked_columns(text, columns, "https://example.com"))
+            .collect();
+        assert_eq!(painted_rows(&node, size), expected);
     }
 }
 
@@ -559,36 +607,20 @@ fn styled_text_wraps_in_the_space_its_nowrap_row_assigns() {
             {"type":"link","props":{"href":href},"children":["was green"]}
         ]}, "!"
     ]}));
-    let lines = node.render_lines(Size::new(10, 4), &Theme::default());
     assert_eq!(
-        lines
-            .iter()
-            .map(|row| row.line.to_string())
-            .collect::<Vec<_>>(),
-        ["> build  !", "  was", "  green"]
-    );
-    assert!(lines[0].hyperlinks.is_empty());
-    assert_eq!(
-        lines[1].hyperlinks,
-        [TerminalHyperlink::web(2..5, href.to_owned())]
-    );
-    assert_eq!(
-        lines[2].hyperlinks,
-        [TerminalHyperlink::web(2..7, href.to_owned())]
+        painted_rows(&node, Size::new(10, 4)),
+        [
+            "> build  !".to_string(),
+            linked_columns("  was", 2..5, href),
+            linked_columns("  green", 2..7, href)
+        ]
     );
 }
 
 #[test]
 fn shrinking_a_hyphenated_word_reserves_the_siblings_column() {
     let node = tree(json!({"type":"row","props":{"gap":1},"children":["aa-bb", "!"]}));
-    let lines = node.render_lines(Size::new(6, 2), &Theme::default());
-    assert_eq!(
-        lines
-            .iter()
-            .map(|line| line.line.to_string())
-            .collect::<Vec<_>>(),
-        ["aa-  !", "bb"]
-    );
+    assert_eq!(painted_rows(&node, Size::new(6, 2)), ["aa-  !", "bb"]);
 }
 
 #[test]
@@ -606,12 +638,15 @@ fn wrapping_row_moves_a_hash_and_nonbreaking_pr_label_together() {
         (20, vec!["gpt-5", "a1b2c3d PR\u{a0}#123"], 8..15),
         (12, vec!["gpt-5", "a1b2c3d PR\u{a0}…"], 8..11),
     ] {
-        let lines = node.render_lines(Size::new(width, 4), &Theme::default());
-        let text: Vec<_> = lines.iter().map(|line| line.line.to_string()).collect();
+        let lines = painted_rows(&node, Size::new(width, 4));
+        let text: Vec<_> = lines
+            .iter()
+            .map(|line| crate::terminal_hyperlinks::strip_osc8(line))
+            .collect();
         assert_eq!(text, expected);
         assert_eq!(
-            lines.last().unwrap().hyperlinks,
-            [TerminalHyperlink::web(linked, href.to_owned())]
+            lines.last().unwrap(),
+            &linked_columns(expected.last().unwrap(), linked, href)
         );
     }
 }
@@ -627,14 +662,13 @@ fn authored_line_breaks_and_collapsed_whitespace_preserve_styles_and_links() {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 4,
     );
-    let lines = node.render_lines(area.as_size(), &Theme::default());
-    assert_eq!(
-        lines[3].hyperlinks,
-        [TerminalHyperlink::web(0..6, href.to_owned())]
-    );
     let mut buffer = Buffer::empty(area);
-    for (row, line) in area.rows().zip(lines) {
-        line.render_fitted(row, &mut buffer);
+    node.render(area, &Theme::default(), &mut buffer);
+    for (x, g) in "PR #42".chars().enumerate() {
+        assert_eq!(
+            buffer[(x as u16, 3)].symbol(),
+            crate::terminal_hyperlinks::osc8_hyperlink(href, &g.to_string())
+        );
     }
     insta::assert_snapshot!(crate::terminal_hyperlinks::strip_osc8(&format!(
         "{buffer:?}"
@@ -651,12 +685,8 @@ fn authored_line_breaks_and_collapsed_whitespace_preserve_styles_and_links() {
 #[test]
 fn earlier_sibling_grows_after_reserving_the_later_siblings_minimum() {
     let node = tree(json!({"type":"row","props":{"gap":0},"children":["aaa a bb", "aaa a bb"]}));
-    let lines = node.render_lines(Size::new(10, 3), &Theme::default());
     assert_eq!(
-        lines
-            .iter()
-            .map(|line| line.line.to_string())
-            .collect::<Vec<_>>(),
+        painted_rows(&node, Size::new(10, 3)),
         ["aaa a  aaa", "bb     a", "       bb"]
     );
 }
@@ -666,18 +696,11 @@ fn width_fitting_respects_word_hyphens_across_styles() {
     for (prefix, suffix, expected) in [
         ("1-", "2", vec!["1-", "2"]),
         ("--", "help", vec!["-…"]),
-        ("a\u{ad}", "bc", vec!["a\u{ad}…"]),
+        ("a\u{ad}", "bc", vec!["a…"]),
         ("中", "文", vec!["中", "文"]),
     ] {
         let node =
             tree(json!({"type":"text","children":[{"type":"bold","children":[prefix]},suffix]}));
-        let lines = node.render_lines(Size::new(2, 3), &Theme::default());
-        assert_eq!(
-            lines
-                .iter()
-                .map(|line| line.line.to_string())
-                .collect::<Vec<_>>(),
-            expected
-        );
+        assert_eq!(painted_rows(&node, Size::new(2, 3)), expected);
     }
 }
