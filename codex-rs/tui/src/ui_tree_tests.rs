@@ -168,6 +168,24 @@ fn ellipsis_counts_toward_width_only_when_there_is_overflow() {
 }
 
 #[test]
+fn zero_width_fragments_do_not_style_the_ellipsis_or_add_row_gaps() {
+    let row = |text| json!({"type":"row","props":{"gap":0},"children":[text]});
+    let mark = json!({"type":"bold","children":["\u{301}"]});
+    for (mut root, width) in [
+        (json!({"type":"text"}), 2),
+        (json!({"type":"row","props":{"gap":1}}), 4),
+    ] {
+        root["children"] = json!([row("x"), mark, row("yz")]);
+        let node = tree(root.clone());
+        root["children"] = json!([row("x"), row("yz")]);
+        assert_eq!(
+            node.render_line(width, &Theme::default()),
+            tree(root).render_line(width, &Theme::default())
+        );
+    }
+}
+
+#[test]
 fn first_line_skips_hidden_text_before_rendering_its_sibling() {
     let multiline = format!("\u{1b}[2Jok\n{}", "x".repeat(1024));
     let tree = tree(json!({"type":"row","props":{"gap":0},"children":[
@@ -405,4 +423,69 @@ fn terminal_commands_are_sanitized_within_each_string() {
         )]
     );
     insta::assert_snapshot!(line.line.to_string(), @"red label Ready");
+}
+
+#[test]
+fn split_graphemes_use_the_first_style_and_require_unanimous_links() {
+    use crate::terminal_hyperlinks::TerminalHyperlink;
+    use ratatui::style::Stylize;
+    use ratatui::text::Span;
+
+    let url = "https://example.com/a";
+    let link = |href, text| json!({"type":"link","props":{"href":href},"children":[text]});
+    let node = tree(json!({"type":"text","children":[
+        {"type":"bold","children":[{"type":"row","props":{"gap":0},"children":["R"]},"e"]}, {"type":"italic","children":[]}, "\u{301}",
+        link(url, "👩"), link(url, "\u{200d}💻"),
+        link(url, "👩"), link("https://example.com/b", "\u{200d}💻"),
+        {"type":"bold","children":["\u{600}"]}, " x",
+        link(url, "तक्क"), "\u{301}"
+    ]}));
+    let line = node.render_line(/*width*/ 20, &Theme::default());
+    assert_eq!(
+        line.line.spans,
+        [
+            Span::raw("R").bold(),
+            Span::raw("e\u{301}").bold(),
+            Span::raw("👩‍💻").underlined(),
+            Span::raw("👩‍💻").underlined(),
+            Span::raw("\u{600} ").bold(),
+            Span::raw("x"),
+            Span::raw("त").underlined(),
+            Span::raw("क्क\u{301}").underlined()
+        ]
+    );
+    assert_eq!(
+        line.hyperlinks,
+        [
+            TerminalHyperlink::web(2..4, url.to_owned()),
+            TerminalHyperlink::web(9..10, url.to_owned())
+        ]
+    );
+}
+
+#[test]
+fn collapsed_space_keeps_the_first_whitespace_owners_link() {
+    use crate::terminal_hyperlinks::TerminalHyperlink;
+
+    let href = "https://example.com/build";
+    let node = tree(json!({"type":"text","children":[
+        "a", {"type":"link","props":{"href":href},"children":["\t"]},
+        "\u{1b}[31m", "  b", {"type":"link","props":{"href":href},"children":[" "]},
+        {"type":"row","props":{"gap":0},"children":[" c "]}, " d"
+    ]}));
+    let line = node.render_line(/*width*/ 10, &Theme::default());
+    assert_eq!(line.line.to_string(), "a bcd");
+    assert_eq!(
+        line.hyperlinks,
+        [TerminalHyperlink::web(1..2, href.to_owned())]
+    );
+}
+
+#[test]
+fn whitespace_collapses_across_styled_leaves() {
+    let node = tree(json!({"type":"text","children":[
+        "  build\t", {"type":"bold","children":["  ready  "]}, "\nnext"
+    ]}));
+    let line = node.render_line(/*width*/ 20, &Theme::default());
+    insta::assert_snapshot!(line.line.to_string(), @"build ready");
 }

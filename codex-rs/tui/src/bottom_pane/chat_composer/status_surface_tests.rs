@@ -26,10 +26,10 @@ fn composer() -> ChatComposer {
 fn extension_status_line_clips_links_to_footer_layout() {
     let mut composer = composer();
     let tree = r#"{
-        "type": "row", "props": {"gap": 0}, "children": [
+        "type": "row", "props": {"gap": 1}, "children": [
             "plain",
-            { "type": "row", "props": {"gap": 0}, "children": [
-                " · ",
+            { "type": "row", "props": {"gap": 1}, "children": [
+                "·",
                 { "type": "link", "props": { "href": "https://example.com/pr/42" }, "children": [
                     "PR #42"
                 ] }

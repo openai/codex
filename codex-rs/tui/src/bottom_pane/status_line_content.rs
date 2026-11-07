@@ -38,7 +38,9 @@ impl StatusLineRenderer {
         let mut children = Vec::new();
         for (item, text) in segments {
             if !children.is_empty() {
-                children.push(Some(UiNode::String(STATUS_LINE_SEPARATOR.to_owned())));
+                children.push(Some(UiNode::String(
+                    STATUS_LINE_SEPARATOR.trim().to_owned(),
+                )));
             }
             let text = UiNode::String(text);
             let node = if item == StatusLineItem::PullRequestNumber
@@ -53,10 +55,9 @@ impl StatusLineRenderer {
             };
             children.push(Some(node));
         }
-        let tree = UiNode::Row {
-            props: RowProps::default(),
-            children,
-        };
+        let mut props = RowProps::default();
+        props.gap = 1;
+        let tree = UiNode::Row { props, children };
         Some(FooterContent::Extension {
             content: UiTree(Some(tree)),
         })

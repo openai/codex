@@ -1,5 +1,9 @@
 //! Render the visible prefix of a horizontal display tree into one terminal line.
 
+mod text;
+
+use self::text::InlineText;
+use self::text::Paint;
 use super::MAX_TEXT_BYTES;
 use super::TextProps;
 use super::TextWeight;
@@ -13,6 +17,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
 use std::borrow::Cow;
+use std::ops::Range;
 use syntect::highlighting::Theme;
 use vtparse::CollectingVTActor;
 use vtparse::VTAction;
@@ -25,8 +30,15 @@ impl UiTree {
         let Some(root) = self.0.as_ref().filter(|_| width > 0) else {
             return HyperlinkLine::default();
         };
-        let mut line = node_line(root, width, Style::default(), &RenderTheme::new(theme));
-        if line.width() > width {
+        let output = LineBuilder::from_node(
+            root,
+            width,
+            Style::default(),
+            /*href*/ None,
+            &RenderTheme::new(theme),
+        );
+        let mut line = output.line;
+        if output.used > width {
             line.line = truncate_line_with_ellipsis(line.line, width);
             line.clip_hyperlinks_to_width(line.width() - 1);
         }
@@ -34,35 +46,122 @@ impl UiTree {
     }
 }
 
-fn node_line(node: &UiNode, width: usize, style: Style, theme: &RenderTheme<'_>) -> HyperlinkLine {
-    let (children, gap, style) = match node {
-        UiNode::String(raw) => {
-            let text = sanitize_leaf(raw);
-            let first = text.split('\n').next().unwrap_or_default();
-            let visible = first.replace('\t', "    ");
-            return HyperlinkLine::new(Span::styled(visible, style).into());
-        }
-        UiNode::Link { props, children } => {
-            let mut line = row_line(children, /*gap*/ 0, width, style.underlined(), theme);
-            let width = line.width();
-            if width > 0 {
-                line.hyperlinks = vec![TerminalHyperlink::web(0..width, props.href.0.clone())];
+struct LineBuilder<'a> {
+    inline: InlineText<'a>,
+    line: HyperlinkLine,
+    used: usize,
+    width: usize,
+    saw_row: bool,
+}
+
+impl<'a> LineBuilder<'a> {
+    fn from_node(
+        node: &'a UiNode,
+        width: usize,
+        style: Style,
+        href: Option<&'a str>,
+        theme: &RenderTheme<'_>,
+    ) -> Self {
+        let mut output = Self {
+            inline: InlineText::default(),
+            line: HyperlinkLine::default(),
+            used: 0,
+            width,
+            saw_row: false,
+        };
+        output.visit(node, style, href, theme);
+        output.flush_runs();
+        output
+    }
+
+    fn visit(
+        &mut self,
+        node: &'a UiNode,
+        mut style: Style,
+        mut href: Option<&'a str>,
+        theme: &RenderTheme<'_>,
+    ) {
+        let children = match node {
+            UiNode::String(raw) => {
+                self.inline.push_leaf(raw, Paint { style, href });
+                return;
             }
-            return line;
+            UiNode::Row { props, children } => {
+                self.saw_row = true;
+                self.flush_runs();
+                if let Some(color) = &props.background {
+                    style = style.bg(color.resolve(theme));
+                }
+                let start = self.used;
+                for child in children.iter().flatten() {
+                    if self.used > self.width {
+                        break;
+                    }
+                    let child = Self::from_node(child, self.width - self.used, style, href, theme);
+                    if child.used == 0 {
+                        continue;
+                    }
+                    if self.used > start && props.gap > 0 {
+                        let gap = props.gap.min((self.width + 1 - self.used) as u64) as usize;
+                        self.line
+                            .line
+                            .push_span(Span::styled(" ".repeat(gap), style));
+                        if let Some(url) = href {
+                            push_link(&mut self.line, self.used..self.used + gap, url);
+                        }
+                        self.used += gap;
+                    }
+                    self.line.line.spans.extend(child.line.line.spans);
+                    for mut link in child.line.hyperlinks {
+                        link.columns = self.used + link.columns.start..self.used + link.columns.end;
+                        push_link(&mut self.line, link.columns, &link.destination);
+                    }
+                    self.used += child.used;
+                }
+                return;
+            }
+            UiNode::Text { props, children } => {
+                style = props.style(style, theme);
+                children
+            }
+            UiNode::Link { props, children } => {
+                href = Some(&props.href.0);
+                style = style.underlined();
+                children
+            }
+            UiNode::Bold { children } => {
+                style = style.bold();
+                children
+            }
+            UiNode::Italic { children } => {
+                style = style.italic();
+                children
+            }
+            UiNode::Underline { children } => {
+                style = style.underlined();
+                children
+            }
+        };
+        for node in children.iter().flatten() {
+            if self.used > self.width {
+                break;
+            }
+            self.visit(node, style, href, theme);
         }
-        UiNode::Row { props, children } => {
-            let style = props
-                .background
-                .as_ref()
-                .map_or(style, |color| style.bg(color.resolve(theme)));
-            (children, props.gap, style)
+    }
+
+    fn flush_runs(&mut self) {
+        let start = self.used;
+        let first_span = self.line.line.spans.len();
+        let text = std::mem::take(&mut self.inline).finish();
+        if let Some(first) = text.lines.first() {
+            self.used += text::paint_chunks(first, &mut self.line, self.used);
         }
-        UiNode::Text { props, children } => (children, 0, props.style(style, theme)),
-        UiNode::Bold { children } => (children, 0, style.bold()),
-        UiNode::Italic { children } => (children, 0, style.italic()),
-        UiNode::Underline { children } => (children, 0, style.underlined()),
-    };
-    row_line(children, gap, width, style, theme)
+        // A zero-cell fragment between row children must not style a later ellipsis.
+        if self.saw_row && self.used == start {
+            self.line.line.spans.truncate(first_span);
+        }
+    }
 }
 
 fn sanitize_leaf(raw: &str) -> Cow<'_, str> {
@@ -86,43 +185,16 @@ fn sanitize_leaf(raw: &str) -> Cow<'_, str> {
         .collect()
 }
 
-fn row_line(
-    children: &[Option<UiNode>],
-    gap: u64,
-    width: usize,
-    style: Style,
-    theme: &RenderTheme<'_>,
-) -> HyperlinkLine {
-    let mut result = HyperlinkLine::default();
-    let mut used = 0;
-    for child in children.iter().flatten() {
-        let child = node_line(child, width, style, theme);
-        let child_width = child.width();
-        if child_width == 0 {
-            continue;
-        }
-        if used > 0 && gap > 0 {
-            // One column past the viewport is sufficient to detect overflow.
-            let spacing = gap.min((width + 1 - used) as u64) as usize;
-            result
-                .line
-                .push_span(Span::styled(" ".repeat(spacing), style));
-            used += spacing;
-        }
-        let offset = used;
-        result.line.spans.extend(child.line.spans);
-        result
-            .hyperlinks
-            .extend(child.hyperlinks.into_iter().map(|mut link| {
-                link.columns = link.columns.start + offset..link.columns.end + offset;
-                link
-            }));
-        used += child_width;
-        if used > width {
-            break;
-        }
+fn push_link(line: &mut HyperlinkLine, columns: Range<usize>, href: &str) {
+    if let Some(last) = line.hyperlinks.last_mut()
+        && last.columns.end == columns.start
+        && last.destination == href
+    {
+        last.columns.end = columns.end;
+    } else {
+        line.hyperlinks
+            .push(TerminalHyperlink::web(columns, href.to_owned()));
     }
-    result
 }
 
 impl TextProps {
