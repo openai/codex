@@ -647,7 +647,7 @@ async fn discovery_warns_once_per_invalid_manifest() {
     write_openai_curated_marketplace(&curated_root, &["slack", "gmail", "openai-developers"]);
     install_marketplace_plugin(codex_home.path(), curated_root.as_path(), "slack").await;
 
-    let too_long_prompt = "x".repeat(129);
+    let too_long_prompt = "x".repeat(513);
     for plugin_name in ["gmail", "openai-developers"] {
         write_file(
             &curated_root.join(format!("plugins/{plugin_name}/.codex-plugin/plugin.json")),

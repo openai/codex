@@ -13711,7 +13711,7 @@
           ]
         },
         "defaultPrompt": {
-          "description": "Starter prompts for the plugin. Capped at 3 entries with a maximum of 128 characters per entry.",
+          "description": "Starter prompts for the plugin. Capped at 3 entries with a maximum of 512 characters per entry.",
           "items": {
             "type": "string"
           },

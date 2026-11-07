@@ -882,7 +882,7 @@ pub struct PluginInterface {
     pub privacy_policy_url: Option<String>,
     pub terms_of_service_url: Option<String>,
     /// Starter prompts for the plugin. Capped at 3 entries with a maximum of
-    /// 128 characters per entry.
+    /// 512 characters per entry.
     pub default_prompt: Option<Vec<String>>,
     pub brand_color: Option<String>,
     /// Local composer icon path, resolved from the installed plugin package.
