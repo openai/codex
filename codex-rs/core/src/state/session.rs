@@ -16,6 +16,7 @@ use super::auto_compact_window::AutoCompactWindowIds;
 use super::auto_compact_window::AutoCompactWindowSnapshot;
 use super::auto_compact_window::ContextWindowIdGenerator;
 use crate::TurnStartOptions;
+use crate::agent::host::ServiceTierAcceptance;
 use crate::context_manager::ContextManager;
 use crate::context_manager::HistoryReplacement;
 use crate::session::PreviousTurnSettings;
@@ -74,6 +75,8 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     /// Shared root tier publication starts when the runtime wins registration.
     pub(crate) shared_service_tier_pending: bool,
+    /// Receipt for the current host root tier, retained for callers retrying that commit.
+    pub(crate) service_tier_acceptance: Option<ServiceTierAcceptance>,
     /// Catalog to carry across compaction, independent of an explicit resume override.
     pub(crate) persisted_dynamic_tools: Arc<[DynamicToolSpec]>,
     /// Plugin selection of the last admitted task; settings updates take effect on the next task.
@@ -144,6 +147,7 @@ impl SessionState {
             persisted_dynamic_tools: Arc::clone(&session_configuration.dynamic_tools),
             session_configuration,
             shared_service_tier_pending: false,
+            service_tier_acceptance: None,
             base_instructions_provenance: None,
             history,
             pending_audio_duration_ids: BTreeSet::new(),

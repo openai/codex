@@ -3,12 +3,15 @@ use anyhow::Result;
 use codex_core::AgentRuntimeOwnership;
 use codex_core::AgentServiceTier;
 use codex_core::AgentTurnAdmission;
+use codex_core::CodexThreadSettingsOverrides;
 use codex_core::InheritedSessionId;
+use codex_core::ThreadManager;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -35,12 +38,15 @@ use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_successful_turn;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio::sync::watch;
 
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
@@ -178,17 +184,76 @@ async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
     Ok(())
 }
 
-#[derive(Default)]
-struct HostTier(Mutex<Option<String>>);
+struct HostTier {
+    value: watch::Sender<Option<String>>,
+    updates: mpsc::UnboundedSender<TierHandoff>,
+}
+
+struct TierHandoff {
+    value: Option<String>,
+    waiting: oneshot::Receiver<()>,
+    accept: oneshot::Sender<()>,
+}
 
 impl AgentServiceTier for HostTier {
-    fn current(&self) -> Option<String> {
-        self.0.lock().expect("host tier").clone()
+    fn current(&self) -> BoxFuture<'_, Option<String>> {
+        Box::pin(async { self.value.borrow().clone() })
     }
 
-    fn update(&self, value: Option<String>) {
-        *self.0.lock().expect("host tier") = value;
+    fn update(&self, value: Option<String>) -> BoxFuture<'static, ()> {
+        let (polling, waiting) = oneshot::channel();
+        let (accept, accepted) = oneshot::channel();
+        self.updates
+            .send(TierHandoff {
+                value,
+                waiting,
+                accept,
+            })
+            .expect("tier handoff");
+        Box::pin(async move {
+            let _ = polling.send(());
+            accepted.await.expect("local tier acceptance");
+        })
     }
+}
+
+async fn accept_committed_tier<T>(
+    operation: impl Future<Output = codex_protocol::error::Result<T>>,
+    handoffs: &mut mpsc::UnboundedReceiver<TierHandoff>,
+    manager: &ThreadManager,
+    root_id: ThreadId,
+    expected: &str,
+) -> Result<(T, Option<String>)> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::pin!(operation);
+        let (root, value, accept) = tokio::select! {
+            biased;
+            _ = &mut operation => anyhow::bail!("root returned before local tier acceptance"),
+            handoff = async {
+                let TierHandoff { value, waiting, accept } = handoffs.recv().await.expect("tier handoff");
+                waiting.await.expect("Core polled the receipt");
+                let root = manager.get_thread(root_id).await?;
+                assert_eq!(value.as_deref(), Some(expected));
+                anyhow::Ok((root, value, accept))
+            } => handoff?,
+        };
+        // Use the direct settings API so the retry cannot queue behind the first caller.
+        let retry = root.restore_thread_settings(CodexThreadSettingsOverrides {
+            service_tier: Some(value.clone()),
+            ..Default::default()
+        });
+        tokio::pin!(retry);
+        tokio::select! {
+            biased;
+            _ = &mut retry => anyhow::bail!("same-tier retry returned before local acceptance"),
+            snapshot = root.thread_settings_snapshot() => assert_eq!(snapshot.service_tier, value),
+        }
+        accept.send(()).expect("Core is waiting for acceptance");
+        retry.await?;
+        let result = operation.await?;
+        assert!(handoffs.is_empty(), "same-tier retry published another update");
+        Ok((result, value))
+    }).await?
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -242,8 +307,14 @@ async fn detached_host_child_inherits_root_service_tier_at_prewarm_and_each_step
     )
     .await?;
 
-    let tier = Arc::new(HostTier::default());
+    let (updates, mut handoffs) = mpsc::unbounded_channel();
+    let tier = Arc::new(HostTier {
+        value: watch::Sender::new(None),
+        updates,
+    });
     let mut options = test.start_thread_options().await;
+    let root_id = test.thread_manager.reserve_thread_id();
+    options.reserved_thread_id = Some(root_id);
     options.config.service_tier = Some("priority".into());
     // The host root only changes settings. Keep WebSocket traffic on the child.
     options.config.model_provider.supports_websockets = false;
@@ -257,7 +328,16 @@ async fn detached_host_child_inherits_root_service_tier_at_prewarm_and_each_step
         .thread_extension_init
         .insert(tier.clone() as Arc<dyn AgentServiceTier>);
     let thread_extension_init = options.thread_extension_init.clone();
-    let root = test.thread_manager.start_thread(options).await?;
+    let (root, initial_tier) = accept_committed_tier(
+        test.thread_manager.start_thread(options),
+        &mut handoffs,
+        &test.thread_manager,
+        root_id,
+        "priority",
+    )
+    .await?;
+    assert_eq!(tier.current().await, None);
+    tier.value.send_replace(initial_tier);
 
     let mut options = test.start_thread_options().await;
     options.session_source = Some(SessionSource::Custom("host".into()));
@@ -295,7 +375,7 @@ async fn detached_host_child_inherits_root_service_tier_at_prewarm_and_each_step
         },
     )
     .await?;
-    assert_eq!(tier.current().as_deref(), Some("priority"));
+    assert_eq!(tier.current().await.as_deref(), Some("priority"));
 
     let request = TurnInputRequest::user_input(vec![UserInput::Text {
         text: "Wait for the tier change.".into(),
@@ -320,14 +400,20 @@ async fn detached_host_child_inherits_root_service_tier_at_prewarm_and_each_step
         |event| matches!(event, EventMsg::DynamicToolCallRequest(call) if call.call_id == "hold"),
     )
     .await;
-    submit_thread_settings(
-        &root.thread,
-        ThreadSettingsOverrides {
+    let ((), accepted_tier) = accept_committed_tier(
+        root.thread.update_thread_settings(ThreadSettingsOverrides {
             service_tier: Some(Some("flex".into())),
             ..Default::default()
-        },
+        }),
+        &mut handoffs,
+        &test.thread_manager,
+        root_id,
+        "flex",
     )
     .await?;
+    // The root has its acknowledgment. The child observes the change after host propagation.
+    assert_eq!(tier.current().await.as_deref(), Some("priority"));
+    tier.value.send_replace(accepted_tier);
     child
         .thread
         .submit(Op::DynamicToolResponse {

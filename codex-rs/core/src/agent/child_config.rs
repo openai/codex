@@ -282,7 +282,8 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
 ) -> Result<(), String> {
-    let Some(service_tier) = crate::agent::host::service_tier(session, config.service_tier.clone())
+    let Some(service_tier) =
+        crate::agent::host::service_tier(session, config.service_tier.clone()).await
     else {
         config.service_tier = None;
         return Ok(());

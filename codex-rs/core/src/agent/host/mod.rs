@@ -22,6 +22,7 @@ pub use mcp_metadata::AgentMcpMetadataRecipient;
 pub use ownership::AgentRuntimeOwnership;
 pub(crate) use ownership::AgentRuntimeServices;
 pub use service_tier::AgentServiceTier;
+pub(crate) use service_tier::ServiceTierAcceptance;
 pub(crate) use service_tier::host_child_uses_shared_service_tier;
 pub(crate) use service_tier::propagate_config_update;
 pub(crate) use service_tier::service_tier;

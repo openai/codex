@@ -16,6 +16,7 @@ use crate::agent::LocalAgentControl;
 use crate::agent::api::AgentControl;
 use crate::agent::control::AgentControlInit;
 use crate::agent::host::InheritedSessionId;
+use crate::agent::host::ServiceTierAcceptance;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
@@ -2894,8 +2895,8 @@ impl ThreadManagerState {
         let finalize_result = self
             .finalize_thread_spawn(session, io, tracked_session_source)
             .await;
-        let new_thread = match finalize_result {
-            Ok(new_thread) => new_thread,
+        let (new_thread, tier_acceptance) = match finalize_result {
+            Ok(registered) => registered,
             Err(error) => {
                 if let Some(startup_guard) = startup_guard {
                     startup_guard.cleanup().await;
@@ -2916,6 +2917,10 @@ impl ThreadManagerState {
         if let Some(startup_guard) = startup_guard {
             startup_guard.disarm();
         }
+        // Cancelling this wait must leave the registered runtime and the host handoff intact.
+        if let Some(accepted) = tier_acceptance {
+            accepted.await;
+        }
         Ok(new_thread)
     }
 
@@ -2924,7 +2929,7 @@ impl ThreadManagerState {
         session: Arc<Session>,
         io: SessionIo,
         session_source: SessionSource,
-    ) -> CodexResult<NewThread> {
+    ) -> CodexResult<(NewThread, Option<ServiceTierAcceptance>)> {
         let thread_id = session.thread_id();
         let event = io.next_event().await?;
         let session_configured = match event {
@@ -2965,15 +2970,18 @@ impl ThreadManagerState {
                     session_source,
                 ));
                 e.insert(thread.clone());
-                if let Some((mut state, update)) = pending_service_tier {
-                    crate::agent::host::propagate_config_update(&session, update);
+                let tier_acceptance = pending_service_tier.and_then(|(mut state, update)| {
+                    state.service_tier_acceptance =
+                        crate::agent::host::propagate_config_update(&session, update);
                     state.shared_service_tier_pending = false;
-                }
-                return Ok(NewThread {
+                    state.service_tier_acceptance.clone()
+                });
+                let new_thread = NewThread {
                     thread_id,
                     thread,
                     session_configured,
-                });
+                };
+                return Ok((new_thread, tier_acceptance));
             }
         }
 

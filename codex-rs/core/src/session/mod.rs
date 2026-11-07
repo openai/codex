@@ -2160,6 +2160,7 @@ impl Session {
     ) -> ConstraintResult<Option<SessionSettingsCommit>> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let windows_sandbox_changed;
+        let mut tier_acceptance = None;
         let (
             commit,
             previous_config,
@@ -2224,7 +2225,7 @@ impl Session {
             }
             state.session_configuration = updated;
             if root_service_tier_changed && !state.shared_service_tier_pending {
-                crate::agent::host::propagate_config_update(
+                state.service_tier_acceptance = crate::agent::host::propagate_config_update(
                     self,
                     AgentConfigUpdate::ServiceTier(
                         state
@@ -2234,6 +2235,9 @@ impl Session {
                             .clone(),
                     ),
                 );
+            }
+            if root_service_tier_changed || updates.step_settings.service_tier.is_some() {
+                tier_acceptance = state.service_tier_acceptance.clone();
             }
             let new_config = notify_config_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
@@ -2276,6 +2280,9 @@ impl Session {
         }
         if mcp_inputs_changed {
             self.schedule_mcp_prewarm();
+        }
+        if let Some(accepted) = tier_acceptance {
+            accepted.await;
         }
         Ok(Some(commit))
     }
@@ -4313,8 +4320,11 @@ impl Session {
             )
         };
         if self.inherits_root_service_tier(&turn_context.session_source) {
-            let root_service_tier =
-                crate::agent::host::service_tier(self, settings.selected().service_tier.clone());
+            let root_service_tier = tokio::select! {
+                biased;
+                tier = crate::agent::host::service_tier(self, settings.selected().service_tier.clone()) => tier,
+                _ = cancellation_token.cancelled() => return Err(CodexErr::TurnAborted),
+            };
             if settings.selected().service_tier != root_service_tier {
                 let mut selected = settings.selected().clone();
                 selected.service_tier = root_service_tier;
