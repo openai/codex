@@ -58,6 +58,10 @@ pub(super) fn optional_token<'de, D: Deserializer<'de>, T: DeserializeOwned>(
         .transpose()
 }
 
+pub(super) fn token<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<T, D::Error> {
+    T::deserialize(String::deserialize(d)?.into_deserializer())
+}
+
 pub(super) fn gap<'de, D: Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
     let gap = u64::deserialize(de)?;
     if gap > MAX_GAP {

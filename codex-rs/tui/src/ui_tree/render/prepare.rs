@@ -3,6 +3,7 @@
 use super::text::InlineText;
 use super::text::Paint;
 use super::text::PreparedText;
+use crate::ui_tree::RowWrap;
 use crate::ui_tree::UiNode;
 use crate::ui_tree::theme::RenderTheme;
 use ratatui::style::Style;
@@ -22,6 +23,7 @@ pub(super) enum NodeKind<'a> {
     Row {
         children: Vec<PreparedNode<'a>>,
         gap: u64,
+        wrap: RowWrap,
         paint: Paint<'a>,
     },
 }
@@ -40,7 +42,12 @@ impl<'a> PreparedNode<'a> {
         if items.len() <= 1 {
             items.pop()
         } else {
-            Self::row(items, /*gap*/ 0, Paint { style, href })
+            Self::row(
+                items,
+                /*gap*/ 0,
+                RowWrap::Nowrap,
+                Paint { style, href },
+            )
         }
     }
 
@@ -68,7 +75,7 @@ impl<'a> PreparedNode<'a> {
         })
     }
 
-    fn row(mut children: Vec<Self>, gap: u64, paint: Paint<'a>) -> Option<Self> {
+    fn row(mut children: Vec<Self>, gap: u64, wrap: RowWrap, paint: Paint<'a>) -> Option<Self> {
         children.retain(|child| {
             child.widths.preferred > 0
                 || match &child.kind {
@@ -81,9 +88,16 @@ impl<'a> PreparedNode<'a> {
         }
         let gaps = gap.saturating_mul(children.len() as u64 - 1);
         let widths = Widths {
-            minimum: children
-                .iter()
-                .fold(gaps, |w, c| w.saturating_add(c.widths.minimum)),
+            minimum: match wrap {
+                RowWrap::Nowrap => children
+                    .iter()
+                    .fold(gaps, |w, c| w.saturating_add(c.widths.minimum)),
+                RowWrap::Wrap => children
+                    .iter()
+                    .map(|c| c.widths.minimum)
+                    .max()
+                    .unwrap_or_default(),
+            },
             preferred: children
                 .iter()
                 .fold(gaps, |w, c| w.saturating_add(c.widths.preferred)),
@@ -93,6 +107,7 @@ impl<'a> PreparedNode<'a> {
             kind: NodeKind::Row {
                 children,
                 gap,
+                wrap,
                 paint,
             },
         })
@@ -121,7 +136,12 @@ impl<'a> PreparedNode<'a> {
                     .flatten()
                     .filter_map(|node| Self::from_node(node, style, href, theme))
                     .collect();
-                items.extend(Self::row(children, props.gap, Paint { style, href }));
+                items.extend(Self::row(
+                    children,
+                    props.gap,
+                    props.wrap,
+                    Paint { style, href },
+                ));
                 return;
             }
             UiNode::Text { props, children } => {

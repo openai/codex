@@ -1,10 +1,12 @@
-//! Render the visible prefix of a horizontal display tree into one terminal line.
+//! Lay out prepared text and nested rows within a terminal viewport.
 
 mod prepare;
 mod text;
 
 use self::prepare::NodeKind;
 use self::prepare::PreparedNode;
+use self::text::Paint;
+use super::RowWrap;
 
 use super::MAX_TEXT_BYTES;
 use super::TextProps;
@@ -14,6 +16,7 @@ use super::theme::RenderTheme;
 use crate::line_truncation::truncate_line_with_ellipsis;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::TerminalHyperlink;
+use ratatui::layout::Size;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -41,66 +44,135 @@ impl UiTree {
 
 impl PreparedUiTree<'_> {
     pub(crate) fn render_line(&self, width: u16) -> HyperlinkLine {
-        let Some(root) = self.0.as_ref().filter(|_| width > 0) else {
-            return HyperlinkLine::default();
+        self.render_lines(Size::new(width, /*height*/ 1))
+            .pop()
+            .unwrap_or_default()
+    }
+
+    /// Fit the tree to the viewport, marking clipped rows and vertical overflow with an unlinked ellipsis.
+    pub(crate) fn render_lines(&self, size: Size) -> Vec<HyperlinkLine> {
+        let Some(item) = &self.0 else {
+            return Vec::new();
         };
-        let width = usize::from(width);
-        let mut line = first_line(root, width);
-        if line.width() > width {
-            line.line = truncate_line_with_ellipsis(line.line, width);
-            line.clip_hyperlinks_to_width(line.width() - 1);
+        if size.width == 0 || size.height == 0 {
+            return Vec::new();
         }
-        line
+        let width = usize::from(size.width);
+        let height = usize::from(size.height);
+        // The extra row distinguishes an exact fit from vertical overflow.
+        let mut lines = layout_node(item, width, height + 1);
+        let more = lines.len() > height;
+        lines.truncate(height);
+        for (index, line) in lines.iter_mut().enumerate() {
+            if line.width() > width || (more && index + 1 == height) {
+                line.line = truncate_line_with_ellipsis(std::mem::take(&mut line.line), width);
+                line.clip_hyperlinks_to_width(line.width() - 1);
+            }
+        }
+        lines
     }
 }
 
-fn first_line(node: &PreparedNode<'_>, width: usize) -> HyperlinkLine {
-    let mut line = HyperlinkLine::default();
+fn layout_node(node: &PreparedNode<'_>, width: usize, limit: usize) -> Vec<HyperlinkLine> {
     match &node.kind {
-        NodeKind::Text(text) => {
-            if let Some(first) = text.lines.first() {
-                text::paint_chunks(first, &mut line, /*start*/ 0);
-            }
-        }
+        NodeKind::Text(text) => text.layout(width, limit),
         NodeKind::Row {
             children,
             gap,
+            wrap,
             paint,
         } => {
+            let gap = (*gap).min((width + 1) as u64) as usize;
+            let mut lines = Vec::new();
+            let mut start = 0;
             let mut used = 0;
-            for child in children {
-                let fragment = first_line(child, width - used);
-                let child_width = fragment.width();
-                if child_width == 0 {
-                    continue;
-                }
-                if used > 0 {
-                    let gap = (*gap).min((width + 1 - used) as u64) as usize;
-                    if gap != 0 {
-                        line.line
-                            .push_span(Span::styled(" ".repeat(gap), paint.style));
-                        if let Some(href) = paint.href {
-                            push_link(&mut line, used..used + gap, href);
-                        }
-                        used += gap;
+            for (i, child) in children.iter().enumerate() {
+                let preferred = child.widths.preferred.min((width + 1) as u64) as usize;
+                if *wrap == RowWrap::Wrap && i > start && used + gap + preferred > width {
+                    lines.extend(layout_band(
+                        &children[start..i],
+                        width,
+                        limit - lines.len(),
+                        gap,
+                        *paint,
+                    ));
+                    if lines.len() == limit {
+                        return lines;
                     }
+                    start = i;
+                    used = 0;
                 }
-                line.line.spans.extend(fragment.line.spans);
-                for link in fragment.hyperlinks {
-                    push_link(
-                        &mut line,
-                        used + link.columns.start..used + link.columns.end,
-                        &link.destination,
-                    );
+                if i > start {
+                    used += gap;
                 }
-                used += child_width;
-                if used > width {
-                    break;
-                }
+                used += preferred;
             }
+            lines.extend(layout_band(
+                &children[start..],
+                width,
+                limit - lines.len(),
+                gap,
+                *paint,
+            ));
+            lines
         }
     }
-    line
+}
+
+fn layout_band(
+    children: &[PreparedNode<'_>],
+    width: usize,
+    limit: usize,
+    gap: usize,
+    paint: Paint<'_>,
+) -> Vec<HyperlinkLine> {
+    let bounded = |cells: u64| cells.min((width + 1) as u64) as usize;
+    let mut reserved = children
+        .iter()
+        .map(|c| bounded(c.widths.minimum))
+        .sum::<usize>()
+        + gap * children.len().saturating_sub(1);
+    let mut offset = 0;
+    let mut rows: Vec<(HyperlinkLine, usize)> = Vec::new();
+    for child in children {
+        let minimum = bounded(child.widths.minimum);
+        reserved -= minimum;
+        let available = bounded(child.widths.preferred)
+            .min(width.saturating_sub(offset + reserved))
+            .max(minimum);
+        let fragments = layout_node(child, available.clamp(1, width), limit);
+        if rows.len() < fragments.len() {
+            rows.resize_with(fragments.len(), Default::default);
+        }
+        for ((line, end), fragment) in rows.iter_mut().zip(fragments) {
+            // One extra column records overflow without materializing a provider-sized gap.
+            let start = offset.min(width + 1);
+            if start > *end {
+                line.line
+                    .push_span(Span::styled(" ".repeat(start - *end), paint.style));
+                if let Some(href) = paint.href {
+                    push_link(line, *end..start, href);
+                }
+                *end = start;
+            }
+            if offset > width {
+                continue;
+            }
+            let start = *end;
+            *end += fragment.width();
+            line.line.spans.extend(fragment.line.spans);
+            for link in fragment.hyperlinks {
+                push_link(
+                    line,
+                    start + link.columns.start..start + link.columns.end,
+                    &link.destination,
+                );
+            }
+        }
+        offset += available + gap;
+        reserved = reserved.saturating_sub(gap);
+    }
+    rows.into_iter().map(|(line, _)| line).collect()
 }
 
 fn sanitize_leaf(raw: &str) -> Cow<'_, str> {

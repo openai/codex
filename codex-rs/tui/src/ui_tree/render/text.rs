@@ -8,6 +8,8 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 use std::borrow::Cow;
 use std::ops::Range;
+use textwrap::core::Fragment;
+use textwrap::wrap_algorithms::wrap_first_fit;
 use unicode_linebreak::linebreaks;
 use unicode_linebreak::split_at_safe;
 use unicode_segmentation::GraphemeCursor;
@@ -215,22 +217,34 @@ fn chunks(runs: Vec<Run<'_>>) -> Vec<Chunk<'_>> {
     let mut out = Vec::new();
     let mut chunk = Chunk::default();
     let mut offset = 0;
+    let mut previous = None;
+    let mut word_hyphen = false;
     for run in runs {
         let mut start = 0;
-        for (i, _) in run.text.grapheme_indices(true) {
-            while breaks.next_if(|b| *b < offset + i).is_some() {}
-            if breaks.next_if_eq(&(offset + i)).is_none() {
-                continue;
+        for (i, grapheme) in run.text.grapheme_indices(true) {
+            let position = offset + i;
+            while breaks.next_if(|b| *b < position).is_some() {}
+            // Match textwrap's default hyphen splitter, even across style boundaries.
+            let can_break = match previous {
+                Some('-') => word_hyphen && grapheme.starts_with(char::is_alphanumeric),
+                Some('\u{ad}') => false,
+                _ => breaks.peek() == Some(&position),
+            };
+            if can_break {
+                chunk.push(&run, start..i);
+                if chunk.runs.last().is_some_and(|r| r.text == " ") {
+                    chunk.trailing_space = chunk.runs.pop().map(|r| r.paint);
+                    chunk.width_cells -= 1;
+                }
+                if !chunk.runs.is_empty() {
+                    out.push(std::mem::take(&mut chunk));
+                }
+                start = i;
             }
-            chunk.push(&run, start..i);
-            if chunk.runs.last().is_some_and(|r| r.text == " ") {
-                chunk.trailing_space = chunk.runs.pop().map(|r| r.paint);
-                chunk.width_cells -= 1;
+            for ch in grapheme.chars() {
+                word_hyphen = ch == '-' && previous.is_some_and(char::is_alphanumeric);
+                previous = Some(ch);
             }
-            if !chunk.runs.is_empty() {
-                out.push(std::mem::take(&mut chunk));
-            }
-            start = i;
         }
         chunk.push(&run, start..run.text.len());
         offset += run.text.len();
@@ -251,8 +265,32 @@ impl<'a> Chunk<'a> {
     }
 }
 
-pub(super) fn paint_chunks(chunks: &[Chunk<'_>], line: &mut HyperlinkLine, start: usize) -> usize {
-    let mut col = start;
+impl Fragment for Chunk<'_> {
+    fn width(&self) -> f64 {
+        self.width_cells as f64
+    }
+    fn whitespace_width(&self) -> f64 {
+        f64::from(self.trailing_space.is_some())
+    }
+    fn penalty_width(&self) -> f64 {
+        0.0
+    }
+}
+
+impl PreparedText<'_> {
+    pub(super) fn layout(&self, width: usize, limit: usize) -> Vec<HyperlinkLine> {
+        self.lines
+            .iter()
+            .flat_map(|line| wrap_first_fit(line, &[width as f64]))
+            .take(limit)
+            .map(paint_chunks)
+            .collect()
+    }
+}
+
+fn paint_chunks(chunks: &[Chunk<'_>]) -> HyperlinkLine {
+    let mut line = HyperlinkLine::default();
+    let mut col = 0;
     for (index, chunk) in chunks.iter().enumerate() {
         for run in &chunk.runs {
             let span = Span::styled(run.text.to_string(), run.paint.style);
@@ -260,7 +298,7 @@ pub(super) fn paint_chunks(chunks: &[Chunk<'_>], line: &mut HyperlinkLine, start
             if let Some(url) = run.paint.href
                 && end > col
             {
-                push_link(line, col..end, url);
+                push_link(&mut line, col..end, url);
             }
             line.line.push_span(span);
             col = end;
@@ -270,12 +308,12 @@ pub(super) fn paint_chunks(chunks: &[Chunk<'_>], line: &mut HyperlinkLine, start
         {
             line.line.push_span(Span::styled(" ", paint.style));
             if let Some(url) = paint.href {
-                push_link(line, col..col + 1, url);
+                push_link(&mut line, col..col + 1, url);
             }
             col += 1;
         }
     }
-    col - start
+    line
 }
 
 #[cfg(test)]

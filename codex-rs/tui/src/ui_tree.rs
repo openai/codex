@@ -113,6 +113,20 @@ pub(crate) struct RowProps {
         skip_serializing_if = "Option::is_none"
     )]
     background: Option<Color>,
+    #[serde(
+        default,
+        deserialize_with = "decode::token",
+        skip_serializing_if = "is_default"
+    )]
+    wrap: RowWrap,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RowWrap {
+    #[default]
+    Nowrap,
+    Wrap,
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {

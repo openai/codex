@@ -1,9 +1,11 @@
 #![cfg(test)]
 
 use super::*;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::layout::Size;
 use serde_json::Value;
 use serde_json::json;
 use syntect::highlighting::Theme;
@@ -186,7 +188,7 @@ fn zero_width_fragments_do_not_style_the_ellipsis_or_add_row_gaps() {
 }
 
 #[test]
-fn first_line_skips_hidden_text_before_rendering_its_sibling() {
+fn single_line_view_marks_vertical_overflow() {
     let multiline = format!("\u{1b}[2Jok\n{}", "x".repeat(1024));
     let tree = tree(json!({"type":"row","props":{"gap":0},"children":[
         &multiline, "!"
@@ -195,7 +197,7 @@ fn first_line_skips_hidden_text_before_rendering_its_sibling() {
         tree.render_line(/*width*/ 4, &Theme::default())
             .line
             .to_string(),
-        "ok!"
+        "ok …"
     );
 }
 
@@ -486,6 +488,202 @@ fn whitespace_collapses_across_styled_leaves() {
     let node = tree(json!({"type":"text","children":[
         "  build\t", {"type":"bold","children":["  ready  "]}, "\nnext"
     ]}));
-    let line = node.render_line(/*width*/ 20, &Theme::default());
-    insta::assert_snapshot!(line.line.to_string(), @"build ready");
+    let lines = node
+        .prepare(&Theme::default())
+        .render_lines(Size::new(/*width*/ 20, /*height*/ 2));
+    let text: Vec<_> = lines
+        .into_iter()
+        .map(|line| line.line.to_string())
+        .collect();
+    insta::assert_snapshot!(text.join("\n"), @r"
+    build ready
+    next
+    ");
+}
+
+#[test]
+fn reads_row_wrap_without_moving_existing_positional_props() {
+    let row = |props| json!({"type":"row","props":props,"children":["ok"]});
+    assert_eq!(
+        tree(row(json!([1, "red"]))),
+        tree(row(json!({"gap":1,"background":"red"})))
+    );
+    assert_eq!(
+        tree(row(json!({"gap":1,"wrap":"nowrap"}))),
+        tree(row(json!({"gap":1})))
+    );
+    for invalid in [json!("wrap-reverse"), json!(null), json!({"wrap":null})] {
+        assert!(parse(row(json!({"gap":0,"wrap":invalid}))).is_err());
+    }
+}
+
+#[test]
+fn wrapped_link_offsets_follow_each_row_and_stop_before_clipping() {
+    let node = tree(json!({"type":"row","props":{"gap":0},"children":[
+        ">",
+        {"type":"link","props":{"href":"https://example.com"},"children":[
+            {"type":"row","props":{"gap":0,"wrap":"wrap"},"children":["12345","67"]}
+        ]}
+    ]}));
+    for (size, expected) in [
+        (Size::new(6, 2), vec![(">12345", 1..6), (" 67", 1..3)]),
+        (Size::new(4, 2), vec![(">12…", 1..3), (" 67", 1..3)]),
+        (Size::new(6, 1), vec![(">1234…", 1..5)]),
+    ] {
+        let lines = node.prepare(&Theme::default()).render_lines(size);
+        assert_eq!(lines.len(), expected.len());
+        for (line, (text, columns)) in lines.into_iter().zip(expected) {
+            assert_eq!(line.line.to_string(), text);
+            assert_eq!(
+                line.hyperlinks,
+                [TerminalHyperlink::web(
+                    columns,
+                    "https://example.com".to_owned()
+                )]
+            );
+        }
+    }
+}
+
+#[test]
+fn styled_text_wraps_in_the_space_its_nowrap_row_assigns() {
+    let href = "https://example.com/build";
+    let (plain, bold) = "build ".split_at(3);
+    let node = tree(json!({"type":"row","props":{"gap":1},"children":[
+        ">", {"type":"text","children":[
+            plain, {"type":"bold","children":[bold]},
+            {"type":"link","props":{"href":href},"children":["was green"]}
+        ]}, "!"
+    ]}));
+    let lines = node
+        .prepare(&Theme::default())
+        .render_lines(Size::new(10, 4));
+    assert_eq!(
+        lines
+            .iter()
+            .map(|row| row.line.to_string())
+            .collect::<Vec<_>>(),
+        ["> build  !", "  was", "  green"]
+    );
+    assert!(lines[0].hyperlinks.is_empty());
+    assert_eq!(
+        lines[1].hyperlinks,
+        [TerminalHyperlink::web(2..5, href.to_owned())]
+    );
+    assert_eq!(
+        lines[2].hyperlinks,
+        [TerminalHyperlink::web(2..7, href.to_owned())]
+    );
+}
+
+#[test]
+fn shrinking_a_hyphenated_word_reserves_the_siblings_column() {
+    let node = tree(json!({"type":"row","props":{"gap":1},"children":["aa-bb", "!"]}));
+    let lines = node
+        .prepare(&Theme::default())
+        .render_lines(Size::new(6, 2));
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.line.to_string())
+            .collect::<Vec<_>>(),
+        ["aa-  !", "bb"]
+    );
+}
+
+#[test]
+fn wrapping_row_moves_a_hash_and_nonbreaking_pr_label_together() {
+    let href = "https://example.com/pull/123";
+    let node = tree(
+        json!({"type":"row","props":{"gap":1,"wrap":"wrap"},"children":[
+            "gpt-5", {"type":"row","props":{"gap":1},"children":[
+                "a1b2c3d", {"type":"link","props":{"href":href},"children":["PR\u{a0}#123"]}
+            ]}
+        ]}),
+    );
+    for (width, expected, linked) in [
+        (21, vec!["gpt-5 a1b2c3d PR\u{a0}#123"], 14..21),
+        (20, vec!["gpt-5", "a1b2c3d PR\u{a0}#123"], 8..15),
+        (12, vec!["gpt-5", "a1b2c3d PR\u{a0}…"], 8..11),
+    ] {
+        let lines = node
+            .prepare(&Theme::default())
+            .render_lines(Size::new(width, 4));
+        let text: Vec<_> = lines.iter().map(|line| line.line.to_string()).collect();
+        assert_eq!(text, expected);
+        assert_eq!(
+            lines.last().unwrap().hyperlinks,
+            [TerminalHyperlink::web(linked, href.to_owned())]
+        );
+    }
+}
+
+#[test]
+fn authored_line_breaks_and_collapsed_whitespace_preserve_styles_and_links() {
+    let href = "https://example.com/pr/42";
+    let node = tree(json!({"type":"text","children":[
+        "  ready  \t", {"type":"bold","children":["  now"]}, "\r", "\n\n",
+        {"type":"link","props":{"href":href},"children":["PR \t", "#42\u{7}"]},
+        "\nmore"
+    ]}));
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 4,
+    );
+    let lines = node.prepare(&Theme::default()).render_lines(area.as_size());
+    assert_eq!(
+        lines[3].hyperlinks,
+        [TerminalHyperlink::web(0..6, href.to_owned())]
+    );
+    let mut buffer = Buffer::empty(area);
+    for (row, line) in area.rows().zip(lines) {
+        line.render_fitted(row, &mut buffer);
+    }
+    insta::assert_snapshot!(crate::terminal_hyperlinks::strip_osc8(&format!(
+        "{buffer:?}"
+    )));
+    assert_eq!(buffer[(6, 3)].symbol(), "…");
+    assert_eq!(
+        node.render_line(/*width*/ 20, &Theme::default())
+            .line
+            .to_string(),
+        "ready now…"
+    );
+}
+
+#[test]
+fn earlier_sibling_grows_after_reserving_the_later_siblings_minimum() {
+    let node = tree(json!({"type":"row","props":{"gap":0},"children":["aaa a bb", "aaa a bb"]}));
+    let lines = node
+        .prepare(&Theme::default())
+        .render_lines(Size::new(10, 3));
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.line.to_string())
+            .collect::<Vec<_>>(),
+        ["aaa a  aaa", "bb     a", "       bb"]
+    );
+}
+
+#[test]
+fn width_fitting_respects_word_hyphens_across_styles() {
+    for (prefix, suffix, expected) in [
+        ("1-", "2", vec!["1-", "2"]),
+        ("--", "help", vec!["-…"]),
+        ("a\u{ad}", "bc", vec!["a\u{ad}…"]),
+        ("中", "文", vec!["中", "文"]),
+    ] {
+        let node =
+            tree(json!({"type":"text","children":[{"type":"bold","children":[prefix]},suffix]}));
+        let lines = node
+            .prepare(&Theme::default())
+            .render_lines(Size::new(2, 3));
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.line.to_string())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
 }
