@@ -208,11 +208,15 @@ impl Session {
                 .cloned()
                 .collect::<Vec<_>>();
             let definitions = codex_tools::create_tools_json_for_responses_lite(&specs)?;
-            world_state.add_section(TopLevelToolsState::new(
+            let mut top_level = TopLevelToolsState::new(
                 model_messages.incremental_tools(),
                 definitions,
                 Some(Arc::clone(&extension_metrics)),
-            )?);
+            )?;
+            if let Some(entries) = step_context.tool_router.exec_definitions() {
+                top_level = top_level.with_incremental_exec_tools(Some(entries));
+            }
+            world_state.add_section(top_level);
         }
         world_state.add_section(model_state);
         let token_budget_enabled = turn_context.config.features.enabled(Feature::TokenBudget)

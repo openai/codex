@@ -497,7 +497,7 @@ pub(crate) fn finalize_tool_router(
         registry.mcp_namespaces(),
     )
     .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
-    let code_mode_tool_names =
+    let (code_mode_tool_names, exec_definitions) =
         register_code_mode_executors(turn_context, model_info, &mut registry, &indirect_prefixes);
     let include_tool_namespaces_info = turn_context
         .config
@@ -580,6 +580,7 @@ pub(crate) fn finalize_tool_router(
         model_visible_specs,
         tool_mode,
         code_mode_tool_names,
+        exec_definitions,
         tool_namespaces_info,
         &child_management_tools,
     ))
@@ -1052,10 +1053,13 @@ fn register_code_mode_executors(
     model_info: &ModelInfo,
     registry: &mut ToolRegistry,
     indirect_prefixes: &IndirectNamespacePrefixes<'_>,
-) -> BTreeMap<String, ToolName> {
+) -> (
+    BTreeMap<String, ToolName>,
+    Option<Arc<Vec<codex_code_mode::ExecDefinition>>>,
+) {
     let tool_mode = effective_tool_mode(turn_context, model_info);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
-        return BTreeMap::new();
+        return (BTreeMap::new(), None);
     }
 
     let mut code_mode_tool_names = BTreeMap::new();
@@ -1109,21 +1113,30 @@ fn register_code_mode_executors(
     }
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-    let (exec_description, _) = codex_code_mode::build_exec_tool_description_and_definitions(
-        &enabled_tools,
-        &deferred_tools,
-        &namespace_descriptions,
-        turn_context.config.code_mode.default_exec_yield_time_ms,
-        tool_mode == ToolMode::CodeModeOnly,
+    let image_detail_visibility =
         if unified_image_budget_enabled(&turn_context.config.features, model_info) {
             codex_code_mode::ImageDetailVisibility::Hidden
         } else {
             codex_code_mode::ImageDetailVisibility::Visible
-        },
-        deferred_tool_discovery,
-        /*incremental_exec_enabled*/ false,
-        model_messages.code_mode(),
-    );
+        };
+    let features = &turn_context.config.features;
+    let incremental_exec_enabled = model_info.use_responses_lite
+        && features.enabled(Feature::IncrementalTools)
+        && features.enabled(Feature::IncrementalExecTools)
+        && tool_mode == ToolMode::CodeModeOnly;
+    let (exec_description, exec_definitions) =
+        codex_code_mode::build_exec_tool_description_and_definitions(
+            &enabled_tools,
+            &deferred_tools,
+            &namespace_descriptions,
+            turn_context.config.code_mode.default_exec_yield_time_ms,
+            tool_mode == ToolMode::CodeModeOnly,
+            image_detail_visibility,
+            deferred_tool_discovery,
+            incremental_exec_enabled,
+            model_messages.code_mode(),
+        );
+    let exec_definitions = incremental_exec_enabled.then(|| Arc::new(exec_definitions));
     let execute_handler = CodeModeExecuteHandler::new(
         create_code_mode_tool(exec_description),
         code_mode_nested_tool_specs,
@@ -1135,7 +1148,7 @@ fn register_code_mode_executors(
     )));
     registry.prepend_trusted(Arc::new(execute_handler));
 
-    code_mode_tool_names
+    (code_mode_tool_names, exec_definitions)
 }
 
 #[instrument(level = "trace", skip_all, fields(tool_spec_count = specs.len()))]

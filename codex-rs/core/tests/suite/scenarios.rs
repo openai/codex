@@ -125,6 +125,8 @@ mod audio_file;
 #[path = "scenarios_retained_tool_outputs.rs"]
 mod retained_tool_outputs;
 
+#[path = "scenarios_exec_tools.rs"]
+mod exec_tools;
 #[path = "scenarios_incremental_tools.rs"]
 mod incremental_tools;
 #[path = "scenarios_incremental_tools_resume.rs"]

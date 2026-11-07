@@ -497,6 +497,7 @@ mod tests {
             Vec::new(),
             ToolMode::CodeModeOnly,
             BTreeMap::new(),
+            /*exec_definitions*/ None,
             /*tool_namespaces_info*/ None,
             &[],
         ));

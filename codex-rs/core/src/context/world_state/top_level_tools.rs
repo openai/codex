@@ -107,10 +107,6 @@ impl TopLevelToolsState {
     }
 
     /// Track granular exec updates as part of this tool catalog.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Activated by the follow-up runtime integration")
-    )]
     pub(crate) fn with_incremental_exec_tools(
         mut self,
         exec_definitions: Option<Arc<Vec<ExecDefinition>>>,
