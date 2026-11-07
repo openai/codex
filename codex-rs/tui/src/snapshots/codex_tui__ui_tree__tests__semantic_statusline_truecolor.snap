@@ -1,0 +1,39 @@
+---
+source: tui/src/ui_tree_tests.rs
+expression: paint_semantic_samples()
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 5, height: 1 },
+    content: [
+        "pabid",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Rgb(220, 221, 222), bg: Rgb(0, 0, 0), underline: Reset, modifier: NONE,
+        x: 1, y: 0, fg: Rgb(0, 200, 80), bg: Rgb(0, 0, 0), underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Rgb(230, 230, 230), bg: Rgb(0, 0, 0), underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Rgb(230, 230, 230), bg: Rgb(230, 230, 230), underline: Reset, modifier: NONE,
+    ]
+}
+Buffer {
+    area: Rect { x: 0, y: 0, width: 5, height: 1 },
+    content: [
+        "pabid",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Rgb(1, 2, 3), bg: Rgb(255, 255, 255), underline: Reset, modifier: NONE,
+        x: 1, y: 0, fg: Reset, bg: Rgb(255, 255, 255), underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Rgb(80, 0, 120), bg: Rgb(255, 255, 255), underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Rgb(80, 0, 120), bg: Rgb(80, 0, 120), underline: Reset, modifier: NONE,
+    ]
+}
+Buffer {
+    area: Rect { x: 0, y: 0, width: 5, height: 1 },
+    content: [
+        "pabid",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Magenta, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Magenta, bg: Magenta, underline: Reset, modifier: NONE,
+    ]
+}

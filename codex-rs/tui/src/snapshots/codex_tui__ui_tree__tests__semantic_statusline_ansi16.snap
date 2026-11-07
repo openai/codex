@@ -1,0 +1,37 @@
+---
+source: tui/src/ui_tree_tests.rs
+expression: paint_semantic_samples()
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 5, height: 1 },
+    content: [
+        "pabid",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Magenta, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Magenta, bg: Magenta, underline: Reset, modifier: NONE,
+    ]
+}
+Buffer {
+    area: Rect { x: 0, y: 0, width: 5, height: 1 },
+    content: [
+        "pabid",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Magenta, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Magenta, bg: Magenta, underline: Reset, modifier: NONE,
+    ]
+}
+Buffer {
+    area: Rect { x: 0, y: 0, width: 5, height: 1 },
+    content: [
+        "pabid",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Magenta, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Magenta, bg: Magenta, underline: Reset, modifier: NONE,
+    ]
+}

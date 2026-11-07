@@ -1,13 +1,59 @@
-//! Literal provider colors use the terminal's palette at paint time.
+//! Resolve typed wire colors against the active theme and terminal palette.
 
-use crate::terminal_palette;
 use ratatui::style::Color as TerminalColor;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::bottom_pane::StatusLineAccent;
+use crate::render::highlight;
+use crate::terminal_palette;
+use crate::terminal_palette::StdoutColorLevel;
+use std::cell::OnceCell;
+use syntect::highlighting::Highlighter;
+use syntect::highlighting::Theme;
+use syntect::parsing::Scope;
+
+pub(super) struct RenderTheme<'a> {
+    theme: &'a Theme,
+    highlighter: OnceCell<Highlighter<'a>>,
+}
+
+impl<'a> RenderTheme<'a> {
+    pub(super) fn new(theme: &'a Theme) -> Self {
+        Self {
+            theme,
+            highlighter: OnceCell::new(),
+        }
+    }
+
+    // Plain text and literal colors need no TextMate scope matching.
+    fn highlighter(&self) -> &Highlighter<'a> {
+        self.highlighter
+            .get_or_init(|| Highlighter::new(self.theme))
+    }
+}
+
+fn terminal_color(color: Option<TerminalColor>, fallback: TerminalColor) -> TerminalColor {
+    let Some(color) = color else { return fallback };
+    let level = terminal_palette::effective_stdout_color_level();
+    match (level, color) {
+        (
+            StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown,
+            TerminalColor::Rgb(..) | TerminalColor::Indexed(16..),
+        ) => fallback,
+        (_, TerminalColor::Rgb(r, g, b)) => {
+            terminal_palette::best_color_for_level((r, g, b), level)
+        }
+        _ => color,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Color {
+    Primary,
+    Surface,
+    Accent,
     Black,
     Red,
     Green,
@@ -17,12 +63,37 @@ pub(super) enum Color {
     Cyan,
     White,
     #[serde(untagged)]
+    Status(StatusLineAccent),
+    #[serde(untagged)]
     Rgb(HexRgb),
 }
 
 impl Color {
-    pub(super) fn resolve(&self) -> TerminalColor {
+    pub(super) fn resolve(&self, palette: &RenderTheme<'_>) -> TerminalColor {
+        let setting = |color: Option<syntect::highlighting::Color>| {
+            terminal_color(
+                color.and_then(highlight::convert_syntect_color),
+                TerminalColor::Reset,
+            )
+        };
         match self {
+            Self::Primary => setting(palette.theme.settings.foreground),
+            Self::Surface => setting(palette.theme.settings.background),
+            Self::Accent => setting(
+                Scope::new("codex.accent")
+                    .ok()
+                    .and_then(|scope| {
+                        palette
+                            .highlighter()
+                            .style_mod_for_stack(&[scope])
+                            .foreground
+                    })
+                    .or(palette.theme.settings.accent),
+            ),
+            Self::Status(role) => terminal_color(
+                highlight::foreground_color_for_scopes(palette.highlighter(), role.scopes()),
+                role.fallback_color(),
+            ),
             Self::Rgb(rgb) => terminal_palette::best_color(rgb.0),
             Self::Black => TerminalColor::Black,
             Self::Red => TerminalColor::Red,

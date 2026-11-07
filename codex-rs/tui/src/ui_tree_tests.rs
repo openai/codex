@@ -6,6 +6,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::Value;
 use serde_json::json;
+use syntect::highlighting::Theme;
 
 fn parse(value: Value) -> serde_json::Result<UiTree> {
     value.to_string().parse()
@@ -28,7 +29,12 @@ fn elements_round_trip_and_require_explicit_row_spacing() {
     }
     for (gap, expected) in [(0, "AB"), (1, "A B"), (2, "A  B"), (MAX_GAP, "A  …")] {
         let row = tree(json!({"type":"row","props":{"gap":gap},"children":["A","B"]}));
-        assert_eq!(row.render_line(/*width*/ 4).line.to_string(), expected);
+        assert_eq!(
+            row.render_line(/*width*/ 4, &Theme::default())
+                .line
+                .to_string(),
+            expected
+        );
     }
 }
 
@@ -93,7 +99,7 @@ fn links_only_annotate_their_own_cells() {
         /*x*/ 0, /*y*/ 0, /*width*/ 16, /*height*/ 1,
     );
     let mut buffer = Buffer::empty(area);
-    tree.render_line(area.width)
+    tree.render_line(area.width, &Theme::default())
         .render_fitted(area, &mut buffer);
     assert_eq!(buffer[(0, 0)].symbol(), "界");
     assert!(
@@ -103,12 +109,17 @@ fn links_only_annotate_their_own_cells() {
     );
     insta::assert_snapshot!(format!("{buffer:?}"));
 
-    assert_eq!(tree.render_line(/*width*/ 1).line.to_string(), "…");
+    assert_eq!(
+        tree.render_line(/*width*/ 1, &Theme::default())
+            .line
+            .to_string(),
+        "…"
+    );
     let narrow = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 6, /*height*/ 2,
     );
     let mut buffer = Buffer::empty(narrow);
-    tree.render_line(narrow.width)
+    tree.render_line(narrow.width, &Theme::default())
         .render_fitted(narrow, &mut buffer);
     assert!(
         buffer[(4, 0)]
@@ -126,7 +137,7 @@ fn render_line_keeps_exactly_fitting_halfwidth_voiced_katakana() {
         /*x*/ 0, /*y*/ 0, /*width*/ 2, /*height*/ 1,
     );
     let mut buffer = Buffer::empty(area);
-    text.render_line(area.width)
+    text.render_line(area.width, &Theme::default())
         .render_fitted(area, &mut buffer);
     assert_eq!(buffer[(0, 0)].symbol(), "ｶﾞ");
 }
@@ -135,16 +146,21 @@ fn render_line_keeps_exactly_fitting_halfwidth_voiced_katakana() {
 fn ellipsis_counts_toward_width_only_when_there_is_overflow() {
     let row = tree(json!({"type":"row","props":{"gap":1},"children":["abcde", null]}));
     for (width, expected) in [(0, ""), (1, "…"), (4, "abc…"), (5, "abcde")] {
-        let line = row.render_line(width);
+        let line = row.render_line(width, &Theme::default());
         assert_eq!(line.line.to_string(), expected);
         assert!(line.width() <= usize::from(width));
     }
     let wide = tree(json!("a界界"));
-    assert_eq!(wide.render_line(/*width*/ 4).line.to_string(), "a界…");
+    assert_eq!(
+        wide.render_line(/*width*/ 4, &Theme::default())
+            .line
+            .to_string(),
+        "a界…"
+    );
     let long = "x".repeat(513);
     assert_eq!(
         tree(json!(&long))
-            .render_line(/*width*/ 513)
+            .render_line(/*width*/ 513, &Theme::default())
             .line
             .to_string(),
         long
@@ -157,19 +173,37 @@ fn first_line_skips_hidden_text_before_rendering_its_sibling() {
     let tree = tree(json!({"type":"row","props":{"gap":0},"children":[
         &multiline, "!"
     ]}));
-    assert_eq!(tree.render_line(/*width*/ 4).line.to_string(), "ok!");
+    assert_eq!(
+        tree.render_line(/*width*/ 4, &Theme::default())
+            .line
+            .to_string(),
+        "ok!"
+    );
 }
 
 #[test]
 fn directly_constructed_text_keeps_a_bounded_utf8_prefix() {
     let prefix = "x".repeat(MAX_TEXT_BYTES - 1);
     let text = UiTree(Some(UiNode::String(format!("{prefix}界tail"))));
-    assert_eq!(text.render_line(u16::MAX).line.to_string(), prefix);
+    assert_eq!(
+        text.render_line(u16::MAX, &Theme::default())
+            .line
+            .to_string(),
+        prefix
+    );
 }
 
 #[test]
-fn text_and_row_share_the_literal_color_contract() {
-    for color in ["red", "white", "#ab12f0"] {
+fn text_and_row_share_the_color_contract() {
+    for color in [
+        "red",
+        "white",
+        "#ab12f0",
+        "primary",
+        "accent",
+        "surface",
+        "status-branch",
+    ] {
         let value = json!({"type":"row","props":{"gap":0,"background":color},"children":[
             {"type":"text","props":{"color":color,"weight":"bold","italic":true,"underline":false},"children":["ok"]}
         ]});
@@ -210,7 +244,7 @@ fn inline_modifiers_and_row_surfaces_follow_the_tree() {
             {"type":"link","props":{"href":"https://example.com"},"children":["f"]}
         ]
     }));
-    let clipped = node.render_line(/*width*/ 6);
+    let clipped = node.render_line(/*width*/ 6, &Theme::default());
     assert_eq!(
         clipped.line.spans.last().unwrap(),
         &ratatui::text::Span::styled(
@@ -218,7 +252,7 @@ fn inline_modifiers_and_row_surfaces_follow_the_tree() {
             ratatui::style::Style::default().bg(ratatui::style::Color::Blue),
         )
     );
-    let line = node.render_line(/*width*/ 12);
+    let line = node.render_line(/*width*/ 12, &Theme::default());
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 12, /*height*/ 1,
     );
@@ -240,7 +274,7 @@ fn hex_colors_use_the_terminal_palette_for_both_channels() {
             bg: (0, 0, 0),
         },
         || {
-            let line = tree.render_line(/*width*/ 3);
+            let line = tree.render_line(/*width*/ 3, &Theme::default());
             let colors: Vec<_> = line
                 .line
                 .spans
@@ -255,4 +289,102 @@ fn hex_colors_use_the_terminal_palette_for_both_channels() {
             );
         },
     );
+}
+
+#[test]
+fn semantic_colors_follow_the_theme_and_terminal() {
+    use crate::terminal_palette::with_test_default_colors;
+    use crate::terminal_probe::DefaultColors;
+
+    const CHILD: &str = "CODEX_STATUSLINE_SEMANTIC_PALETTE_TEST";
+    if std::env::var_os(CHILD).is_some() {
+        insta::assert_snapshot!("semantic_statusline_ansi16", paint_semantic_samples());
+        return;
+    }
+    let limited = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ui_tree::tests::semantic_colors_follow_the_theme_and_terminal",
+        ])
+        .env(CHILD, "1")
+        .env("FORCE_COLOR", "1")
+        .output()
+        .unwrap();
+    with_test_default_colors(
+        DefaultColors {
+            fg: (255, 255, 255),
+            bg: (0, 0, 0),
+        },
+        || {
+            insta::assert_snapshot!("semantic_statusline_truecolor", paint_semantic_samples());
+        },
+    );
+    assert!(
+        limited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&limited.stdout)
+    );
+}
+
+fn paint_semantic_samples() -> String {
+    use ratatui::style::Color as TerminalColor;
+    use ratatui::style::Style;
+    use syntect::highlighting::Color;
+    use syntect::highlighting::StyleModifier;
+    use syntect::highlighting::ThemeItem;
+
+    let node = tree(
+        json!({"type":"row","props":{"gap":0,"background":"surface"},"children":[
+            {"type":"text","props":{"color":"primary"},"children":["p"]},
+            {"type":"text","props":{"color":"accent"},"children":["a"]},
+            {"type":"text","props":{"color":"status-branch"},"children":["b",
+                {"type":"row","props":{"gap":0,"background":"status-branch"},"children":["i",
+                    {"type":"text","props":{"color":"status-branch"},"children":["d"]}]}]}
+        ]}),
+    );
+    let rgb = |r, g, b| Color { r, g, b, a: 255 };
+    let scope = |name: &str, color| ThemeItem {
+        scope: name.parse().unwrap(),
+        style: StyleModifier {
+            foreground: Some(color),
+            ..Default::default()
+        },
+    };
+    let mut dark = Theme::default();
+    dark.settings.background = Some(rgb(0, 0, 0));
+    dark.settings.foreground = Some(rgb(220, 221, 222));
+    dark.settings.accent = Some(rgb(0, 200, 80));
+    dark.scopes
+        .push(scope("entity.name.function", rgb(230, 230, 230)));
+    let mut light = Theme::default();
+    light.settings.background = Some(rgb(255, 255, 255));
+    light.settings.foreground = Some(rgb(1, 2, 3));
+    light.settings.accent = dark.settings.accent;
+    light.scopes.push(scope(
+        "codex.accent",
+        Color {
+            a: 1,
+            ..Color::BLACK
+        },
+    ));
+    light
+        .scopes
+        .push(scope("entity.name.function", rgb(80, 0, 120)));
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 5, /*height*/ 1,
+    );
+    let mut samples = Vec::new();
+    for theme in [dark, light, Theme::default()] {
+        let mut buffer = Buffer::empty(area);
+        buffer.set_style(
+            area,
+            Style::default()
+                .fg(TerminalColor::Yellow)
+                .bg(TerminalColor::Blue),
+        );
+        node.render_line(area.width, &theme)
+            .render_fitted(area, &mut buffer);
+        samples.push(format!("{buffer:?}"));
+    }
+    samples.join("\n")
 }

@@ -7,6 +7,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use crate::render::highlight::with_syntax_theme;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::ui_tree::UiTree;
 
@@ -24,7 +25,9 @@ impl FooterContent {
         let width = match self {
             Self::Line(line) => line.width(),
             Self::HyperlinkLine(line) => line.width(),
-            Self::Extension { content } => content.render_line(u16::MAX).width(),
+            Self::Extension { content } => {
+                with_syntax_theme(|theme| content.render_line(u16::MAX, theme)).width()
+            }
         };
         u16::try_from(width).unwrap_or(u16::MAX)
     }
@@ -33,7 +36,10 @@ impl FooterContent {
     pub(crate) fn render(self, area: Rect, buf: &mut Buffer) {
         match self {
             Self::Line(line) => Widget::render(line, area, buf),
-            Self::Extension { content } => content.render_line(area.width).render_fitted(area, buf),
+            Self::Extension { content } => {
+                with_syntax_theme(|theme| content.render_line(area.width, theme))
+                    .render_fitted(area, buf)
+            }
             Self::HyperlinkLine(mut line) => {
                 let area = Rect {
                     height: area.height.min(1),
@@ -55,7 +61,9 @@ impl FooterContent {
         match self {
             Self::Line(line) => line.into(),
             Self::HyperlinkLine(line) => line,
-            Self::Extension { content } => content.render_line(u16::MAX),
+            Self::Extension { content } => {
+                with_syntax_theme(|theme| content.render_line(u16::MAX, theme))
+            }
         }
     }
 }

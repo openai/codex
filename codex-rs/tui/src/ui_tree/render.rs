@@ -5,6 +5,7 @@ use super::TextProps;
 use super::TextWeight;
 use super::UiNode;
 use super::UiTree;
+use super::theme::RenderTheme;
 use crate::history_cell::sanitize_user_text;
 use crate::line_truncation::truncate_line_with_ellipsis;
 use crate::terminal_hyperlinks::HyperlinkLine;
@@ -12,15 +13,16 @@ use crate::terminal_hyperlinks::TerminalHyperlink;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
+use syntect::highlighting::Theme;
 
 impl UiTree {
     /// Render one row. On overflow, fit an unlinked ellipsis inside the supplied width.
-    pub(crate) fn render_line(&self, width: u16) -> HyperlinkLine {
+    pub(crate) fn render_line(&self, width: u16, theme: &Theme) -> HyperlinkLine {
         let width = usize::from(width);
         let Some(root) = self.0.as_ref().filter(|_| width > 0) else {
             return HyperlinkLine::default();
         };
-        let mut line = node_line(root, width, Style::default());
+        let mut line = node_line(root, width, Style::default(), &RenderTheme::new(theme));
         if line.width() > width {
             line.line = truncate_line_with_ellipsis(line.line, width);
             line.clip_hyperlinks_to_width(line.width() - 1);
@@ -29,7 +31,7 @@ impl UiTree {
     }
 }
 
-fn node_line(node: &UiNode, width: usize, style: Style) -> HyperlinkLine {
+fn node_line(node: &UiNode, width: usize, style: Style, theme: &RenderTheme<'_>) -> HyperlinkLine {
     let (children, gap, style) = match node {
         UiNode::String(raw) => {
             // Built-in values are constructed directly, bypassing the wire decoder.
@@ -39,7 +41,7 @@ fn node_line(node: &UiNode, width: usize, style: Style) -> HyperlinkLine {
             return HyperlinkLine::new(Span::styled(visible, style).into());
         }
         UiNode::Link { props, children } => {
-            let mut line = row_line(children, /*gap*/ 0, width, style.underlined());
+            let mut line = row_line(children, /*gap*/ 0, width, style.underlined(), theme);
             let width = line.width();
             if width > 0 {
                 line.hyperlinks = vec![TerminalHyperlink::web(0..width, props.href.0.clone())];
@@ -50,22 +52,28 @@ fn node_line(node: &UiNode, width: usize, style: Style) -> HyperlinkLine {
             let style = props
                 .background
                 .as_ref()
-                .map_or(style, |color| style.bg(color.resolve()));
+                .map_or(style, |color| style.bg(color.resolve(theme)));
             (children, props.gap, style)
         }
-        UiNode::Text { props, children } => (children, 0, props.style(style)),
+        UiNode::Text { props, children } => (children, 0, props.style(style, theme)),
         UiNode::Bold { children } => (children, 0, style.bold()),
         UiNode::Italic { children } => (children, 0, style.italic()),
         UiNode::Underline { children } => (children, 0, style.underlined()),
     };
-    row_line(children, gap, width, style)
+    row_line(children, gap, width, style, theme)
 }
 
-fn row_line(children: &[Option<UiNode>], gap: u64, width: usize, style: Style) -> HyperlinkLine {
+fn row_line(
+    children: &[Option<UiNode>],
+    gap: u64,
+    width: usize,
+    style: Style,
+    theme: &RenderTheme<'_>,
+) -> HyperlinkLine {
     let mut result = HyperlinkLine::default();
     let mut used = 0;
     for child in children.iter().flatten() {
-        let child = node_line(child, width, style);
+        let child = node_line(child, width, style, theme);
         let child_width = child.width();
         if child_width == 0 {
             continue;
@@ -95,9 +103,9 @@ fn row_line(children: &[Option<UiNode>], gap: u64, width: usize, style: Style) -
 }
 
 impl TextProps {
-    fn style(&self, mut style: Style) -> Style {
+    fn style(&self, mut style: Style, theme: &RenderTheme<'_>) -> Style {
         if let Some(color) = &self.color {
-            style = style.fg(color.resolve());
+            style = style.fg(color.resolve(theme));
         }
         for (enabled, modifier) in [
             (
