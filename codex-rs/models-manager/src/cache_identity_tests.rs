@@ -23,12 +23,12 @@ async fn mismatched_and_legacy_cache_entries_fetch_the_current_catalog() {
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
             )),
         );
+        manager
+            .ensure_initialized(DEFAULT_HTTP_CLIENT_FACTORY)
+            .await;
         assert_eq!(
             manager
-                .raw_model_catalog(
-                    RefreshStrategy::OnlineIfUncached,
-                    DEFAULT_HTTP_CLIENT_FACTORY
-                )
+                .raw_model_catalog(RefreshStrategy::InMemory, DEFAULT_HTTP_CLIENT_FACTORY)
                 .await
                 .models,
             vec![current.clone()]

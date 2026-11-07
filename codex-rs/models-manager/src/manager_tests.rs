@@ -566,6 +566,9 @@ async fn injected_cache_write_error_does_not_fail_remote_refresh() {
         .await;
 
     assert_eq!(catalog.models, remote_models);
+    manager
+        .ensure_initialized(DEFAULT_HTTP_CLIENT_FACTORY)
+        .await;
     assert_eq!(
         manager
             .model_catalog_with_origins(RefreshStrategy::InMemory, DEFAULT_HTTP_CLIENT_FACTORY)
@@ -579,6 +582,27 @@ async fn injected_cache_write_error_does_not_fail_remote_refresh() {
             .collect::<Vec<_>>()
     );
     assert_eq!(endpoint.fetch_count(), 1);
+}
+
+#[tokio::test]
+async fn initialization_retains_loaded_catalogs_including_empty_responses() {
+    for models in [
+        Vec::new(),
+        vec![remote_model("remote", "Remote", /*priority*/ 0)],
+    ] {
+        let endpoint = TestModelsEndpoint::new(vec![models.clone()]);
+        let manager =
+            OpenAiModelsManager::new_without_cache(endpoint.clone(), /*auth_manager*/ None)
+                .with_provider_catalog();
+        manager
+            .ensure_initialized(DEFAULT_HTTP_CLIENT_FACTORY)
+            .await;
+        manager
+            .ensure_initialized(DEFAULT_HTTP_CLIENT_FACTORY)
+            .await;
+        assert_eq!(manager.get_remote_models().await, models);
+        assert_eq!(endpoint.fetch_count(), 1);
+    }
 }
 
 #[tokio::test]

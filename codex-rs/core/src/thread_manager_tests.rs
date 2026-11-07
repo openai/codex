@@ -2248,6 +2248,8 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     let lifecycle_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mcp_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mcp_loaded = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // This fixture counts explicit MCP projections, excluding background websocket prewarming.
+    config.model_provider.supports_websockets = false;
     let recorder = Arc::new(InitialDataRecorder {
         lifecycle_observed: Arc::clone(&lifecycle_observed),
         mcp_observed: Arc::clone(&mcp_observed),
@@ -3432,8 +3434,10 @@ async fn metadata_update_without_result_reads_only_when_the_caller_needs_the_thr
     );
 }
 
+#[test_case::test_case(true; "disk_cache")]
+#[test_case::test_case(false; "without_cache")]
 #[tokio::test]
-async fn new_uses_active_provider_for_model_refresh() {
+async fn new_uses_active_provider_for_model_refresh(with_cache: bool) {
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;
 
@@ -3453,7 +3457,11 @@ async fn new_uses_active_provider_for_model_refresh() {
             &config,
             auth_manager.clone(),
             TEST_INSTALLATION_ID.to_string(),
-            Arc::new(ModelCatalogSettings::disk(config.codex_home.to_path_buf())),
+            Arc::new(if with_cache {
+                ModelCatalogSettings::disk(config.codex_home.to_path_buf())
+            } else {
+                ModelCatalogSettings::default()
+            }),
         ),
         crate::CodexAppsToolsCache::default(),
         SessionSource::Exec,
@@ -3476,6 +3484,16 @@ async fn new_uses_active_provider_for_model_refresh() {
         .await;
     assert_eq!(models_mock.requests().len(), 1);
 
+    let mut thread_config = config.clone();
+    thread_config.model = Some("remote-search-model".to_string());
+    thread_config.model_provider.request_max_retries = Some(1);
+    thread_config.model_provider.stream_max_retries = Some(1);
+    thread_config
+        .model_provider
+        .http_headers
+        .get_or_insert_default()
+        .insert("X-OpenAI-Product-Sku".to_string(), "test-product".into());
+
     // Thread startup must select the originator catalog before resolving model metadata.
     for originator in [
         "codex_work_cca",
@@ -3484,24 +3502,32 @@ async fn new_uses_active_provider_for_model_refresh() {
         "codex_work_mobile",
         "chatgpt_cca",
     ] {
-        let mut model = codex_models_manager::model_info::model_info_from_slug("gpt-5.5");
+        let mut model =
+            codex_models_manager::model_info::model_info_from_slug("remote-search-model");
         model.description = Some(originator.to_string());
+        model.supports_search_tool = true;
+        model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeModeOnly);
+        model.use_responses_lite = true;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/models"))
             .and(wiremock::matchers::header("originator", originator))
+            .and(wiremock::matchers::header(
+                "X-OpenAI-Product-Sku",
+                "test-product",
+            ))
             .respond_with(
                 wiremock::ResponseTemplate::new(200).set_body_json(ModelsResponse {
                     models: vec![model],
                 }),
             )
-            .expect(1)
+            .expect(if with_cache { 1..=1 } else { 1..=2 })
             .mount(&server)
             .await;
         let started = manager
             .start_thread(StartThreadOptions {
                 metrics_service_name: Some(originator.to_string()),
                 environments: Some(Vec::new()),
-                ..StartThreadOptions::new(config.clone())
+                ..StartThreadOptions::new(thread_config.clone())
             })
             .await
             .expect("start scoped thread");
@@ -3510,9 +3536,50 @@ async fn new_uses_active_provider_for_model_refresh() {
             .session
             .services
             .models_manager
-            .get_model_info("gpt-5.5", &config.to_models_manager_config())
+            .get_model_info(
+                "remote-search-model",
+                &thread_config.to_models_manager_config(),
+            )
             .await;
         assert_eq!(model.description.as_deref(), Some(originator));
+        assert!(model.supports_search_tool);
+
+        let child = manager
+            .state
+            .spawn_child_thread(
+                StartThreadOptions {
+                    session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id: started.thread_id,
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    })),
+                    environments: Some(Vec::new()),
+                    ..StartThreadOptions::new(thread_config.clone())
+                },
+                started
+                    .thread
+                    .session
+                    .services
+                    .local_agent_runtime
+                    .control(started.thread.session.session_id()),
+                Some(started.thread_id),
+                /*inherited_exec_policy*/ None,
+            )
+            .await
+            .expect("spawn child with the parent's provider headers");
+        let (turn, _) = child
+            .thread
+            .session
+            .new_turn_with_sub_id(
+                "child-turn".to_string(),
+                SessionSettingsUpdate::default(),
+                Default::default(),
+            )
+            .await
+            .expect("prepare child's first turn");
+        assert_eq!(turn.model_info().as_ref(), &model);
     }
     let legacy = manager
         .start_thread(StartThreadOptions {

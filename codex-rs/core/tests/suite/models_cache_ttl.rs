@@ -1,3 +1,4 @@
+use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use core_test_support::test_codex::local_requests;
 use std::path::Path;
@@ -10,6 +11,7 @@ use chrono::Utc;
 use codex_core::config::Constrained;
 use codex_login::CodexAuth;
 use codex_models_manager::client_version_to_whole;
+use codex_models_manager::manager::ModelCatalogSettings;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
@@ -28,6 +30,8 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
@@ -46,7 +50,11 @@ use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 const ETAG: &str = "\"models-etag-ttl\"";
 const CACHE_FILE: &str = "models_cache.json";
@@ -55,11 +63,19 @@ const VERSIONED_MODEL: &str = "codex-test-versioned";
 const MISSING_VERSION_MODEL: &str = "codex-test-missing-version";
 const DIFFERENT_VERSION_MODEL: &str = "codex-test-different-version";
 
+#[test_case::test_case(true; "expired_cache")]
+#[test_case::test_case(false; "disabled_cache")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_reused_reviewer_avoids_stale_catalog_lookup() -> Result<()> {
+async fn guardian_reused_reviewer_avoids_stale_catalog_lookup(with_cache: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
+    let websocket_fallback = Mock::given(method("GET"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(ResponseTemplate::new(426))
+        .expect(1)
+        .mount_as_scoped(&server)
+        .await;
     let bundled = codex_models_manager::bundled_models_response()?;
     let catalog = ModelsResponse {
         models: bundled
@@ -77,23 +93,30 @@ async fn guardian_reused_reviewer_avoids_stale_catalog_lookup() -> Result<()> {
         .with_model("gpt-5.5");
     builder = builder.with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        config.approvals_reviewer = ApprovalsReviewer::User;
         config.model_provider.request_max_retries = Some(0);
+        config.model_provider.supports_websockets = true;
     });
+    if !with_cache {
+        builder = builder.with_model_catalog_settings(ModelCatalogSettings::default());
+    }
     let test = builder.build_with_auto_env(&server).await?;
-    test.thread_manager
-        .get_models_manager()
-        .list_models(
-            RefreshStrategy::OnlineIfUncached,
-            codex_core::test_support::default_http_client_factory(),
-        )
-        .await;
     assert_eq!(initial_models.requests().len(), 1);
-    rewrite_cache_timestamp(
-        &test.config.codex_home.join(CACHE_FILE),
-        Utc::now() - chrono::Duration::hours(1),
+    // Complete the parent's fallback before Guardian can prewarm its own session.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        websocket_fallback.wait_until_satisfied(),
     )
     .await?;
+    if with_cache {
+        rewrite_cache_timestamp(
+            &test.config.codex_home.join(CACHE_FILE),
+            Utc::now() - chrono::Duration::hours(1),
+        )
+        .await?;
+    } else {
+        assert!(!test.config.codex_home.join(CACHE_FILE).exists());
+    }
     let repeat_models = responses::mount_models_once_with_etag(&server, catalog, ETAG).await;
     let deny = r#"{"risk_level":"high","user_authorization":"low","outcome":"deny"}"#;
     let mut sequence = Vec::new();
@@ -121,7 +144,22 @@ async fn guardian_reused_reviewer_avoids_stale_catalog_lookup() -> Result<()> {
         ev_completed("parent-done"),
     ]));
     let response_mock = mount_sse_sequence(&server, sequence).await;
-    test.submit_text_turn("Review both shell requests.").await?;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Review both shell requests.".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     let requests = response_mock.requests();
     assert_eq!(
@@ -151,6 +189,26 @@ async fn guardian_reused_reviewer_avoids_stale_catalog_lookup() -> Result<()> {
         Some(guardian_thread.as_str()),
         "the second approval must reuse the Guardian reviewer"
     );
+
+    // Parallel reviewers inherit HTTP fallback as well as Guardian's retry overrides.
+    let fork_reviewer = || async {
+        let mut config = test.config.clone();
+        config.model_provider.request_max_retries = Some(1);
+        config.model_provider.stream_max_retries = Some(1);
+        config.model_provider.supports_websockets = false;
+        test.thread_manager
+            .fork_internal_session(
+                test.session_configured.session_id.into(),
+                StartThreadOptions {
+                    session_source: Some(SessionSource::Internal(InternalSessionSource::Guardian)),
+                    ..StartThreadOptions::new(config)
+                },
+                Vec::new(),
+            )
+            .await
+    };
+    let (first, second) = tokio::try_join!(fork_reviewer(), fork_reviewer())?;
+    assert_ne!(first.thread_id, second.thread_id);
     assert_eq!(repeat_models.requests().len(), 0);
     Ok(())
 }

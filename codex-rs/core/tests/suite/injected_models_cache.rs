@@ -129,14 +129,14 @@ impl ModelsCache for TestModelsCache {
 
 #[derive(Debug)]
 struct TestModelsEndpoint {
-    models: Vec<ModelInfo>,
+    models: Mutex<Vec<ModelInfo>>,
     fetch_count: AtomicUsize,
 }
 
 impl TestModelsEndpoint {
     fn new(models: Vec<ModelInfo>) -> Arc<Self> {
         Arc::new(Self {
-            models,
+            models: Mutex::new(models),
             fetch_count: AtomicUsize::new(0),
         })
     }
@@ -163,7 +163,7 @@ impl ModelsEndpointClient for TestModelsEndpoint {
         Box::pin(async move {
             self.fetch_count.fetch_add(1, Ordering::SeqCst);
             Ok(ModelsEndpointResponse {
-                models: self.models.clone(),
+                models: self.models.lock().expect("model response lock").clone(),
                 etag: None,
                 identity: self.identity().expect("test endpoint identity"),
             })
@@ -425,6 +425,57 @@ async fn threads_follow_provider_changes_and_preserve_host_cache_policy(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initialization_preserves_a_concurrent_refresh() -> Result<()> {
+    let (store_entered, entered) = oneshot::channel();
+    let (release_store, release) = oneshot::channel();
+    let cache = Arc::new(TestModelsCache {
+        entry: None,
+        load_error: false,
+        stored_entries: Mutex::new(Vec::new()),
+        store_gate: Mutex::new(Some(StoreGate {
+            entered: store_entered,
+            release,
+        })),
+    });
+    let mut model = remote_model("gpt-5.4");
+    model.default_reasoning_summary = ReasoningSummary::Concise;
+    let endpoint = TestModelsEndpoint::new(vec![model.clone()]);
+    let manager = models_manager(cache, endpoint.clone());
+    let initialization = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .ensure_initialized(codex_core::test_support::default_http_client_factory())
+                .await;
+        }
+    });
+    timeout(Duration::from_secs(/*secs*/ 10), entered).await??;
+
+    // A normal refresh must proceed while the initial load is waiting on storage.
+    model.default_reasoning_summary = ReasoningSummary::Detailed;
+    *endpoint.models.lock().expect("model response lock") = vec![model.clone()];
+    timeout(
+        Duration::from_secs(/*secs*/ 10),
+        manager.list_models(
+            RefreshStrategy::Online,
+            codex_core::test_support::default_http_client_factory(),
+        ),
+    )
+    .await
+    .expect("refresh must not wait for an initialization cache write");
+    assert_eq!(manager.get_remote_models().await, vec![model.clone()]);
+
+    release_store.send(()).expect("release initial cache write");
+    timeout(Duration::from_secs(/*secs*/ 10), initialization).await??;
+    assert_eq!(manager.get_remote_models().await, vec![model.clone()]);
+    assert_eq!(
+        manager.refreshed_model_catalog().as_deref(),
+        Some(std::slice::from_ref(&model))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn account_switch_during_cache_store_preserves_new_catalog_for_next_turn() -> Result<()> {
     let server = wiremock::MockServer::start().await;
     let home = Arc::new(TempDir::new()?);
@@ -517,12 +568,15 @@ async fn account_switch_during_cache_store_preserves_new_catalog_for_next_turn()
         },
     )
     .await;
-    manager
-        .list_models(
+    timeout(
+        Duration::from_secs(/*secs*/ 10),
+        manager.list_models(
             RefreshStrategy::Online,
             codex_core::test_support::default_http_client_factory(),
-        )
-        .await;
+        ),
+    )
+    .await
+    .expect("new account catalog must load while the old account's cache write is paused");
     assert_eq!(manager.get_remote_models().await, vec![new_model.clone()]);
     release_store.send(()).unwrap();
     timeout(Duration::from_secs(10), old_refresh).await??;

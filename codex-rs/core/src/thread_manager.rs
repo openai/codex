@@ -1116,12 +1116,16 @@ impl ThreadManager {
                 /*parent_originator*/ None,
             )
             .await;
-        let manager = self.state.models_for_thread(
-            &options.config,
-            &self.state.auth_manager,
-            &self.state.runtime_auth,
-            &originator,
-        );
+        let manager = self
+            .state
+            .models_for_thread(
+                &options.config,
+                &self.state.auth_manager,
+                &self.state.runtime_auth,
+                &originator,
+                &source,
+            )
+            .await;
         let (_, info) = Session::resolve_startup_model(
             manager.as_ref(),
             &options.config,
@@ -1919,12 +1923,13 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
-    fn models_for_thread(
+    async fn models_for_thread(
         &self,
         config: &Config,
         auth_manager: &Arc<AuthManager>,
         runtime_auth: &crate::runtime_auth::RuntimeAuthSlot,
         originator: &str,
+        session_source: &SessionSource,
     ) -> SharedModelsManager {
         let runtime = crate::runtime_auth::runtime_for_config(
             runtime_auth,
@@ -1932,13 +1937,16 @@ impl ThreadManagerState {
             Arc::clone(auth_manager),
             &self.installation_id,
         );
-        let manager = self.model_catalog.for_thread(
-            config,
-            Arc::clone(auth_manager),
-            runtime,
-            Arc::ptr_eq(auth_manager, &self.auth_manager),
-        );
-        manager.for_originator(originator).unwrap_or(manager)
+        self.model_catalog
+            .for_thread(
+                config,
+                Arc::clone(auth_manager),
+                runtime,
+                Arc::ptr_eq(auth_manager, &self.auth_manager),
+                originator,
+                session_source,
+            )
+            .await
     }
 
     pub(crate) fn shared_thread_instructions_provider(
@@ -2775,12 +2783,22 @@ impl ThreadManagerState {
         } else {
             Arc::new(mcp_manager.for_plugins_manager(Arc::clone(&plugins_manager)))
         };
-        let models_manager = self.models_for_thread(
-            &config,
-            &auth_manager,
-            &runtime_auth,
-            &startup_context.originator,
-        );
+        let models_manager = tokio::select! {
+            biased;
+            _ = agent_control.runtime().shutdown.cancelled() => {
+                if let Some(startup_guard) = startup_guard {
+                    startup_guard.cleanup().await;
+                }
+                return Err(CodexErr::TurnAborted);
+            }
+            manager = self.models_for_thread(
+                &config,
+                &auth_manager,
+                &runtime_auth,
+                &startup_context.originator,
+                &session_source,
+            ) => manager,
+        };
         let spawn_result = Session::spawn(SessionSpawnArgs {
             attached_thread,
             startup,

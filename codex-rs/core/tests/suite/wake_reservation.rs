@@ -49,6 +49,10 @@ struct GatedModelsManager {
 }
 
 impl ModelsManager for GatedModelsManager {
+    fn ensure_initialized(&self, factory: HttpClientFactory) -> ModelsManagerFuture<'_, ()> {
+        self.inner.ensure_initialized(factory)
+    }
+
     fn model_catalog_with_origins(
         &self,
         strategy: RefreshStrategy,

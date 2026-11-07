@@ -309,10 +309,11 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex()
+    let test = test_codex()
         .with_history_mode(ThreadHistoryMode::Paginated)
         .build(&server)
         .await?;
+    let codex = test.codex.clone();
 
     let web_search_added = ev_web_search_call_added_partial("web-search-1", "in_progress");
     let web_search_done = ev_web_search_call_done("web-search-1", "completed", "weather seattle");

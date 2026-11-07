@@ -605,15 +605,14 @@ impl Session {
         session_source: &SessionSource,
         allow_provider_model_fallback: bool,
     ) -> CodexResult<(String, CatalogModel)> {
+        // Child catalogs are initialized by their selector. Reading only memory here
+        // preserves the loaded snapshot shared with the parent.
         let refresh_strategy = if session_source.is_non_root_agent() {
-            RefreshStrategy::Offline
+            RefreshStrategy::InMemory
         } else {
             RefreshStrategy::OnlineIfUncached
         };
-        if config.features.enabled(Feature::RuntimeAgentInstances)
-            || config.model.is_none()
-            || refresh_strategy != RefreshStrategy::Offline
-        {
+        if !session_source.is_non_root_agent() {
             let _ = models_manager
                 .list_models(refresh_strategy, config.http_client_factory())
                 .await;
