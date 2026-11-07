@@ -9,6 +9,9 @@ impl ChatComposer {
         if self.footer.status_line_value == status_line {
             return false;
         }
+        if matches!(status_line, Some(FooterContent::Extension { .. })) {
+            self.effort_status_line_transition = None;
+        }
         self.footer.status_line_value = status_line;
         true
     }
@@ -29,18 +32,90 @@ impl ChatComposer {
         true
     }
 
+    pub(super) fn has_separate_status(&self, options: ComposerRenderOptions<'_>) -> bool {
+        options.separate_status_line && self.footer.status_line_enabled
+    }
+
+    pub(super) fn shows_shared_status(&self, options: ComposerRenderOptions<'_>) -> bool {
+        !options.separate_status_line
+            && options.footer.is_none()
+            && self.custom_footer_height().is_none()
+            && self.footer.status_line_enabled
+            && self.footer_mode().shows_passive_line(self.is_task_running)
+    }
+
     pub(super) fn status_surface_height(&self, options: ComposerRenderOptions<'_>) -> u16 {
-        u16::from(options.separate_status_line && self.footer.status_line_enabled)
+        u16::from(self.has_separate_status(options))
     }
 
     pub(super) fn hint_footer_props(&self, options: ComposerRenderOptions<'_>) -> FooterProps {
         let mut props = self.footer_props();
-        if self.status_surface_height(options) > 0 {
+        if self.has_separate_status(options) {
             props.status_line_enabled = false;
             props.status_line_value = None;
             props.active_agent_label = None;
         }
         props
+    }
+
+    fn status_line_layout(
+        &self,
+        area: Rect,
+        options: ComposerRenderOptions<'_>,
+        left_width: u16,
+    ) -> (Option<Line<'static>>, u16) {
+        let show_cycle_hint = !self.is_task_running
+            && if options.separate_status_line {
+                !self.blocks_direct_input
+                    && self.draft.input_enabled
+                    && !self.popup_active()
+                    && matches!(
+                        self.footer_mode(),
+                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                    )
+                    && options.footer.is_none_or(|footer| !footer.is_interactive)
+            } else {
+                self.footer.collaboration_mode_indicator.is_some()
+            };
+        let right = if !options.separate_status_line
+            && let Some(label) = &self.footer.side_conversation_context_label
+        {
+            Some(side_conversation_context_line(label))
+        } else if !options.separate_status_line
+            && let Some(shell) = self.shell_mode_footer_line()
+        {
+            Some(shell)
+        } else if !options.separate_status_line
+            && self
+                .effort_status_line_transition
+                .as_ref()
+                .is_some_and(|transition| !transition.is_finished())
+        {
+            None
+        } else {
+            let full = self.mode_indicator_line(show_cycle_hint);
+            let full_fits = full.as_ref().is_none_or(|right| {
+                let right_width = right.width() as u16;
+                (!options.separate_status_line || right_width <= inset_footer_hint_area(area).width)
+                    && can_show_left_with_context(area, left_width, right_width)
+            });
+            if full_fits {
+                full
+            } else {
+                self.mode_indicator_line(/*show_cycle_hint*/ false)
+            }
+        };
+        let right_width = right
+            .as_ref()
+            .map_or(/*default*/ 0, |line| line.width() as u16);
+        let width = max_left_width_for_right(area, right_width).unwrap_or_else(|| {
+            if options.separate_status_line {
+                inset_footer_hint_area(area).width
+            } else {
+                area.width.saturating_sub(FOOTER_INDENT_COLS as u16)
+            }
+        });
+        (right, width)
     }
 
     pub(super) fn render_status_surface(
@@ -63,44 +138,21 @@ impl ChatComposer {
             return;
         }
         let mut props = self.footer_props();
-        let show_cycle_hint = !props.is_task_running
-            && !self.blocks_direct_input
-            && self.draft.input_enabled
-            && !self.popup_active()
-            && matches!(
-                props.mode,
-                FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-            )
-            && options.footer.is_none_or(|footer| !footer.is_interactive);
-        // Persistent context is independent of help, queue, search, and quit modes.
-        props.mode = FooterMode::ComposerHasDraft;
-        props.is_task_running = false;
+        if options.separate_status_line {
+            // Persistent context is independent of help, queue, search, and quit modes.
+            props.mode = FooterMode::ComposerHasDraft;
+            props.is_task_running = false;
+        }
         let line = passive_footer_status_line(&props);
-        let full = self.mode_indicator_line(show_cycle_hint);
         let left_width = line.as_ref().map_or(/*default*/ 0, FooterContent::width);
-        let full_width = full
-            .as_ref()
-            .map_or(/*default*/ 0, |line| line.width() as u16);
-        let right = if full_width <= inset_footer_hint_area(area).width
-            && can_show_left_with_context(area, left_width, full_width)
-        {
-            full
-        } else {
-            self.mode_indicator_line(/*show_cycle_hint*/ false)
-        };
-        let right_width = right
-            .as_ref()
-            .map_or(/*default*/ 0, |line| line.width() as u16);
-        let width = max_left_width_for_right(area, right_width)
-            .unwrap_or_else(|| inset_footer_hint_area(area).width);
+        let (right, width) = self.status_line_layout(area, options, left_width);
         let transition = self
             .effort_status_line_transition
             .as_ref()
             .filter(|transition| !transition.is_finished());
         let content = if let Some(transition) = transition {
-            let current = line.map(FooterContent::into_hyperlink_line);
             transition
-                .render_line(current, width)
+                .render_line(line.map(FooterContent::into_hyperlink_line), width)
                 .map(FooterContent::HyperlinkLine)
         } else {
             line

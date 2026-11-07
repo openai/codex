@@ -40,6 +40,30 @@ fn effort_composer_baseline_repeat_and_lowering_do_not_replay() {
 }
 
 #[test]
+fn extension_content_skips_the_effort_transition_in_both_directions() {
+    let (mut composer, _rx) = new_test_composer();
+    composer.set_status_line_enabled(/*enabled*/ true);
+    composer.set_status_line(Some("native".into()));
+    composer.set_active_reasoning_effort_baseline(Some(&ReasoningEffort::High));
+    composer.set_active_reasoning_effort(
+        Some(&ReasoningEffort::Max),
+        /*animations_enabled*/ true,
+    );
+    assert!(composer.effort_status_line_transition.is_some());
+
+    let tree: crate::ui_tree::UiTree = r#""extension""#.parse().unwrap();
+    composer.set_status_line(Some(tree.into()));
+    assert!(composer.effort_status_line_transition.is_none());
+
+    composer.set_active_reasoning_effort(
+        Some(&ReasoningEffort::Ultra),
+        /*animations_enabled*/ true,
+    );
+    composer.set_status_line(Some("native".into()));
+    assert!(composer.effort_status_line_transition.is_none());
+}
+
+#[test]
 fn effort_transition_does_not_queue_a_missing_outgoing_status_line() {
     let (mut composer, _rx) = new_test_composer();
     composer.set_status_line_enabled(/*enabled*/ true);

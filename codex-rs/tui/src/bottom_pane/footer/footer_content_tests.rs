@@ -54,3 +54,40 @@ fn arabic_prefix_keeps_link_on_the_painted_cells_at_exact_fit_and_overflow() {
         }
     }
 }
+
+#[test]
+fn prepared_tree_uses_its_natural_width_and_paints_only_the_footer_viewport() {
+    use crate::terminal_hyperlinks::strip_osc8;
+    use crate::ui_tree::UiTree;
+    use ratatui::buffer::Cell;
+
+    let url = "https://example.com/build";
+    let tree: UiTree = serde_json::json!({
+        "type":"link","props":{"href":url},"children":["ok\nlarge build\na\nb\nc\nd"]
+    })
+    .to_string()
+    .parse()
+    .unwrap();
+    let prepared = FooterContent::from(tree);
+    assert_eq!(prepared.width(), 11);
+
+    let area = Rect::new(
+        /*x*/ 1, /*y*/ 1, /*width*/ 6, /*height*/ 4,
+    );
+    let mut buffer = Buffer::filled(
+        Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 7,
+        ),
+        Cell::new("."),
+    );
+    prepared.render(area, &mut buffer);
+    let rows: Vec<String> = buffer
+        .content
+        .chunks(8)
+        .map(|row| row.iter().map(|cell| strip_osc8(cell.symbol())).collect())
+        .collect();
+    insta::assert_snapshot!(rows.join("\n"));
+
+    assert_eq!(buffer[(1, 4)].symbol(), osc8_hyperlink(url, "a"));
+    assert_eq!(buffer[(2, 4)].symbol(), "…");
+}

@@ -1,0 +1,6 @@
+---
+source: tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+expression: "format!(\"{wide}\\n{narrow}\")"
+---
+branch PR #42             Plan mode (⇧tab to cycle)
+branch…    Plan mode

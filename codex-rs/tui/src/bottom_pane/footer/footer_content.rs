@@ -35,9 +35,7 @@ impl FooterContent {
         let width = match self {
             Self::Line(line) => line.width(),
             Self::HyperlinkLine(line) => line.width(),
-            Self::Extension { content } => {
-                with_syntax_theme(|theme| content.render_line(u16::MAX, theme)).width()
-            }
+            Self::Extension { content } => return content.measure_natural().width,
         };
         u16::try_from(width).unwrap_or(u16::MAX)
     }

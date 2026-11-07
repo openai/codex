@@ -17,7 +17,7 @@ impl ChatComposer {
         options.warning_count > 0
             && !options.footer.is_some_and(|footer| footer.is_interactive)
             && matches!(self.popups.active, ActivePopup::None)
-            && super::super::footer::shows_passive_footer_line(&self.footer_props())
+            && self.footer_mode().shows_passive_line(self.is_task_running)
             && self.footer.hint_override.is_none()
             && !self.footer.flash_visible()
             && self.history_search.is_none()

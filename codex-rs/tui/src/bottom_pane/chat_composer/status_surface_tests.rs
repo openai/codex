@@ -71,6 +71,40 @@ fn extension_status_line_clips_links_to_footer_layout() {
     assert!(!output.contains("bot"), "{output}");
 }
 
+#[test]
+fn extension_layout_uses_the_width_left_by_the_mode_indicator_after_resize() {
+    let mut composer = composer();
+    composer.set_collaboration_modes_enabled(/*enabled*/ true);
+    composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
+    let tree: crate::ui_tree::UiTree =
+        r#"{"type":"row","props":{"gap":1,"wrap":"wrap"},"children":[
+        "branch", {"type":"link","props":{"href":"https://example.com/pr/42"},"children":["PR #42"]}
+    ]}"#
+        .parse()
+        .unwrap();
+    composer.set_status_line(Some(FooterContent::from(tree)));
+
+    let hosts = [false, true].map(|separate_status_line| {
+        let options = ComposerRenderOptions {
+            separate_status_line,
+            ..Default::default()
+        };
+        [55, 24, 55].map(|width| {
+            let height = composer.desired_height_with_options(width, options);
+            let area = Rect::new(0, 0, width, height);
+            let mut buffer = Buffer::empty(area);
+            composer.render_with_options(area, &mut buffer, /*mask_char*/ None, options);
+            let y = height - 1 - u16::from(separate_status_line);
+            let row: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
+            strip_osc8(&row).trim().to_owned()
+        })
+    });
+    let [wide, narrow, restored] = &hosts[0];
+    assert_eq!(hosts[0], hosts[1]);
+    assert_eq!(wide, restored);
+    insta::assert_snapshot!(format!("{wide}\n{narrow}"));
+}
+
 fn render(
     composer: &ChatComposer,
     width: u16,

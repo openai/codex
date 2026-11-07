@@ -16,7 +16,6 @@ use std::time::Instant;
 
 use super::super::footer::footer_height;
 use super::super::footer::reset_mode_after_activity;
-use super::super::footer::shows_passive_footer_line;
 use super::ActivePopup;
 use crate::bottom_pane::footer::FooterKeyHints;
 use crate::bottom_pane::footer::FooterProps;
@@ -268,7 +267,7 @@ impl super::ChatComposer {
             {
                 return false;
             }
-            footer.is_interactive || shows_passive_footer_line(&self.footer_props())
+            footer.is_interactive || self.footer_mode().shows_passive_line(self.is_task_running)
         });
         options
     }
