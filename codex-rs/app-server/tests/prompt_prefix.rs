@@ -37,6 +37,8 @@ async fn prompt_prefix_matches_release() -> Result<()> {
         // catalog or base instructions from the test would hide changes to them.
         MockResponsesConfig::new(&server.uri())
             .with_model("gpt-6-astra")
+            // CCA disables bundled skills in its orchestrator.
+            .with_root_config("skills.bundled.enabled = false")
             .write(home.path())?;
         let mut builder = TestAppServer::builder()
             .with_codex_home(home.path())
