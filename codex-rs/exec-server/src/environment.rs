@@ -417,6 +417,16 @@ impl EnvironmentManager {
             .cloned()
     }
 
+    /// Removes a registration without invalidating existing handles or changing the default ID.
+    /// The caller must coordinate removal with use and registration. The returned environment
+    /// remains alive until its last handle is dropped, outside the registry lock.
+    pub fn remove_environment(&self, environment_id: &str) -> Option<Arc<Environment>> {
+        self.environments
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(environment_id)
+    }
+
     /// Records a Ready or Failed provisioning result for an environment.
     ///
     /// Ordinary environments are ignored. A provisioned environment keeps the same `Arc` from
@@ -1685,6 +1695,25 @@ mod tests {
             .expect("second remote environment");
         assert!(second.is_remote());
         assert!(!Arc::ptr_eq(&first, &second));
+
+        let removed = manager
+            .remove_environment("executor-a")
+            .expect("removed remote environment");
+        assert!(Arc::ptr_eq(&second, &removed));
+        assert!(manager.get_environment("executor-a").is_none());
+        assert!(manager.remove_environment("executor-a").is_none());
+
+        manager
+            .upsert_environment(
+                "executor-a".to_string(),
+                "ws://127.0.0.1:8765".to_string(),
+                /*connect_timeout*/ None,
+            )
+            .expect("replacement remote environment");
+        let replacement = manager
+            .get_environment("executor-a")
+            .expect("registered replacement");
+        assert!(!Arc::ptr_eq(&removed, &replacement));
     }
 
     #[tokio::test]

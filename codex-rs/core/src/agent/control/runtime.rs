@@ -240,6 +240,14 @@ impl LocalAgentRuntime {
         runtime
     }
 
+    pub(crate) fn tree_id(&self) -> Uuid {
+        self.shutdown_state
+            .report
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .tree_id
+    }
+
     /// Bind local startup to the same tree state with this session's identity.
     pub(crate) fn control(&self, session_id: SessionId) -> LocalAgentControl {
         LocalAgentControl {

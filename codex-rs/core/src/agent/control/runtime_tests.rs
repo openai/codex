@@ -18,6 +18,7 @@ fn runtime() -> LocalAgentRuntime {
 #[tokio::test]
 async fn aborted_teardown_reports_operation_and_thread() {
     let runtime = runtime();
+    let tree_id = runtime.tree_id();
     let thread_id = ThreadId::new();
     let teardown = runtime
         .admit_start()
@@ -42,7 +43,7 @@ async fn aborted_teardown_reports_operation_and_thread() {
     assert_eq!(
         report,
         AgentTreeShutdownReport {
-            tree_id: report.tree_id,
+            tree_id,
             failures: vec![AgentTreeShutdownFailure {
                 operation: "session_startup",
                 thread_id: Some(thread_id),
