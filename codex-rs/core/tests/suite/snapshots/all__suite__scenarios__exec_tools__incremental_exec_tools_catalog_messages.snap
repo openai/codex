@@ -1,0 +1,475 @@
+---
+source: core/tests/suite/scenarios_exec_tools.rs
+expression: snapshot
+---
+Scenario: Configured exec updates and removals use the catalog wording. Empty overrides omit that wording while retaining the changed definitions and removal keys. Compaction restores the current catalog.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (1; hash=b2c6697017b587f1):
+        - namespace/functions; hash=e9ce2d0830f744bb
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Initial eager catalog: echo.
+-- request 2 (turn) --
+05:message/developer:
+    Catalog exec updates: retain {{ literal }} text.
+
+    ## Namespace: functions
+    ### `mcp__echo_service__cwd`
+    Return the current working directory of this test server process.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__cwd(args: {}): Promise<CallToolResult<{ cwd: string; }>>; };
+    ```
+06:message/user:
+    Nested tool addition: cwd.
+-- request 3 (turn) --
+07:message/developer:
+    Catalog exec updates: retain {{ literal }} text.
+
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+08:message/user:
+    Namespace instructions redefinition: durations.
+-- request 4 (turn) --
+09:message/developer:
+    Catalog exec removals: retain {{ literal }} text.
+    - Tool: tools.mcp__echo_service__cwd
+10:message/user:
+    Nested tool removal: cwd.
+
+## Window 2 (after request 4: settings changed (model))
+-- request 5 (turn) --
+00:additional_tools/developer (1; hash=b2c6697017b587f1):
+        - namespace/functions; hash=e9ce2d0830f744bb
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Initial eager catalog: echo.
+05:message/developer:
+    Catalog exec updates: retain {{ literal }} text.
+
+    ## Namespace: functions
+    ### `mcp__echo_service__cwd`
+    Return the current working directory of this test server process.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__cwd(args: {}): Promise<CallToolResult<{ cwd: string; }>>; };
+    ```
+06:message/user:
+    Nested tool addition: cwd.
+07:message/developer:
+    Catalog exec updates: retain {{ literal }} text.
+
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+08:message/user:
+    Namespace instructions redefinition: durations.
+09:message/developer:
+    Catalog exec removals: retain {{ literal }} text.
+    - Tool: tools.mcp__echo_service__cwd
+10:message/user:
+    Nested tool removal: cwd.
+11:message/developer:
+    <model_instructions>
+    The current model is catalog-empty-hints.
+    </model_instructions>
+12:message/user:
+    Unchanged catalog: emit no update.
+-- request 6 (turn) --
+13:message/developer:
+    - Namespace instructions: mcp__echo_service
+14:message/user:
+    Namespace instructions removal: keep echo.
+-- request 7 (turn) --
+15:message/developer:
+    - Tool: tools.mcp__echo_service__echo
+16:message/developer:
+    <tools>
+    Added deferred tool namespaces:
+    - mcp__echo_service
+    </tools>
+17:message/user:
+    Eager to deferred: echo.
+-- request 8 (turn) --
+18:message/developer:
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+
+    ### `mcp__echo_service__echo`
+    Echo back the provided message and include environment data.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__echo(args: { env_var?: string; message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
+    ```
+19:message/developer:
+    <tools>
+    Removed deferred tool namespaces:
+    - mcp__echo_service
+    </tools>
+20:message/user:
+    Deferred to eager: echo.
+-- request 9 (turn) --
+21:message/developer:
+    - Namespace instructions: mcp__echo_service
+    - Tool: tools.mcp__echo_service__echo
+22:message/user:
+    Remove all echo service entries.
+-- request 10 (turn) --
+23:message/developer:
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+
+    ### `mcp__echo_service__cwd`
+    Return the current working directory of this test server process.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__cwd(args: {}): Promise<CallToolResult<{ cwd: string; }>>; };
+    ```
+
+    ### `mcp__echo_service__echo`
+    Echo back the provided message and include environment data.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__echo(args: { env_var?: string; message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
+    ```
+24:message/user:
+    Re-enable echo service entries: echo and cwd.
+
+## Window 3 (after request 10: settings changed (model))
+-- request 11 (turn) --
+00:additional_tools/developer (1; hash=b2c6697017b587f1):
+        - namespace/functions; hash=e9ce2d0830f744bb
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Initial eager catalog: echo.
+05:message/developer:
+    Catalog exec updates: retain {{ literal }} text.
+
+    ## Namespace: functions
+    ### `mcp__echo_service__cwd`
+    Return the current working directory of this test server process.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__cwd(args: {}): Promise<CallToolResult<{ cwd: string; }>>; };
+    ```
+06:message/user:
+    Nested tool addition: cwd.
+07:message/developer:
+    Catalog exec updates: retain {{ literal }} text.
+
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+08:message/user:
+    Namespace instructions redefinition: durations.
+09:message/developer:
+    Catalog exec removals: retain {{ literal }} text.
+    - Tool: tools.mcp__echo_service__cwd
+10:message/user:
+    Nested tool removal: cwd.
+11:message/developer:
+    <model_instructions>
+    The current model is catalog-empty-hints.
+    </model_instructions>
+12:message/user:
+    Unchanged catalog: emit no update.
+13:message/developer:
+    - Namespace instructions: mcp__echo_service
+14:message/user:
+    Namespace instructions removal: keep echo.
+15:message/developer:
+    - Tool: tools.mcp__echo_service__echo
+16:message/developer:
+    <tools>
+    Added deferred tool namespaces:
+    - mcp__echo_service
+    </tools>
+17:message/user:
+    Eager to deferred: echo.
+18:message/developer:
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+
+    ### `mcp__echo_service__echo`
+    Echo back the provided message and include environment data.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__echo(args: { env_var?: string; message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
+    ```
+19:message/developer:
+    <tools>
+    Removed deferred tool namespaces:
+    - mcp__echo_service
+    </tools>
+20:message/user:
+    Deferred to eager: echo.
+21:message/developer:
+    - Namespace instructions: mcp__echo_service
+    - Tool: tools.mcp__echo_service__echo
+22:message/user:
+    Remove all echo service entries.
+23:message/developer:
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+
+    ### `mcp__echo_service__cwd`
+    Return the current working directory of this test server process.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__cwd(args: {}): Promise<CallToolResult<{ cwd: string; }>>; };
+    ```
+
+    ### `mcp__echo_service__echo`
+    Echo back the provided message and include environment data.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__echo(args: { env_var?: string; message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
+    ```
+24:message/user:
+    Re-enable echo service entries: echo and cwd.
+25:message/developer:
+    ## Namespace: functions
+    ### `read_mcp_resource`
+    Read a selected resource revision.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { read_mcp_resource(args: { revision?: number; server: string; uri: string; }): Promise<unknown>; };
+    ```
+26:message/developer:
+    <model_instructions>
+    The current model is catalog-updated.
+    </model_instructions>
+27:message/user:
+    Combined redefinition: resource revision, common instructions, and shared types.
+
+## Window 4 (after request 11: settings changed (model))
+-- request 12 (turn) --
+00:additional_tools/developer (1; hash=b2c6697017b587f1):
+        - namespace/functions; hash=e9ce2d0830f744bb
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Initial eager catalog: echo.
+05:message/developer:
+    Catalog exec updates: retain {{ literal }} text.
+
+    ## Namespace: functions
+    ### `mcp__echo_service__cwd`
+    Return the current working directory of this test server process.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__cwd(args: {}): Promise<CallToolResult<{ cwd: string; }>>; };
+    ```
+06:message/user:
+    Nested tool addition: cwd.
+07:message/developer:
+    Catalog exec updates: retain {{ literal }} text.
+
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+08:message/user:
+    Namespace instructions redefinition: durations.
+09:message/developer:
+    Catalog exec removals: retain {{ literal }} text.
+    - Tool: tools.mcp__echo_service__cwd
+10:message/user:
+    Nested tool removal: cwd.
+11:message/developer:
+    <model_instructions>
+    The current model is catalog-empty-hints.
+    </model_instructions>
+12:message/user:
+    Unchanged catalog: emit no update.
+13:message/developer:
+    - Namespace instructions: mcp__echo_service
+14:message/user:
+    Namespace instructions removal: keep echo.
+15:message/developer:
+    - Tool: tools.mcp__echo_service__echo
+16:message/developer:
+    <tools>
+    Added deferred tool namespaces:
+    - mcp__echo_service
+    </tools>
+17:message/user:
+    Eager to deferred: echo.
+18:message/developer:
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+
+    ### `mcp__echo_service__echo`
+    Echo back the provided message and include environment data.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__echo(args: { env_var?: string; message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
+    ```
+19:message/developer:
+    <tools>
+    Removed deferred tool namespaces:
+    - mcp__echo_service
+    </tools>
+20:message/user:
+    Deferred to eager: echo.
+21:message/developer:
+    - Namespace instructions: mcp__echo_service
+    - Tool: tools.mcp__echo_service__echo
+22:message/user:
+    Remove all echo service entries.
+23:message/developer:
+    ## Namespace: functions
+    ## mcp__echo_service
+    Echo service instructions. Durations are milliseconds.
+
+    ### `mcp__echo_service__cwd`
+    Return the current working directory of this test server process.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__cwd(args: {}): Promise<CallToolResult<{ cwd: string; }>>; };
+    ```
+
+    ### `mcp__echo_service__echo`
+    Echo back the provided message and include environment data.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { mcp__echo_service__echo(args: { env_var?: string; message: string; }): Promise<CallToolResult<{ echo: string; env: string | null; }>>; };
+    ```
+24:message/user:
+    Re-enable echo service entries: echo and cwd.
+25:message/developer:
+    ## Namespace: functions
+    ### `read_mcp_resource`
+    Read a selected resource revision.
+
+    exec tool declaration:
+    ```ts
+    declare const tools: { read_mcp_resource(args: { revision?: number; server: string; uri: string; }): Promise<unknown>; };
+    ```
+26:message/developer:
+    <model_instructions>
+    The current model is catalog-updated.
+    </model_instructions>
+27:message/user:
+    Combined redefinition: resource revision, common instructions, and shared types.
+28:message/developer:
+    <model_instructions>
+    The current model is catalog-compacted.
+    </model_instructions>
+29:message/user:
+    Only common instructions and shared types change: wait for compaction.
+-- request 13 (compaction) --
+30:compaction_trigger
+
+## Window 5 (after request 13: input diverged at item 00)
+-- request 14 (turn) --
+00:additional_tools/developer (1; hash=c3cdfbca78ae91e2):
+        - namespace/functions; hash=36087e37fe329f5c
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/user:
+    Initial eager catalog: echo.
+03:message/user:
+    Nested tool addition: cwd.
+04:message/user:
+    Namespace instructions redefinition: durations.
+05:message/user:
+    Nested tool removal: cwd.
+06:message/user:
+    Unchanged catalog: emit no update.
+07:message/user:
+    Namespace instructions removal: keep echo.
+08:message/user:
+    Eager to deferred: echo.
+09:message/user:
+    Deferred to eager: echo.
+10:message/user:
+    Remove all echo service entries.
+11:message/user:
+    Re-enable echo service entries: echo and cwd.
+12:message/user:
+    Combined redefinition: resource revision, common instructions, and shared types.
+13:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+14:message/user:
+    <ENVIRONMENT_CONTEXT>
+15:message/user:
+    Only common instructions and shared types change: wait for compaction.
+16:compaction:encrypted=true; chars=18; hash=1049063b3b4d3e47
+17:message/user:
+    After compaction: restore the full current catalog.

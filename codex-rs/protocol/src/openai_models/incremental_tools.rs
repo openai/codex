@@ -21,4 +21,10 @@ pub struct IncrementalToolMessages {
     /// Message supporting `{name}` when a namespace's instructions are cleared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace_instructions_cleared: Option<String>,
+    /// Literal hint before changed Code Mode tool definitions and namespace instructions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_tools_update_hint: Option<String>,
+    /// Literal header before removed Code Mode tool and namespace-instruction identities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec_tools_removed_definitions_header: Option<String>,
 }

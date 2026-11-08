@@ -5,9 +5,11 @@ use crate::context::world_state::test_support::render_section_cases;
 use crate::context_manager::updates::merge_world_state_updates;
 use crate::session::extension_metrics::from_session_telemetry;
 use codex_code_mode::ExecDefinition;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -840,15 +842,25 @@ fn hidden_exec_is_not_reintroduced_and_returning_exec_restores_full_catalog() {
                 role: "developer".to_string(),
                 tools: Arc::from(vec![original]),
             },
-            ContextualUserFragment::into(RemovedExecDefinitions(
-                vec!["Tool: tools.a".to_string(),]
-            )),
+            ContextualUserFragment::into(RemovedExecDefinitions {
+                header: ResolvedIncrementalToolMessages::default()
+                    .exec_tools_removed_definitions_header,
+                names: vec!["Tool: tools.a".to_string()],
+            }),
         ],
     );
 }
 
-#[test]
-fn changed_and_added_entries_share_one_update_and_removed_entries_are_withdrawn() {
+#[test_case::test_case(json!({}), None, None; "bundled")]
+#[test_case::test_case(json!({"exec_tools_update_hint": null, "exec_tools_removed_definitions_header": null}), None, None; "null_fields")]
+#[test_case::test_case(json!({"exec_tools_update_hint": "é".repeat(257), "exec_tools_removed_definitions_header": "Catalog removals:"}), None, Some("Catalog removals:".to_string()); "oversized_update_preserves_removal")]
+#[test_case::test_case(json!({"exec_tools_update_hint": "Catalog update.", "exec_tools_removed_definitions_header": "é".repeat(257)}), Some("Catalog update.".to_string()), None; "oversized_removal_preserves_update")]
+#[test_case::test_case(json!({"exec_tools_update_hint": "é".repeat(256), "exec_tools_removed_definitions_header": "🐈".repeat(128)}), Some("é".repeat(256)), Some("🐈".repeat(128)); "utf8_byte_limit")]
+fn changed_and_added_entries_share_one_update_and_removed_entries_are_withdrawn(
+    overrides: Value,
+    expected_update_hint: Option<String>,
+    expected_removal_header: Option<String>,
+) {
     let definition = exec_declaration("Shared MCP Types:", "grammar");
     let original = TopLevelToolsState::new(
         /*messages*/ Default::default(),
@@ -871,8 +883,11 @@ fn changed_and_added_entries_share_one_update_and_removed_entries_are_withdrawn(
         .0
         .unwrap();
 
+    let mut model = model_info_from_slug("test-model");
+    model.model_messages =
+        Some(serde_json::from_value(json!({"tools": {"incremental_tools": overrides}})).unwrap());
     let current = TopLevelToolsState::new(
-        /*messages*/ Default::default(),
+        ResolvedModelMessages::from_model(&model).incremental_tools(),
         vec![definition],
         /*metrics*/ None,
     )
@@ -890,15 +905,20 @@ fn changed_and_added_entries_share_one_update_and_removed_entries_are_withdrawn(
         },
     ])));
     let (snapshot, updates) = current.render_diff(PreviousSectionState::Known(&baseline));
+    let defaults = ResolvedIncrementalToolMessages::default();
+    let expected_update_hint = expected_update_hint.unwrap_or(defaults.exec_tools_update_hint);
+    let expected_removal_header =
+        expected_removal_header.unwrap_or(defaults.exec_tools_removed_definitions_header);
     assert_eq!(
         merge_world_state_updates(updates),
         vec![
-            ContextualUserFragment::into(IncrementalToolsUpdate(
-                "Use these definitions and namespace instructions with `functions.exec`. Each replaces its earlier version in full. Unlisted tools keep their latest definitions and `tools` methods.\n\n## Namespace: functions\n### a\nChanged a.\ndeclare const tools: { a(value: number): Promise<number> };\n\n### c\ndeclare const tools: { c(): Promise<boolean> };".to_string(),
-            )),
-            ContextualUserFragment::into(RemovedExecDefinitions(vec![
-                "Tool: tools.b".to_string(),
-            ])),
+            ContextualUserFragment::into(IncrementalToolsUpdate(format!(
+                "{expected_update_hint}\n\n## Namespace: functions\n### a\nChanged a.\ndeclare const tools: {{ a(value: number): Promise<number> }};\n\n### c\ndeclare const tools: {{ c(): Promise<boolean> }};",
+            ))),
+            ContextualUserFragment::into(RemovedExecDefinitions {
+                header: expected_removal_header,
+                names: vec!["Tool: tools.b".to_string()],
+            }),
         ]
     );
     assert!(

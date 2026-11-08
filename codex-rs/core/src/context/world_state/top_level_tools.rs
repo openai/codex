@@ -39,9 +39,6 @@ const ACTION_ADDED: &str = "added";
 const ACTION_REMOVED: &str = "removed";
 const ACTION_SCHEMA_CHANGED: &str = "schema_changed";
 
-const EXEC_TOOLS_UPDATE_HINT: &str = "Use these definitions and namespace instructions with `functions.exec`. Each replaces its earlier version in full. Unlisted tools keep their latest definitions and `tools` methods.";
-const EXEC_TOOLS_REMOVED_DEFINITIONS_HEADER: &str = "Listed `Tool:` entries are unavailable until redefined or rediscovered. `Namespace instructions:` removes guidance only. Unlisted entries are unchanged.";
-
 /// The exact serialized Responses Lite declarations visible in one captured step.
 pub(crate) struct TopLevelToolsState {
     messages: ResolvedIncrementalToolMessages,
@@ -391,7 +388,8 @@ impl TopLevelToolsState {
                     })
                     .collect::<Vec<_>>();
                 if !changed.is_empty() {
-                    let update = render_exec_update(&changed);
+                    let update =
+                        render_exec_update(&changed, &self.messages.exec_tools_update_hint);
                     if let Some(metrics) = self.metrics.as_deref() {
                         let added = changed
                             .iter()
@@ -458,7 +456,11 @@ impl TopLevelToolsState {
                         );
                     }
                     updates.push(
-                        WorldStateUpdate::fragment(RemovedExecDefinitions(removed)).standalone(),
+                        WorldStateUpdate::fragment(RemovedExecDefinitions {
+                            header: self.messages.exec_tools_removed_definitions_header.clone(),
+                            names: removed,
+                        })
+                        .standalone(),
                     );
                 }
             }
@@ -550,19 +552,28 @@ impl ContextualUserFragment for RemovedTools {
 }
 
 /// Render a nonempty batch of complete replacement definitions with the exec update hint.
-fn render_exec_update(definitions: &[&ExecDefinition]) -> IncrementalToolsUpdate {
+fn render_exec_update(definitions: &[&ExecDefinition], hint: &str) -> IncrementalToolsUpdate {
     let description = definitions
         .iter()
         .map(|entry| entry.description.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
-    IncrementalToolsUpdate(format!(
-        "{EXEC_TOOLS_UPDATE_HINT}\n\n## Namespace: functions\n{description}"
-    ))
+    let mut text = hint.to_owned();
+    if !text.is_empty() {
+        text.push_str("\n\n");
+    }
+    text.push_str("## Namespace: functions\n");
+    text.push_str(&description);
+    IncrementalToolsUpdate(text)
 }
 
 /// Removal notice containing the stable keys of withdrawn tools or namespace instructions.
-struct RemovedExecDefinitions(Vec<String>);
+struct RemovedExecDefinitions {
+    /// Guidance preceding the removed keys; an empty header emits only the keys.
+    header: String,
+    /// Stable entry keys that are no longer present in the current catalog.
+    names: Vec<String>,
+}
 
 impl ContextualUserFragment for RemovedExecDefinitions {
     fn role(&self) -> &'static str {
@@ -582,10 +593,13 @@ impl ContextualUserFragment for RemovedExecDefinitions {
     }
 
     fn body(&self) -> ContentItem {
-        input_text(format!(
-            "{EXEC_TOOLS_REMOVED_DEFINITIONS_HEADER}\n- {}",
-            self.0.join("\n- ")
-        ))
+        let mut text = self.header.clone();
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("- ");
+        text.push_str(&self.names.join("\n- "));
+        input_text(text)
     }
 }
 

@@ -508,6 +508,7 @@ async fn tool_removal_appends_a_standalone_notice_without_rewriting_history(
                     removed_namespaces_header: Some("Unavailable namespaces:".to_string()),
                     namespace_instructions_prefix: Some("Catalog {name}: ".to_string()),
                     namespace_instructions_cleared: Some("Cleared {name}.".to_string()),
+                    ..Default::default()
                 });
             }
         })

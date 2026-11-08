@@ -11,6 +11,8 @@ pub struct ResolvedIncrementalToolMessages {
     pub removed_namespaces_header: String,
     pub namespace_instructions_prefix: String,
     pub namespace_instructions_cleared: String,
+    pub exec_tools_update_hint: String,
+    pub exec_tools_removed_definitions_header: String,
 }
 
 impl Default for ResolvedIncrementalToolMessages {
@@ -45,6 +47,14 @@ impl ResolvedIncrementalToolMessages {
             namespace_instructions_cleared: resolve(
                 messages.and_then(|m| m.namespace_instructions_cleared.as_ref()),
                 "The {name} namespace no longer has additional instructions.",
+            ),
+            exec_tools_update_hint: resolve(
+                messages.and_then(|m| m.exec_tools_update_hint.as_ref()),
+                "Use these definitions and namespace instructions with `functions.exec`. Each replaces its earlier version in full. Unlisted tools keep their latest definitions and `tools` methods.",
+            ),
+            exec_tools_removed_definitions_header: resolve(
+                messages.and_then(|m| m.exec_tools_removed_definitions_header.as_ref()),
+                "Listed `Tool:` entries are unavailable until redefined or rediscovered. `Namespace instructions:` removes guidance only. Unlisted entries are unchanged.",
             ),
         }
     }
