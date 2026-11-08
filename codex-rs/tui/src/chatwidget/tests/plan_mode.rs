@@ -1521,7 +1521,7 @@ async fn plan_slash_command_with_hidden_shell_paste_queued_before_session_submit
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     chat.queue_user_message(UserMessage::from("queued follow-up"));
-    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    chat.finish_mcp_startup();
     assert_eq!(
         chat.queued_user_message_texts(),
         vec![format!("/plan {payload}"), "queued follow-up".to_string()]
@@ -1547,7 +1547,7 @@ async fn rejected_initial_image_does_not_submit_later_queued_prompt() {
     initial_message.remote_image_urls = vec!["https://example.com/image.png".to_string()];
     chat.initial_user_message = Some(initial_message);
     chat.queue_user_message(UserMessage::from("queued follow-up"));
-    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    chat.finish_mcp_startup();
 
     let mut session = plan_test_session(ThreadId::new());
     session.model = current_model;

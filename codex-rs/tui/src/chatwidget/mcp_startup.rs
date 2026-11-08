@@ -3,10 +3,12 @@
 //! The app server reports MCP server startup as per-server status updates. This
 //! module keeps the TUI's buffered startup round state coherent and translates
 //! those updates into status headers, warnings, and queued-input release points.
+//! Each active round includes every outcome it receives, even if the client has
+//! already shown the same diagnostic in an earlier round.
 //! Initial and runtime diagnostics remain in retained history and the warnings viewer;
 //! compact history hides their full text behind the persistent warning notice.
 
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_app_server_protocol::McpServerStartupFailureReason;
@@ -29,17 +31,26 @@ pub(crate) enum McpStartupStatus {
     Cancelled,
 }
 
+impl McpStartupStatus {
+    fn is_diagnostic(&self) -> bool {
+        matches!(self, Self::Failed { .. } | Self::Cancelled)
+    }
+}
+
 pub(super) enum ExpectedMcpServers {
     EveryRound(HashSet<String>),
     InitialRound(HashSet<String>),
-    ReportedOnly,
+    /// A subscriber can miss the starts. A repeated diagnostic can still belong to a new round.
+    ReportedOnly {
+        last_diagnostics: HashMap<String, McpStartupStatus>,
+    },
 }
 
 impl ExpectedMcpServers {
     fn iter(&self) -> impl Iterator<Item = &String> {
         match self {
             Self::EveryRound(names) | Self::InitialRound(names) => Some(names),
-            Self::ReportedOnly => None,
+            Self::ReportedOnly { .. } => None,
         }
         .into_iter()
         .flatten()
@@ -47,21 +58,32 @@ impl ExpectedMcpServers {
 }
 
 impl ChatWidget {
-    /// Record one MCP startup update, promoting it into either the active startup
-    /// round or a buffered "next" round.
-    ///
-    /// This path has to deal with lossy app-server delivery. After
-    /// `finish_mcp_startup()` or `finish_mcp_startup_after_lag()`, we briefly
-    /// ignore incoming updates so stale events from the just-finished round do not
-    /// reopen startup. While that guard is active we buffer updates for a possible
-    /// next round, and only reactivate once the buffered set is coherent enough to
-    /// treat as a fresh startup round.
-    fn update_mcp_startup_status(
-        &mut self,
-        server: String,
-        status: McpStartupStatus,
-        complete_when_settled: bool,
-    ) {
+    /// Record a startup update for the displayed thread. A configured round buffers
+    /// possible starts after it settles until there is enough evidence of a new round.
+    /// A subscriber that tracks reported servers can also receive a standalone outcome.
+    fn update_mcp_startup_status(&mut self, server: String, status: McpStartupStatus) {
+        let mut report_diagnostic = true;
+        if let Some(ExpectedMcpServers::ReportedOnly { last_diagnostics }) =
+            &mut self.mcp_startup_expected_servers
+        {
+            report_diagnostic = if status.is_diagnostic() {
+                last_diagnostics
+                    .insert(server.clone(), status.clone())
+                    .as_ref()
+                    != Some(&status)
+            } else {
+                last_diagnostics.remove(&server);
+                false
+            };
+            // An idle client can receive a terminal update without ever seeing its start.
+            if self.mcp_startup_status.is_none() && !matches!(status, McpStartupStatus::Starting) {
+                if report_diagnostic {
+                    self.report_mcp_startup_failure(&server, &status);
+                    self.report_mcp_startup_summary([(&server, &status)]);
+                }
+                return;
+            }
+        }
         let mut activated_pending_round = false;
         let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
             // Ignore-mode buffers the next plausible round so stale post-finish
@@ -105,17 +127,8 @@ impl ChatWidget {
             // Normal path: fold the update into the active round and surface
             // per-server failures immediately.
             let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
-            if let McpStartupStatus::Failed {
-                error,
-                failure_reason,
-            } = &status
-                && startup_status.get(&server) != Some(&status)
-            {
-                self.add_mcp_startup_warning(
-                    vec![error.clone()],
-                    [server.clone()],
-                    *failure_reason,
-                );
+            if report_diagnostic && startup_status.get(&server) != Some(&status) {
+                self.report_mcp_startup_failure(&server, &status);
             }
             startup_status.insert(server, status);
             startup_status
@@ -123,17 +136,7 @@ impl ChatWidget {
         if activated_pending_round {
             // A promoted buffered round may already contain terminal failures.
             for (server, state) in &startup_status {
-                if let McpStartupStatus::Failed {
-                    error,
-                    failure_reason,
-                } = state
-                {
-                    self.add_mcp_startup_warning(
-                        vec![error.clone()],
-                        [server.clone()],
-                        *failure_reason,
-                    );
-                }
+                self.report_mcp_startup_failure(server, state);
             }
         }
         self.mcp_startup_status = Some(startup_status);
@@ -142,8 +145,7 @@ impl ChatWidget {
         // App-server-backed startup completes when every expected server has
         // reported a non-Starting status. Lag handling can force an earlier
         // settle via `finish_mcp_startup_after_lag()`.
-        if complete_when_settled
-            && let Some(current) = &self.mcp_startup_status
+        if let Some(current) = &self.mcp_startup_status
             && let Some(expected_servers) = &self.mcp_startup_expected_servers
             && !current.is_empty()
             && expected_servers
@@ -153,19 +155,7 @@ impl ChatWidget {
                 .values()
                 .all(|state| !matches!(state, McpStartupStatus::Starting))
         {
-            let mut failed = Vec::new();
-            let mut cancelled = Vec::new();
-            for (name, state) in current {
-                match state {
-                    McpStartupStatus::Ready => {}
-                    McpStartupStatus::Failed { .. } => failed.push(name.clone()),
-                    McpStartupStatus::Cancelled => cancelled.push(name.clone()),
-                    McpStartupStatus::Starting => {}
-                }
-            }
-            failed.sort();
-            cancelled.sort();
-            self.finish_mcp_startup(failed, cancelled);
+            self.finish_mcp_startup();
             return;
         }
         if let Some(header) = self.mcp_startup_status_header() {
@@ -218,6 +208,17 @@ impl ChatWidget {
         ));
     }
 
+    pub(crate) fn track_reported_mcp_startup_servers(&mut self) {
+        if !matches!(
+            self.mcp_startup_expected_servers,
+            Some(ExpectedMcpServers::ReportedOnly { .. })
+        ) {
+            self.mcp_startup_expected_servers = Some(ExpectedMcpServers::ReportedOnly {
+                last_diagnostics: HashMap::new(),
+            });
+        }
+    }
+
     /// After the initial batch a dormant helper can start a round on its own.
     pub(crate) fn set_initial_mcp_startup_expected_servers(
         &mut self,
@@ -225,15 +226,38 @@ impl ChatWidget {
     ) {
         if !matches!(
             self.mcp_startup_expected_servers,
-            Some(ExpectedMcpServers::ReportedOnly)
+            Some(ExpectedMcpServers::ReportedOnly { .. })
         ) {
             self.mcp_startup_expected_servers =
                 Some(ExpectedMcpServers::InitialRound(names.collect()));
         }
     }
 
-    pub(super) fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
+    fn report_mcp_startup_failure(&mut self, server: &str, status: &McpStartupStatus) {
+        if let McpStartupStatus::Failed {
+            error,
+            failure_reason,
+        } = status
+        {
+            self.add_mcp_startup_warning(vec![error.clone()], [server.to_owned()], *failure_reason);
+        }
+    }
+
+    fn report_mcp_startup_summary<'a>(
+        &mut self,
+        outcomes: impl IntoIterator<Item = (&'a String, &'a McpStartupStatus)>,
+    ) {
+        let mut failed = Vec::new();
+        let mut cancelled = Vec::new();
+        for (server, status) in outcomes {
+            match status {
+                McpStartupStatus::Failed { .. } => failed.push(server.clone()),
+                McpStartupStatus::Cancelled => cancelled.push(server.clone()),
+                McpStartupStatus::Starting | McpStartupStatus::Ready => {}
+            }
+        }
         if !cancelled.is_empty() {
+            cancelled.sort();
             self.add_mcp_startup_warning(
                 vec![format!(
                     "MCP startup interrupted. The following servers were not initialized: {}",
@@ -243,25 +267,31 @@ impl ChatWidget {
                 /*failure_reason*/ None,
             );
         }
-        let mut parts = Vec::new();
         if !failed.is_empty() {
-            parts.push(format!("failed: {}", failed.join(", ")));
-        }
-        if !parts.is_empty() {
+            failed.sort();
             self.add_mcp_startup_warning(
-                vec![format!("MCP startup incomplete ({})", parts.join("; "))],
+                vec![format!(
+                    "MCP startup incomplete (failed: {})",
+                    failed.join(", ")
+                )],
                 failed,
                 /*failure_reason*/ None,
             );
         }
+    }
 
+    pub(super) fn finish_mcp_startup(&mut self) {
         let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
-        self.mcp_startup_status = None;
+        let mut settled = self.mcp_startup_status.take().unwrap_or_default();
+        self.report_mcp_startup_summary(&settled);
         if matches!(
             self.mcp_startup_expected_servers,
             Some(ExpectedMcpServers::InitialRound(_))
         ) {
-            self.mcp_startup_expected_servers = Some(ExpectedMcpServers::ReportedOnly);
+            settled.retain(|_, status| status.is_diagnostic());
+            self.mcp_startup_expected_servers = Some(ExpectedMcpServers::ReportedOnly {
+                last_diagnostics: settled,
+            });
         }
         self.mcp_startup_ignore_updates_until_next_start = true;
         self.mcp_startup_allow_terminal_only_next_round = false;
@@ -279,39 +309,21 @@ impl ChatWidget {
     }
 
     pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
+        if self.mcp_startup_status.is_some() {
+            self.finish_mcp_startup();
+        }
+        if let Some(ExpectedMcpServers::ReportedOnly { last_diagnostics }) =
+            &mut self.mcp_startup_expected_servers
+        {
+            // A missed Starting may have begun a new attempt with the same error.
+            last_diagnostics.clear();
+        }
         if self.mcp_startup_ignore_updates_until_next_start {
             if self.mcp_startup_pending_next_round.is_empty() {
                 self.mcp_startup_pending_next_round_saw_starting = false;
             }
             self.mcp_startup_allow_terminal_only_next_round = true;
         }
-
-        let Some(current) = &self.mcp_startup_status else {
-            return;
-        };
-
-        let mut failed = Vec::new();
-        let mut cancelled = Vec::new();
-
-        let mut server_names: BTreeSet<String> = current.keys().cloned().collect();
-        if let Some(expected_servers) = &self.mcp_startup_expected_servers {
-            server_names.extend(expected_servers.iter().cloned());
-        }
-
-        for name in server_names {
-            match current.get(&name) {
-                Some(McpStartupStatus::Failed { .. }) => failed.push(name),
-                Some(McpStartupStatus::Cancelled) => cancelled.push(name),
-                Some(McpStartupStatus::Ready | McpStartupStatus::Starting) | None => {}
-            }
-        }
-
-        failed.sort();
-        failed.dedup();
-        cancelled.sort();
-        cancelled.dedup();
-        self.finish_mcp_startup(failed, cancelled);
-        self.mcp_startup_allow_terminal_only_next_round = true;
     }
 
     pub(super) fn status_header_is_mcp_startup_owned(&self) -> bool {
@@ -357,11 +369,7 @@ impl ChatWidget {
             },
             McpServerStartupState::Cancelled => McpStartupStatus::Cancelled,
         };
-        self.update_mcp_startup_status(
-            notification.name,
-            status,
-            /*complete_when_settled*/ true,
-        );
+        self.update_mcp_startup_status(notification.name, status);
         if refresh_connector_mentions {
             self.refresh_connector_mentions(/*force_refresh*/ false);
         }

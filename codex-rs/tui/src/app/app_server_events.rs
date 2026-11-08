@@ -73,11 +73,11 @@ impl App {
                     || (thread_id != primary_thread_id
                         && !self.side_threads.contains_key(&thread_id))
             });
-        if is_subagent {
-            // Deferred servers may start in a later round on their own. Track the
-            // servers that actually report startup in each round.
-            self.chat_widget
-                .set_mcp_startup_expected_servers(std::iter::empty());
+        if is_subagent || !matches!(self.app_server_target, crate::AppServerTarget::Embedded) {
+            // Shared app servers only send startup updates after subscription and may
+            // have different configured servers. Subagents can start deferred servers
+            // individually. In both cases, wait only for the startups we observe.
+            self.chat_widget.track_reported_mcp_startup_servers();
             return;
         }
 

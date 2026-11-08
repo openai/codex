@@ -635,14 +635,10 @@ pub(crate) struct ChatWidget {
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     /// Exits observed during the pending list request take precedence over its response.
     pending_terminal_restore: Option<(uuid::Uuid, HashSet<String>)>,
-    /// Tracks per-server MCP startup state while startup is in progress.
-    ///
-    /// The map is `Some(_)` from the first startup status update until the
-    /// app-server-backed startup round settles, and the bottom pane is treated
-    /// as "running" while this is populated, even if no agent turn is currently
-    /// executing.
+    /// Latest status per server in the active startup round. Its presence keeps
+    /// the composer busy, and its terminal outcomes determine the round's summary.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
-    /// Expected MCP servers for the current startup round, seeded from enabled local config.
+    /// Whether round membership comes from configuration or the notifications we receive.
     mcp_startup_expected_servers: Option<mcp_startup::ExpectedMcpServers>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
     mcp_startup_ignore_updates_until_next_start: bool,

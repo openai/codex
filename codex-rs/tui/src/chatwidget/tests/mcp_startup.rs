@@ -346,7 +346,7 @@ async fn pending_mcp_startup_does_not_block_queued_follow_up() {
         }
     ]);
 
-    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    chat.finish_mcp_startup();
 
     assert!(chat.input_queue.user_turn_pending_start);
 }
@@ -462,7 +462,7 @@ async fn pending_mcp_startup_does_not_unblock_external_review() {
         @"■ '/fork' is disabled while a task is in progress."
     );
 
-    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    chat.finish_mcp_startup();
     assert!(chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_indicator_visible());
     assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
@@ -489,7 +489,7 @@ async fn pending_mcp_startup_does_not_unblock_foreground_shell() {
     assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_no_submit_op(&mut op_rx);
 
-    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    chat.finish_mcp_startup();
     assert!(chat.bottom_pane.is_task_running());
     assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_no_submit_op(&mut op_rx);
@@ -809,6 +809,20 @@ async fn app_server_mcp_startup_reports_failure_after_lag() {
 }
 
 #[tokio::test]
+async fn reported_mcp_startup_rechecks_an_identical_failure_after_lag() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.track_reported_mcp_startup_servers();
+    notify_mcp_status_error(&mut chat, "alpha", "handshake failed");
+    let first = drain_insert_history(&mut rx);
+    assert!(!first.is_empty());
+
+    chat.finish_mcp_startup_after_lag();
+    notify_mcp_status_error(&mut chat, "alpha", "handshake failed");
+    assert_eq!(drain_insert_history(&mut rx), first);
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn app_server_mcp_startup_reports_cancellation_after_lag() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
@@ -988,7 +1002,7 @@ async fn app_server_mcp_startup_next_round_with_empty_expected_servers_reactivat
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
     chat.set_mcp_startup_expected_servers(std::iter::empty::<String>());
-    chat.finish_mcp_startup(Vec::new(), Vec::new());
+    chat.finish_mcp_startup();
 
     notify_mcp_status(&mut chat, "runtime", McpServerStartupState::Starting);
     assert!(drain_insert_history(&mut rx).is_empty());
