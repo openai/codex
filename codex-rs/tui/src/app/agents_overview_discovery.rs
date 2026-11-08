@@ -1,6 +1,8 @@
 //! Demand-driven history discovery. Each source retains its cursor and unshown rows.
-//! One activation requests at most one page per source, then publishes up to ten tasks.
+//! Each new query scans the active backend from the start with its own paging cursor.
 
+use super::App;
+use crate::app_event::AppEvent;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
@@ -14,6 +16,8 @@ use codex_app_server_protocol::ThreadSourceKind;
 use codex_protocol::protocol::SubAgentSource;
 use codex_state::PINNED_THREAD_SECTION_ID;
 use std::collections::VecDeque;
+use std::sync::PoisonError;
+use tokio_util::task::AbortOnDropHandle;
 use uuid::Uuid;
 
 const PAGE_SIZE: u32 = 10;
@@ -110,6 +114,7 @@ struct SourcePage {
     rows: VecDeque<(Thread, bool)>,
     exhausted: bool,
     sort_key: ThreadSortKey,
+    page_size: u32,
 }
 
 impl Default for SourcePage {
@@ -119,6 +124,7 @@ impl Default for SourcePage {
             rows: VecDeque::new(),
             exhausted: false,
             sort_key: ThreadSortKey::RecencyAt,
+            page_size: PAGE_SIZE,
         }
     }
 }
@@ -192,7 +198,7 @@ impl SourcePage {
                         attached_to_thread_id: None,
                         originators: None,
                         cursor: self.cursor.clone(),
-                        limit: Some(PAGE_SIZE),
+                        limit: Some(self.page_size),
                         sort_key: Some(self.sort_key),
                         sort_direction: None,
                         model_providers: Some(Vec::new()),
@@ -218,6 +224,9 @@ impl SourcePage {
                     self.cursor = None;
                 }
                 Ok(page) => {
+                    if page.next_cursor.is_some() && page.next_cursor == self.cursor {
+                        return false;
+                    }
                     self.exhausted = page.next_cursor.is_none();
                     self.cursor = page.next_cursor.clone();
                     self.rows.extend(
@@ -231,5 +240,110 @@ impl SourcePage {
                 }
             }
         }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct HistorySearch {
+    pub(super) id: Uuid,
+    pub(super) cursor: AgentsOverviewDiscovery,
+    /// Requested number of matches visible under the active status filter.
+    pub(super) target: usize,
+    pub(super) loading: bool,
+    pub(super) failed: bool,
+    pub(super) task: Option<AbortOnDropHandle<()>>,
+}
+
+pub(super) fn matches_query(thread: &Thread, query: &str) -> bool {
+    let name = thread.name.as_deref().unwrap_or_default();
+    let cwd = thread.cwd.display();
+    format!("{name} {} {cwd}", thread.preview)
+        .to_lowercase()
+        .contains(query)
+}
+
+impl App {
+    pub(super) fn search_agents_overview(
+        &mut self,
+        handle: AppServerRequestHandle,
+        id: Uuid,
+        limit: usize,
+    ) {
+        let shared = &self.agents_overview.view_state;
+        let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
+        let query = state.search.to_lowercase();
+        let Some(search) = state.history.as_mut().filter(|search| search.id == id) else {
+            return;
+        };
+        let first = self.agents_overview.search_id != id;
+        let mut cursor = std::mem::take(&mut search.cursor);
+        if first {
+            self.agents_overview.search_matches.clear();
+            self.agents_overview.search_id = id;
+        }
+        for source in &mut cursor.sources {
+            source.page_size = 100;
+        }
+        if matches!(handle, AppServerRequestHandle::Cloud(_)) {
+            cursor.sources[1].exhausted = true;
+        }
+        let tx = self.app_event_tx.clone();
+        search.task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
+            if first {
+                tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+            }
+            loop {
+                let (mut rows, ok) = cursor.next_batch(&handle, limit).await;
+                rows.retain(|(thread, _)| matches_query(thread, &query));
+                if rows.is_empty() && ok && cursor.has_more() {
+                    continue;
+                }
+                tx.send(AppEvent::AgentsOverviewSearchPage {
+                    id,
+                    rows,
+                    cursor,
+                    ok,
+                });
+                return;
+            }
+        })));
+    }
+
+    pub(super) fn apply_agents_overview_search_page(
+        &mut self,
+        id: Uuid,
+        rows: Vec<(Thread, bool)>,
+        cursor: AgentsOverviewDiscovery,
+        ok: bool,
+    ) {
+        let overview = &mut self.agents_overview;
+        let mut state = overview
+            .view_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(search) = state.history.as_mut().filter(|s| s.id == id) else {
+            return;
+        };
+        for (thread, unread) in rows {
+            if let Ok(id) = codex_protocol::ThreadId::from_string(&thread.id)
+                && !overview.threads.get(&id).is_some_and(Option::is_some)
+                && !overview.removed_threads.contains(&id)
+                && !overview.hidden_threads.contains(&id)
+                && let std::collections::hash_map::Entry::Vacant(entry) =
+                    overview.search_matches.entry(id)
+            {
+                entry.insert(thread);
+                if unread {
+                    overview.unread.insert(id);
+                } else {
+                    overview.unread.remove(&id);
+                }
+            }
+        }
+        search.cursor = cursor;
+        search.loading = false;
+        search.failed = !ok;
+        drop(state);
+        self.repaint_agents_overview();
     }
 }

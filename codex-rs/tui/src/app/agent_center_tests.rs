@@ -4,7 +4,7 @@ use super::*;
 use assert_matches::assert_matches;
 use pretty_assertions::assert_eq;
 
-fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> String {
+pub(super) fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> String {
     let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
     let mut buf = ratatui::buffer::Buffer::empty(area);
     view.render(area, &mut buf);
@@ -819,6 +819,9 @@ async fn backspace_edits_search_and_rename_without_deleting_tasks() {
         view.handle_paste("!".into());
         view.handle_key_event(KeyCode::Backspace.into());
         assert_eq!(screen(&view, /*width*/ 88, /*height*/ 16), initial);
+        if key == '/' {
+            assert_matches!(rx.try_recv(), Ok(AppEvent::SearchAgentsOverview(..)));
+        }
         assert!(rx.try_recv().is_err());
         view.handle_key_event(KeyCode::Esc.into());
     }
@@ -895,10 +898,15 @@ async fn live_center_show_more_navigation_search_and_loading() {
     }
     view.handle_key_event(KeyCode::Char('/').into());
     view.handle_paste("Older task".into());
+    let id = assert_matches!(rx.try_recv(), Ok(AppEvent::SearchAgentsOverview(id, _)) => id);
+    insta::assert_snapshot!(screen(&view, /*width*/ 80, /*height*/ 12).lines().nth(6).unwrap(), @"  ›   Searching history…");
+    app.apply_agents_overview_search_page(id, Vec::new(), Default::default(), /*ok*/ false);
     insta::assert_snapshot!(
         "live_center_show_more_search_retry",
         screen(&view, /*width*/ 80, /*height*/ 12)
     );
     view.handle_key_event(KeyCode::Enter.into());
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ShowMoreAgentsOverview));
+    let id = assert_matches!(rx.try_recv(), Ok(AppEvent::SearchAgentsOverview(id, _)) => id);
+    app.apply_agents_overview_search_page(id, Vec::new(), Default::default(), /*ok*/ true);
+    insta::assert_snapshot!(screen(&view, /*width*/ 80, /*height*/ 12).lines().nth(6).unwrap(), @"  ›   Show more matches");
 }

@@ -386,6 +386,7 @@ impl App {
         let destination = backends.session_at_mut(destination_slot);
         self.store_active_thread_receiver().await;
         self.clear_active_thread().await;
+        self.agents_overview.search_matches.clear();
         self.agents_overview.pending_usage = None;
         self.agents_overview.usage_disabled = false;
         self.app_event_tx = AppEventSender::new(self.app_event_tx.app_event_tx.clone());
@@ -393,6 +394,7 @@ impl App {
         self.reconnect = Default::default();
         if let Ok(mut state) = self.agents_overview.view_state.lock() {
             state.connection_notice = None;
+            state.restart_history_search();
         }
         self.rate_limit_hard_stop_generation = self.rate_limit_hard_stop_generation.wrapping_add(1);
         self.rate_limit_refresh_state.invalidate_recovery();

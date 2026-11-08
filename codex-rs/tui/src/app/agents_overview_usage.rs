@@ -105,7 +105,9 @@ impl App {
             return;
         }
         self.agents_overview.pending_usage = None;
-        if self.agents_overview.threads.contains_key(&thread_id) {
+        if self.agents_overview.threads.contains_key(&thread_id)
+            || self.agents_overview.search_matches.contains_key(&thread_id)
+        {
             let usage = self.agents_overview.usage.entry(thread_id).or_default();
             usage.fetched_at = Some(Instant::now());
             match result {

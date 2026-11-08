@@ -154,12 +154,14 @@ impl Renderable for AgentsOverviewView {
             inset(layout.header),
             buf,
         );
+        let history = state.history.as_ref();
         let labels = TASK_FILTERS
             .iter()
             .map(|(label, group)| {
                 let count = self
                     .rows
                     .iter()
+                    .filter(|row| state.includes_row(row))
                     .filter(|row| group.is_none_or(|group| group == row.group))
                     .count();
                 format!("{label} {count}")
@@ -229,7 +231,8 @@ impl Renderable for AgentsOverviewView {
                 })
             })
             .or_else(|| {
-                (state.refresh_failed && !state.loading).then(|| "Error loading tasks".to_owned())
+                let failed = state.refresh_failed || history.is_some_and(|s| s.failed);
+                (failed && !state.loading).then(|| "Error loading tasks".to_owned())
             })
             .or_else(|| state.server_version_notice.clone());
         if let Some(notice) = notice.filter(|_| !state.help && state.key_chord_hint.is_none()) {

@@ -137,9 +137,11 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
         );
         view.handle_key_event(KeyCode::Esc.into());
         view.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
-        for character in "Target".chars() {
-            view.handle_key_event(KeyCode::Char(character).into());
-        }
+        view.handle_paste("Target".into());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::SearchAgentsOverview(..))
+        ));
         for (key, expected) in [
             (5, AgentsOverviewAction::Archive),
             (6, AgentsOverviewAction::Delete),
@@ -664,7 +666,7 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
         request_id,
         Ok(AgentsOverviewThreadRefresh {
             cleared_unread: Vec::new(),
-            threads: HashMap::from([(id, Some((thread.clone(), false)))]),
+            threads: HashMap::from([(id, Some((thread.clone(), false, None)))]),
             last_messages: HashMap::new(),
             recent_seed_complete: true,
             discovery: None,
@@ -948,7 +950,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
                 cleared_unread: Vec::new(),
                 threads: stale_threads
                     .into_iter()
-                    .map(|(id, thread)| (id, thread.map(|thread| (thread, false))))
+                    .map(|(id, thread)| (id, thread.map(|thread| (thread, false, None))))
                     .collect(),
                 last_messages: HashMap::new(),
                 recent_seed_complete: true,
@@ -1126,6 +1128,12 @@ async fn fork_shortcut_respects_metadata_editing() {
     for editor in ['r', '/'] {
         view.handle_key_event(KeyCode::Char(editor).into());
         view.handle_key_event(KeyCode::Char('f').into());
+        if editor == '/' {
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(AppEvent::SearchAgentsOverview(..))
+            ));
+        }
         assert!(rx.try_recv().is_err());
         view.handle_key_event(KeyCode::Esc.into());
     }

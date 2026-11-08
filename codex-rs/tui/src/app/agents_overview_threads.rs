@@ -57,6 +57,7 @@ fn detail_thread_ids<'a>(threads: impl Iterator<Item = &'a Thread>) -> Vec<Threa
 impl App {
     pub(super) fn remove_agents_overview_thread(&mut self, thread_id: ThreadId) {
         self.prepare_agents_overview_removal(&std::collections::HashSet::from([thread_id]));
+        self.agents_overview.search_matches.remove(&thread_id);
         self.agents_overview.removed_threads.insert(thread_id);
         self.agents_overview.unread.remove(&thread_id);
         if let Some(Some(thread)) = self.agents_overview.threads.remove(&thread_id)
@@ -100,7 +101,8 @@ impl App {
             .agents_overview
             .threads
             .get_mut(&thread_id)
-            .and_then(Option::as_mut);
+            .and_then(Option::as_mut)
+            .or_else(|| self.agents_overview.search_matches.get_mut(&thread_id));
         match notification {
             ServerNotification::ThreadReadStateChanged(change) => {
                 if change.read_state.first_unread.is_some() {
@@ -127,6 +129,7 @@ impl App {
                 self.agents_overview.removed_threads.remove(&thread_id);
                 let mut thread = started.thread.clone();
                 thread.turns.clear();
+                self.agents_overview.search_matches.remove(&thread_id);
                 self.agents_overview.threads.insert(thread_id, Some(thread));
             }
             ServerNotification::ThreadArchived(_) | ServerNotification::ThreadDeleted(_) => {
@@ -333,7 +336,7 @@ impl App {
                         for (thread, is_unread) in pinned_threads {
                             if let Ok(thread_id) = ThreadId::from_string(&thread.id) {
                                 ids.push(thread_id);
-                                threads.insert(thread_id, Some((thread, is_unread)));
+                                threads.insert(thread_id, Some((thread, is_unread, None)));
                             }
                         }
                         Some(Some(ids))
@@ -377,7 +380,7 @@ impl App {
                     thread_ids.extend(detail_thread_ids(recent.iter().map(|(thread, _)| thread)));
                     for (thread, is_unread) in recent {
                         if let Ok(thread_id) = ThreadId::from_string(&thread.id) {
-                            threads.insert(thread_id, Some((thread, is_unread)));
+                            threads.insert(thread_id, Some((thread, is_unread, None)));
                         }
                     }
                 }
@@ -417,7 +420,8 @@ impl App {
                             })
                             .await
                         {
-                            Ok(mut response) => {
+                            Ok(response) => {
+                                let mut latest_prompt = None;
                                 let mut last_message = None;
                                 if let Ok(turns) = request_handle
                                     .request_typed::<ThreadTurnsListResponse>(
@@ -441,9 +445,13 @@ impl App {
                                         content, ..
                                     }) = turn.item_payloads().next()
                                     {
-                                        response.thread.preview =
-                                            ChatWidget::user_message_display_from_inputs(content)
-                                                .message;
+                                        latest_prompt =
+                                            Some(super::agents_overview_details::preview_markdown(
+                                                &ChatWidget::user_message_display_from_inputs(
+                                                    content,
+                                                )
+                                                .message,
+                                            ));
                                     }
                                     last_message =
                                         turn.item_payloads().rev().find_map(|item| match item {
@@ -456,7 +464,11 @@ impl App {
                                 let unread = response
                                     .read_state
                                     .is_some_and(|state| state.first_unread.is_some());
-                                Some((thread_id, (response.thread, unread), last_message))
+                                Some((
+                                    thread_id,
+                                    (response.thread, unread, latest_prompt),
+                                    last_message,
+                                ))
                             }
                             Err(error) => {
                                 tracing::warn!(%thread_id, %error, "failed to read agent thread");

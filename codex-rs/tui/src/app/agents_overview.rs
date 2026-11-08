@@ -38,6 +38,9 @@ pub(crate) const AGENTS_OVERVIEW_VIEW_ID: &str = "agents-overview";
 pub(super) struct AgentsOverviewState {
     /// Missing metadata records a local resume until the next metadata refresh.
     pub(super) threads: HashMap<ThreadId, Option<Thread>>,
+    /// Identifies the query that populated the cached search results.
+    pub(super) search_id: Uuid,
+    pub(super) search_matches: HashMap<ThreadId, Thread>,
     /// Lifecycle removals take precedence over delayed tool registration responses.
     pub(super) removed_threads: HashSet<ThreadId>,
     /// Local visibility only; activity and metadata refreshes never reveal hidden roots.
@@ -173,7 +176,8 @@ impl App {
                     if self.agents_overview.removed_threads.contains(&thread_id) {
                         continue;
                     }
-                    if let Some((mut thread, unread)) = thread {
+                    if let Some((mut thread, unread, latest_prompt)) = thread {
+                        self.agents_overview.search_matches.remove(&thread_id);
                         if unread {
                             self.agents_overview.unread.insert(thread_id);
                         } else {
@@ -197,6 +201,11 @@ impl App {
                             self.agents_overview.refill_count =
                                 self.agents_overview.refill_count.saturating_sub(1);
                         }
+                        self.agents_overview
+                            .activity
+                            .entry(thread_id)
+                            .or_default()
+                            .latest_prompt = latest_prompt;
                         thread.turns.clear();
                         self.agents_overview.threads.insert(thread_id, Some(thread));
                     } else {
@@ -216,6 +225,9 @@ impl App {
                     && let Ok(thread_id) = ThreadId::from_string(&reverted.thread_id)
                 {
                     // Discard stale read results without clearing activity received after the revert.
+                    if let Some(activity) = self.agents_overview.activity.get_mut(&thread_id) {
+                        activity.latest_prompt = None;
+                    }
                     self.agents_overview.last_messages.remove(&thread_id);
                     if let Some(usage) = self.agents_overview.usage.get_mut(&thread_id) {
                         usage.tokens = None;
@@ -268,6 +280,18 @@ impl App {
             .cloned()
             .collect();
         let view = self.agents_overview_view(threads, selected_thread_id);
+        let matches = &mut self.agents_overview.search_matches;
+        if !matches.is_empty() {
+            let visible: HashSet<_> = view
+                .visible_indices()
+                .into_iter()
+                .map(|i| view.rows[i].thread_id)
+                .collect();
+            matches.retain(|id, _| {
+                visible.contains(id) || self.agents_overview.hidden_threads.contains(id)
+            });
+        }
+        view.load_search_matches(/*additional*/ 0);
         self.agents_overview.visible_thread_ids = view.thread_ids();
         let next_thread_id = view
             .selected_index()
@@ -304,6 +328,35 @@ impl App {
         mut threads: Vec<Thread>,
         selected_thread_id: Option<ThreadId>,
     ) -> AgentsOverviewView {
+        {
+            let overview = &self.agents_overview;
+            let mut state = overview
+                .view_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.vim_enabled = self.chat_widget.composer_is_vim_enabled();
+            if state
+                .history
+                .as_ref()
+                .is_some_and(|search| search.id == overview.search_id)
+            {
+                let query = state.search.to_lowercase();
+                threads.extend(
+                    overview
+                        .search_matches
+                        .values()
+                        .filter(|thread| {
+                            super::agents_overview_discovery::matches_query(thread, &query)
+                        })
+                        .cloned(),
+                );
+            } else if let Some(target) = state
+                .rename_target
+                .and_then(|id| overview.search_matches.get(&id))
+            {
+                threads.push(target.clone());
+            }
+        }
         threads.retain(|thread| !thread.ephemeral);
         for thread in &mut threads {
             if thread.parent_thread_id.is_none()
@@ -349,6 +402,11 @@ impl App {
                 continue;
             }
             rows.push(AgentsOverviewRow {
+                search_id: self
+                    .agents_overview
+                    .search_matches
+                    .contains_key(&thread_id)
+                    .then_some(self.agents_overview.search_id),
                 unread: self.agents_overview.unread.contains(&thread_id),
                 details: self.agents_overview_details(root, &children),
                 thread: root.clone(),
@@ -359,11 +417,6 @@ impl App {
             });
         }
 
-        self.agents_overview
-            .view_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .vim_enabled = self.chat_widget.composer_is_vim_enabled();
         let mut view = AgentsOverviewView::new(
             rows,
             selected_thread_id,

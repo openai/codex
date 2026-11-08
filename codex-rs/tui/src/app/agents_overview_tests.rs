@@ -384,9 +384,9 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
             cleared_unread: Vec::new(),
             last_messages: HashMap::new(),
             threads: HashMap::from([
-                (retained, Some((retained_thread.clone(), false))),
-                (archived, Some((archived_thread, false))),
-                (deleted, Some((deleted_thread, false))),
+                (retained, Some((retained_thread.clone(), false, None))),
+                (archived, Some((archived_thread, false, None))),
+                (deleted, Some((deleted_thread, false, None))),
             ]),
             recent_seed_complete: true,
             discovery: None,
@@ -1438,6 +1438,10 @@ async fn shared_overview_shows_only_root_sessions() {
     );
     action_view.handle_key_event(KeyCode::Char('/').into());
     assert!(action_view.handle_paste("Repair authentication".into()));
+    assert!(matches!(
+        event_rx.try_recv(),
+        Ok(AppEvent::SearchAgentsOverview(..))
+    ));
     action_view.handle_key_event(KeyCode::Enter.into());
     assert!(
         matches!(event_rx.try_recv(), Ok(AppEvent::SelectAgentsOverviewThread { thread_id }) if thread_id == second_root)
@@ -1580,6 +1584,10 @@ async fn filtered_dashboard_actions_use_configured_shortcuts() {
 
     view.handle_key_event(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
     assert!(view.handle_paste("Second task".to_string()));
+    assert!(matches!(
+        event_rx.try_recv(),
+        Ok(AppEvent::SearchAgentsOverview(..))
+    ));
     view.handle_key_event(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
     assert!(matches!(
         event_rx.try_recv(),

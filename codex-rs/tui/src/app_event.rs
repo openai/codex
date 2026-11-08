@@ -281,7 +281,7 @@ pub(crate) enum RecapTrigger {
 #[derive(Debug)]
 pub(crate) struct AgentsOverviewThreadRefresh {
     pub(crate) cleared_unread: Vec<ThreadId>,
-    pub(crate) threads: std::collections::HashMap<ThreadId, Option<(Thread, bool)>>,
+    pub(crate) threads: std::collections::HashMap<ThreadId, Option<(Thread, bool, Option<String>)>>,
     pub(crate) last_messages: std::collections::HashMap<ThreadId, String>,
     pub(crate) recent_seed_complete: bool,
     pub(crate) discovery: Option<crate::app::agents_overview_discovery::AgentsOverviewDiscovery>,
@@ -367,6 +367,13 @@ pub(crate) enum AppEvent {
     /// Open the live command center for recent and locally retained root sessions.
     OpenAgentsOverview,
     ShowMoreAgentsOverview,
+    SearchAgentsOverview(Uuid, usize),
+    AgentsOverviewSearchPage {
+        id: Uuid,
+        rows: Vec<(Thread, bool)>,
+        cursor: crate::app::agents_overview_discovery::AgentsOverviewDiscovery,
+        ok: bool,
+    },
     RefreshViewedThread {
         backend_id: crate::backend_id::BackendId,
         thread_id: ThreadId,
