@@ -34,12 +34,6 @@ async fn agents_defers_launch_directory_trust_until_starting_a_task() -> Result<
 
 #[tokio::test]
 #[cfg(unix)]
-async fn agents_checks_trust_when_starting_after_dismissing_overview() -> Result<()> {
-    daemon_startup("agents-untrusted-new").await
-}
-
-#[tokio::test]
-#[cfg(unix)]
 async fn discovered_managed_daemon_can_restart_with_auto_start_disabled() -> Result<()> {
     daemon_startup("discovered").await
 }
@@ -202,7 +196,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 ""
             },
             serde_json::to_string(&workspace_path)?,
-            if command.starts_with("agents-untrusted") {
+            if command == "agents-untrusted" {
                 "untrusted"
             } else {
                 "trusted"
@@ -246,7 +240,6 @@ async fn daemon_startup(command: &str) -> Result<()> {
             | "agents"
             | "agents-no-daemon"
             | "agents-untrusted"
-            | "agents-untrusted-new"
             | "discovered"
             | "bedrock"
             | "bedrock-running"
@@ -316,18 +309,13 @@ async fn daemon_startup(command: &str) -> Result<()> {
             "Notconnectedtothelocalbackgroundserver"
         } else if command == "agents" {
             args.push("agents".into());
-            steps.push_back(("Notasksyet", b"\x1b"));
+            steps.push_back(("Notasksyet", b"n"));
             steps.push_back(("GPT-5.6-Terra", b"/daemon\r"));
             steps.push_back(("Restartbackgroundserver", b"\x1b[F\r"));
             "Restartbackgroundserver?"
-        } else if command.starts_with("agents-untrusted") {
+        } else if command == "agents-untrusted" {
             args.push("agents".into());
-            if command == "agents-untrusted-new" {
-                steps.push_back(("Notasksyet", b"\x1b"));
-                steps.push_back(("GPT-5.6-Terra", b"/new\r"));
-            } else {
-                steps.push_back(("Notasksyet", b"n"));
-            }
+            steps.push_back(("Notasksyet", b"n"));
             "entercontinue·escback"
         } else if command == "discovered" {
             args.extend(["--disable".into(), "daemon_auto_start".into()]);

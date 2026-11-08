@@ -1165,7 +1165,6 @@ impl App {
             }
             return;
         }
-        // Dismissing the initial agents overview can expose /new before any folder consent.
         // Resolve trust before loading defaults and applying explicit permission choices.
         if self.current_displayed_thread_id().is_none() {
             let mut config = self.chat_widget.config_ref().clone();

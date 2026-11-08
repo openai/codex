@@ -168,6 +168,7 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
         };
         for (expected, input) in [
             (prompt, b"\x1b".as_slice()),
+            ("Launch-folder task", b"\x1b"),
             ("Launch-folder task", b"\x1b[Bn"),
             (prompt, b"\x1b"),
             ("n new", b"n"),

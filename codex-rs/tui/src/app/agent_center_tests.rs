@@ -25,7 +25,7 @@ fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> String {
 
 #[tokio::test]
 async fn live_center_keeps_status_order_across_progress_refreshes() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     app.agents_overview.view_state.lock().unwrap().grouping = AgentsOverviewGrouping::Status;
     let ids = [1, 2, 3, 4, 5].map(ThreadId::from_u128);
     let mut threads = [
@@ -563,8 +563,17 @@ async fn live_center_rename_retains_target_when_status_leaves_filter() -> Result
 }
 
 #[tokio::test]
+async fn escape_returns_to_a_chat_that_is_still_starting() {
+    let mut app = make_test_app().await;
+    app.pending_startup_thread_start = true;
+    let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    view.handle_key_event(KeyCode::Esc.into());
+    assert!(view.is_complete());
+}
+
+#[tokio::test]
 async fn live_center_navigation_and_complete_hints() {
-    let app = make_test_app().await;
+    let app = make_test_app_with_chat().await;
     let ready = ThreadId::from_u128(/*value*/ 42);
     let needs_you = ThreadId::from_u128(/*value*/ 43);
     let unloaded = ThreadId::from_u128(/*value*/ 44);
@@ -714,7 +723,7 @@ async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
 
 #[tokio::test]
 async fn live_center_hints_follow_configured_bindings() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let config: TuiKeymap = toml::from_str(
         r#"
 [list]
@@ -858,7 +867,7 @@ async fn overview_clears_voice_badge_after_async_close() -> Result<()> {
 
 #[tokio::test]
 async fn live_center_show_more_navigation_search_and_loading() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = AppEventSender::new(tx);
     app.agents_overview.view_state.lock().unwrap().has_more = true;

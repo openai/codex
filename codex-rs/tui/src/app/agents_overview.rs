@@ -383,6 +383,8 @@ impl App {
                 .map(|(rank, id)| (id, rank))
                 .collect()
         });
+        view.can_return_to_chat =
+            self.pending_startup_thread_start || self.current_displayed_thread_id().is_some();
         view.pin_action_pending = self.agents_overview.pending_pin_change.is_some();
         view
     }

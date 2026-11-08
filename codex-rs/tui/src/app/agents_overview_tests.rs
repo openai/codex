@@ -8,9 +8,16 @@ mod command_center;
 use super::super::agents_overview_view::AgentsOverviewGroup;
 use super::super::agents_overview_view::AgentsOverviewGrouping;
 use super::*;
+use crate::app::owned_transcript::tests::attach_thread;
 use crate::app::tests::make_test_app_with_channels;
 use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
 use codex_config::types::AgentsOverviewGrouping as PersistedAgentsOverviewGrouping;
+
+async fn make_test_app_with_chat() -> Box<App> {
+    let mut app = make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app
+}
 
 #[tokio::test]
 async fn overview_worktree_creation_busy_state() {
@@ -787,7 +794,7 @@ async fn check_hidden_thread_does_not_refresh_shared_overview(source: &str) {
 
 #[tokio::test]
 async fn agents_overview_details_show_available_attention_without_expanding_rows() -> Result<()> {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
     let [root, failed_agent, child, unloaded] = std::array::from_fn(|_| ThreadId::new());
     let waiting = ThreadStatus::Active {
@@ -911,7 +918,7 @@ fn reasoning_delta(thread_id: ThreadId, item_id: &str, delta: &str) -> ServerNot
 
 #[tokio::test]
 async fn agents_overview_details_render_markdown() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let thread_id = ThreadId::new();
     let mut thread = overview_thread(
         thread_id,
@@ -1053,7 +1060,7 @@ fn agents_overview_markdown_preview_preserves_layout_and_bounds() {
 
 #[tokio::test]
 async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachment() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let thread_id = ThreadId::new();
     let mut thread = overview_thread(
         thread_id,
@@ -1153,7 +1160,7 @@ async fn agents_overview_reasoning_uses_existing_events_and_expires_with_attachm
 
 #[tokio::test]
 async fn worktrees_overview_groups_by_project_or_directory() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let root = tempfile::tempdir().unwrap();
     let primary = root.path().join("primary");
     let linked = root.path().join("linked");
@@ -1304,7 +1311,7 @@ fn overview_directory_group_keys_normalize_aliases() {
 
 #[tokio::test]
 async fn overview_model_grouping_shows_details_and_preserves_selection() {
-    let mut app = make_test_app().await;
+    let mut app = make_test_app_with_chat().await;
     let threads = [
         ("Older task", Some("model-a"), 1),
         ("Other model", Some("model-b"), 2),
@@ -1365,6 +1372,7 @@ async fn shared_overview_shows_only_root_sessions() {
     let first_root = ThreadId::from_string("00000000-0000-0000-0000-000000000101").unwrap();
     let unloaded_root = ThreadId::from_string("00000000-0000-0000-0000-000000000102").unwrap();
     let [child, second_root, side_thread] = std::array::from_fn(|_| ThreadId::new());
+    attach_thread(&mut app, first_root);
     app.primary_thread_id = Some(first_root);
 
     let mut threads = vec![

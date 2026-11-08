@@ -204,6 +204,7 @@ pub(super) struct AgentsOverviewView {
     directory_group_keys: Vec<PathBuf>,
     pub(super) pinned_thread_ranks: Option<HashMap<ThreadId, usize>>,
     pub(super) pin_action_pending: bool,
+    pub(super) can_return_to_chat: bool,
     selected: usize,
     state: Arc<Mutex<AgentsOverviewViewState>>,
     app_event_tx: AppEventSender,
@@ -281,6 +282,7 @@ impl AgentsOverviewView {
             directory_group_keys,
             pinned_thread_ranks: None,
             pin_action_pending: false,
+            can_return_to_chat: false,
             selected,
             state,
             app_event_tx,
@@ -796,7 +798,9 @@ impl BottomPaneView for AgentsOverviewView {
                 }
                 ListAction::Accept => self.activate(),
                 ListAction::Cancel => {
-                    if matches!(self.on_ctrl_c(), CancellationEvent::NotHandled) {
+                    if self.can_return_to_chat
+                        && matches!(self.on_ctrl_c(), CancellationEvent::NotHandled)
+                    {
                         self.state().completion = Some(ViewCompletion::Cancelled);
                     }
                 }
