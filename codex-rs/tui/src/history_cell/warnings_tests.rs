@@ -6,12 +6,12 @@ use pretty_assertions::assert_eq;
 #[test]
 fn usage_warnings_render_in_both_transcripts_including_composites() {
     let message = "Only 8% of your 5h limit remains. Run /status for details.";
-    let usage = new_usage_warning_event(message.into());
+    let usage = new_visible_warning_event(message.into());
     let diagnostic = new_warning_event(message.into());
     let composite = CompositeHistoryCell::new(vec![
         Box::new(PlainHistoryCell::new(vec!["Earlier output".into()])),
         Box::new(new_warning_event("Hidden diagnostic".into())),
-        Box::new(new_usage_warning_event(message.into())),
+        Box::new(new_visible_warning_event(message.into())),
     ]);
     assert_eq!(usage.warning_entries(), diagnostic.warning_entries());
     for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {

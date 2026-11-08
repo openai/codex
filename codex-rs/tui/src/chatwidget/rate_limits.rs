@@ -393,7 +393,7 @@ impl ChatWidget {
 
             if !warnings.is_empty() {
                 for warning in warnings {
-                    self.add_to_history(history_cell::new_usage_warning_event(warning));
+                    self.add_to_history(history_cell::new_visible_warning_event(warning));
                 }
                 self.request_redraw();
             }

@@ -16,6 +16,7 @@ use crate::app_server_session::source_agent_path;
 use crate::app_server_session::thread_blocks_direct_input;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::streaming::commit_tick::CommitTickScope;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy)]
@@ -1108,6 +1109,20 @@ impl App {
                 self.enqueue_primary_thread_session(started.session, started.turns)
                     .await?;
                 self.apply_backend_banner_fallback(app_server).await;
+                if let Some(model) = self.harness_overrides.model.as_deref()
+                    && model == self.chat_widget.current_model()
+                    && self.chat_widget.has_chatgpt_account()
+                    && self.chat_widget.config_ref().model_provider_id == OPENAI_PROVIDER_ID
+                    && !self
+                        .model_catalog
+                        .models
+                        .iter()
+                        .any(|preset| preset.model == model)
+                {
+                    self.chat_widget.add_to_history(history_cell::new_visible_warning_event(format!(
+                        "Your ChatGPT model list doesn't include `{model}`. Check the spelling or use /model to choose another model."
+                    )));
+                }
                 if let Some(notice) = self.pending_server_version_notice.take() {
                     self.chat_widget.add_server_version_warning(notice);
                 }
