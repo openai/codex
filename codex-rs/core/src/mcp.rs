@@ -250,12 +250,13 @@ impl McpManager {
     }
 
     /// Resolves only plugins from this step's ready roots, independent of shared MCP refresh.
-    pub(crate) async fn selected_plugins_for_step(
+    pub(crate) async fn selected_plugins_for_step<'a>(
         &self,
-        context: McpServerContributionContext<'_, Config>,
+        context: McpServerContributionContext<'a, Config>,
         plugins_config: &PluginsConfigToml,
-        disabled_plugin_ids: &[String],
+        disabled_plugin_ids: &'a [String],
     ) -> SelectedPluginSnapshot {
+        let context = context.with_disabled_plugin_ids(disabled_plugin_ids);
         let mut selected = SelectedPluginSnapshot {
             disabled_plugin_ids: disabled_plugin_ids.to_vec(),
             ..Default::default()

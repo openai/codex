@@ -250,6 +250,13 @@ async fn root_ownership_survives_malformed_ancestor_manifests() {
     let directory = tempdir().expect("tempdir");
     let root = directory.path().join("package/skills");
     fs::create_dir_all(&root).expect("create skills root");
+    #[cfg(unix)]
+    let root = {
+        let alias = directory.path().join("owning-package/skills");
+        fs::create_dir_all(alias.parent().unwrap()).expect("create owning package");
+        std::os::unix::fs::symlink(&root, &alias).expect("symlink skills");
+        alias
+    };
     let provider = ExecutorPluginProvider::new(Arc::new(EnvironmentManager::default_for_tests()));
     let selected = selected_root("example@marketplace", LOCAL_ENVIRONMENT_ID, &root);
     assert_eq!(
@@ -300,9 +307,8 @@ async fn root_ownership_survives_malformed_ancestor_manifests() {
 async fn discovery_ownership_uses_ancestors_not_nested_plugins() {
     let directory = tempdir().expect("tempdir");
     let path = PathUri::from_host_native_path(directory.path()).unwrap();
-    let selected = selected_root_uri("example@marketplace", "executor", path.clone());
-    let provider =
-        ExecutorPluginProvider::new(Arc::new(environment_manager_without_environments()));
+    let selected = selected_root_uri("example@marketplace", LOCAL_ENVIRONMENT_ID, path.clone());
+    let provider = ExecutorPluginProvider::new(Arc::new(EnvironmentManager::default_for_tests()));
     let mut discovery = CapabilityRootDiscovery {
         id: selected.id.clone(),
         path: path.clone(),
@@ -330,6 +336,8 @@ async fn discovery_ownership_uses_ancestors_not_nested_plugins() {
             .unwrap(),
         PluginRootOwnership::Plugin
     );
+    let provider =
+        ExecutorPluginProvider::new(Arc::new(environment_manager_without_environments()));
     assert!(matches!(
         provider
             .root_ownership(&selected, /*discovery*/ None, /*sandbox*/ None)
@@ -377,6 +385,7 @@ async fn ancestor_manifest_probes_pipeline_and_preserve_error_order() {
             &selected,
             std::iter::successors(Some(root.clone()), PathUri::parent),
             &file_system,
+            GetMetadataOptions::default(),
             /*sandbox*/ None,
         ));
         assert!(futures::poll!(resolution.as_mut()).is_pending());
@@ -407,42 +416,46 @@ async fn ancestor_manifest_probes_pipeline_and_preserve_error_order() {
 
 #[tokio::test]
 async fn manifest_presence_uses_sandboxed_metadata_without_reading_contents() {
-    let directory = tempdir().expect("tempdir");
-    let plugin_root = PathUri::from_host_native_path(directory.path()).expect("root URI");
+    let plugin_root = PathUri::parse("file:///C:").expect("Windows anchor URI");
     let manifest_path = plugin_root
         .join(".codex-plugin/plugin.json")
         .expect("manifest URI");
-    let file_system = SyntheticPluginFileSystem {
-        plugin_root: plugin_root.clone(),
-        manifest_path: manifest_path.clone(),
-        calls: Mutex::new(Vec::new()),
-        metadata_gate: None,
-        metadata_delay: None,
-        metadata_error: None,
-    };
-    let sandbox =
-        FileSystemSandboxContext::from_permission_profile(Default::default(), plugin_root.clone());
-    assert_eq!(
-        find_manifest(
-            &selected_root_uri("selected-demo", "executor-test", plugin_root.clone()),
-            std::iter::once(plugin_root.clone()),
-            &file_system,
-            Some(&sandbox),
-        )
-        .await
-        .expect("probe manifest"),
-        Some(manifest_path.clone()),
-    );
-    assert_eq!(
-        *file_system
-            .calls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-        vec![FileSystemCall::SandboxedMetadata {
-            path: manifest_path,
-            sandbox: Box::new(sandbox)
-        }],
-    );
+    for follow_symlinks in [true, false] {
+        let file_system = SyntheticPluginFileSystem {
+            plugin_root: plugin_root.clone(),
+            manifest_path: manifest_path.clone(),
+            calls: Mutex::new(Vec::new()),
+            metadata_gate: None,
+            metadata_delay: None,
+            metadata_error: None,
+        };
+        let sandbox = FileSystemSandboxContext::from_permission_profile(
+            Default::default(),
+            plugin_root.clone(),
+        );
+        assert_eq!(
+            find_manifest(
+                &selected_root_uri("selected-demo", "executor-test", plugin_root.clone()),
+                std::iter::once(plugin_root.clone()),
+                &file_system,
+                GetMetadataOptions { follow_symlinks },
+                Some(&sandbox),
+            )
+            .await
+            .expect("probe manifest"),
+            Some(manifest_path.clone()),
+        );
+        assert_eq!(
+            *file_system
+                .calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![FileSystemCall::SandboxedMetadata {
+                path: manifest_path.clone(),
+                sandbox: Box::new(sandbox)
+            }],
+        );
+    }
 }
 
 #[tokio::test]

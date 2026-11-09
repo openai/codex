@@ -3816,6 +3816,7 @@ impl Session {
                     environment_id,
                     response.permissions.clone().into(),
                 );
+                self.mark_mcp_runtime_dirty();
             }
         }
     }
@@ -4365,7 +4366,11 @@ impl Session {
             let ready_selected_capability_roots =
                 Self::ready_selected_capability_roots(&selected_capability_roots);
             let (executor_capability_discovery_v2, inventory_changed) = self
-                .executor_capability_discovery_for_step_v2(&turn_context.config, &environments)
+                .executor_capability_discovery_for_step_v2(
+                    &turn_context.config,
+                    &environments,
+                    /*skill_turn*/ None,
+                )
                 .await;
             let v2_snapshots = executor_capability_discovery_v2.as_ref();
             let (executor_capability_discovery, discovery_recovered) = if v2_snapshots.is_some() {
@@ -4376,6 +4381,7 @@ impl Session {
                     &selected_capability_roots,
                     &environments,
                     executor_capability_discovery_v2.as_deref(),
+                    /*skill_turn*/ None,
                 )
                 .await
             };
@@ -4392,14 +4398,37 @@ impl Session {
                 self.host_skills_for_step(&turn_context, &environments)
                     .await,
             );
-            if turn_context
-                .config
-                .features
-                .enabled(Feature::SkillCatalogDeltas)
-                && let Some(grants) = turn_context.turn_skill_filesystem_grants(&environments)
-            {
-                extension_data.insert(grants);
-            }
+            // Only skill discovery may use a turn's temporary file access. Plugin servers and
+            // hooks use the session inventory above because they can outlive the step.
+            let turn_skill_discovery =
+                if let Some(grants) = turn_context.turn_skill_filesystem_grants(&environments) {
+                    if turn_context
+                        .config
+                        .features
+                        .enabled(Feature::SkillCatalogDeltas)
+                    {
+                        extension_data.insert(grants);
+                    }
+                    let (v2, _) = self
+                        .executor_capability_discovery_for_step_v2(
+                            &turn_context.config,
+                            &environments,
+                            Some(&turn_context),
+                        )
+                        .await;
+                    let (v1, _) = self
+                        .executor_capability_discovery_for_step(
+                            &turn_context.config,
+                            &selected_capability_roots,
+                            &environments,
+                            v2.as_deref(),
+                            Some(&turn_context),
+                        )
+                        .await;
+                    Some((v1, v2))
+                } else {
+                    None
+                };
             if let Some(messages) = settings
                 .model_info
                 .model_messages
@@ -4462,28 +4491,53 @@ impl Session {
                 mcp
             };
             extension_data.insert(selected_capability_roots);
-            // A step keeps the plugins from the environments it captured, even if shared MCP
-            // moves on to another environment. Its skill tools and the model use this same copy.
-            // Policy follows this step's MCP binding, which may have refreshed mid-turn.
-            let selected_plugins = self
-                .services
-                .mcp_manager
-                .selected_plugins_for_step(
+            let selected_environments = environments.all_selections();
+            let select_plugins = |discovery, discovery_v2| {
+                self.services.mcp_manager.selected_plugins_for_step(
                     codex_extension_api::McpServerContributionContext::for_step(
                         turn_context.config.as_ref(),
                         &self.services.mcp_thread_init,
                         &self.services.thread_extension_data,
                         &turn_context.originator,
                         &ready_selected_capability_roots,
-                        executor_capability_discovery.as_deref(),
-                        executor_capability_discovery_v2.as_deref(),
+                        discovery,
+                        discovery_v2,
                     )
                     .with_session_source(&turn_context.session_source)
-                    .with_selected_environments(&environments.all_selections()),
+                    .with_selected_environments(&selected_environments),
                     &mcp.config().plugins,
                     &turn_context.disabled_plugin_ids,
                 )
-                .await;
+            };
+            // Resolve skill ownership from the same inventory as skill discovery.
+            let (skill_discovery, skill_discovery_v2) = match &turn_skill_discovery {
+                Some((v1, v2)) => (v1.as_deref(), v2.as_deref()),
+                None => (
+                    executor_capability_discovery.as_deref(),
+                    executor_capability_discovery_v2.as_deref(),
+                ),
+            };
+            let selected_plugins = select_plugins(skill_discovery, skill_discovery_v2).await;
+            // V2 hooks match accepted installations from the session inventory. V1 hooks
+            // only need the explicit disabled IDs, already present in selected_plugins.
+            let session_plugins =
+                if turn_skill_discovery.is_some() && executor_capability_discovery_v2.is_some() {
+                    Some(
+                        select_plugins(
+                            executor_capability_discovery.as_deref(),
+                            executor_capability_discovery_v2.as_deref(),
+                        )
+                        .await,
+                    )
+                } else {
+                    None
+                };
+            let executor_hook_sources = crate::hook_runtime::prepare_executor_hook_sources(
+                &mcp,
+                session_plugins.as_ref().unwrap_or(&selected_plugins),
+                executor_capability_discovery.as_deref(),
+                executor_capability_discovery_v2.as_deref(),
+            );
             let mut filesystem_access = HashMap::new();
             for environment in environments.turn_environments() {
                 let environment_id = &environment.selection.environment_id;
@@ -4508,9 +4562,8 @@ impl Session {
                     .prepare_for_step(codex_extension_api::StepPreparationInput {
                         turn_id: &turn_context.sub_id,
                         ready_selected_capability_roots: &accessed_roots,
-                        executor_capability_discovery: executor_capability_discovery.as_deref(),
-                        executor_capability_discovery_v2: executor_capability_discovery_v2
-                            .as_deref(),
+                        executor_capability_discovery: skill_discovery,
+                        executor_capability_discovery_v2: skill_discovery_v2,
                         selected_plugins: &selected_plugins,
                         session_store: &self.services.session_extension_data,
                         thread_store: &self.services.thread_extension_data,
@@ -4520,12 +4573,6 @@ impl Session {
                     .or_cancel(cancellation_token)
                     .await?;
             }
-            let executor_hook_sources = crate::hook_runtime::prepare_executor_hook_sources(
-                &mcp,
-                &selected_plugins,
-                executor_capability_discovery.as_deref(),
-                executor_capability_discovery_v2.as_deref(),
-            );
             extension_data.insert(selected_plugins);
             let tool_router = turn::built_tools(
                 self.as_ref(),

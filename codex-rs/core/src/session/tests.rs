@@ -10290,6 +10290,7 @@ async fn capability_discovery_uses_environment_permission_profile() {
             /*resolved_roots*/ &[],
             &turn_context.initial_environments,
             /*v2_snapshots*/ None,
+            /*skill_turn*/ None,
         )
         .await;
     let discovery = discovery.expect("restricted environment should trigger capability discovery");

@@ -36,7 +36,10 @@ impl ExecServerProcess {
     }
 
     pub async fn start_with_version(version: &str) -> Result<Self> {
-        let codex_home = TempDir::new()?;
+        Self::start_with_version_and_home(version, TempDir::new()?).await
+    }
+
+    pub async fn start_with_version_and_home(version: &str, codex_home: TempDir) -> Result<Self> {
         let package = codex_home.path().join("package");
         let bin = package.join("bin");
         std::fs::create_dir_all(&bin)?;
@@ -49,7 +52,12 @@ impl ExecServerProcess {
             package.join("codex-package.json"),
             serde_json::to_vec(&serde_json::json!({"version": version}))?,
         )?;
-        Self::start_command(Command::new(executable), codex_home).await
+        let mut command = Command::new(executable);
+        // V2 must not discover skills installed in the developer's home directory.
+        command
+            .env("HOME", codex_home.path())
+            .env("USERPROFILE", codex_home.path());
+        Self::start_command(command, codex_home).await
     }
 
     async fn start_command(mut command: Command, codex_home: TempDir) -> Result<Self> {

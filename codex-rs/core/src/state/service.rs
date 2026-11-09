@@ -110,6 +110,21 @@ pub(crate) struct SessionServices {
 impl SessionServices {
     #[expect(
         clippy::expect_used,
+        reason = "poisoned grants must not authorize discovery"
+    )]
+    pub(crate) fn granted_permissions(
+        &self,
+        environment_id: &str,
+    ) -> Option<AdditionalPermissionProfile> {
+        self.granted_permissions_by_environment_id
+            .lock()
+            .expect("session permission grants lock poisoned")
+            .get(environment_id)
+            .cloned()
+    }
+
+    #[expect(
+        clippy::expect_used,
         reason = "poisoned grant state must not authorize further operations"
     )]
     pub(crate) fn record_granted_permissions(

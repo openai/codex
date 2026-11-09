@@ -712,6 +712,138 @@ async fn thread_plugin_selection_disables_executor_hooks_without_disabling_their
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_hooks_survive_turn_skill_discovery_failure() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = super::executor_discovery_v2::Executor::start(
+        /*supports_v2*/ true,
+        super::executor_discovery_v2::DiscoveryFailure::TurnGrant,
+    )
+    .await?;
+    *executor.inventory.lock().await = Some(json!({
+        "plugins": [{
+            "id": "computer-use@openai-bundled", "displayName": "computer-use",
+            "remotePluginId": null, "version": "1", "root": "file:///computer-use",
+            "files": {
+                "manifest": {"path": "file:///computer-use/.codex-plugin/plugin.json",
+                    "contents": computer_use_hook_manifest().to_string()},
+                "mcpConfig": null, "appsConfig": null,
+            }, "skills": [],
+        }],
+        "skills": [], "warnings": [],
+    }));
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    codex_mcp_extension::install_plugins(
+        &mut extensions,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let fixture = executor_plugin_hook_fixture(
+        test_codex()
+            .with_exec_server_url(executor.url.clone())
+            .with_extensions(Arc::new(extensions.build()))
+            .with_config(|config| {
+                for feature in [
+                    Feature::ExecutorCapabilityDiscoveryV2,
+                    Feature::Plugins,
+                    Feature::RequestPermissionsTool,
+                ] {
+                    config.features.enable(feature).unwrap();
+                }
+                config.config_layer_stack = config
+                    .config_layer_stack
+                    .with_user_config(
+                        &config.codex_home.join("config.toml"),
+                        toml::from_str("[plugins.\"computer-use@openai-bundled\"]\nenabled = true")
+                            .unwrap(),
+                    )
+                    .unwrap();
+                config.permissions.approval_policy = codex_core::config::Constrained::allow_any(
+                    codex_protocol::protocol::AskForApproval::OnRequest,
+                );
+                config
+                    .permissions
+                    .set_permission_profile(
+                        codex_protocol::models::PermissionProfile::from_runtime_permissions(
+                            &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(
+                                Vec::new(),
+                            ),
+                            codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+                        ),
+                    )
+                    .unwrap();
+            }),
+        &[],
+        vec![
+            sse_response(sse(vec![
+                ev_function_call(
+                    "grant",
+                    "request_permissions",
+                    r#"{"permissions":{"file_system":{"read":["turn-only-skills"]}}}"#,
+                ),
+                ev_completed("grant"),
+            ])),
+            completed_turn_response("done"),
+            completed_turn_response("disabled"),
+        ],
+    )
+    .await?;
+    fixture.attach().await?;
+    fixture
+        .test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Grant skill access, then finish.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let request = wait_for_event_match(&fixture.test.codex, |event| match event {
+        EventMsg::RequestPermissions(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    fixture
+        .test
+        .codex
+        .submit(Op::RequestPermissionsResponse {
+            id: request.call_id,
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: request.permissions,
+                scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            },
+        })
+        .await?;
+    wait_for_event(&fixture.test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    fixture.wait_for_hook_call().await?;
+    assert_eq!(fixture.calls().await?.len(), 1);
+    assert!(
+        executor.requests.lock().await.iter().any(|request| {
+            request["method"] == "capabilities/discoverV2"
+                && request["params"]["sandbox"]
+                    .to_string()
+                    .contains("turn-only-skills")
+        }),
+        "the turn inventory failed while the session inventory stayed healthy"
+    );
+    submit_thread_settings(
+        &fixture.test.codex,
+        ThreadSettingsOverrides {
+            disabled_plugin_ids: Some(vec!["computer-use@openai-bundled".into()]),
+            ..Default::default()
+        },
+    )
+    .await?;
+    fixture
+        .test
+        .submit_text_turn("Finish with the plugin disabled.")
+        .await?;
+    assert_eq!(fixture.calls().await?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn executor_stop_hook_uses_plugin_policy_refreshed_during_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let fixture = executor_plugin_hook_fixture(
@@ -1454,7 +1586,11 @@ async fn executor_plugin_hook_fixture(
             .expect("disable ordinary hooks");
         let node_repl: McpServerConfig = serde_json::from_value(json!({
             "url": node_repl_url,
-            "environment_id": remote_aware_environment_id(),
+            "environment_id": if config.features.enabled(Feature::ExecutorCapabilityDiscoveryV2) {
+                codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string()
+            } else {
+                remote_aware_environment_id()
+            },
         }))
         .expect("valid Node REPL MCP server configuration");
         config

@@ -1,4 +1,4 @@
-//! Verifies V2 discovery, plugin acceptance across auth changes, and cache behavior.
+//! Verifies executor discovery, plugin acceptance across auth changes, and cache behavior.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -193,22 +193,24 @@ impl ContextContributor for DiscoveryRecorder {
     }
 }
 
-struct Executor {
-    url: String,
-    inventory: Arc<Mutex<Option<Value>>>,
-    requests: Arc<Mutex<Vec<Value>>>,
+pub(super) struct Executor {
+    pub(super) url: String,
+    pub(super) inventory: Arc<Mutex<Option<Value>>>,
+    pub(super) requests: Arc<Mutex<Vec<Value>>>,
     _task: AbortOnDropHandle<Result<()>>,
 }
 
 #[derive(Clone, Copy)]
-enum DiscoveryFailure {
+pub(super) enum DiscoveryFailure {
     None,
     Server,
     Disconnect,
+    #[cfg_attr(windows, expect(dead_code, reason = "executor hook tests run on Unix"))]
+    TurnGrant,
 }
 
 impl Executor {
-    async fn start(supports_v2: bool, failure: DiscoveryFailure) -> Result<Self> {
+    pub(super) async fn start(supports_v2: bool, failure: DiscoveryFailure) -> Result<Self> {
         Self::start_with_version(supports_v2, failure, "0.164.0").await
     }
 
@@ -265,23 +267,27 @@ impl Executor {
                             match failure {
                                 // Exhaust the environment's one transport replay so the cache sees Err.
                                 DiscoveryFailure::Disconnect if attempt < 2 => break,
+                                DiscoveryFailure::TurnGrant if request["params"]["sandbox"].to_string().contains("turn-only-skills") => {
+                                    socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32004,"message":"turn discovery failed"}}).to_string().into())).await?;
+                                    continue;
+                                }
                                 DiscoveryFailure::Server if attempt == 0 => {
                                     socket.send(Message::Text(json!({"id":request["id"],"error":{"code":-32004,"message":"fixture discovery failure"}}).to_string().into())).await?;
                                     continue;
                                 }
-                                DiscoveryFailure::None | DiscoveryFailure::Server | DiscoveryFailure::Disconnect => {}
+                                DiscoveryFailure::None | DiscoveryFailure::Server | DiscoveryFailure::Disconnect | DiscoveryFailure::TurnGrant => {}
                             }
                         }
                         let result = match request["method"].as_str() {
                             Some("initialize") => Some(json!({"sessionId":"acquisition-only", "environmentInfo": {
                                 "shell":{"name":"bash","path":"/bin/bash"},
                                 "executorVersion":version,
-                                "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoveryV2":supports_v2}
+                                "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoverySandbox":true,"capabilityDiscoveryV2":supports_v2}
                             }})),
                             Some("environment/info") => Some(json!({
                                 "shell":{"name":"bash","path":"/bin/bash"},
                                 "executorVersion":version,
-                                "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoveryV2":supports_v2}
+                                "capabilities":{"sandboxedFileStreaming":true,"capabilityDiscoverySandbox":true,"capabilityDiscoveryV2":supports_v2}
                             })),
                             Some("capabilityRoots/discoverV1") => Some(json!({
                                 "roots": request["params"]["roots"].as_array().context("V1 roots")?
@@ -537,7 +543,9 @@ async fn v2_discovery_failures_retry_or_remain_cached_by_error_kind() -> Result<
                 // Two disconnected attempts, then one shared successful retry in the same cache.
                 3
             }
-            DiscoveryFailure::None => unreachable!("the test only exercises failures"),
+            DiscoveryFailure::None | DiscoveryFailure::TurnGrant => {
+                unreachable!("the test only exercises startup failures")
+            }
         };
         assert_eq!(
             executor
@@ -837,6 +845,126 @@ async fn check_acquisition(enabled: bool, version: &'static str) -> Result<()> {
     for request in discovery {
         assert!(request["params"]["sandbox"].is_object());
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v1_reuses_session_and_turn_discovery_across_model_steps() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let executor = Executor::start(/*supports_v2*/ false, DiscoveryFailure::None).await?;
+    let model = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_exec_server_url(executor.url.clone())
+        .with_config(|config| {
+            config.update_plan_enabled = true;
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .unwrap();
+            config
+                .features
+                .disable(Feature::ExecutorCapabilityDiscoveryV2)
+                .unwrap();
+            config.permissions.approval_policy = codex_core::config::Constrained::allow_any(
+                codex_protocol::protocol::AskForApproval::OnRequest,
+            );
+            config
+                .permissions
+                .set_permission_profile(
+                    codex_protocol::models::PermissionProfile::from_runtime_permissions(
+                        &codex_protocol::permissions::FileSystemSandboxPolicy::restricted(
+                            Vec::new(),
+                        ),
+                        codex_protocol::permissions::NetworkSandboxPolicy::Restricted,
+                    ),
+                )
+                .unwrap();
+        })
+        .build_with_auto_env(&model)
+        .await?;
+    let selection = test.codex.environment_selections().await.remove(0);
+    let mut config =
+        core_test_support::test_codex::environment_config_for_selection(&test.config, &selection);
+    config.selected_capability_roots = vec![codex_protocol::capabilities::SelectedCapabilityRoot {
+        id: "legacy-root".to_string(),
+        location: codex_protocol::capabilities::CapabilityRootLocation::Environment {
+            environment_id: selection.environment_id.clone(),
+            path: selection.cwd.clone(),
+        },
+    }];
+    test.codex.environment_ready(&selection, config).await?;
+    let permissions = codex_protocol::request_permissions::RequestPermissionProfile {
+        file_system: Some(
+            codex_protocol::models::FileSystemPermissions::from_read_write_path_uris(
+                Some(vec![selection.cwd.join("approved")?]),
+                /*write*/ None,
+            ),
+        ),
+        ..Default::default()
+    };
+    let mut sequence = vec![responses::sse(vec![
+        responses::ev_function_call(
+            "grant",
+            "request_permissions",
+            &json!({
+                "permissions": permissions,
+            })
+            .to_string(),
+        ),
+        responses::ev_completed("grant"),
+    ])];
+    for id in ["first-step", "second-step"] {
+        sequence.push(responses::sse(vec![
+            responses::ev_function_call(
+                id,
+                "update_plan",
+                r#"{"plan":[{"step":"Inspect skills","status":"completed"}]}"#,
+            ),
+            responses::ev_completed(id),
+        ]));
+    }
+    sequence.push(responses::sse(vec![responses::ev_completed("done")]));
+    let responses = responses::mount_sse_sequence(&model, sequence).await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Inspect the approved skills across two steps.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let request = core_test_support::wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestPermissions(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: request.call_id,
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions,
+                scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+                strict_auto_review: false,
+            },
+        })
+        .await?;
+    core_test_support::wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(responses.requests().len(), 4);
+    let requests = executor.requests.lock().await;
+    let discovery = requests
+        .iter()
+        .filter(|request| request["method"] == "capabilityRoots/discoverV1")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        discovery.len(),
+        2,
+        "unchanged steps reuse both discovery scopes"
+    );
+    assert_ne!(
+        discovery[0]["params"]["roots"][0]["sandbox"],
+        discovery[1]["params"]["roots"][0]["sandbox"]
+    );
     Ok(())
 }
 

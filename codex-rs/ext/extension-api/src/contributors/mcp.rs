@@ -18,6 +18,8 @@ use crate::ExtensionFuture;
 pub struct McpServerContributionContext<'a, C> {
     /// Host configuration visible during MCP resolution.
     config: &'a C,
+    /// Explicit thread denials, including V1 roots whose manifests cannot be read.
+    disabled_plugin_ids: &'a [String],
     /// Whether pending auth differs from published auth; invalidate catalogs before projection.
     auth_changed: bool,
     /// Extension-owned data for the active thread, when resolution is thread-scoped.
@@ -51,6 +53,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
     pub fn global(config: &'a C) -> Self {
         Self {
             config,
+            disabled_plugin_ids: &[],
             auth_changed: false,
             thread_store: None,
             thread_init: None,
@@ -75,6 +78,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
     ) -> Self {
         Self {
             config,
+            disabled_plugin_ids: &[],
             auth_changed: false,
             thread_store: Some(thread_store),
             thread_init: Some(thread_init),
@@ -85,6 +89,17 @@ impl<'a, C> McpServerContributionContext<'a, C> {
             executor_capability_discovery,
             executor_capability_discovery_v2,
         }
+    }
+
+    /// Applies thread denials before resolving ownership of unreadable plugin manifests.
+    pub fn with_disabled_plugin_ids(mut self, ids: &'a [String]) -> Self {
+        self.disabled_plugin_ids = ids;
+        self
+    }
+
+    /// Plugin identities explicitly disabled for the active thread.
+    pub fn disabled_plugin_ids(&self) -> &'a [String] {
+        self.disabled_plugin_ids
     }
 
     /// Attaches the same environment snapshot used to project MCP authority.

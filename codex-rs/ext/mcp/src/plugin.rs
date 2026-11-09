@@ -343,7 +343,10 @@ impl McpServerContributor<Config> for PluginContributor {
                         &root.selected_root.location;
                     // Ownership survives capability parse failures; an unresolved root cannot
                     // bypass a denying policy.
-                    if !plugins_config.allows_plugin(&root.selected_root.id)
+                    if (!plugins_config.allows_plugin(&root.selected_root.id)
+                        || context
+                            .disabled_plugin_ids()
+                            .contains(&root.selected_root.id))
                         && discovery.error.is_none()
                         && !matches!(
                             self.ownership_for_root(
@@ -389,7 +392,9 @@ impl McpServerContributor<Config> for PluginContributor {
                 }
             } else {
                 for selected_root in selected_roots {
-                    if !plugins_config.allows_plugin(&selected_root.id) {
+                    if !plugins_config.allows_plugin(&selected_root.id)
+                        || context.disabled_plugin_ids().contains(&selected_root.id)
+                    {
                         if !matches!(
                             self.ownership_for_root(
                                 &state,
