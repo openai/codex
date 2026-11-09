@@ -11,8 +11,6 @@ use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::RolloutId;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -59,8 +57,6 @@ pub(crate) fn builder_from_session_meta(
     builder.agent_path = session_meta.meta.agent_path.clone();
     builder.cwd = session_meta.meta.cwd.clone();
     builder.cli_version = Some(session_meta.meta.cli_version.clone());
-    builder.sandbox_policy = SandboxPolicy::new_read_only_policy();
-    builder.approval_mode = AskForApproval::OnRequest;
     if let Some(git) = session_meta.git.as_ref() {
         builder.git_sha = git.commit_hash.as_ref().map(|sha| sha.0.clone());
         builder.git_branch = git.branch.clone();

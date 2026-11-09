@@ -1038,25 +1038,34 @@ mod tests {
         builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        let permission_profile: PermissionProfile = PermissionProfile::Disabled;
-        metadata.sandbox_policy =
-            serde_json::to_string(&permission_profile).expect("serialize profile");
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("state db upsert should succeed");
+        for (value, expected) in [
+            (
+                metadata.sandbox_policy.clone(),
+                PermissionProfile::read_only(),
+            ),
+            (
+                serde_json::to_string(&PermissionProfile::Disabled).expect("serialize profile"),
+                PermissionProfile::Disabled,
+            ),
+        ] {
+            metadata.sandbox_policy = value;
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("state db upsert should succeed");
 
-        let thread = store
-            .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
-                include_history: false,
-            })
-            .await
-            .expect("read thread");
+            let thread = store
+                .read_thread(ReadThreadParams {
+                    thread_id,
+                    include_archived: false,
+                    include_history: false,
+                })
+                .await
+                .expect("read thread");
 
-        assert_eq!(thread.preview, "Hello from user");
-        assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+            assert_eq!(thread.preview, "Hello from user");
+            assert_eq!(thread.permission_profile, expected);
+        }
     }
 
     #[tokio::test]
@@ -1079,22 +1088,28 @@ mod tests {
         builder.model_provider = Some(config.default_model_provider_id.clone());
         builder.cwd = home.path().to_path_buf();
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
-        metadata.sandbox_policy = "danger-full-access".to_string();
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("state db upsert should succeed");
+        for value in [
+            "danger-full-access".to_string(),
+            serde_json::to_string(&SandboxPolicy::DangerFullAccess)
+                .expect("serialize legacy policy"),
+        ] {
+            metadata.sandbox_policy = value;
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("state db upsert should succeed");
 
-        let thread = store
-            .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
-                include_history: true,
-            })
-            .await
-            .expect("read thread");
+            let thread = store
+                .read_thread(ReadThreadParams {
+                    thread_id,
+                    include_archived: false,
+                    include_history: true,
+                })
+                .await
+                .expect("read thread");
 
-        assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+            assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+        }
     }
 
     #[tokio::test]

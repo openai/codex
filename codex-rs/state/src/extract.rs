@@ -852,7 +852,8 @@ mod tests {
             title: String::new(),
             name: None,
             preview: None,
-            sandbox_policy: "read-only".to_string(),
+            sandbox_policy: serde_json::to_string(&PermissionProfile::read_only())
+                .unwrap_or_default(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
             first_user_message: None,

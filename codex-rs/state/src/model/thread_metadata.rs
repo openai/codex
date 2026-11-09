@@ -3,9 +3,9 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::SanitizedGitUrl;
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
@@ -171,7 +171,7 @@ pub struct ThreadMetadata {
     pub name: Option<String>,
     /// Best available user-facing preview for discovery and list display.
     pub preview: Option<String>,
-    /// The sandbox policy (stringified enum).
+    /// Serialized permission profile or legacy sandbox value.
     pub sandbox_policy: String,
     /// The approval mode (stringified enum).
     pub approval_mode: String,
@@ -236,8 +236,6 @@ pub struct ThreadMetadataBuilder {
     pub cwd: PathBuf,
     /// Version of the CLI that created the thread.
     pub cli_version: Option<String>,
-    /// The sandbox policy.
-    pub sandbox_policy: SandboxPolicy,
     /// The approval mode.
     pub approval_mode: AskForApproval,
     /// The archive timestamp, if the thread is archived.
@@ -276,7 +274,6 @@ impl ThreadMetadataBuilder {
             model_provider: None,
             cwd: PathBuf::new(),
             cli_version: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             approval_mode: AskForApproval::OnRequest,
             archived_at: None,
             git_sha: None,
@@ -288,7 +285,6 @@ impl ThreadMetadataBuilder {
     /// Build canonical thread metadata, filling missing values from defaults.
     pub fn build(&self, default_provider: &str) -> ThreadMetadata {
         let source = crate::extract::enum_to_string(&self.source);
-        let sandbox_policy = crate::extract::enum_to_string(&self.sandbox_policy);
         let approval_mode = crate::extract::enum_to_string(&self.approval_mode);
         let created_at = canonicalize_datetime(self.created_at);
         let updated_at = self
@@ -335,7 +331,8 @@ impl ThreadMetadataBuilder {
             name: (guardian_review && self.history_mode == ThreadHistoryMode::Paginated)
                 .then(|| crate::GUARDIAN_THREAD_TITLE.to_string()),
             preview: guardian_review.then(|| crate::GUARDIAN_THREAD_PREVIEW.to_string()),
-            sandbox_policy,
+            sandbox_policy: serde_json::to_string(&PermissionProfile::read_only())
+                .unwrap_or_default(),
             approval_mode,
             tokens_used: 0,
             first_user_message: None,
