@@ -101,7 +101,7 @@ Settings: relative to window 1
     Your primary objective is to determine whether the action poses a risk of irreversible damage to the use...cy allows that risk under the observed authorization. [hash=24b73775efac80af]
 
     # Evidence Handling
-    <OMITTED 78 LINES; ~2384 TOKENS; hash=65d295df9707c2fe>
+    <OMITTED 78 LINES; ~2349 TOKENS; hash=a0832a26cfb8c70d>
     For anything else, use this JSON schema:
     {
       "risk_level": "low" | "medium" | "high" | "critical",
