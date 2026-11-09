@@ -814,12 +814,15 @@ fn only_an_explicit_workspace_403_stops_retries() {
     use http::StatusCode;
     let provider = r#"{"error":{"code":"invalid_workspace_selected"}}"#;
     let detail = r#"{"detail":{"code":"invalid_workspace_selected"}}"#;
+    let access_denied = r#"{"detail":{"code":"codex_workspace_access_denied"}}"#;
     let other = r#"{"detail":{"code":"route_rate_limited"}}"#;
     let workspace_header =
         http::HeaderValue::from_str(&base64::engine::general_purpose::STANDARD.encode(provider))
             .unwrap();
     for (status, body, with_header, terminal) in [
         (StatusCode::FORBIDDEN, detail, false, true),
+        (StatusCode::FORBIDDEN, access_denied, false, true),
+        (StatusCode::SERVICE_UNAVAILABLE, access_denied, false, false),
         (StatusCode::FORBIDDEN, provider, false, true),
         (StatusCode::FORBIDDEN, "", true, true),
         (StatusCode::FORBIDDEN, "", false, false),
@@ -845,10 +848,7 @@ fn only_an_explicit_workspace_403_stops_retries() {
             retry_after: None,
         }));
         assert_eq!(
-            matches!(
-                err.details(),
-                CodexErrorDetails::InvalidWorkspaceSelected(_)
-            ),
+            matches!(err.details(), CodexErrorDetails::WorkspaceAccessDenied(_)),
             terminal,
             "{err}"
         );

@@ -129,6 +129,7 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
 
 #[test_case::test_case(true, Some("invalid_workspace_selected"), 3, 0; "workspace denial on websocket")]
 #[test_case::test_case(false, Some("invalid_workspace_selected"), 0, 2; "workspace denial on http")]
+#[test_case::test_case(true, Some("codex_workspace_access_denied"), 3, 0; "workspace permission denied on websocket")]
 #[test_case::test_case(true, Some("access_program_not_enabled"), 3, 0; "access program denial on websocket")]
 #[test_case::test_case(false, Some("access_program_not_enabled"), 0, 2; "access program denial on http")]
 #[test_case::test_case(true, None, 3, 4; "bare websocket and http denials")]

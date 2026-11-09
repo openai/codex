@@ -290,9 +290,10 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                     });
                     let code = body_code.or(response.identity_error_code.as_deref());
                     match (status, code) {
-                        (http::StatusCode::FORBIDDEN, Some("invalid_workspace_selected")) => {
-                            CodexErrorDetails::InvalidWorkspaceSelected(response).into()
-                        }
+                        (
+                            http::StatusCode::FORBIDDEN,
+                            Some("invalid_workspace_selected" | "codex_workspace_access_denied"),
+                        ) => CodexErrorDetails::WorkspaceAccessDenied(response).into(),
                         (http::StatusCode::FORBIDDEN, Some("access_program_not_enabled")) => {
                             CodexErrorDetails::AccessProgramNotEnabled(ProviderRejection::Http(
                                 response,

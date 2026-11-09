@@ -148,9 +148,9 @@ pub enum CodexErrorDetails {
     /// surface a polite FunctionCallOutput back to the model instead of crashing the CLI.
     #[error("interrupted (Ctrl-C). Something went wrong? Hit `/feedback` to report the issue.")]
     Interrupted,
-    /// The server rejected the selected workspace.
+    /// The account cannot use Codex in the selected workspace.
     #[error("{0}")]
-    InvalidWorkspaceSelected(UnexpectedResponseError),
+    WorkspaceAccessDenied(UnexpectedResponseError),
     /// The provider denied the access program required for this request.
     #[error("{0}")]
     AccessProgramNotEnabled(ProviderRejection),
@@ -479,7 +479,7 @@ impl CodexErr {
             | CodexErrorDetails::FlexUnavailable
             | CodexErrorDetails::CyberPolicy { .. }
             | CodexErrorDetails::BioPolicy { .. }
-            | CodexErrorDetails::InvalidWorkspaceSelected(_)
+            | CodexErrorDetails::WorkspaceAccessDenied(_)
             | CodexErrorDetails::AccessProgramNotEnabled(_)
             | CodexErrorDetails::MisalignmentPolicyViolation { .. } => None,
             CodexErrorDetails::ServerOverloaded
@@ -556,7 +556,7 @@ impl CodexErr {
                 http_status_code: self.http_status_code_value(),
             },
             CodexErrorDetails::ConnectionFailed(_)
-            | CodexErrorDetails::InvalidWorkspaceSelected(_)
+            | CodexErrorDetails::WorkspaceAccessDenied(_)
             | CodexErrorDetails::AccessProgramNotEnabled(_)
             | CodexErrorDetails::UnexpectedStatus(_) => CodexErrorInfo::HttpConnectionFailed {
                 http_status_code: self.http_status_code_value(),
@@ -604,7 +604,7 @@ impl CodexErr {
             CodexErrorDetails::ModelNotFound { status, .. }
             | CodexErrorDetails::ContentPolicyViolation { status, .. } => *status,
             CodexErrorDetails::RetryLimit(err) => Some(err.status),
-            CodexErrorDetails::InvalidWorkspaceSelected(err)
+            CodexErrorDetails::WorkspaceAccessDenied(err)
             | CodexErrorDetails::AccessProgramNotEnabled(ProviderRejection::Http(err))
             | CodexErrorDetails::UnexpectedStatus(err) => Some(err.status),
             CodexErrorDetails::ConnectionFailed(err) => err.source.status(),
