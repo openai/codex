@@ -5,6 +5,10 @@ import type { GatewayOAuthStatus } from "./GatewayOAuthStatus";
 
 export type GatewayOAuthChangedNotification = {
 /**
+ * Identifies the completed device login attempt.
+ */
+loginId: string | null,
+/**
  * Authorization handoff, sent only to the connection that started login.
  */
 authUrl: string | null, providerId: string, status: GatewayOAuthStatus, error: string | null, };

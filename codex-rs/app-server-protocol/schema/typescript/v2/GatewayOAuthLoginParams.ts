@@ -9,4 +9,8 @@ export type GatewayOAuthLoginParams = {
 /**
  * Defaults to the current provider when omitted.
  */
-modelProvider?: string | null, };
+modelProvider?: string | null,
+/**
+ * Select device authorization when the server advertises support for it.
+ */
+deviceAuth?: boolean, };

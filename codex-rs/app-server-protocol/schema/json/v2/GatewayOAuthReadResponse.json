@@ -39,6 +39,11 @@
         }
       ],
       "description": "Null when the effective provider does not use gateway OAuth."
+    },
+    "supportsDeviceAuth": {
+      "default": false,
+      "description": "Whether the administrator configured a device authorization endpoint.",
+      "type": "boolean"
     }
   },
   "required": [

@@ -12,6 +12,10 @@
     "GatewayOAuthLoginParams": {
       "description": "Authorize a configured provider without changing the default or any thread's provider.",
       "properties": {
+        "deviceAuth": {
+          "description": "Select device authorization when the server advertises support for it.",
+          "type": "boolean"
+        },
         "modelProvider": {
           "description": "Defaults to the current provider when omitted.",
           "type": [

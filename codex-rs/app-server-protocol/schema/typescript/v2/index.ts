@@ -214,6 +214,7 @@ export type { GatewayOAuthCancelResponse } from "./GatewayOAuthCancelResponse";
 export type { GatewayOAuthChangedNotification } from "./GatewayOAuthChangedNotification";
 export type { GatewayOAuthLoginParams } from "./GatewayOAuthLoginParams";
 export type { GatewayOAuthLoginResponse } from "./GatewayOAuthLoginResponse";
+export type { GatewayOAuthPrompt } from "./GatewayOAuthPrompt";
 export type { GatewayOAuthReadParams } from "./GatewayOAuthReadParams";
 export type { GatewayOAuthReadResponse } from "./GatewayOAuthReadResponse";
 export type { GatewayOAuthStatus } from "./GatewayOAuthStatus";

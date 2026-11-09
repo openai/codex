@@ -76,6 +76,7 @@ base_url = "{url}/v1"
 wire_api = "responses"
 [model_providers.gateway.gateway_oauth]
 authorization_url = "{url}/authorize"
+device_authorization_url = "{url}/devicecode"
 token_url = "{url}/token"
 client_id = "app-server-login-success"
 delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
@@ -178,7 +179,7 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
         .await?
         .error_for_status()?;
     let response: GatewayOAuthLoginResponse = read_response(&mut outgoing, /*request_id*/ 2).await;
-    assert_eq!(response, GatewayOAuthLoginResponse {});
+    assert_eq!(response, GatewayOAuthLoginResponse { prompt: None });
     send_request(
         &processor,
         &session,
@@ -192,6 +193,7 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
             provider_id: "gateway".to_string(),
             provider_name: "OpenAI".to_string(),
             required: true,
+            supports_device_auth: true,
             status: Some(GatewayOAuthStatus::Succeeded),
             error: None,
         }

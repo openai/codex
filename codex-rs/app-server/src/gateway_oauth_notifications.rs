@@ -55,6 +55,7 @@ pub(crate) fn spawn(
                 outgoing
                     .send_server_notification(ServerNotification::GatewayOAuthChanged(
                         GatewayOAuthChangedNotification {
+                            login_id: None,
                             auth_url: None,
                             provider_id: provider_id.clone(),
                             status,

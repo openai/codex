@@ -660,20 +660,26 @@ managers using the same home and network configuration within the process and
 cannot be undone by a later connection that omits the capability.
 
 - `account/gatewayOAuth/read` returns the selected `providerId`,
-  `providerName`, `required`, `status`, and `error`. `required` indicates that this
+  `providerName`, `required`, `supportsDeviceAuth`, `status`, and `error`. `required` indicates that this
   provider uses gateway OAuth, including when already signed in. With a credential
   exporter, `required` is false and `status` is null. This read does not refresh
-  tokens or open a browser.
+  tokens or open a browser. `supportsDeviceAuth` means a
+  device authorization endpoint is configured. Older servers omit this field.
   `notReady` means credentials are not ready. `succeeded` means saved credentials
   are locally usable, not that a gateway request has been verified. Reads observe
   usable replacement credentials saved by another process sharing the same home.
-- `account/gatewayOAuth/login` starts authorization and returns `{}` after
-  the credential has been saved. Providers requiring OpenAI authentication need a
-  primary account first. A second login request fails while a login is active.
+- `account/gatewayOAuth/login` starts browser authorization and returns
+  `{"prompt": null}` after saving the credential. Providers requiring OpenAI
+  authentication need a primary account first. A second login request fails
+  while a login is active.
   The initiating connection receives a `started` notification with `authUrl`; the
   client must open that URL in a browser that can reach the server callback port.
-  Other status notifications set `authUrl` to null. Login is rejected if the
-  initiating connection opted out of `account/gatewayOAuth/changed` notifications.
+  Pass `deviceAuth: true` to use device authorization. If the saved credential
+  can be reused or refreshed, `prompt` is null. Otherwise it returns a
+  `prompt` with `verificationUrl`, `userCode`, and `loginId` before approval.
+  The initiating connection receives `account/gatewayOAuth/changed` with that
+  login ID when the attempt succeeds or fails. Login requires the connection
+  to accept these notifications.
 - `account/gatewayOAuth/cancel` cancels the calling connection's login and returns
   `{}` after the active login releases its slot, so the client can immediately
   start another login. Closing that connection also cancels its login and releases
@@ -684,7 +690,7 @@ cannot be undone by a later connection that omits the capability.
   default. Clients can read readiness when connecting and after
   changing configuration. Notifications follow the standard per-connection
   `optOutNotificationMethods` setting.
-  These payloads never contain credentials.
+  These payloads never contain access tokens, refresh tokens, or the device grant credential.
 
 Read and login accept an optional `modelProvider`, for example
 `{"modelProvider": "my_gateway"}`. Omitted params, null params, and an omitted or

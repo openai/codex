@@ -1,5 +1,38 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "GatewayOAuthPrompt": {
+      "properties": {
+        "loginId": {
+          "type": "string"
+        },
+        "userCode": {
+          "type": "string"
+        },
+        "verificationUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "loginId",
+        "userCode",
+        "verificationUrl"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "prompt": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/GatewayOAuthPrompt"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
   "title": "GatewayOAuthLoginResponse",
   "type": "object"
 }

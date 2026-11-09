@@ -25,6 +25,13 @@
         "null"
       ]
     },
+    "loginId": {
+      "description": "Identifies the completed device login attempt.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "providerId": {
       "type": "string"
     },

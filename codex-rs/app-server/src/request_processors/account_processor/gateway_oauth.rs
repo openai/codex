@@ -7,6 +7,7 @@ use crate::transport::ConnectionId;
 use codex_app_server_protocol::GatewayOAuthCancelResponse;
 use codex_app_server_protocol::GatewayOAuthLoginResponse;
 use codex_app_server_protocol::GatewayOAuthReadResponse;
+use codex_login::OAuthSessionError;
 use codex_login::OAuthSessionManager;
 use codex_model_provider::GatewayAuthManager;
 use std::sync::PoisonError;
@@ -73,13 +74,15 @@ impl AccountRequestProcessor {
         params: codex_app_server_protocol::GatewayOAuthReadParams,
     ) -> Result<GatewayOAuthReadResponse, JSONRPCErrorError> {
         let (config, client) = self.gateway_client(params.model_provider).await?;
+        let supports_device_auth = client
+            .as_ref()
+            .is_some_and(|client| client.config().device_authorization_url.is_some());
         let state = if let Some(client) = client {
-            Some(status_fields(
-                client
-                    .status()
-                    .await
-                    .map_err(|err| internal_error(err.to_string()))?,
-            ))
+            let status = client
+                .status()
+                .await
+                .map_err(|err| internal_error(err.to_string()))?;
+            Some(status_fields(status))
         } else {
             None
         };
@@ -87,6 +90,7 @@ impl AccountRequestProcessor {
             provider_id: config.model_provider_id.clone(),
             provider_name: config.model_provider.name.clone(),
             required: state.is_some(),
+            supports_device_auth,
             status: state.as_ref().map(|state| state.0),
             error: state.and_then(|state| state.1),
         })
@@ -130,6 +134,76 @@ impl AccountRequestProcessor {
                 "Sign in to your primary account before signing in to the gateway",
             ));
         }
+        if params.device_auth {
+            if client.config().device_authorization_url.is_none() {
+                return Err(invalid_request(
+                    "The gateway does not support device authorization",
+                ));
+            }
+            let saved = client.as_ref().clone().without_interactive_login();
+            let credentials = tokio::select! {
+                result = saved.resolve_access_token() => result,
+                _ = cancel.cancelled() => return Err(invalid_request("Gateway sign-in cancelled")),
+            };
+            match credentials {
+                Ok(_) => return Ok(GatewayOAuthLoginResponse { prompt: None }),
+                Err(err)
+                    if matches!(
+                        err.get_ref()
+                            .and_then(|err| err.downcast_ref::<OAuthSessionError>()),
+                        Some(OAuthSessionError::LoginRequired)
+                    ) => {}
+                Err(err) => return Err(internal_error(err.to_string())),
+            }
+            let (prompt_tx, prompt_rx) = tokio::sync::oneshot::channel();
+            let login_id = uuid::Uuid::new_v4().to_string();
+            let provider_id = config.model_provider_id.clone();
+            let outgoing = Arc::clone(&self.outgoing);
+            let login = tokio::spawn(async move {
+                let result = client
+                    .login_with_device_code(cancel.cancelled(), |prompt| {
+                        let _ = prompt_tx.send(codex_app_server_protocol::GatewayOAuthPrompt {
+                            login_id: login_id.clone(),
+                            verification_url: prompt.verification_uri.to_string(),
+                            user_code: prompt.user_code.clone(),
+                        });
+                    })
+                    .await;
+                drop(guard);
+                let status = if result.is_ok() {
+                    codex_app_server_protocol::GatewayOAuthStatus::Succeeded
+                } else {
+                    codex_app_server_protocol::GatewayOAuthStatus::Failed
+                };
+                outgoing
+                    .send_server_notification_to_connections(
+                        &[owner],
+                        ServerNotification::GatewayOAuthChanged(
+                            codex_app_server_protocol::GatewayOAuthChangedNotification {
+                                login_id: Some(login_id),
+                                auth_url: None,
+                                provider_id,
+                                status,
+                                error: result.as_ref().err().map(ToString::to_string),
+                            },
+                        ),
+                    )
+                    .await;
+                result
+            });
+            return match prompt_rx.await {
+                Ok(prompt) => Ok(GatewayOAuthLoginResponse {
+                    prompt: Some(prompt),
+                }),
+                Err(_) => {
+                    login
+                        .await
+                        .map_err(|err| internal_error(err.to_string()))?
+                        .map_err(|err| internal_error(err.to_string()))?;
+                    Ok(GatewayOAuthLoginResponse { prompt: None })
+                }
+            };
+        }
         let (url_tx, url_rx) = tokio::sync::oneshot::channel();
         let login = client.login_with_browser(cancel.cancelled(), |url| {
             let _ = url_tx.send(url.to_string());
@@ -140,7 +214,7 @@ impl AccountRequestProcessor {
             url = url_rx => {
                 if let Ok(url) = url {
                     self.outgoing.send_server_notification_to_connections(&[owner], ServerNotification::GatewayOAuthChanged(codex_app_server_protocol::GatewayOAuthChangedNotification {
-                        auth_url: Some(url), provider_id: config.model_provider_id.clone(),
+                        login_id: None, auth_url: Some(url), provider_id: config.model_provider_id.clone(),
                         status: codex_app_server_protocol::GatewayOAuthStatus::Started, error: None,
                     })).await;
                 }
@@ -149,7 +223,7 @@ impl AccountRequestProcessor {
         };
         result.map_err(|err| internal_error(err.to_string()))?;
         drop(guard);
-        Ok(GatewayOAuthLoginResponse {})
+        Ok(GatewayOAuthLoginResponse { prompt: None })
     }
 
     pub(crate) async fn gateway_oauth_cancel(
