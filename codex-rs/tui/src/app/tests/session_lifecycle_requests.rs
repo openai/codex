@@ -206,12 +206,11 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
     use crate::app_server_session::user_message_submission::UserMessageAdmission;
     use codex_app_server_client::CloudOperation;
     use codex_app_server_protocol::ItemCompletedNotification;
+    use codex_protocol::models::MessagePhase;
 
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
     let [original, other] = [ThreadId::new(), ThreadId::new()];
-    app.app_server_target = AppServerTarget::Remote {
-        endpoint: crate::resolve_remote_addr("ws://127.0.0.1:1")?,
-    };
+    app.app_server_target = AppServerTarget::Cloud;
     app.enqueue_primary_thread_session(
         test_thread_session(original, app.config.cwd.to_path_buf()),
         Vec::new(),
@@ -248,6 +247,31 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
             text_elements: Vec::new(),
         }],
     };
+    let agent_item = |id: &str, text: &str, phase| ThreadItemPayload::AgentMessage {
+        moderation: None,
+        id: id.into(),
+        text: text.into(),
+        phase,
+        memory_citation: None,
+        delivery: None,
+        questions: None,
+    };
+    let stored = agent_item("stored-item", "Canonical response", None);
+    let commentary = agent_item(
+        "commentary",
+        "Commentary response",
+        Some(MessagePhase::Commentary),
+    );
+    let ongoing = "ongoing-turn";
+    let mut ongoing_turn = test_turn(
+        ongoing,
+        TurnStatus::InProgress,
+        vec![
+            commentary.clone(),
+            agent_item("live-item", "Partial response", None),
+        ],
+    );
+    ongoing_turn.items[0].completed_at_ms = Some(1);
     let mut original_thread = overview_thread(
         original,
         /*parent_thread_id*/ None,
@@ -258,15 +282,18 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
     original_thread.turns = vec![test_turn(
         turn_id,
         TurnStatus::Completed,
-        vec![user_item(confirmed_id)],
+        vec![user_item(confirmed_id), stored.clone()],
     )];
     let mut other_thread = overview_thread(
         other,
         /*parent_thread_id*/ None,
         "Other",
-        ThreadStatus::Idle,
+        ThreadStatus::Active {
+            active_flags: Vec::new(),
+        },
     );
     other_thread.cwd = app.config.cwd.clone();
+    other_thread.turns = vec![ongoing_turn];
 
     let (client, mut commands, _server_events) =
         codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
@@ -340,6 +367,24 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
         resumed_threads
     });
 
+    let completed = |thread_id: ThreadId, turn_id: &str, item| {
+        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+            thread_id.to_string(),
+            turn_id.into(),
+            item,
+            /*started_at_ms*/ None,
+            /*completed_at_ms*/ 1,
+        ))
+    };
+    let rendered_responses = |app: &App| {
+        app.transcript_cells
+            .iter()
+            .flat_map(|cell| cell.display_lines(/*width*/ 80))
+            .map(|line| line.to_string())
+            .filter(|line| line.contains("response"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let mut tui = crate::tui::test_support::make_test_tui()?;
     while events.try_recv().is_ok() {}
     for thread_id in [other, original] {
@@ -355,7 +400,36 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
             }),
         )
         .await?;
+        drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
         assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+        if thread_id == other {
+            insta::assert_snapshot!(rendered_responses(&app), @"
+            • Commentary response
+            • Partial response
+            ");
+            for notification in [
+                agent_message_delta_notification(other, ongoing, "live-item", "Live response "),
+                agent_message_delta_notification(
+                    other,
+                    ongoing,
+                    "commentary",
+                    "Commentary response",
+                ),
+                completed(other, ongoing, commentary.clone()),
+                agent_message_delta_notification(other, ongoing, "live-item", "continues"),
+                turn_completed_notification(other, ongoing, TurnStatus::Completed),
+            ] {
+                app.enqueue_thread_notification(other, notification).await?;
+                let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+                app.handle_thread_event_now(event);
+            }
+            drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+            insta::assert_snapshot!(rendered_responses(&app), @"
+            • Commentary response
+            • Partial response
+            • Live response continues
+            ");
+        }
     }
 
     assert_eq!(app.chat_widget.queued_user_message_texts(), ["same text"]);
@@ -364,21 +438,40 @@ async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
             .capture_thread_input_state()
             .is_some_and(|input| input.has_unconfirmed_messages())
     );
-    assert!(
-        !std::iter::from_fn(|| events.try_recv().ok())
-            .any(|event| { matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })) })
-    );
     app.chat_widget.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification::new(
-            original.to_string(),
-            turn_id.into(),
-            user_item(unmatched_id),
-            /*started_at_ms*/ None,
-            /*completed_at_ms*/ 1,
-        )),
+        completed(original, turn_id, user_item(unmatched_id)),
         /*replay_kind*/ None,
     );
     assert!(app.chat_widget.queued_user_message_texts().is_empty());
+    insta::assert_snapshot!(rendered_responses(&app), @"• Canonical response");
+
+    for notification in [
+        ServerNotification::ItemStarted(ItemStartedNotification::new(
+            original.to_string(),
+            turn_id.into(),
+            stored.clone(),
+            /*started_at_ms*/ 1,
+        )),
+        agent_message_delta_notification(original, turn_id, "stored-item", "Canonical response"),
+        completed(original, turn_id, stored),
+        turn_completed_notification(original, turn_id, TurnStatus::Completed),
+        turn_started_notification(original, "later-turn"),
+        agent_message_delta_notification(original, "later-turn", "later-item", "New response"),
+        turn_completed_notification(original, "later-turn", TurnStatus::Completed),
+    ] {
+        app.enqueue_thread_notification(original, notification)
+            .await?;
+        let event = app.active_thread_rx.as_mut().unwrap().recv().await.unwrap();
+        app.handle_thread_event_now(event);
+    }
+    drain_app_events(&mut app, &mut tui, &mut server, &mut events).await?;
+    insta::assert_snapshot!(rendered_responses(&app), @"
+    • Canonical response
+    • New response
+    ");
+    assert!(
+        !std::iter::from_fn(|| ops.try_recv().ok()).any(|op| matches!(op, Op::UserTurn { .. }))
+    );
     server.shutdown().await?;
     assert_eq!(serve.await?, [other.to_string(), original.to_string()]);
     Ok(())

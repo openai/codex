@@ -92,6 +92,17 @@ impl ChatWidget {
         self.flush_active_cell();
     }
 
+    pub(crate) fn replay_backend_thread_turns(
+        &mut self,
+        turns: Vec<Turn>,
+        replay_kind: ReplayKind,
+        target: &crate::AppServerTarget,
+    ) {
+        self.transcript.replayed_cloud_text =
+            matches!(target, crate::AppServerTarget::Cloud).then(std::collections::HashMap::new);
+        self.replay_thread_turns(turns, replay_kind);
+    }
+
     /// Replay a subset of initial events into the UI to seed the transcript when
     /// resuming an existing session. This approximates the live event flow and
     /// is intentionally conservative: only safe-to-replay items are rendered to
@@ -153,7 +164,8 @@ impl ChatWidget {
                     _ => None,
                 });
             let mut replaying_delegation = false;
-            for item in items.into_iter().map(|entry| entry.payload) {
+            for entry in items {
+                let item = entry.payload;
                 if matches!(&item, ThreadItemPayload::UserMessage { content, .. }
                     if realtime::realtime_delegation_input(content).is_some())
                 {
@@ -190,7 +202,10 @@ impl ChatWidget {
                         Some((summary, content)),
                     );
                 } else {
+                    self.transcript.recording_finished_cloud_text =
+                        status != TurnStatus::InProgress || entry.completed_at_ms.is_some();
                     self.replay_thread_item(item, turn_id.clone(), replay_kind);
+                    self.transcript.recording_finished_cloud_text = false;
                 }
             }
             let status = if hidden_nested_review_turn {

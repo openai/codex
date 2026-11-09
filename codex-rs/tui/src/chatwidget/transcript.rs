@@ -48,6 +48,10 @@ pub(super) struct TranscriptState {
     /// Latest `/status` card and fields, retained across copying until a later turn or command.
     pub(super) last_status_copy_targets: Option<StatusCopySource>,
     pub(super) last_completed_agent_message: Option<(String, String)>,
+    /// Finished assistant items projected into this widget from Cloud history, keyed by turn.
+    pub(super) replayed_cloud_text:
+        Option<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    pub(super) recording_finished_cloud_text: bool,
     /// Turn and item IDs for the agent message currently supplying streamed deltas.
     pub(super) active_streamed_agent_message: Option<(String, String)>,
     /// Turn/item identity and raw source of the latest interleaved stream flush.
@@ -75,6 +79,13 @@ impl TranscriptState {
             active_cell,
             ..Self::default()
         }
+    }
+
+    pub(super) fn has_replayed_cloud_text(&self, turn_id: &str, item_id: &str) -> bool {
+        self.replayed_cloud_text
+            .as_ref()
+            .and_then(|turns| turns.get(turn_id))
+            .is_some_and(|items| items.contains(item_id))
     }
 
     pub(super) fn bump_active_cell_revision(&mut self) {

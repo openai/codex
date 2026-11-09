@@ -534,6 +534,9 @@ impl ChatWidget {
         if !from_replay && let Some(questions) = &item.questions {
             self.add_async_questions(&item.id, questions);
         }
+        if self.transcript.has_replayed_cloud_text(turn_id, &item.id) {
+            return;
+        }
         self.transcript.last_completed_agent_message = Some((turn_id.to_string(), item.id.clone()));
         let mut message = String::new();
         for content in &item.content {
@@ -578,6 +581,13 @@ impl ChatWidget {
                     .send(AppEvent::CorrectFlushedAgentMessage { item, cell });
             } else {
                 self.add_to_history(cell);
+            }
+            if self.transcript.recording_finished_cloud_text
+                && let Some(seen) = &mut self.transcript.replayed_cloud_text
+            {
+                seen.entry(turn_id.to_owned())
+                    .or_default()
+                    .insert(item.id.clone());
             }
             self.handle_stream_finished();
             self.request_redraw();

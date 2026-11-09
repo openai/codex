@@ -1573,8 +1573,11 @@ impl App {
         self.recap.seed_from_turns(&turns, now);
         self.schedule_recap_check(thread_id, now);
 
-        self.chat_widget
-            .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
+        self.chat_widget.replay_backend_thread_turns(
+            turns,
+            ReplayKind::ResumeInitialMessages,
+            &self.app_server_target,
+        );
         if should_buffer_initial_replay {
             self.app_event_tx
                 .send(AppEvent::EndInitialHistoryReplayBuffer);
@@ -1873,8 +1876,11 @@ impl App {
             },
         );
         if !snapshot.turns.is_empty() {
-            self.chat_widget
-                .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
+            self.chat_widget.replay_backend_thread_turns(
+                snapshot.turns,
+                ReplayKind::ThreadSnapshot,
+                &self.app_server_target,
+            );
         }
         for (event, changes) in snapshot.events.into_iter().zip(request_changes) {
             reasoning_replay.before_event(&event, &mut self.chat_widget);
