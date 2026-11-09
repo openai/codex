@@ -2069,6 +2069,14 @@ impl ResponsesHttpExecutor<'_> {
             let kind = codex_extension_api::ModelRequestKind::Generation;
             crate::model_request::check_budget(&self.client.request_contributors, &thread_id, kind)
                 .await?;
+            // An account switch during the check requires fresh request setup.
+            if client_setup
+                .auth_owner
+                .as_ref()
+                .is_some_and(|owner| !owner.is_current())
+            {
+                continue;
+            }
             let interceptors = crate::model_request::prepare(
                 &self.client.request_contributors,
                 &thread_id,
@@ -2298,7 +2306,12 @@ impl ModelClientSession {
                 )
                 .await?;
                 // An account switch during the check requires fresh request setup and a new socket.
-                if self.websocket_session.auth_owner != self.client.auth_owner() {
+                if self
+                    .websocket_session
+                    .auth_owner
+                    .as_ref()
+                    .is_some_and(|owner| !owner.is_current())
+                {
                     continue;
                 }
             }

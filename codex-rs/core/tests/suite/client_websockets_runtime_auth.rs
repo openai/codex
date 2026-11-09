@@ -312,6 +312,66 @@ async fn http_requests_keep_matching_runtime_and_credentials_across_retries_and_
     );
 }
 
+#[test_case(RuntimeAuthMode::DualHeader; "dual_header")]
+#[test_case(RuntimeAuthMode::AssertionOnly; "assertion_only")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_reprepares_request_when_account_switches_during_budget_check(mode: RuntimeAuthMode) {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+    Mock::given(path("/register"))
+        .respond_with(registered)
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(responses::sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_completed("resp-1"),
+                ])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
+    provider.supports_websockets = false;
+    let budget = Arc::new(BudgetChecks::default());
+    let (harness, credentials) =
+        runtime_harness(&server, provider, mode, vec![budget.clone()]).await;
+    let mut session = harness.client.new_session();
+    let gate = Arc::new(Barrier::new(2));
+    budget.0.lock().unwrap().push_back(Some(gate.clone()));
+    let generation = complete(&mut session, &harness);
+    tokio::pin!(generation);
+    tokio::select! {
+        result = &mut generation => panic!("generation finished before the budget check: {result:?}"),
+        _ = gate.wait() => {}
+    }
+    *credentials.0.write().unwrap() = CodexAuth::from_api_key("key-other-user");
+    harness.auth_manager.reload().await;
+    let (result, _) = tokio::join!(generation, gate.wait());
+    result.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let responses: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/responses")
+        .collect();
+    assert_eq!(responses.len(), 1);
+    assertion_payload(
+        responses[0].headers["authorization"].to_str().unwrap(),
+        responses[0]
+            .headers
+            .get("x-openai-agent-assertion")
+            .map(|value| value.to_str().unwrap().to_string()),
+        mode,
+        "key-other-user",
+    );
+}
+
 #[test_case(RuntimeAuthMode::DualHeader, false; "dual_header")]
 #[test_case(RuntimeAuthMode::AssertionOnly, false; "assertion_only")]
 #[test_case(RuntimeAuthMode::DualHeader, true; "dual_header_with_gateway")]
@@ -466,6 +526,49 @@ async fn websocket_reconnects_for_replacement_and_account_switch_within_a_turn(
         assert_eq!(body["actor_auth"]["organization_id"], "org-a");
         assert_eq!(body["actor_auth"]["project_id"], "project-a");
     }
+    server.shutdown().await;
+}
+
+#[test_case(RuntimeAuthMode::DualHeader; "dual_header")]
+#[test_case(RuntimeAuthMode::AssertionOnly; "assertion_only")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_sends_after_external_auth_changes_during_request_setup(mode: RuntimeAuthMode) {
+    skip_if_no_network!();
+    let registration = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(registered)
+        .expect(2)
+        .mount(&registration)
+        .await;
+    let response = vec![ev_response_created("resp-1"), ev_completed("resp-1")];
+    let server = start_websocket_server(vec![vec![response.clone()], vec![response]]).await;
+    let provider = websocket_provider(&server);
+    let budget = Arc::new(BudgetChecks::default());
+    let (harness, credentials) = runtime_harness(&registration, provider, mode, vec![budget]).await;
+    let mut session = harness.client.new_session();
+    complete(&mut session, &harness).await.unwrap();
+
+    *credentials.0.write().unwrap() = CodexAuth::from_api_key("key-other-user");
+    complete(&mut session, &harness).await.unwrap();
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 2);
+    for (handshake, credential) in handshakes.iter().zip(["key-a", "key-other-user"]) {
+        assertion_payload(
+            &handshake.header("authorization").unwrap(),
+            handshake.header("x-openai-agent-assertion"),
+            mode,
+            credential,
+        );
+    }
+    assert_eq!(
+        server
+            .connections()
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>(),
+        vec![1, 1]
+    );
     server.shutdown().await;
 }
 
