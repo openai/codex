@@ -1265,7 +1265,7 @@ ON CONFLICT(id) DO UPDATE SET
         for (thread_id, thread_id_string) in thread_ids.iter().zip(&thread_id_strings) {
             sqlx::query("DELETE FROM logs WHERE thread_id = ?")
                 .bind(thread_id_string)
-                .execute_with_busy_retry(self.logs_pool.as_ref())
+                .execute_with_busy_retry(self.diagnostic_logs_pool()?)
                 .await?;
             self.thread_queue.delete_thread_queue(*thread_id).await?;
             self.delete_versioned_thread_memory(*thread_id).await?;
@@ -2254,7 +2254,7 @@ mod tests {
             .await?;
         seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
 
-        runtime.logs_pool.close().await;
+        runtime.diagnostic_logs_pool().unwrap().close().await;
         runtime
             .delete_thread(thread_id)
             .await
@@ -2291,7 +2291,7 @@ mod tests {
             .await?;
         sqlx::query("INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (1, 0, 'INFO', 'test', 'feedback log', ?)")
             .bind(thread_id.to_string())
-            .execute(runtime.logs_pool.as_ref())
+            .execute(runtime.diagnostic_logs_pool().unwrap())
             .await?;
         Ok(())
     }

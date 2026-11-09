@@ -11,7 +11,7 @@ impl StateRuntime {
             return Ok(());
         }
 
-        let mut tx = self.logs_pool.begin().await?;
+        let mut tx = self.diagnostic_logs_pool()?.begin().await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
             "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
         );
@@ -300,7 +300,7 @@ WHERE id IN (
 
         let rows = builder
             .build_query_as::<LogRow>()
-            .fetch_all(self.logs_pool.as_ref())
+            .fetch_all(self.diagnostic_logs_pool()?)
             .await?;
         Ok(rows)
     }
@@ -310,7 +310,7 @@ WHERE id IN (
         &self,
         thread_ids: &[&str],
     ) -> anyhow::Result<Vec<u8>> {
-        Self::query_feedback_logs_from_pool(self.logs_pool.as_ref(), thread_ids).await
+        Self::query_feedback_logs_from_pool(self.diagnostic_logs_pool()?, thread_ids).await
     }
 
     /// Read logs from the previous directory without creating or migrating its database.
@@ -441,7 +441,10 @@ WHERE cumulative_estimated_bytes <=
         let mut builder =
             QueryBuilder::<Sqlite>::new("SELECT MAX(id) AS max_id FROM logs WHERE 1 = 1");
         push_log_filters(&mut builder, query);
-        let row = builder.build().fetch_one(self.logs_pool.as_ref()).await?;
+        let row = builder
+            .build()
+            .fetch_one(self.diagnostic_logs_pool()?)
+            .await?;
         let max_id: Option<i64> = row.try_get("max_id")?;
         Ok(max_id.unwrap_or(0))
     }

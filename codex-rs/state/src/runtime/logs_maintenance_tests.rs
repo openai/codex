@@ -94,55 +94,70 @@ async fn stops_at_one_second_when_recent_rows_exceed_budget() {
 
 #[tokio::test]
 async fn periodic_cleanup_prunes_without_new_log_writes_or_restart() {
-    let directory = super::super::test_support::unique_temp_dir();
-    let sqlite = SqliteConfig::new_for_testing(directory.as_path().abs());
-    let runtime = StateRuntime::init(
-        sqlite.clone().with_local_logs_home(directory.join("log")),
-        "test-provider".to_string(),
-    )
-    .await
-    .unwrap();
-    // An older process can create the legacy database after the new runtime starts.
-    let legacy_pool = sqlite
-        .open_logs_db(&LOGS_MIGRATOR, /*telemetry_override*/ None)
+    for current_logs_available in [true, false] {
+        let directory = super::super::test_support::unique_temp_dir();
+        let sqlite = SqliteConfig::new_for_testing(directory.as_path().abs());
+        let logs_home = directory.join("log");
+        if !current_logs_available {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(&logs_home, "not a directory").unwrap();
+        }
+        let runtime = StateRuntime::init(
+            sqlite.clone().with_local_logs_home(logs_home),
+            "test-provider".to_string(),
+        )
         .await
         .unwrap();
-    runtime.start_periodic_logs_maintenance(Duration::from_millis(10));
-    let now = Utc::now().timestamp();
-    for round in 1..=2 {
-        for pool in [runtime.logs_pool.as_ref(), &legacy_pool] {
-            for timestamp in [now - 11 * DAY, now] {
-                sqlx::query(
-                    "INSERT INTO logs (ts, ts_nanos, level, target) VALUES (?, 0, 'INFO', 'test')",
-                )
-                .bind(timestamp)
-                .execute(pool)
-                .await
-                .unwrap();
-            }
-        }
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let current: Vec<i64> = sqlx::query_scalar("SELECT ts FROM logs ORDER BY ts")
-                    .fetch_all(runtime.logs_pool.as_ref())
+        assert_eq!(runtime.logs_pool.is_some(), current_logs_available);
+        // An older process can create the legacy database after the new runtime starts.
+        let legacy_pool = sqlite
+            .open_logs_db(&LOGS_MIGRATOR, /*telemetry_override*/ None)
+            .await
+            .unwrap();
+        runtime.start_periodic_logs_maintenance(Duration::from_millis(10));
+        let now = Utc::now().timestamp();
+        for round in 1..=2 {
+            let pools: Vec<_> = runtime
+                .logs_pool
+                .as_deref()
+                .into_iter()
+                .chain([&legacy_pool])
+                .collect();
+            for pool in &pools {
+                for timestamp in [now - 11 * DAY, now] {
+                    sqlx::query(
+                        "INSERT INTO logs (ts, ts_nanos, level, target) VALUES (?, 0, 'INFO', 'test')",
+                    )
+                    .bind(timestamp)
+                    .execute(*pool)
                     .await
                     .unwrap();
-                let legacy: Vec<i64> = sqlx::query_scalar("SELECT ts FROM logs ORDER BY ts")
-                    .fetch_all(&legacy_pool)
-                    .await
-                    .unwrap();
-                if (current, legacy) == (vec![now; round], vec![now; round]) {
-                    break;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        })
-        .await
-        .expect("periodic cleanup should remove expired logs from both locations while idle");
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let mut retained = Vec::new();
+                    for pool in &pools {
+                        retained.push(
+                            sqlx::query_scalar::<_, i64>("SELECT ts FROM logs ORDER BY ts")
+                                .fetch_all(*pool)
+                                .await
+                                .unwrap(),
+                        );
+                    }
+                    if retained == vec![vec![now; round]; pools.len()] {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("periodic cleanup should remove expired logs from both locations while idle");
+        }
+        legacy_pool.close().await;
+        runtime.close().await;
+        tokio::fs::remove_dir_all(directory).await.unwrap();
     }
-    legacy_pool.close().await;
-    runtime.close().await;
-    tokio::fs::remove_dir_all(directory).await.unwrap();
 }
 
 #[tokio::test]
@@ -183,12 +198,12 @@ async fn legacy_writer_does_not_block_current_cleanup_and_is_retried() -> anyhow
     )
     .await?;
     sqlx::query("INSERT INTO logs (ts, ts_nanos, level, target) VALUES (0, 0, 'INFO', 'test')")
-        .execute(runtime.logs_pool.as_ref())
+        .execute(runtime.diagnostic_logs_pool().unwrap())
         .await?;
     runtime.start_periodic_logs_maintenance(Duration::from_millis(10));
     tokio::time::timeout(Duration::from_secs(5), async {
         while sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM logs")
-            .fetch_one(runtime.logs_pool.as_ref())
+            .fetch_one(runtime.diagnostic_logs_pool().unwrap())
             .await
             .unwrap()
             != 0
@@ -263,7 +278,7 @@ async fn startup_cleanup_runs_without_waiting_for_the_period() {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let current: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM logs")
-                    .fetch_one(runtime.logs_pool.as_ref())
+                    .fetch_one(runtime.diagnostic_logs_pool().unwrap())
                     .await
                     .unwrap();
                 let legacy: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM logs")

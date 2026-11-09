@@ -1176,14 +1176,17 @@ async fn thread_list_db_only_errors_distinguish_unavailable_database_from_empty_
     let other_home = TempDir::new()?;
     create_minimal_config(home.path())?;
     let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
-    let config = Arc::new(
-        ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
-            .fallback_cwd(Some(home.path().to_path_buf()))
-            .loader_overrides(loader_overrides.clone())
-            .build()
-            .await?,
-    );
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .loader_overrides(loader_overrides.clone())
+        .build()
+        .await?;
+    // Diagnostic storage failure must not disable database-only history listing.
+    let logs_home = home.path().join("unavailable-logs");
+    std::fs::write(&logs_home, "not a directory")?;
+    config.sqlite = config.sqlite.clone().with_local_logs_home(logs_home);
+    let config = Arc::new(config);
     let right_db = codex_state::StateRuntime::init(
         config.sqlite_config().clone(),
         config.model_provider_id.clone(),

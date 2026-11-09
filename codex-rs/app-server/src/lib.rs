@@ -774,6 +774,14 @@ pub async fn run_main_with_transport_options(
         .with(log_db_layer)
         .with(otel_layers)
         .try_init();
+    if let Some(error) = state_db.as_ref().and_then(|db| db.diagnostic_logs_error()) {
+        tracing::warn!(
+            event.name = "diagnostic_database_unavailable",
+            error,
+            "diagnostic database unavailable"
+        );
+    }
+
     #[cfg(unix)]
     if let Some(Err(err)) = nofile_limit_result {
         warn!(%err, "failed to raise managed app-server file descriptor limit");

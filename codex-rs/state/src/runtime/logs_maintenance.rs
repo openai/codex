@@ -1,4 +1,5 @@
 //! Prune current and legacy diagnostic logs immediately, then on a timer.
+//! Legacy cleanup continues when current diagnostics are unavailable.
 //! SQLite keeps freed pages for reuse.
 
 use super::StateRuntime;
@@ -26,7 +27,8 @@ impl StateRuntime {
                 let Some(runtime) = runtime.upgrade() else {
                     break;
                 };
-                if runtime.logs_pool.is_closed() {
+                let logs_pool = runtime.logs_pool.as_deref();
+                if runtime.pool.is_closed() || logs_pool.is_some_and(SqlitePool::is_closed) {
                     break;
                 }
                 // Older versions write logs in sqlite_home. Keep the same retention policy
@@ -38,8 +40,7 @@ impl StateRuntime {
                         None
                     }
                 };
-                for pool in std::iter::once(runtime.logs_pool.as_ref()).chain(legacy_pool.as_ref())
-                {
+                for pool in logs_pool.into_iter().chain(legacy_pool.as_ref()) {
                     if let Err(err) = prune_by_age_and_size(
                         pool,
                         Utc::now().timestamp(),

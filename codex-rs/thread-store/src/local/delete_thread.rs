@@ -5,6 +5,7 @@
 //! associated rollout is removed, under the same lifecycle lock, so queued artifact mutations cannot
 //! use deleted thread metadata. Host-owned data is cleaned after reference and writer checks,
 //! before removing rollouts, so cleanup failures remain retryable even without a state DB.
+//! Known diagnostic database failures must be rejected before any destructive cleanup.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -41,9 +42,23 @@ impl LocalThreadStore {
         &self,
         thread_ids: &[ThreadId],
     ) -> ThreadStoreResult<()> {
+        ensure_diagnostic_logs_available(self)?;
         let reference_index = scan_reference_index(self).await?;
         check_attached_children(&reference_index, thread_ids)
     }
+}
+
+fn ensure_diagnostic_logs_available(store: &LocalThreadStore) -> ThreadStoreResult<()> {
+    if let Some(error) = store
+        .state_db
+        .as_ref()
+        .and_then(|db| db.diagnostic_logs_error())
+    {
+        return Err(ThreadStoreError::Internal {
+            message: format!("cannot delete thread while diagnostic logs are unavailable: {error}"),
+        });
+    }
+    Ok(())
 }
 
 fn check_attached_children(
@@ -94,6 +109,7 @@ pub(super) async fn delete_thread(
     store: &LocalThreadStore,
     params: DeleteThreadParams,
 ) -> ThreadStoreResult<()> {
+    ensure_diagnostic_logs_available(store)?;
     let thread_id = params.thread_id;
     let _lifecycle_guard = store.live_writer_locks.lock_lifecycle(thread_id).await;
     let _live_writer_guard = store.live_writer_locks.lock(thread_id).await;
@@ -129,6 +145,7 @@ pub(super) async fn delete_threads(
         return Ok(());
     }
 
+    ensure_diagnostic_logs_available(store)?;
     let mut lock_thread_ids = thread_ids.clone();
     lock_thread_ids.sort_unstable_by_key(ToString::to_string);
     lock_thread_ids.dedup();

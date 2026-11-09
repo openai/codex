@@ -1,4 +1,4 @@
-//! Verifies startup recovery preserves corrupt databases and allows thread creation.
+//! Verifies database failures preserve saved threads and report actionable diagnostics.
 
 use anyhow::Result;
 use app_test_support::TestAppServer;
@@ -93,6 +93,24 @@ async fn startup_reports_shared_and_fallback_recovery() -> Result<()> {
         backup_pool.close().await;
         server.start_thread(ThreadStartParams::default()).await?;
         timeout(read_timeout, server.shutdown_gracefully()).await??;
+
+        // An unreadable logs header must also reach the outer recovery path.
+        tokio::fs::write(&logs_path, b"damaged logs database").await?;
+        let mut server = TestAppServer::builder()
+            .with_codex_home(sqlite.home())
+            .build_initialized_with_timeout(read_timeout)
+            .await?;
+        let warning: ConfigWarningNotification =
+            timeout(read_timeout, server.read_notification("configWarning")).await??;
+        assert_eq!(warning.summary, "Codex rebuilt its local database");
+        assert!(
+            warning
+                .details
+                .expect("recovery details")
+                .contains(&logs_path.display().to_string())
+        );
+        server.start_thread(ThreadStartParams::default()).await?;
+        timeout(read_timeout, server.shutdown_gracefully()).await??;
     }
     Ok(())
 }
@@ -141,6 +159,64 @@ async fn state_recovery_restores_saved_threads() -> Result<()> {
         .await?;
     let before: ThreadReadResponse = timeout(read_timeout, server.read_response(request)).await??;
     timeout(read_timeout, server.shutdown_gracefully()).await??;
+
+    // A logs outage must be visible after startup installs tracing, and must
+    // reject deletion before touching the saved conversation.
+    let config_path = home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    let blocked_logs = home.path().join("blocked-logs");
+    std::fs::write(&blocked_logs, b"not a directory")?;
+    std::fs::write(
+        &config_path,
+        format!("log_dir = {blocked_logs:?}\n{config}"),
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(sqlite.home())
+        .with_json_logging("warn")
+        .build_initialized_with_timeout(read_timeout)
+        .await?;
+    let warning = server
+        .wait_for_json_log_event("diagnostic_database_unavailable", read_timeout)
+        .await?;
+    let cause = warning["fields"]["error"]
+        .as_str()
+        .expect("original startup error");
+    assert!(cause.contains(&blocked_logs.display().to_string()));
+    assert!(
+        cause.contains(
+            &std::fs::create_dir_all(&blocked_logs)
+                .unwrap_err()
+                .to_string()
+        )
+    );
+    let rollout_path = before.thread.path.as_ref().expect("saved rollout");
+    let rollout = std::fs::read(rollout_path)?;
+    let request = server
+        .send_thread_delete_request(codex_app_server_protocol::ThreadDeleteParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let error = timeout(
+        read_timeout,
+        server.read_stream_until_error_message(codex_app_server_protocol::RequestId::Integer(
+            request,
+        )),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32603);
+    assert!(error.error.message.contains(cause));
+    assert_eq!(std::fs::read(rollout_path)?, rollout);
+    let request = server
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread_id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let retained: ThreadReadResponse =
+        timeout(read_timeout, server.read_response(request)).await??;
+    assert_eq!(retained.thread.turns, before.thread.turns);
+    timeout(read_timeout, server.shutdown_gracefully()).await??;
+    std::fs::write(config_path, config)?;
 
     // Introduce corruption only after the owning process has closed its pools.
     let pool = sqlite.open_read_write_pool(&sqlite.state_db_path()).await?;

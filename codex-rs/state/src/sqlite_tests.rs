@@ -88,11 +88,18 @@ async fn configured_log_directory_is_initialized_on_use_and_retries_after_failur
     // Opening unrelated state must not require the configured logs directory.
     let pool = sqlite.open_read_write_pool(&sqlite.state_db_path()).await?;
     pool.close().await;
+    let runtime = crate::StateRuntime::init(sqlite.clone(), "openai".to_string()).await?;
+    runtime.get_backfill_state().await?;
     assert!(
-        crate::StateRuntime::init(sqlite.clone(), "openai".to_string())
+        runtime
+            .max_log_id(&crate::LogQuery::default())
             .await
             .is_err()
     );
+    assert!(sqlite.goals_db_path().is_file());
+    assert!(sqlite.memories_db_path().is_file());
+    assert!(sqlite.queue_db_path().is_file());
+    runtime.close().await;
     assert!(!fallback_logs_path.exists());
 
     // A failed initialization must remain retryable without replacing the config.
