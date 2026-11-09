@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios_incremental_tools.rs
-assertion_line: 644
+assertion_line: 687
 expression: "context_snapshot::format_request_history_snapshot(scenario, &requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: MCP refreshes remove one tool, then its whole namespace, before restoring both tools. Removal notices append alone; restoration appends one developer notice before both namespace declarations. Unchanged turns do not repeat updates.
@@ -19,8 +19,8 @@ Settings:
   tools (1; hash=f359ca6f02a419d6):
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=c6476125e1d67bb3):
-        - namespace/functions; hash=6475578c7f948d18
+00:additional_tools/developer (3; hash=7748a53142f449b7):
+        - namespace/functions; hash=124fee69a69ed6b2
           - function/exec_command
           - function/write_stdin
           - function/list_mcp_resources
