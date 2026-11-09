@@ -2396,6 +2396,11 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         if let Some(mut line) = self.current_line_content.take() {
             let style = self.current_line_style;
             let mut source = crate::terminal_hyperlinks::LogicalLineSource::from_line(&line.line);
+            if !self.current_line_in_code_block
+                && crate::wrapping::text_contains_url_like(&source.text)
+            {
+                source.wrap_policy = crate::terminal_hyperlinks::LineWrapPolicy::UrlAware;
+            }
             source.copy = Some(std::sync::Arc::new(std::mem::take(&mut self.copy_line)));
             // NB we don't wrap code in code blocks, in order to preserve whitespace for copy/paste.
             if !self.current_line_in_code_block

@@ -299,6 +299,29 @@ fn narrow_wrapping_keeps_joined_emoji_whole() {
 }
 
 #[test]
+fn fullscreen_markdown_keeps_a_fitting_url_on_one_row() {
+    use crate::history_cell::AgentMarkdownCell;
+    use crate::history_cell::HistoryCell;
+    let cell = AgentMarkdownCell::new(
+        "See the documentation at https://example.com/docs/reference.".into(),
+        std::path::Path::new("."),
+    );
+    let layout = TextLayout::new(
+        cell.retained_hyperlink_lines(/*width*/ 44, /*detailed*/ false),
+        /*width*/ 44,
+    );
+    let rows = layout
+        .rows
+        .iter()
+        .map(|row| row.line.line.to_string())
+        .collect::<Vec<_>>();
+    insta::assert_snapshot!(rows.join("\n"), @"
+    • See the documentation at
+      https://example.com/docs/reference.
+    ");
+}
+
+#[test]
 fn source_backed_markdown_copy_preserves_code_indentation() {
     use crate::history_cell::AgentMarkdownCell;
     use crate::history_cell::HistoryCell;

@@ -186,7 +186,7 @@ fn copy_on_select_preserves_link_activation_and_ignores_empty_drags() {
             copy_on_select: true,
             ..Default::default()
         };
-        render(&mut view, &cells, /*width*/ 30, /*height*/ 1);
+        render(&mut view, &cells, /*width*/ 30, /*height*/ 2);
         let down = mouse(MouseEventKind::Down(MouseButton::Left), /*column*/ 2);
         assert!(matches!(
             view.handle_mouse(down, &cells),
