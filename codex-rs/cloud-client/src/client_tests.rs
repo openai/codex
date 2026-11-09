@@ -231,6 +231,9 @@ async fn activation_preserves_native_settings_and_thread_metadata() {
     assert!(server.requests.try_recv().is_err());
 }
 
+// Native Prewarm pluginsMcp (28) with productSku (1) set to "codex".
+const PREWARM_CODEX_PLUGINS: &[u8] = b"\xe2\x01\x07\x0a\x05codex";
+
 #[tokio::test]
 async fn prewarm_defers_readiness_only_for_selected_projects() {
     let mut fixture = fixture_responses(vec![
@@ -246,7 +249,12 @@ async fn prewarm_defers_readiness_only_for_selected_projects() {
             .await,
         Err(Error::InvalidResponse)
     ));
-    assert_request(&mut fixture, "Prewarm", b"\x52\x04\x0a\x02\x0a\x00").await;
+    let expected = [
+        b"\x52\x04\x0a\x02\x0a\x00".as_slice(),
+        PREWARM_CODEX_PLUGINS,
+    ]
+    .concat();
+    assert_request(&mut fixture, "Prewarm", &expected).await;
 
     assert!(matches!(
         fixture
@@ -274,7 +282,9 @@ async fn prewarm_defers_readiness_only_for_selected_projects() {
         b"git@github.com:acme/app.git",
         b"\x0a\x21\x2a\x1f",
         b"https://github.com/acme/lib.git",
-        b"\x12\x03App\xe8\x01\x01",
+        b"\x12\x03App",
+        PREWARM_CODEX_PLUGINS,
+        b"\xe8\x01\x01",
     ]
     .concat();
     assert_request(&mut fixture, "Prewarm", &expected).await;
@@ -326,7 +336,7 @@ async fn prewarm_uses_managed_defaults_and_preserves_resolved_settings() {
     .await;
     let expected = server.client.activate("t").await.unwrap();
     assert_request(&mut server, "UpdateConfig", &[56, 1, 0x92, 1, 1, b't']).await;
-    for (model, model_provider, request) in [
+    for (model, model_provider, mut request) in [
         (None, None, vec![0x52, 4, 0x0a, 2, 0x0a, 0]),
         (
             Some("m".to_owned()),
@@ -344,7 +354,8 @@ async fn prewarm_uses_managed_defaults_and_preserves_resolved_settings() {
             serde_json::to_value(&expected).unwrap()
         );
         assert_eq!(actual.thread.protobuf().as_ref(), native_thread.as_slice());
-        // Exactly one default managed selection; no custom settings or Aeon mode.
+        // Exactly one default managed selection with Codex Apps.
+        request.extend_from_slice(PREWARM_CODEX_PLUGINS);
         assert_request(&mut server, "Prewarm", &request).await;
         assert!(server.requests.try_recv().is_err());
     }
@@ -369,7 +380,12 @@ async fn prewarm_uses_managed_defaults_and_preserves_resolved_settings() {
             .await,
         Err(Error::InvalidResponse)
     ));
-    assert_request(&mut server, "Prewarm", &[0x52, 4, 0x0a, 2, 0x0a, 0]).await;
+    let expected = [
+        b"\x52\x04\x0a\x02\x0a\x00".as_slice(),
+        PREWARM_CODEX_PLUGINS,
+    ]
+    .concat();
+    assert_request(&mut server, "Prewarm", &expected).await;
     assert!(server.requests.try_recv().is_err());
 }
 
