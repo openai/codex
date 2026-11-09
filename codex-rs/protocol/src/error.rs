@@ -148,6 +148,9 @@ pub enum CodexErrorDetails {
     /// surface a polite FunctionCallOutput back to the model instead of crashing the CLI.
     #[error("interrupted (Ctrl-C). Something went wrong? Hit `/feedback` to report the issue.")]
     Interrupted,
+    /// The server rejected the selected workspace.
+    #[error("{0}")]
+    InvalidWorkspaceSelected(UnexpectedResponseError),
     /// Unexpected HTTP status code.
     #[error("{0}")]
     UnexpectedStatus(UnexpectedResponseError),
@@ -466,6 +469,7 @@ impl CodexErr {
             | CodexErrorDetails::FlexUnavailable
             | CodexErrorDetails::CyberPolicy { .. }
             | CodexErrorDetails::BioPolicy { .. }
+            | CodexErrorDetails::InvalidWorkspaceSelected(_)
             | CodexErrorDetails::MisalignmentPolicyViolation { .. } => None,
             CodexErrorDetails::ServerOverloaded
             | CodexErrorDetails::PolicyCapacityUnavailable
@@ -539,11 +543,11 @@ impl CodexErr {
             CodexErrorDetails::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },
-            CodexErrorDetails::ConnectionFailed(_) | CodexErrorDetails::UnexpectedStatus(_) => {
-                CodexErrorInfo::HttpConnectionFailed {
-                    http_status_code: self.http_status_code_value(),
-                }
-            }
+            CodexErrorDetails::ConnectionFailed(_)
+            | CodexErrorDetails::InvalidWorkspaceSelected(_)
+            | CodexErrorDetails::UnexpectedStatus(_) => CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: self.http_status_code_value(),
+            },
             CodexErrorDetails::ResponseStreamFailed(_) => {
                 CodexErrorInfo::ResponseStreamConnectionFailed {
                     http_status_code: self.http_status_code_value(),
@@ -586,7 +590,8 @@ impl CodexErr {
             CodexErrorDetails::FlexUnavailable => Some(StatusCode::TOO_MANY_REQUESTS),
             CodexErrorDetails::ModelNotFound { status, .. } => *status,
             CodexErrorDetails::RetryLimit(err) => Some(err.status),
-            CodexErrorDetails::UnexpectedStatus(err) => Some(err.status),
+            CodexErrorDetails::InvalidWorkspaceSelected(err)
+            | CodexErrorDetails::UnexpectedStatus(err) => Some(err.status),
             CodexErrorDetails::ConnectionFailed(err) => err.source.status(),
             CodexErrorDetails::ResponseStreamFailed(err) => err.source.status(),
             _ => None,

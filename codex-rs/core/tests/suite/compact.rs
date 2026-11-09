@@ -1140,6 +1140,63 @@ async fn reasoning_effort_override_remote_v2_compaction_resets_pinned_effort(
     Ok(())
 }
 
+#[test_case::test_case(non_openai_model_provider; "local")]
+#[test_case::test_case(openai_model_provider; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_denial_stops_compaction_on_model_downshift(
+    provider: fn(&MockServer) -> ModelProviderInfo,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let previous = "gpt-5.4";
+    let selected = "gpt-5.2";
+    let model_provider = provider(&server);
+    let test = test_codex()
+        .with_model(previous)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.model_provider.stream_max_retries = Some(2);
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![
+                    model_info_with_context_window(previous, /*context_window*/ 273_000),
+                    model_info_with_context_window(selected, /*context_window*/ 125_000),
+                ],
+            });
+            set_test_compact_prompt(config);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("message", "First reply"),
+            ev_completed_with_tokens("first", /*total_tokens*/ 120_000),
+        ]),
+    )
+    .await;
+    test.submit_turn("first turn").await?;
+
+    let denied = responses::mount_response_handler(&server, |_| {
+        wiremock::ResponseTemplate::new(403)
+            .set_body_json(json!({ "detail": { "code": "invalid_workspace_selected" } }))
+    })
+    .await;
+    test.codex
+        .start_or_steer_turn(disabled_permission_user_turn(
+            "continue on the smaller model",
+            test.cwd.path().to_path_buf(),
+            selected.to_string(),
+        ))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(denied.single_request().body_json()["model"], previous);
+    Ok(())
+}
+
 #[test_case::test_case(json!({"input_tokens": 120_000, "output_tokens": 30_000, "total_tokens": 150_000}); "reported_usage")]
 #[test_case::test_case(Value::Null; "missing_usage")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

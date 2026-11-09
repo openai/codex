@@ -127,6 +127,49 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
     Ok(())
 }
 
+#[test_case::test_case(true, Some("invalid_workspace_selected"), 3, 0; "workspace denial on websocket")]
+#[test_case::test_case(false, Some("invalid_workspace_selected"), 0, 2; "workspace denial on http")]
+#[test_case::test_case(true, None, 3, 4; "bare websocket and http denials")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forbidden_responses_retry_only_without_workspace_denial(
+    supports_websockets: bool,
+    code: Option<&str>,
+    expected_upgrades: u64,
+    expected_posts: u64,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut denial = ResponseTemplate::new(403);
+    if let Some(code) = code {
+        denial = denial.set_body_json(serde_json::json!({"detail": {"code": code}}));
+    }
+    for (verb, count) in [("GET", expected_upgrades), ("POST", expected_posts)] {
+        Mock::given(method(verb))
+            .and(path_regex(".*/responses$"))
+            .respond_with(denial.clone())
+            .expect(count)
+            .mount(&server)
+            .await;
+    }
+
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider.supports_websockets = supports_websockets;
+            config.model_provider.stream_max_retries = Some(1);
+            config.model_provider.request_max_retries = Some(1);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    // A WebSocket-enabled session also attempts a startup prewarm. A typed denial
+    // should leave the next turn eligible for its own WebSocket attempt.
+    test.submit_turn("first").await?;
+    test.submit_turn("second").await?;
+    server.verify().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result<()> {
     skip_if_no_network!(Ok(()));

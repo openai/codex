@@ -261,7 +261,7 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                         request_id: extract_request_tracking_id(headers.as_ref()),
                     })
                 } else {
-                    CodexErr::UnexpectedStatus(UnexpectedResponseError {
+                    let response = UnexpectedResponseError {
                         status,
                         user_message: api_error_user_message(status, &body_text),
                         body: body_text,
@@ -273,7 +273,19 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                             X_OPENAI_AUTHORIZATION_ERROR_HEADER,
                         ),
                         identity_error_code: extract_x_error_json_code(headers.as_ref()),
-                    })
+                    };
+                    let body_code = parsed_body.as_ref().and_then(|body| {
+                        ["/detail/code", "/error/code"]
+                            .into_iter()
+                            .find_map(|path| body.pointer(path)?.as_str())
+                    });
+                    let code = body_code.or(response.identity_error_code.as_deref());
+                    match (status, code) {
+                        (http::StatusCode::FORBIDDEN, Some("invalid_workspace_selected")) => {
+                            CodexErrorDetails::InvalidWorkspaceSelected(response).into()
+                        }
+                        _ => CodexErr::UnexpectedStatus(response),
+                    }
                 }
             }
             TransportError::RetryLimit => CodexErr::RetryLimit(RetryLimitReachedError {

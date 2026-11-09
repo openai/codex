@@ -17,6 +17,7 @@ pub(crate) fn should_retry_with_current_model(
         CodexErrorDetails::TurnAborted
             | CodexErrorDetails::Interrupted
             | CodexErrorDetails::SessionBudgetExceeded
+            | CodexErrorDetails::InvalidWorkspaceSelected(_)
             | CodexErrorDetails::ResponseIncomplete(_)
     ) || (previous.model_info().slug == current.model_info().slug
         && previous.cyber_access_program == current.cyber_access_program)
