@@ -54,6 +54,7 @@ delivery = {{ kind = "header", name = "X-Gateway-Authorization" }}
 async fn gateway_server(home: &std::path::Path) -> Result<TestAppServer> {
     let mut server = TestAppServer::builder()
         .with_codex_home(home)
+        .with_env_overrides(&[("OPENAI_API_KEY", None), ("CODEX_API_KEY", None)])
         .build()
         .await?;
     server
@@ -238,10 +239,7 @@ async fn model_list_leaves_oauth_gateway_after_account_change() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn file_credentials_reuse_gateway_login_after_restart() -> Result<()> {
-    let home = TempDir::new()?;
-    let oauth = MockServer::start().await;
+async fn login_to_gateway(server: &mut TestAppServer, oauth: &MockServer) -> Result<()> {
     Mock::given(method("POST"))
         .and(path("/token"))
         .and(body_string_contains("grant_type=authorization_code"))
@@ -249,18 +247,12 @@ async fn file_credentials_reuse_gateway_login_after_restart() -> Result<()> {
             "access_token": "gateway-access", "refresh_token": "gateway-refresh", "expires_in": 3600,
         })))
         .expect(/*r*/ 1)
-        .mount(&oauth)
+        .mount(oauth)
         .await;
-    // Exercise the managed provider definition used by headless installations.
-    std::fs::write(
-        home.path().join("requirements.toml"),
-        format!("{}\ncredentials_store = 'file'\n", gateway_config(&oauth)),
-    )?;
-    let mut server = gateway_server(home.path()).await?;
     let login = server
         .send_raw_request("account/gatewayOAuth/login", /*params*/ None)
         .await?;
-    let url = authorization_url(&mut server).await?;
+    let url = authorization_url(server).await?;
     let query = url
         .query_pairs()
         .collect::<std::collections::HashMap<_, _>>();
@@ -275,6 +267,73 @@ async fn file_credentials_reuse_gateway_login_after_restart() -> Result<()> {
         .await?
         .error_for_status()?;
     let _: GatewayOAuthLoginResponse = server.read_response(login).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn gateway_oauth_without_api_key_discovers_explicit_catalog_by_default() -> Result<()> {
+    let home = TempDir::new()?;
+    let gateway = MockServer::start().await;
+    let url = gateway.uri();
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "gateway"
+[model_providers.gateway]
+name = "Test gateway"
+base_url = "{url}/v1"
+model_catalog_url = "{url}/catalog"
+[model_providers.gateway.gateway_oauth]
+authorization_url = "{url}/authorize"
+token_url = "{url}/token"
+client_id = "catalog-test"
+credentials_store = "file"
+"#
+        ),
+    )?;
+    let model = codex_protocol::openai_models::ModelInfo {
+        visibility: codex_protocol::openai_models::ModelVisibility::List,
+        ..codex_models_manager::model_info::model_info_from_slug("gateway-coder")
+    };
+    Mock::given(method("GET"))
+        .and(path("/catalog"))
+        .and(wiremock::matchers::header(
+            "authorization",
+            "Bearer gateway-access",
+        ))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(
+            codex_protocol::openai_models::ModelsResponse {
+                models: vec![model],
+            },
+        ))
+        .expect(1..)
+        .mount(&gateway)
+        .await;
+    let mut server = gateway_server(home.path()).await?;
+    login_to_gateway(&mut server, &gateway).await?;
+    let response: codex_app_server_protocol::ModelListResponse = server
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: Default::default(),
+        })
+        .await?;
+    let ids: Vec<_> = response.data.into_iter().map(|model| model.id).collect();
+    assert_eq!(ids, ["gateway-coder"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_credentials_reuse_gateway_login_after_restart() -> Result<()> {
+    let home = TempDir::new()?;
+    let oauth = MockServer::start().await;
+    // Exercise the managed provider definition used by headless installations.
+    std::fs::write(
+        home.path().join("requirements.toml"),
+        format!("{}\ncredentials_store = 'file'\n", gateway_config(&oauth)),
+    )?;
+    let mut server = gateway_server(home.path()).await?;
+    login_to_gateway(&mut server, &oauth).await?;
     server.shutdown_gracefully().await?;
 
     let path = home.path().join("secrets/gateway_oauth.json");

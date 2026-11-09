@@ -50,6 +50,25 @@ const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
 const FEDRAMP_CODEX_BASE_URL: &str = "https://gov.chatgpt.com/backend-api/codex";
 
+// Catalog requests use the model provider's credentials. Before enabling a fetch
+// with gateway OAuth alone, check that the catalog URL has the same origin as the gateway.
+fn supports_gateway_catalog(info: &ModelProviderInfo) -> bool {
+    if info.is_openai() || info.gateway_oauth.is_none() {
+        return false;
+    }
+    let (Some(base), Some(catalog)) = (info.base_url.as_deref(), info.model_catalog_url.as_deref())
+    else {
+        return false;
+    };
+    match (
+        codex_http_client::validate_endpoint_url(base, "base_url"),
+        codex_http_client::validate_endpoint_url(catalog, "model_catalog_url"),
+    ) {
+        (Ok(base), Ok(catalog)) => base.origin() == catalog.origin(),
+        _ => false,
+    }
+}
+
 /// Provider-owned OpenAI-compatible `/models` endpoint.
 #[derive(Debug)]
 pub(crate) struct OpenAiModelsEndpoint {
@@ -64,8 +83,14 @@ impl OpenAiModelsEndpoint {
     pub(crate) fn new(
         provider_info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
-        gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
+        mut gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
     ) -> Self {
+        // Fetch with an existing gateway session; a catalog refresh must not open a browser.
+        if supports_gateway_catalog(&provider_info)
+            && let Some(Ok(manager)) = &mut gateway_auth_manager
+        {
+            *manager = manager.without_interactive_login();
+        }
         let redirect_policy = if provider_info.model_catalog_url.is_some()
             || provider_info
                 .gateway_oauth
@@ -297,6 +322,16 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
     fn has_provider_api_key(&self) -> bool {
         self.provider_info.env_key.is_some()
             || self.provider_info.experimental_bearer_token.is_some()
+    }
+
+    fn supports_gateway_catalog(&self) -> bool {
+        supports_gateway_catalog(&self.provider_info)
+    }
+
+    fn uses_api_key_auth(&self, login: Option<codex_protocol::auth::AuthMode>) -> bool {
+        self.has_provider_api_key()
+            || (login == Some(codex_protocol::auth::AuthMode::ApiKey)
+                && (!self.supports_gateway_catalog() || self.provider_info.requires_openai_auth))
     }
 
     fn identity(&self) -> Option<String> {

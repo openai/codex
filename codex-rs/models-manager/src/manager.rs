@@ -79,6 +79,16 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
         false
     }
 
+    /// Whether this custom provider can serve a Codex catalog using its gateway credentials.
+    fn supports_gateway_catalog(&self) -> bool {
+        false
+    }
+
+    /// Determines whether this provider uses API key auth to fetch the model catalog.
+    fn uses_api_key_auth(&self, login: Option<AuthMode>) -> bool {
+        self.has_provider_api_key() || login == Some(AuthMode::ApiKey)
+    }
+
     /// Fetches the latest remote model catalog and optional ETag.
     fn list_models<'a>(
         &'a self,
@@ -936,15 +946,16 @@ impl OpenAiModelsManager {
     }
 
     fn uses_api_key_auth(&self) -> bool {
-        self.endpoint_client.has_provider_api_key()
-            || self
-                .auth_manager
+        self.endpoint_client.uses_api_key_auth(
+            self.auth_manager
                 .as_ref()
-                .is_some_and(|auth_manager| auth_manager.auth_mode() == Some(AuthMode::ApiKey))
+                .and_then(|manager| manager.auth_mode()),
+        )
     }
 
     async fn should_refresh_models(&self) -> bool {
-        self.endpoint_client.uses_codex_backend().await
+        self.endpoint_client.supports_gateway_catalog()
+            || self.endpoint_client.uses_codex_backend().await
             || self.endpoint_client.has_command_auth()
             || self.supports_api_key_discovery()
     }

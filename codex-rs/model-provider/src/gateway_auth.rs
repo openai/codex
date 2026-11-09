@@ -65,6 +65,15 @@ impl GatewayAuthManager {
         }
     }
 
+    pub(crate) fn without_interactive_login(self: &Arc<Self>) -> Arc<Self> {
+        let GatewayCredentialSource::OAuth(session) = &self.0 else {
+            return Arc::clone(self);
+        };
+        Arc::new(Self(GatewayCredentialSource::OAuth(Arc::new(
+            session.as_ref().clone().without_interactive_login(),
+        ))))
+    }
+
     pub async fn resolve_access_token(&self) -> Result<Arc<str>> {
         match &self.0 {
             GatewayCredentialSource::Export(export) => export.token().await,
