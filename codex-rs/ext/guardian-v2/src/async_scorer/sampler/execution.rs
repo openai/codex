@@ -163,6 +163,7 @@ impl SamplingExecution {
                 | ApiError::InvalidAudioInput { .. }
                 | ApiError::ModelNotFound { .. }
                 | ApiError::InvalidPrompt { .. }
+                | ApiError::AccessProgramNotEnabled { .. }
                 | ApiError::MisalignmentPolicyViolation { .. }
                 | ApiError::CyberPolicy { .. }
                 | ApiError::BioPolicy { .. },

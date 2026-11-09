@@ -115,6 +115,12 @@ async fn terminal_failure_with_retry_header_ends_stream_immediately() {
     for (code, expected) in [
         ("flex_unavailable", CodexErrorInfo::FlexUnavailable),
         ("budget_reached", CodexErrorInfo::SessionBudgetExceeded),
+        (
+            "access_program_not_enabled",
+            CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: None,
+            },
+        ),
     ] {
         let error = json!({
             "code": code,

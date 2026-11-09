@@ -2534,6 +2534,9 @@ fn websocket_error_detail(err: &ApiError) -> String {
             "handshake error: model not found: [redacted]".to_string()
         }
         ApiError::InvalidPrompt { .. } => "handshake error: invalid prompt: [redacted]".to_string(),
+        ApiError::AccessProgramNotEnabled { .. } => {
+            "handshake error: access program not enabled".to_string()
+        }
         ApiError::CyberPolicy { .. } => "handshake error: cyber policy: [redacted]".to_string(),
         ApiError::BioPolicy { .. } => "handshake error: bio policy: [redacted]".to_string(),
         ApiError::MisalignmentPolicyViolation { .. } => {
@@ -3376,6 +3379,7 @@ mod tests {
                 status: Some(http::StatusCode::NOT_FOUND),
             },
             ApiError::InvalidPrompt { message: message() },
+            ApiError::AccessProgramNotEnabled { message: message() },
             ApiError::CyberPolicy { message: message() },
             ApiError::BioPolicy { message: message() },
             ApiError::MisalignmentPolicyViolation {
@@ -3401,6 +3405,7 @@ mod tests {
                 "handshake error: invalid audio input: [redacted]",
                 "handshake error: model not found: [redacted]",
                 "handshake error: invalid prompt: [redacted]",
+                "handshake error: access program not enabled",
                 "handshake error: cyber policy: [redacted]",
                 "handshake error: bio policy: [redacted]",
                 "handshake error: misalignment policy violation: [redacted]",

@@ -681,6 +681,7 @@ async fn process_sse_with_treatment(
                     error,
                     ApiError::FlexUnavailable
                         | ApiError::SessionBudgetExceeded
+                        | ApiError::AccessProgramNotEnabled { .. }
                         | ApiError::ResponseIncomplete(_)
                 ) {
                     let _ = tx_event.send(Err(error)).await;
