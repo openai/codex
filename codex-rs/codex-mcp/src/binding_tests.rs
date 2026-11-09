@@ -107,10 +107,10 @@ async fn test_step(
         client_supports_network_policy_meta_capability: false,
         codex_apps_tools_cache_context: None,
     });
-    let clients = Arc::new(McpBindingClients::new(HashMap::from([(
-        SERVER_NAME.to_string(),
-        Arc::clone(&managed_client),
-    )])));
+    let clients = Arc::new(McpBindingClients::new(
+        HashMap::from([(SERVER_NAME.to_string(), Arc::clone(&managed_client))]),
+        Vec::new(),
+    ));
     let connections = Arc::new(McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true));
     let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
     config.host_cwd = config.host_cwd.join(label);

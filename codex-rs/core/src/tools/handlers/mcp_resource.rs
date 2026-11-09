@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpResourceListing;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
@@ -197,6 +198,8 @@ struct ListResourcesPayload {
     resources: Vec<ResourceWithServer<Resource>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deferred_servers: Vec<String>,
 }
 
 impl ListResourcesPayload {
@@ -205,14 +208,16 @@ impl ListResourcesPayload {
             resources: ResourceWithServer::from_server(&server, result.resources),
             server: Some(server),
             next_cursor: result.next_cursor,
+            deferred_servers: Vec::new(),
         }
     }
 
-    fn from_all_servers(resources_by_server: HashMap<String, Vec<Resource>>) -> Self {
+    fn from_all_servers(listing: McpResourceListing<Resource>) -> Self {
         Self {
             server: None,
-            resources: ResourceWithServer::from_all_servers(resources_by_server),
+            resources: ResourceWithServer::from_all_servers(listing.by_server),
             next_cursor: None,
+            deferred_servers: listing.deferred_servers,
         }
     }
 }
@@ -225,6 +230,8 @@ struct ListResourceTemplatesPayload {
     resource_templates: Vec<ResourceWithServer<ResourceTemplate>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deferred_servers: Vec<String>,
 }
 
 impl ListResourceTemplatesPayload {
@@ -233,14 +240,16 @@ impl ListResourceTemplatesPayload {
             resource_templates: ResourceWithServer::from_server(&server, result.resource_templates),
             server: Some(server),
             next_cursor: result.next_cursor,
+            deferred_servers: Vec::new(),
         }
     }
 
-    fn from_all_servers(templates_by_server: HashMap<String, Vec<ResourceTemplate>>) -> Self {
+    fn from_all_servers(listing: McpResourceListing<ResourceTemplate>) -> Self {
         Self {
             server: None,
-            resource_templates: ResourceWithServer::from_all_servers(templates_by_server),
+            resource_templates: ResourceWithServer::from_all_servers(listing.by_server),
             next_cursor: None,
+            deferred_servers: listing.deferred_servers,
         }
     }
 }

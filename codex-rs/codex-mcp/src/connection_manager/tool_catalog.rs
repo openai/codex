@@ -547,11 +547,21 @@ impl McpConnectionSet {
                 call,
             );
         }
+        let deferred_servers = self
+            .servers
+            .iter()
+            .filter(|(_, view)| {
+                view.connection.startup_is_dormant()
+                    && !view.connection.client.cancel_token.is_cancelled()
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
         let clients = Arc::new(McpBindingClients::new(
             clients
                 .into_iter()
                 .map(|(server_name, (client, _))| (server_name, client))
                 .collect(),
+            deferred_servers,
         ));
         McpBinding::new(
             Arc::clone(self),

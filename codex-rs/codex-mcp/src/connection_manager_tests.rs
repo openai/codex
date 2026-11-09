@@ -2341,7 +2341,10 @@ async fn resource_template_listings_skip_only_hosted_apps() -> anyhow::Result<()
             expected
         );
         let all = binding.list_all_resource_templates(|_| true).await;
-        assert_eq!(all.get(name), (!expected.is_empty()).then_some(&expected));
+        assert_eq!(
+            all.by_server.get(name),
+            (!expected.is_empty()).then_some(&expected)
+        );
     }
     Ok(())
 }
@@ -6139,11 +6142,11 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
         .expect("refresh must use the reconciled timeout");
     assert_eq!(failed.tools(), old_step.tools());
     assert_eq!(
-        failed.list_all_resources(|_| true).await,
+        failed.list_all_resources(|_| true).await.by_server,
         HashMap::from([("docs".to_string(), vec![])])
     );
     assert_eq!(
-        failed.list_all_resource_templates(|_| true).await,
+        failed.list_all_resource_templates(|_| true).await.by_server,
         HashMap::from([("docs".to_string(), vec![])])
     );
     let retry_started = tokio::time::Instant::now();

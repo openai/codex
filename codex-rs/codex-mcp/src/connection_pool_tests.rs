@@ -514,10 +514,10 @@ async fn shared_startup_survives_first_chat_cancellation_and_rejects_released_bi
         /*selected_plugin_server*/ false,
     )
     .unwrap();
-    let bindings = McpBindingClients::new(HashMap::from([(
-        "test_server".to_string(),
-        Arc::new(client.clone()),
-    )]));
+    let bindings = McpBindingClients::new(
+        HashMap::from([("test_server".to_string(), Arc::new(client.clone()))]),
+        Vec::new(),
+    );
     server.block_listing.store(true, Ordering::Release);
     let waiting = async {
         tokio::join!(
