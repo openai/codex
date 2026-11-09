@@ -48,11 +48,6 @@ struct GuardianMcpElicitationReviewer {
     session: std::sync::Weak<Session>,
 }
 
-pub(crate) struct McpServerElicitationOutcome {
-    pub(crate) response: Option<ElicitationResponse>,
-    pub(crate) sent: bool,
-}
-
 #[derive(Debug, PartialEq, Eq)]
 struct PluginInstallElicitationTelemetryMetadata {
     tool_type: String,
@@ -748,18 +743,7 @@ impl Session {
         server_name: String,
         request_id: RequestId,
         request: ElicitationRequest,
-    ) -> McpServerElicitationOutcome {
-        if self.services.mcp_runtime.elicitations_auto_deny() {
-            return McpServerElicitationOutcome {
-                response: Some(ElicitationResponse {
-                    action: codex_rmcp_client::ElicitationAction::Accept,
-                    content: Some(serde_json::json!({})),
-                    meta: None,
-                }),
-                sent: false,
-            };
-        }
-
+    ) -> Option<ElicitationResponse> {
         // This callback carries a request ID, not a reliable tool invocation owner.
         // Do not report its human wait as ordinary tool execution.
         if turn_context
@@ -818,10 +802,7 @@ impl Session {
                     plugin_install_telemetry.tool_name.as_str(),
                 );
         }
-        McpServerElicitationOutcome {
-            response: rx_response.await.ok(),
-            sent: true,
-        }
+        rx_response.await.ok()
     }
 
     #[expect(

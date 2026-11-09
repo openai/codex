@@ -2382,7 +2382,6 @@ impl Session {
         &self,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-        mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
         self.update_settings(SessionSettingsUpdate {
             app_server_client_name,
@@ -2390,9 +2389,6 @@ impl Session {
             ..Default::default()
         })
         .await?;
-        self.services
-            .mcp_runtime
-            .set_elicitations_auto_deny(mcp_elicitations_auto_deny);
         Ok(())
     }
 

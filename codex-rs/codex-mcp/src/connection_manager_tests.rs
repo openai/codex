@@ -1197,13 +1197,12 @@ async fn assert_elicitation_declined_with_reviewer_calls(
 async fn assert_requested_user_input_is_declined(
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
-    router: ElicitationRequestRouter,
 ) {
     let manager = ElicitationRequestManager::new(
         test_elicitation_config("server", approval_policy, permission_profile),
         /*reviewer*/ None,
         /*lifecycle*/ None,
-        router,
+        full_access_form_input_enabled_router(),
     );
     let (tx_event, rx_event) = async_channel::bounded(1);
     let sender = manager.make_sender(
@@ -1238,18 +1237,6 @@ async fn assert_requested_user_input_is_declined(
         },
     );
     assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn disabled_permissions_do_not_surface_user_input_when_auto_denied() {
-    let router = full_access_form_input_enabled_router();
-    router.set_auto_deny(/*auto_deny*/ true);
-    assert_requested_user_input_is_declined(
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-        router,
-    )
-    .await;
 }
 
 #[tokio::test]
@@ -1393,12 +1380,8 @@ async fn disabled_permissions_decline_requested_user_input_with_approval_metadat
 
 #[tokio::test]
 async fn restricted_never_policy_does_not_surface_requested_user_input() {
-    assert_requested_user_input_is_declined(
-        AskForApproval::Never,
-        PermissionProfile::default(),
-        full_access_form_input_enabled_router(),
-    )
-    .await;
+    assert_requested_user_input_is_declined(AskForApproval::Never, PermissionProfile::default())
+        .await;
 }
 
 #[tokio::test]
@@ -1412,7 +1395,6 @@ async fn granular_policy_does_not_surface_requested_user_input() {
             mcp_elicitations: false,
         }),
         PermissionProfile::Disabled,
-        full_access_form_input_enabled_router(),
     )
     .await;
 }

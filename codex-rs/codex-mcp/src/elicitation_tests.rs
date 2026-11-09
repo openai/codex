@@ -676,14 +676,6 @@ async fn strict_auto_review_respects_explicit_elicitation_denials() {
                 );
             }
         }
-        manager.router.set_auto_deny(/*auto_deny*/ true);
-        assert_eq!(
-            send_elicitation(&sender, Some(json!(true))).await,
-            ElicitationResponse {
-                meta: None,
-                ..strict_auto_review_decline()
-            },
-        );
         assert_eq!(
             (
                 reviewer.calls.load(Relaxed),

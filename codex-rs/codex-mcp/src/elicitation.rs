@@ -102,7 +102,6 @@ struct ActiveElicitation {
 pub(crate) struct ElicitationRequestRouter {
     requests: Arc<StdMutex<PendingResponders>>,
     terminal_actions_finished: Arc<tokio::sync::Notify>,
-    auto_deny: Arc<AtomicBool>,
     full_access_form_input_enabled: Arc<AtomicBool>,
 }
 
@@ -240,14 +239,6 @@ impl ElicitationRequestRouter {
             }
             notified.await;
         }
-    }
-
-    pub(crate) fn auto_deny(&self) -> bool {
-        self.auto_deny.load(Ordering::Relaxed)
-    }
-
-    pub(crate) fn set_auto_deny(&self, auto_deny: bool) {
-        self.auto_deny.store(auto_deny, Ordering::Relaxed);
     }
 
     pub(crate) fn full_access_form_input_enabled(&self) -> bool {
@@ -480,14 +471,6 @@ impl ElicitationRequestManager {
                     )
                     .await;
                 }
-                if router.auto_deny() {
-                    return Ok(ElicitationResponse {
-                        action: ElicitationAction::Decline,
-                        content: None,
-                        meta: None,
-                    });
-                }
-
                 if elicitation
                     .meta()
                     .and_then(|meta| meta.get(APPROVAL_KIND_KEY))

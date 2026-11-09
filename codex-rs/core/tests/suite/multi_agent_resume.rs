@@ -485,11 +485,7 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
     let resumed = resume_builder.restart(&server, &initial).await?;
     resumed
         .codex
-        .set_app_server_client_info(
-            Some("resume-test".to_string()),
-            Some("1.0.0".to_string()),
-            /*mcp_elicitations_auto_deny*/ false,
-        )
+        .set_app_server_client_info(Some("resume-test".to_string()), Some("1.0.0".to_string()))
         .await?;
     drop(initial);
     assert_eq!(

@@ -262,11 +262,7 @@ async fn delegate_start_analytics_honors_child_opt_out_with_enabled_parent() {
         .services
         .analytics_events_client = client.clone();
     parent_session
-        .set_app_server_client_info(
-            Some("codex-test".to_string()),
-            Some("1.0.0".to_string()),
-            /*mcp_elicitations_auto_deny*/ false,
-        )
+        .set_app_server_client_info(Some("codex-test".to_string()), Some("1.0.0".to_string()))
         .await
         .expect("set parent client metadata");
 

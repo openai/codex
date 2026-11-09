@@ -683,50 +683,6 @@ async fn regular_turn_emits_turn_started_with_trace_id_without_waiting_for_start
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
-#[test_case(SessionSource::Exec; "root")]
-#[test_case(SessionSource::SubAgent(SubAgentSource::Review); "subagent")]
-#[test_case(SessionSource::Internal(InternalSessionSource::Guardian); "guardian")]
-#[tokio::test]
-async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled(
-    source: SessionSource,
-) {
-    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
-    Arc::get_mut(&mut turn_context)
-        .expect("turn context should not be shared")
-        .session_source = source;
-    session
-        .services
-        .mcp_runtime
-        .set_elicitations_auto_deny(/*auto_deny*/ true);
-
-    let response = session
-        .request_mcp_server_elicitation(
-            turn_context.as_ref(),
-            "codex_apps".to_string(),
-            RequestId::String("request-1".into()),
-            ElicitationRequest::Form {
-                meta: None,
-                message: "Allow this request?".to_string(),
-                requested_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                }),
-            },
-        )
-        .await;
-
-    assert_eq!(
-        response.response,
-        Some(ElicitationResponse {
-            action: ElicitationAction::Accept,
-            content: Some(json!({})),
-            meta: None,
-        })
-    );
-    assert!(!response.sent);
-    assert!(rx.try_recv().is_err());
-}
-
 #[test_case(SessionSource::Exec, true; "root")]
 #[test_case(SessionSource::Exec, false; "capture_off")]
 #[test_case(SessionSource::SubAgent(SubAgentSource::Review), true; "subagent")]
@@ -818,12 +774,11 @@ async fn request_mcp_server_elicitation_waits_for_user_response(
         )
         .await
         .expect("user response should resolve the elicitation");
-    let outcome = tokio::time::timeout(Duration::from_secs(1), pending)
+    let received = tokio::time::timeout(Duration::from_secs(1), pending)
         .await
         .expect("elicitation should finish")
         .expect("elicitation task should succeed");
-    assert_eq!(outcome.response, Some(response));
-    assert!(outcome.sent);
+    assert_eq!(received, Some(response));
     assert!(!*paused.borrow());
     assert!(rx.try_recv().is_err());
 }

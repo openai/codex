@@ -251,7 +251,7 @@ impl RequestPluginInstallHandler {
         let request =
             build_request_plugin_install_elicitation_request(suggest_reason, &tool, &suggestion_id);
         let request_id = RequestId::String(suggestion_id.into());
-        let elicitation = session
+        let response = session
             .request_mcp_server_elicitation(
                 turn.as_ref(),
                 CODEX_APPS_MCP_SERVER_NAME.to_string(),
@@ -259,7 +259,6 @@ impl RequestPluginInstallHandler {
                 request,
             )
             .await;
-        let response = elicitation.response;
         if let Some(response) = response.as_ref() {
             maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;
         }
@@ -281,29 +280,27 @@ impl RequestPluginInstallHandler {
                 .await;
         }
 
-        if elicitation.sent {
-            let tool_type = match tool_type {
-                DiscoverableToolType::Connector => "connector",
-                DiscoverableToolType::Plugin => "plugin",
-            };
-            let response_action = match response.as_ref().map(|response| &response.action) {
-                Some(ElicitationAction::Accept) => "accept",
-                Some(ElicitationAction::Decline) => "decline",
-                Some(ElicitationAction::Cancel) => "cancel",
-                Some(_) => "unknown",
-                None => "unavailable",
-            };
-            step_context
-                .session_telemetry
-                .record_plugin_install_suggestion(
-                    tool_type,
-                    tool.id(),
-                    tool.name(),
-                    response_action,
-                    user_confirmed,
-                    completed,
-                );
-        }
+        let telemetry_tool_type = match tool_type {
+            DiscoverableToolType::Connector => "connector",
+            DiscoverableToolType::Plugin => "plugin",
+        };
+        let response_action = match response.as_ref().map(|response| &response.action) {
+            Some(ElicitationAction::Accept) => "accept",
+            Some(ElicitationAction::Decline) => "decline",
+            Some(ElicitationAction::Cancel) => "cancel",
+            Some(_) => "unknown",
+            None => "unavailable",
+        };
+        step_context
+            .session_telemetry
+            .record_plugin_install_suggestion(
+                telemetry_tool_type,
+                tool.id(),
+                tool.name(),
+                response_action,
+                user_confirmed,
+                completed,
+            );
 
         let content = serde_json::to_string(&RequestPluginInstallResult {
             completed,

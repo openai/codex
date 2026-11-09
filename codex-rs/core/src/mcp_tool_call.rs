@@ -952,7 +952,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
         url: plan.elicitation.url,
         elicitation_id: plan.elicitation.elicitation_id,
     };
-    let outcome = sess
+    let response = sess
         .request_mcp_server_elicitation(
             turn_context,
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
@@ -960,11 +960,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
             request,
         )
         .await;
-    if !outcome
-        .response
-        .as_ref()
-        .is_some_and(|response| response.action == ElicitationAction::Accept)
-    {
+    if !response.is_some_and(|response| response.action == ElicitationAction::Accept) {
         return result;
     }
 
@@ -1866,7 +1862,7 @@ pub(crate) async fn request_mcp_tool_user_approval(
             .as_ref()
             .map(|rendered_template| rendered_template.question.as_str()),
     );
-    let (request_dispatched, decision, cancellation_reason) = if tool_call_mcp_elicitation_enabled {
+    let (decision, cancellation_reason) = if tool_call_mcp_elicitation_enabled {
         let metadata = sess
             .mcp_tool_approval_metadata(server, id)
             .map(|context| context.metadata)
@@ -1896,12 +1892,12 @@ pub(crate) async fn request_mcp_tool_user_approval(
                     .map(|rendered_template| rendered_template.elicitation_message.as_str()),
                 prompt_options,
             });
-        let outcome = sess
+        let response = sess
             .request_mcp_server_elicitation(turn_context, server.clone(), request_id, request)
             .await;
         // Missing replies are interruptions. A received Cancel needs provenance
         // from its source; RPC success alone does not establish a user action.
-        let cancellation_reason = match outcome.response.as_ref() {
+        let cancellation_reason = match response.as_ref() {
             None => Some(McpApprovalCancellationReason::Interrupted),
             Some(response) if response.action == ElicitationAction::Cancel => response
                 .meta
@@ -1911,8 +1907,7 @@ pub(crate) async fn request_mcp_tool_user_approval(
             Some(_) => None,
         };
         (
-            outcome.sent,
-            parse_mcp_tool_approval_elicitation_response(outcome.response, &question_id),
+            parse_mcp_tool_approval_elicitation_response(response, &question_id),
             cancellation_reason,
         )
     } else {
@@ -1951,7 +1946,6 @@ pub(crate) async fn request_mcp_tool_user_approval(
                     .then_some(McpApprovalCancellationReason::Interrupted)
             });
         (
-            true,
             parse_mcp_tool_approval_response(
                 response.map(|accepted| accepted.response),
                 &question_id,
@@ -1960,12 +1954,10 @@ pub(crate) async fn request_mcp_tool_user_approval(
         )
     };
     let decision = normalize_approval_decision_for_mode(decision, *approval_mode);
-    if request_dispatched
-        && matches!(
-            decision,
-            ReviewDecision::Denied { .. } | ReviewDecision::TimedOut | ReviewDecision::Abort
-        )
-    {
+    if matches!(
+        decision,
+        ReviewDecision::Denied { .. } | ReviewDecision::TimedOut | ReviewDecision::Abort
+    ) {
         track_mcp_tool_call_elicitation(sess, turn_context, call_id, ElicitationType::Approval);
     }
     ApprovalResolution {
