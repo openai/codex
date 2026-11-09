@@ -11,6 +11,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
+use std::time::SystemTime;
 
 use strum_macros::EnumIter;
 
@@ -82,6 +83,7 @@ use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tracing::error;
 use ts_rs::TS;
 
@@ -220,6 +222,16 @@ pub struct ConversationStartParams {
     /// Overrides the configured realtime protocol version for this session only.
     pub version: Option<RealtimeConversationVersion>,
     pub voice: Option<RealtimeVoice>,
+}
+
+/// Controls when an in-process realtime attachment may establish a connection.
+#[derive(Debug, Clone, Default)]
+pub struct RealtimeAttachmentOptions {
+    /// Set the watch to `true` to cancel a pending connection.
+    /// Dropping the sender while its value is `false` lets the attempt continue.
+    pub cancel: Option<watch::Receiver<bool>>,
+    /// Optional caller deadline for publishing the connection. Cleanup can finish later.
+    pub start_before: Option<SystemTime>,
 }
 
 /// A caller-owned realtime sideband. Dropping either direction seals input and ends
@@ -724,8 +736,10 @@ pub enum Op {
     RealtimeConversationStart(ConversationStartParams),
 
     /// Start a realtime conversation and report completion of the connection attempt.
+    /// If cancellation wins, completion acknowledges connection cleanup.
     RealtimeConversationAttach {
         params: ConversationStartParams,
+        options: RealtimeAttachmentOptions,
         reply: oneshot::Sender<CodexResult<()>>,
     },
 

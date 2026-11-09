@@ -29,6 +29,7 @@ use codex_api::RealtimeWebsocketEvents;
 use codex_api::RealtimeWebsocketWriter;
 use codex_api::build_session_headers;
 use codex_api::map_api_error;
+use codex_async_utils::OrCancelExt;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_features::Feature;
@@ -55,6 +56,7 @@ use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RealtimeAttachmentOptions;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationSdpEvent;
@@ -79,8 +81,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -546,7 +550,29 @@ struct ConversationState {
     stop_token: CancellationToken,
 }
 
+#[derive(Clone, Default)]
+struct RealtimeAttachmentControl {
+    token: CancellationToken,
+    options: RealtimeAttachmentOptions,
+}
+
+impl RealtimeAttachmentControl {
+    fn is_cancelled(&self) -> bool {
+        self.token.is_cancelled()
+            || self
+                .options
+                .cancel
+                .as_ref()
+                .is_some_and(|cancellation| *cancellation.borrow())
+            || self
+                .options
+                .start_before
+                .is_some_and(|deadline| SystemTime::now() >= deadline)
+    }
+}
+
 struct RealtimeStart {
+    attachment_control: RealtimeAttachmentControl,
     sideband: Option<codex_protocol::protocol::RealtimeSidebandTransport>,
     api_provider: ApiProvider,
     http_client_factory: HttpClientFactory,
@@ -643,6 +669,9 @@ impl RealtimeConversationManager {
     ) -> CodexResult<RealtimeStartOutput> {
         let previous_state = {
             let mut guard = self.state.lock().await;
+            if start.attachment_control.is_cancelled() {
+                return Err(CodexErr::TurnAborted);
+            }
             guard.conversation.take()
         };
         if let Some(state) = previous_state {
@@ -667,6 +696,7 @@ impl RealtimeConversationManager {
     ) -> CodexResult<RealtimeStartOutput> {
         let session_id = start.session_config.session_id.clone();
         let RealtimeStart {
+            attachment_control,
             sideband,
             auth_context,
             api_provider,
@@ -687,6 +717,9 @@ impl RealtimeConversationManager {
             sdp,
             existing_call_id,
         } = start;
+        if attachment_control.is_cancelled() {
+            return Err(CodexErr::TurnAborted);
+        }
         let event_parser = session_config.event_parser;
         let session_kind = match event_parser {
             RealtimeEventParser::V1 | RealtimeEventParser::FramelessBidi => RealtimeSessionKind::V1,
@@ -769,7 +802,8 @@ impl RealtimeConversationManager {
                     &auth_context,
                     http_client_factory,
                 )
-                .await?;
+                .or_cancel(&attachment_control.token)
+                .await??;
             let task = spawn_webrtc_sideband_input_task(RealtimeWebrtcSidebandInputTask {
                 client: client
                     .with_http_client_factory(call.sideband_http_client_factory)
@@ -790,6 +824,7 @@ impl RealtimeConversationManager {
             (task, Some(call.sdp))
         } else if let Some(call_id) = existing_call_id {
             let task = existing_call::attach(existing_call::ExistingCallAttachment {
+                attachment_cancellation: attachment_control.token.clone(),
                 client,
                 model_client,
                 auth_context,
@@ -817,7 +852,8 @@ impl RealtimeConversationManager {
             };
             let connection = client
                 .connect(session_config, extra_headers, default_headers())
-                .await
+                .or_cancel(&attachment_control.token)
+                .await?
                 .map_err(map_api_error)?;
             let task = spawn_realtime_input_task(
                 RealtimeInputTask {
@@ -837,8 +873,7 @@ impl RealtimeConversationManager {
             (task, None)
         };
 
-        let mut state = self.state.lock().await;
-        state.conversation = Some(ConversationState {
+        let conversation = ConversationState {
             session_id,
             sub_id: sub_id.to_owned(),
             audio_tx,
@@ -850,9 +885,39 @@ impl RealtimeConversationManager {
             realtime_active: Arc::clone(&realtime_active),
             route_handoffs: Arc::clone(&route_handoffs),
             stop_token,
-        });
-        state.mode_instructions = Some(mode_instructions);
-        state.context_active = true;
+        };
+        let uncommitted = {
+            let mut state = self.state.lock().await;
+            // Read the original sources at commit, even if their wakeup has not
+            // been polled. Hold the watch guard through synchronous publication.
+            let cancellation = attachment_control
+                .options
+                .cancel
+                .as_ref()
+                .map(watch::Receiver::borrow);
+            if cancellation.as_ref().is_some_and(|cancelled| **cancelled)
+                || attachment_control.token.is_cancelled()
+                || attachment_control
+                    .options
+                    .start_before
+                    .is_some_and(|deadline| SystemTime::now() >= deadline)
+            {
+                Some(conversation)
+            } else {
+                // Publication commits success; later cancellation must preserve
+                // residency until the caller projects the Started event.
+                state.conversation = Some(conversation);
+                state.mode_instructions = Some(mode_instructions);
+                state.context_active = true;
+                None
+            }
+        };
+        if let Some(conversation) = uncommitted {
+            drop(events_rx);
+            drop(transcript_tail_rx);
+            stop_conversation_state(conversation, RealtimeFanoutTaskStop::Await).await;
+            return Err(CodexErr::TurnAborted);
+        }
         Ok(RealtimeStartOutput {
             realtime_active,
             route_handoffs,
@@ -1378,6 +1443,7 @@ pub(crate) async fn handle_start(
 }
 
 struct PreparedRealtimeConversationStart {
+    attachment_control: RealtimeAttachmentControl,
     sideband: Option<codex_protocol::protocol::RealtimeSidebandTransport>,
     api_provider: ApiProvider,
     http_client_factory: HttpClientFactory,
@@ -1595,6 +1661,7 @@ async fn prepare_realtime_start(
         extra_headers.insert(X_CODEX_TURN_METADATA_HEADER, metadata);
     }
     Ok(PreparedRealtimeConversationStart {
+        attachment_control: RealtimeAttachmentControl::default(),
         sideband: None,
         auth_context,
         api_provider,
@@ -1823,6 +1890,7 @@ async fn handle_start_inner(
     prepared_start: PreparedRealtimeConversationStart,
 ) -> CodexResult<()> {
     let PreparedRealtimeConversationStart {
+        attachment_control,
         sideband,
         auth_context,
         api_provider,
@@ -1857,6 +1925,7 @@ async fn handle_start_inner(
     };
     let event_parser = session_config.event_parser;
     let start = RealtimeStart {
+        attachment_control,
         sideband,
         auth_context,
         api_provider,
@@ -2184,14 +2253,57 @@ pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
     handle_detach(sess, /*expected*/ None, &sub_id).await;
 }
 
-/// Uses the ordinary sequential start path and reports its connection result.
+/// Completes after the connection is published or the cancelled attempt is cleaned up.
 pub(crate) async fn handle_attach(
     sess: &Arc<Session>,
     sub_id: String,
     params: ConversationStartParams,
+    options: RealtimeAttachmentOptions,
 ) -> CodexResult<()> {
-    let prepared = prepare_realtime_start(sess, params).await?;
-    handle_start_inner(sess, &sub_id, prepared).await
+    let attachment_control = RealtimeAttachmentControl {
+        token: CancellationToken::new(),
+        options,
+    };
+    if attachment_control.is_cancelled() {
+        return Err(CodexErr::TurnAborted);
+    }
+    let remaining = attachment_control
+        .options
+        .start_before
+        .map(|deadline| deadline.duration_since(SystemTime::now()))
+        .transpose()
+        .map_err(|_| CodexErr::TurnAborted)?;
+    if remaining == Some(Duration::ZERO) {
+        return Err(CodexErr::TurnAborted);
+    }
+    let attach = async {
+        let mut prepared = prepare_realtime_start(sess, params)
+            .or_cancel(&attachment_control.token)
+            .await??;
+        prepared.attachment_control = attachment_control.clone();
+        handle_start_inner(sess, &sub_id, prepared).await
+    };
+    tokio::pin!(attach);
+    let cancelled = async {
+        let Some(mut cancellation) = attachment_control.options.cancel.clone() else {
+            return false;
+        };
+        cancellation.wait_for(|cancelled| *cancelled).await.is_ok()
+    };
+    let expired = async {
+        match remaining {
+            Some(remaining) => tokio::time::sleep(remaining).await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        biased;
+        true = cancelled => {}
+        _ = expired => {}
+        result = &mut attach => return result,
+    }
+    attachment_control.token.cancel();
+    attach.await
 }
 
 /// Attaches Core to an existing call using the caller’s channels to receive

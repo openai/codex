@@ -8,6 +8,7 @@ use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeAttachmentOptions;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeSidebandTransport;
@@ -23,9 +24,11 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
+use std::time::SystemTime;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -363,7 +366,11 @@ async fn start(
     let (reply, result) = oneshot::channel();
     let id = test
         .codex
-        .submit(Op::RealtimeConversationAttach { params, reply })
+        .submit(Op::RealtimeConversationAttach {
+            params,
+            reply,
+            options: RealtimeAttachmentOptions::default(),
+        })
         .await?;
     Ok((id, result))
 }
@@ -417,6 +424,163 @@ async fn assert_text_routes_to(test: &TestCodex, connection: &mut Connected) -> 
         panic!("selected sideband closed");
     })
     .await?;
+    Ok(())
+}
+
+/// Cancellation releases a held handshake and obsolete queued work before selecting the next call.
+#[tokio::test]
+async fn cancelled_attachments_release_the_queue_and_preserve_the_next_call() -> Result<()> {
+    let api = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&api).await?;
+    let mut original = Sideband::new().await?;
+    let mut newer = Sideband::new().await?;
+    let (cancel_original, cancellation) = watch::channel(false);
+    let (reply, original_result) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttach {
+            params: params("original", &original.url),
+            reply,
+            options: RealtimeAttachmentOptions {
+                cancel: Some(cancellation),
+                start_before: None,
+            },
+        })
+        .await?;
+    // Keep the first upgrade pending until the replacement is already usable.
+    let mut original_connection = original.connected().await;
+
+    let (cancel_queued, cancellation) = watch::channel(false);
+    let (reply, queued_result) = oneshot::channel();
+    cancel_queued.send_replace(/*value*/ true);
+    test.codex
+        .submit(Op::RealtimeConversationAttach {
+            params: params("queued", &newer.url),
+            reply,
+            options: RealtimeAttachmentOptions {
+                cancel: Some(cancellation),
+                start_before: None,
+            },
+        })
+        .await?;
+    let (_cancel_expired, cancellation) = watch::channel(false);
+    let (reply, expired_result) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttach {
+            params: params("expired", &newer.url),
+            reply,
+            options: RealtimeAttachmentOptions {
+                cancel: Some(cancellation),
+                start_before: Some(SystemTime::now() - Duration::from_secs(1)),
+            },
+        })
+        .await?;
+    let (cancel_newer, cancellation) = watch::channel(false);
+    let (reply, newer_result) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttach {
+            params: params("newer", &newer.url),
+            reply,
+            options: RealtimeAttachmentOptions {
+                cancel: Some(cancellation),
+                start_before: None,
+            },
+        })
+        .await?;
+    // Losing the caller's cancellation sender does not cancel admitted work.
+    drop(cancel_newer);
+    cancel_original.send_replace(/*value*/ true);
+    assert!(
+        timeout(Duration::from_secs(10), original_result)
+            .await??
+            .is_err()
+    );
+    assert!(
+        timeout(Duration::from_secs(10), queued_result)
+            .await??
+            .is_err()
+    );
+    assert!(
+        timeout(Duration::from_secs(10), expired_result)
+            .await??
+            .is_err()
+    );
+
+    let connection = newer.connected().await;
+    connection
+        .accept
+        .send(/*value*/ true)
+        .expect("handshake pending");
+    timeout(Duration::from_secs(10), newer_result).await???;
+    let started = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationStarted(_))
+    })
+    .await;
+    let EventMsg::RealtimeConversationStarted(started) = started else {
+        unreachable!("wait_for_event selected the Started event");
+    };
+    assert_eq!(started.realtime_session_id.as_deref(), Some("newer"));
+    assert_eq!(started.version, RealtimeConversationVersion::V3);
+    assert!(matches!(
+        newer.connections.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    original_connection
+        .accept
+        .send(/*value*/ true)
+        .expect("original upgrade remains held until cancellation completes");
+    assert_eq!(
+        timeout(Duration::from_secs(10), original_connection.messages.recv()).await?,
+        None
+    );
+    detach(&test, "original").await?;
+    let mut current = Connected {
+        messages: connection.messages,
+        events: connection.events,
+    };
+    assert_text_routes_to(&test, &mut current).await?;
+    detach(&test, "newer").await?;
+    assert_eq!(
+        timeout(Duration::from_secs(10), current.messages.recv()).await?,
+        None
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+/// A deadline without a cancellation receiver releases a held handshake so the next call can connect.
+#[tokio::test]
+async fn attachment_deadline_releases_a_pending_handshake() -> Result<()> {
+    let api = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&api).await?;
+    let mut sideband = Sideband::new().await?;
+    let (reply, result) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttach {
+            params: params("expired", &sideband.url),
+            reply,
+            options: RealtimeAttachmentOptions {
+                cancel: None,
+                start_before: Some(SystemTime::now() + Duration::from_secs(60)),
+            },
+        })
+        .await?;
+    let mut connection = sideband.connected().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(61)).await;
+    let expired = timeout(Duration::from_secs(10), result).await;
+    tokio::time::resume();
+    assert!(expired??.is_err());
+    connection
+        .accept
+        .send(/*value*/ true)
+        .expect("handshake still held");
+    assert_eq!(
+        timeout(Duration::from_secs(10), connection.messages.recv()).await?,
+        None
+    );
+    let (_, mut current) = attached(&test, &mut sideband, "current").await?;
+    assert_text_routes_to(&test, &mut current).await?;
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 
@@ -541,7 +705,11 @@ async fn completed_turns_reach_history_before_the_next_handoff(flush_tail: bool)
     params.flush_transcript_tail_on_session_end = flush_tail;
     let (reply, attached) = oneshot::channel();
     test.codex
-        .submit(Op::RealtimeConversationAttach { params, reply })
+        .submit(Op::RealtimeConversationAttach {
+            params,
+            reply,
+            options: RealtimeAttachmentOptions::default(),
+        })
         .await?;
     let connection = sideband.connected().await;
     connection

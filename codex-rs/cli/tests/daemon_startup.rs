@@ -259,7 +259,8 @@ async fn daemon_startup(command: &str) -> Result<()> {
         fs::hard_link(&codex, &managed)
             .or_else(|_| codex_utils_cargo_bin::copy_executable(&codex, &managed))?;
         if command != "restrictive-job" {
-            fs::create_dir(home.path().join("app-server-daemon"))?;
+            codex_uds::prepare_private_socket_directory(&home.path().join("app-server-daemon"))
+                .await?;
             fs::write(
                 home.path().join("app-server-daemon/settings.json"),
                 if persisted {
