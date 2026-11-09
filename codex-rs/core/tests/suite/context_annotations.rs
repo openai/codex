@@ -214,7 +214,7 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
     message developer ["multi_agent.mode_instructions"]
     message user ["environments.environment_context"]
     message developer ["additional_content.automation_info"]
-    message user ["additional_content.browser_info"]
+    function_call_output - null
     message user ["user.text","user.image","user.audio"]
     message developer ["rollout_budget.remaining_tokens"]
     message developer ["current_time.reminder"]

@@ -74,9 +74,12 @@ def test_private_goal_operation_coalesces_runtime_continuations(tmp_path) -> Non
         "result": (result.id, result.status, result.final_response),
         "messages": agent_message_texts(events),
         "request_count": len(requests),
-        "objective_reached_model": (
-            "<external_goal_objective>Improve benchmark coverage</external_goal_objective>"
-            in requests[0].message_input_texts("user")
+        "objective_reached_model": any(
+            item.get("type") == "function_call_output"
+            and item.get("namespace") == "agent"
+            and item.get("name") == "goal_objective"
+            and item.get("output") == "Improve benchmark coverage"
+            for item in requests[0].input()
         ),
         "steering_reached_model": any(
             "Continue working toward the active thread goal." in text

@@ -16,7 +16,6 @@ Scenario: additional context is inserted before the user turn input.
         </tools>
 02:message/developer:
     <automation_info>run one</automation_info>
-03:message/user:
-    <external_browser_info>tab one</external_browser_info>
+03:function_call_output/agent.browser_info:tab one
 04:message/user:
     inspect the active tab

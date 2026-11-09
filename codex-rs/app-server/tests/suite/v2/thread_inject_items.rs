@@ -228,24 +228,37 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
         .iter()
         .filter_map(|item| match item {
             RolloutItem::ResponseItem(envelope) => {
-                let ResponseItem::Message { role, content, .. } = &envelope.item else {
-                    return None;
+                let context_kind = match &envelope.item {
+                    ResponseItem::Message { role, content, .. } => {
+                        content.iter().find_map(|item| {
+                            let ContentItem::InputText { text } = item else {
+                                return None;
+                            };
+                            text.contains(application_context_text)
+                                .then_some(role.as_str())
+                        })
+                    }
+                    ResponseItem::FunctionCallOutput {
+                        name,
+                        namespace,
+                        output,
+                        ..
+                    } if name.as_deref() == Some("untrusted_context")
+                        && namespace.as_deref() == Some("agent")
+                        && output.text_content() == Some(untrusted_context_text) =>
+                    {
+                        Some("function_call_output")
+                    }
+                    _ => None,
                 };
-                content.iter().find_map(|item| {
-                    let ContentItem::InputText { text } = item else {
-                        return None;
-                    };
-                    (text.contains(application_context_text)
-                        || text.contains(untrusted_context_text))
-                    .then(|| {
-                        (
-                            role.as_str(),
-                            envelope
-                                .metadata
-                                .as_ref()
-                                .map(|metadata| metadata.client_authored),
-                        )
-                    })
+                context_kind.map(|kind| {
+                    (
+                        kind,
+                        envelope
+                            .metadata
+                            .as_ref()
+                            .map(|metadata| metadata.client_authored),
+                    )
                 })
             }
             _ => None,
@@ -253,7 +266,10 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
         .collect::<Vec<_>>();
     assert_eq!(
         persisted_additional_context,
-        vec![("developer", Some(true)), ("user", Some(false))]
+        vec![
+            ("developer", Some(true)),
+            ("function_call_output", Some(false))
+        ]
     );
 
     let injected_value = serde_json::to_value(&injected_item)?;

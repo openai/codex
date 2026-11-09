@@ -572,10 +572,12 @@ async fn additional_context_tool_outputs(tool_outputs: bool) -> Result<()> {
         .with_config(move |config| {
             configure_scenario_catalog(config);
             config.include_environment_context = false;
-            config
-                .features
-                .set_enabled(Feature::UntrustedAsToolOutput, tool_outputs)
-                .expect("test config should allow feature update");
+            if !tool_outputs {
+                config
+                    .features
+                    .disable(Feature::UntrustedAsToolOutput)
+                    .expect("test config should allow feature update");
+            }
         })
         .build_with_auto_env(&server)
         .await?;

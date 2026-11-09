@@ -34,6 +34,8 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::received_responses_requests;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::responses::strip_metadata_from_json;
+use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::test_codex::test_codex;
@@ -113,7 +115,9 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
 
     let request = request.single_request();
     assert!(request.has_content_kinds(&["additional_content.automation_info"]));
-    assert!(request.has_content_kinds(&["additional_content.browser_info"]));
+    let outputs = request.inputs_of_type("function_call_output");
+    assert_eq!(outputs.len(), 1);
+    assert_browser_context_actor_output(&outputs[0]);
     assert!(request.has_content_kinds(&["user.text"]));
     insta::assert_snapshot!(
         "additional_context_simple_input",
@@ -134,10 +138,7 @@ async fn additional_context_is_model_visible_but_not_a_user_message_item() -> Re
     );
     assert_eq!(
         request.message_input_texts("user"),
-        vec![
-            "<external_browser_info>tab one</external_browser_info>",
-            "inspect the active tab",
-        ]
+        vec!["inspect the active tab"]
     );
 
     Ok(())
@@ -639,20 +640,47 @@ async fn additional_context_is_deduplicated_between_turns_while_retained(
     })
     .await;
 
+    let first_request = first_request.single_request();
+    let second_request = second_request.single_request();
     assert_eq!(
-        first_request.single_request().message_input_texts("user"),
-        vec![
-            "<external_browser_info>same tab</external_browser_info>",
-            "first turn",
-        ]
+        first_request.message_input_texts("user"),
+        vec!["first turn"]
     );
     assert_eq!(
-        second_request.single_request().message_input_texts("user"),
-        vec![
-            "<external_browser_info>same tab</external_browser_info>",
-            "first turn",
-            "second turn",
-        ]
+        second_request.message_input_texts("user"),
+        vec!["first turn", "second turn"]
+    );
+    let mut expected_outputs = vec![json!({
+        "type": "function_call_output",
+        "namespace": "agent",
+        "name": first_name.unwrap_or("browser_info"),
+        "output": "same tab",
+    })];
+    assert_eq!(
+        first_request
+            .inputs_of_type("function_call_output")
+            .into_iter()
+            .map(strip_response_item_ids_from_json)
+            .map(strip_metadata_from_json)
+            .collect::<Vec<_>>(),
+        expected_outputs,
+    );
+    if first_name != second_name {
+        expected_outputs.push(json!({
+            "type": "function_call_output",
+            "namespace": "agent",
+            "name": second_name.unwrap_or("browser_info"),
+            "output": "same tab",
+        }));
+    }
+    assert_eq!(
+        second_request
+            .inputs_of_type("function_call_output")
+            .into_iter()
+            .map(strip_response_item_ids_from_json)
+            .map(strip_metadata_from_json)
+            .collect::<Vec<_>>(),
+        expected_outputs,
     );
 
     Ok(())

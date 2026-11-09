@@ -1441,9 +1441,16 @@ goals = true
         retry_request_index + 1
     };
     assert!(
-        user_input_texts(&request_bodies[goal_continuation_request_index])
+        request_bodies[goal_continuation_request_index]["input"]
+            .as_array()
+            .expect("goal continuation model input")
             .iter()
-            .any(|text| text.contains(RETRY_GOAL)),
+            .any(|item| {
+                item["type"] == "function_call_output"
+                    && item["namespace"] == "agent"
+                    && item["name"] == "goal_objective"
+                    && item["output"] == RETRY_GOAL
+            }),
         "inherited goal continuation should resume after the explicit retry"
     );
 

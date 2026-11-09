@@ -815,10 +815,9 @@ async fn turn_start_additional_context_flows_to_model_input(
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            config: Some(HashMap::from([(
-                "features.untrusted_as_tool_output".to_owned(),
-                json!(tool_outputs),
-            )])),
+            config: (!tool_outputs).then(|| {
+                HashMap::from([("features.untrusted_as_tool_output".to_owned(), json!(false))])
+            }),
             ..Default::default()
         })
         .await?;
