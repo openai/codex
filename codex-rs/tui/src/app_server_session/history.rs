@@ -29,6 +29,7 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 
 pub(crate) const INITIAL_HISTORY_TURN_LIMIT: u32 = 5;
+const HISTORY_TURN_PAGE_LIMIT: u32 = 100;
 pub(crate) const HISTORY_ITEM_PAGE_LIMIT: u32 = 100;
 pub(crate) const HISTORY_ITEM_SCAN_LIMIT: usize = 4 * HISTORY_ITEM_PAGE_LIMIT as usize;
 
@@ -36,6 +37,8 @@ pub(crate) const HISTORY_ITEM_SCAN_LIMIT: usize = 4 * HISTORY_ITEM_PAGE_LIMIT as
 pub(crate) enum HistoryHydrationScope<'a> {
     Initial,
     Complete,
+    /// Include older turns that have no items.
+    FullTranscript,
     ThroughTurn(&'a str),
 }
 
@@ -68,7 +71,7 @@ impl HistoryLoadBudget {
         let rows = local_settings
             .and_then(|settings| resize_reflow_max_rows(settings.terminal_resize_reflow()));
         let items = match (scope, config, rows) {
-            (HistoryHydrationScope::Complete, _, _)
+            (HistoryHydrationScope::Complete | HistoryHydrationScope::FullTranscript, _, _)
             | (HistoryHydrationScope::ThroughTurn(_), _, _)
             | (HistoryHydrationScope::Initial, Some(_), None) => None,
             (HistoryHydrationScope::Initial, Some(_), Some(max_rows)) => {
@@ -125,6 +128,15 @@ fn advancing_cursor(
         seen_cursors.insert(current.to_string());
     }
     next.filter(|next| seen_cursors.insert(next.clone()))
+}
+
+fn prepend_older_turns(turns: &mut Vec<Turn>, mut older: Vec<Turn>) {
+    let mut new_ids: HashSet<_> = older.iter().map(|turn| turn.id.clone()).collect();
+    for known in turns.iter() {
+        new_ids.remove(&known.id);
+    }
+    older.retain(|turn| new_ids.remove(&turn.id));
+    turns.splice(0..0, older.into_iter().rev());
 }
 
 #[derive(Clone, Debug, Default)]
@@ -307,7 +319,7 @@ impl AppServerSession {
                 for turn in &page.data {
                     missing_turn_ids.remove(&turn.id);
                 }
-                turns.splice(0..0, page.data.into_iter().rev());
+                prepend_older_turns(turns, page.data);
             }
             if let Some(turn) = turns.iter_mut().find(|turn| turn.id == entry.turn_id)
                 && !turn.items.iter().any(|item| item.id() == entry.item.id())
@@ -420,6 +432,22 @@ impl AppServerSession {
                 );
             } else {
                 rendered_rows = rendered_rows.saturating_add(items.len());
+            }
+        }
+        // A failed Cloud turn may have only an error and no items.
+        if self.thread_params_mode() == super::ThreadParamsMode::Cloud
+            && scope == HistoryHydrationScope::FullTranscript
+        {
+            while let Some(cursor) = state.next_turn_cursor.take() {
+                let page = self
+                    .thread_turns_page(thread_id, Some(cursor.clone()), HISTORY_TURN_PAGE_LIMIT)
+                    .await?;
+                state.next_turn_cursor = advancing_cursor(
+                    Some(&cursor),
+                    page.next_cursor,
+                    &mut state.seen_turn_cursors,
+                );
+                prepend_older_turns(&mut thread.turns, page.data);
             }
         }
         if config.is_some() {

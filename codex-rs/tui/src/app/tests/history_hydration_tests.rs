@@ -331,3 +331,124 @@ async fn history_hydration_archived_retry_uses_first_attempt_runtime_settings() 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn cloud_complete_transcript_includes_error_from_an_older_zero_item_turn() -> Result<()> {
+    use crate::app::agents_overview::tests::overview_thread;
+    use crate::app::transcript_export::load_export_transcript;
+    use crate::thread_transcript::RawReasoningVisibility::Hidden;
+    use crate::thread_transcript::load_session_transcript;
+    use codex_app_server_client::CloudClient;
+    use codex_app_server_client::CloudOperation;
+    use codex_app_server_protocol::ThreadItemsListCursor::Opaque;
+    use codex_app_server_protocol::ThreadStatus::Idle;
+    use serde_json::json;
+
+    let id = ThreadId::new();
+    let mut thread = overview_thread(id, /*parent_thread_id*/ None, "Cloud", Idle);
+    thread.history_mode = codex_app_server_protocol::ThreadHistoryMode::Paginated;
+    let failure = "offline failure with no items";
+    let recent = json!({
+        "id": "recent", "status": "failed", "itemsView": "notLoaded", "items": [],
+        "error": {"message": "recent failure"}
+    });
+    let middle = test_turn("middle", TurnStatus::Completed, vec![]);
+    let prior = json!({"type": "agentMessage", "id": "prior", "text": "older answer"});
+    let answer = json!({"type": "agentMessage", "id": "item", "text": "exported answer"});
+    let failed = json!({
+        "id": "older", "status": "failed", "itemsView": "notLoaded", "items": [],
+        "error": {"message": failure}
+    });
+    let (client, mut commands, _events) = CloudClient::channel(/*capacity*/ 1);
+    let mut server = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        codex_app_server_client::AppServerClient::Cloud(client),
+        crate::ThreadParamsMode::Cloud,
+    );
+    let service = tokio::spawn(async move {
+        let mut turn_pages = Vec::new();
+        let mut item_pages = Vec::new();
+        while let Some(command) = commands.recv().await {
+            let CloudOperation::Request(request) = command.operation else {
+                panic!("expected a history read")
+            };
+            let response = match *request {
+                ClientRequest::ThreadRead { .. } => json!({"thread": thread}),
+                ClientRequest::ThreadTurnsList { params, .. } => {
+                    let page = match params.cursor.as_deref() {
+                        None => json!({"data": [recent], "nextCursor": "overlap"}),
+                        Some("overlap") => json!({"data": [recent], "nextCursor": "middle"}),
+                        Some("middle") => json!({"data": [middle], "nextCursor": "older"}),
+                        Some("older") => json!({"data": [failed], "nextCursor": "older"}),
+                        other => panic!("unexpected metadata cursor {other:?}"),
+                    };
+                    turn_pages.push((params.cursor, params.limit));
+                    page
+                }
+                ClientRequest::ThreadItemsList { params, .. } => {
+                    item_pages.push(params.cursor.clone());
+                    match params.cursor {
+                        None => json!({"data": [
+                        {"turnId": "recent", "item": answer}, {"turnId": "middle", "item": prior}
+                    ], "nextCursor": "end"}),
+                        Some(Opaque(cursor)) if cursor == "end" => {
+                            json!({"data": [{"turnId": "middle", "item": {
+                            "type":"agentMessage", "id":"first", "text":"first answer"
+                        }}], "nextCursor": "end"})
+                        }
+                        other => panic!("unexpected item cursor {other:?}"),
+                    }
+                }
+                _ => panic!("unexpected request"),
+            };
+            command.response.send(Ok(Ok(response))).unwrap();
+        }
+        (turn_pages, item_pages)
+    });
+    let cells = load_session_transcript(&mut server, id, Hidden, /*config*/ None).await?;
+    let rendered = lines_to_single_string(&cells[0].display_lines(/*width*/ 80));
+    insta::assert_snapshot!(rendered, @"■ offline failure with no items");
+    assert_eq!(cells.len(), 5);
+    for (cell, expected) in cells[1..].iter().zip([
+        "first answer",
+        "older answer",
+        "exported answer",
+        "recent failure",
+    ]) {
+        assert!(lines_to_single_string(&cell.display_lines(/*width*/ 80)).contains(expected));
+    }
+    let exported = load_export_transcript(&mut server, id, Hidden, /*config*/ None, vec![])
+        .await
+        .expect("export history");
+    assert_eq!(exported.len(), 3);
+    for (cell, expected) in exported
+        .iter()
+        .zip(["first answer", "older answer", "exported answer"])
+    {
+        assert!(lines_to_single_string(&cell.raw_lines()).contains(expected));
+    }
+    drop(server);
+    let (turn_pages, item_pages) = service.await?;
+    assert_eq!(
+        item_pages,
+        [
+            None,
+            Some(Opaque("end".into())),
+            None,
+            Some(Opaque("end".into()))
+        ]
+    );
+    assert_eq!(
+        turn_pages,
+        [
+            (None, Some(5)),
+            (Some("overlap".into()), Some(1)),
+            (Some("middle".into()), Some(1)),
+            (Some("older".into()), Some(100)),
+            (None, Some(5)),
+            (Some("overlap".into()), Some(1)),
+            (Some("middle".into()), Some(1)),
+        ]
+    );
+    Ok(())
+}
