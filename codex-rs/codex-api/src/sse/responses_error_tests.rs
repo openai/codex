@@ -115,6 +115,8 @@ async fn terminal_failure_with_retry_header_ends_stream_immediately() {
     for (code, expected) in [
         ("flex_unavailable", CodexErrorInfo::FlexUnavailable),
         ("budget_reached", CodexErrorInfo::SessionBudgetExceeded),
+        ("invalid_access_program", CodexErrorInfo::Other),
+        ("unsupported_access_program", CodexErrorInfo::Other),
         ("content_policy_violation", CodexErrorInfo::InvalidPrompt),
         (
             "access_program_not_enabled",

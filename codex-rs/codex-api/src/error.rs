@@ -91,13 +91,22 @@ pub(crate) fn parse_terminal_provider_error(
 ) -> Option<ApiError> {
     let error = error?;
     let code = error.get("code")?.as_str()?;
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty());
     match (code, status) {
+        // A non-streaming 400 already follows the ordinary invalid-request path.
+        ("invalid_access_program" | "unsupported_access_program", None) => {
+            Some(ApiError::InvalidRequest {
+                message: message
+                    .unwrap_or("The requested access program cannot be used with this model.")
+                    .to_owned(),
+            })
+        }
         ("content_policy_violation", None | Some(StatusCode::BAD_REQUEST)) => {
             Some(ApiError::ContentPolicyViolation {
-                message: error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .filter(|message| !message.trim().is_empty())
+                message: message
                     .unwrap_or("The input was rejected by the content policy.")
                     .to_owned(),
                 status,
@@ -105,10 +114,7 @@ pub(crate) fn parse_terminal_provider_error(
         }
         // HTTP 403s retain their request ID and headers in the API bridge.
         ("access_program_not_enabled", None) => Some(ApiError::AccessProgramNotEnabled {
-            message: error
-                .get("message")
-                .and_then(Value::as_str)
-                .filter(|message| !message.trim().is_empty())
+            message: message
                 .unwrap_or("The requested access program is not enabled.")
                 .to_owned(),
         }),
@@ -125,12 +131,7 @@ pub(crate) fn parse_terminal_provider_error(
             None | Some(StatusCode::BAD_REQUEST),
         ) => Some(ApiError::InvalidAudioInput {
             per_recording: code != "audio_too_large",
-            message: error
-                .get("message")
-                .and_then(Value::as_str)
-                .filter(|message| !message.trim().is_empty())
-                .unwrap_or("Invalid audio input.")
-                .to_owned(),
+            message: message.unwrap_or("Invalid audio input.").to_owned(),
         }),
         ("flex_unavailable", None | Some(StatusCode::TOO_MANY_REQUESTS)) => {
             Some(ApiError::FlexUnavailable)
@@ -139,12 +140,7 @@ pub(crate) fn parse_terminal_provider_error(
             "model_not_found",
             None | Some(StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
         ) => Some(ApiError::ModelNotFound {
-            message: error
-                .get("message")
-                .and_then(Value::as_str)
-                .filter(|message| !message.trim().is_empty())
-                .unwrap_or(code)
-                .to_owned(),
+            message: message.unwrap_or(code).to_owned(),
             status,
         }),
         _ => None,
