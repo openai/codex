@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::plain_output_text;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -72,7 +73,7 @@ pub fn truncate_mcp_tool_result(
     result: &CallToolResult,
     max_bytes: usize,
 ) -> Cow<'_, CallToolResult> {
-    let Ok(serialized) = serde_json::to_string(result) else {
+    let Ok(mut serialized) = serde_json::to_string(result) else {
         return Cow::Borrowed(result);
     };
     if serialized.len() <= max_bytes {
@@ -80,6 +81,26 @@ pub fn truncate_mcp_tool_result(
     }
 
     let meta = None;
+
+    // Keep plain output recognizable after truncation. Rich results retain their
+    // serialized preview so history can distinguish them from plain output.
+    if result.is_error != Some(true)
+        && result.structured_content.is_none()
+        && result.meta.is_none()
+        && let Some(blocks) = result
+            .content
+            .iter()
+            .map(plain_output_text)
+            .collect::<Option<Vec<_>>>()
+        && blocks.iter().any(|text| !text.is_empty())
+    {
+        serialized.clear();
+        serialized.push_str("Truncated tool output:");
+        for text in blocks {
+            serialized.push('\n');
+            serialized.push_str(text);
+        }
+    }
 
     let mut preview_budget = max_bytes;
     loop {

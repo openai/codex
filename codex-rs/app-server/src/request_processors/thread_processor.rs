@@ -26,6 +26,7 @@ use crate::thread_sample::generate_sample;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemOutputDeferral;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadItemsListAnchor;
 use codex_app_server_protocol::ThreadItemsListCursor;
@@ -46,6 +47,7 @@ use codex_protocol::SanitizedGitUrl;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::mcp::plain_output_text;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::LocalHistoryAccount;
 use codex_thread_store::PersistContext;
@@ -3733,8 +3735,7 @@ impl ThreadRequestProcessor {
             sort_direction,
             defer_output,
         } = params;
-        let defer_command_output =
-            turn_id.is_some() && defer_output.is_some_and(|options| options.command_execution);
+        let defer_output = defer_output.filter(|_| turn_id.is_some());
         let position = cursor.map(|cursor| match cursor {
             ThreadItemsListCursor::Opaque(cursor) => StoreListItemsPosition::Cursor(cursor),
             ThreadItemsListCursor::Anchor(ThreadItemsListAnchor::Item { item_id }) => {
@@ -3787,20 +3788,10 @@ impl ThreadRequestProcessor {
         let mut data = Vec::with_capacity(page.items.len());
         for stored_item in page.items {
             let mut entry = stored_thread_item_to_entry(stored_item)?;
-            if defer_command_output
+            if let Some(options) = &defer_output
                 && entry.completed_at_ms.is_some()
-                && let ThreadItemPayload::CommandExecution {
-                    status: codex_app_server_protocol::CommandExecutionStatus::Completed,
-                    exit_code: Some(0),
-                    aggregated_output,
-                    ..
-                } = &mut entry.item.payload
-                && aggregated_output
-                    .as_ref()
-                    .is_some_and(|output| !output.is_empty())
             {
-                *aggregated_output = None;
-                entry.output_deferred = true;
+                entry.output_deferred = defer_item_output(&mut entry.item.payload, options);
             }
             data.push(entry);
         }
@@ -6490,6 +6481,57 @@ fn stored_thread_item_to_api_item(
         started_at_ms: stored_item.started_at_ms,
         completed_at_ms: stored_item.completed_at_ms,
     })
+}
+
+fn defer_item_output(item: &mut ThreadItemPayload, options: &ThreadItemOutputDeferral) -> bool {
+    match item {
+        ThreadItemPayload::CommandExecution {
+            status: codex_app_server_protocol::CommandExecutionStatus::Completed,
+            exit_code: Some(0),
+            aggregated_output,
+            ..
+        } if options.command_execution
+            && aggregated_output
+                .as_ref()
+                .is_some_and(|output| !output.is_empty()) =>
+        {
+            *aggregated_output = None;
+        }
+        ThreadItemPayload::McpToolCall {
+            server,
+            status: codex_app_server_protocol::McpToolCallStatus::Completed,
+            result: Some(result),
+            error: None,
+            app_context,
+            mcp_app_resource_uri: None,
+            mcp_app_ui: None,
+            ..
+        } if options.mcp_tool_call
+            && server != "codex_app"
+            && app_context
+                .as_ref()
+                .is_none_or(|ctx| ctx.resource_uri.is_none())
+            && is_deferrable_mcp_result(result) =>
+        {
+            result.content.clear();
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn is_deferrable_mcp_result(result: &codex_app_server_protocol::McpToolCallResult) -> bool {
+    if result.structured_content.is_some() || result.meta.is_some() {
+        return false;
+    }
+    let mut has_text = false;
+    for block in &result.content {
+        let Some(text) = plain_output_text(block) else {
+            return false;
+        };
+        has_text |= !text.is_empty();
+    }
+    has_text
 }
 
 fn stored_thread_item_to_entry(

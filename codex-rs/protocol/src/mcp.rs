@@ -361,6 +361,21 @@ pub struct CallToolResult {
     pub meta: Option<serde_json::Value>,
 }
 
+/// Returns display text from an unannotated MCP text block. Some tools encode
+/// sources and UI data as JSON or fenced text, which history must keep inline.
+pub fn plain_output_text(block: &serde_json::Value) -> Option<&str> {
+    let fields = block.as_object()?;
+    if fields.len() != 2 || fields.get("type")?.as_str()? != "text" {
+        return None;
+    }
+    let text = fields.get("text")?.as_str()?;
+    let trimmed = text.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
+    if trimmed.starts_with(['{', '[']) || trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        return None;
+    }
+    Some(text)
+}
+
 // === Adapter helpers ===
 //
 // These types and conversions intentionally live in `codex-protocol` so other crates can convert

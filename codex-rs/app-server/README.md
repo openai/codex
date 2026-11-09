@@ -755,13 +755,23 @@ Omitted or null cursors preserve normal first-page behavior. Continue anchored
 pages with the returned opaque string `nextCursor`; response fields and
 `backwardsCursor` semantics are unchanged.
 
-Experimental clients can set `"deferOutput": {"commandExecution": true}`
-with a `turnId`. Omitted or false options keep the full output. Unknown fields in
-`deferOutput` are ignored.
-For a completed command with a recorded completion time, exit code zero, and
-nonempty saved output, the entry returns `outputDeferred: true` and
-`item.aggregatedOutput: null`. Use `thread/items/read` with that turn and item ID
-to retrieve the full output. All other entries retain their recorded output.
+Experimental clients can request `"deferOutput": {"commandExecution": true, "mcpToolCall": true}`
+with a `turnId`. Each option applies independently to items with a recorded
+completion time and defaults to false. The server ignores unknown options.
+
+- `commandExecution` returns `item.aggregatedOutput: null` for a successful command with
+  exit code zero and nonempty saved output.
+- `mcpToolCall` returns `item.result.content: []` for a successful tool call with
+  nonempty output made up entirely of plain, unannotated text blocks. Calls with
+  an app resource URI or UI, result metadata, structured content, non-text blocks, or
+  text beginning with a JSON object, array, or Markdown fence retain the full result.
+  Connector identity stays on the item when its output is deferred.
+  The built-in `codex_app` server also keeps its results inline because Desktop
+  renders those calls as native tools, including terminal reads.
+
+Both forms set `outputDeferred: true`. Use `thread/items/read` with the turn
+and item ID to retrieve the saved output. For MCP results over the 64 KiB
+history limit, this returns the bounded preview saved at completion.
 
 ## Workspace switching (experimental)
 

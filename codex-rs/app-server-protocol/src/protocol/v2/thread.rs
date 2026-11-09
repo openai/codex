@@ -1879,6 +1879,10 @@ pub struct ThreadItemOutputDeferral {
     #[experimental("thread/items/list.deferOutput.commandExecution")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub command_execution: bool,
+    /// Defer nonempty plain-text results from successful MCP tool calls.
+    #[experimental("thread/items/list.deferOutput.mcpToolCall")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mcp_tool_call: bool,
 }
 
 /// Starting position for an item-history page.
@@ -1909,7 +1913,7 @@ pub struct ThreadItemEntry {
     /// Turn containing this item.
     pub turn_id: String,
     pub item: ThreadItem,
-    /// The saved command output was omitted. Fetch the complete item with `thread/items/read`.
+    /// The saved output was omitted. Fetch the complete item with `thread/items/read`.
     #[experimental("thread/items/list.outputDeferred")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub output_deferred: bool,
