@@ -173,6 +173,12 @@ pub enum CodexErrorDetails {
     },
     #[error("{message}")]
     InvalidPrompt { message: String },
+    /// The provider rejected the input under its content policy.
+    #[error("{message}")]
+    ContentPolicyViolation {
+        message: String,
+        status: Option<StatusCode>,
+    },
     /// Multiple registered tools share the same effective name.
     #[error("duplicate tool: {0}")]
     ToolCollision(String),
@@ -457,6 +463,7 @@ impl CodexErr {
             | CodexErrorDetails::ResponseIncomplete(_)
             | CodexErrorDetails::ModelNotFound { .. }
             | CodexErrorDetails::InvalidPrompt { .. }
+            | CodexErrorDetails::ContentPolicyViolation { .. }
             | CodexErrorDetails::ToolCollision(_)
             | CodexErrorDetails::RefreshTokenFailed(_)
             | CodexErrorDetails::GatewayLoginRequired(_)
@@ -540,7 +547,8 @@ impl CodexErr {
             CodexErrorDetails::CyberPolicy { .. } => CodexErrorInfo::CyberPolicy,
             CodexErrorDetails::BioPolicy { .. } => CodexErrorInfo::BioPolicy,
             CodexErrorDetails::ModelNotFound { .. } => CodexErrorInfo::ModelNotFound,
-            CodexErrorDetails::InvalidPrompt { .. } => CodexErrorInfo::InvalidPrompt,
+            CodexErrorDetails::InvalidPrompt { .. }
+            | CodexErrorDetails::ContentPolicyViolation { .. } => CodexErrorInfo::InvalidPrompt,
             CodexErrorDetails::MisalignmentPolicyViolation { .. } => {
                 CodexErrorInfo::MisalignmentPolicyViolation
             }
@@ -593,7 +601,8 @@ impl CodexErr {
     pub fn http_status_code_value(&self) -> Option<u16> {
         let http_status_code = match &self.details {
             CodexErrorDetails::FlexUnavailable => Some(StatusCode::TOO_MANY_REQUESTS),
-            CodexErrorDetails::ModelNotFound { status, .. } => *status,
+            CodexErrorDetails::ModelNotFound { status, .. }
+            | CodexErrorDetails::ContentPolicyViolation { status, .. } => *status,
             CodexErrorDetails::RetryLimit(err) => Some(err.status),
             CodexErrorDetails::InvalidWorkspaceSelected(err)
             | CodexErrorDetails::AccessProgramNotEnabled(ProviderRejection::Http(err))

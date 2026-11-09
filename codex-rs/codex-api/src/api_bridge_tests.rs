@@ -359,6 +359,11 @@ fn map_api_error_preserves_typed_errors() {
 fn map_api_error_maps_http_and_wrapped_websocket_typed_errors() {
     for (code, expected_info, fallback) in [
         (
+            "content_policy_violation",
+            CodexErrorInfo::InvalidPrompt,
+            "The input was rejected by the content policy.",
+        ),
+        (
             "bio_policy",
             CodexErrorInfo::BioPolicy,
             "This content was flagged for possible biological risk.",

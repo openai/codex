@@ -56,6 +56,11 @@ pub enum ApiError {
     },
     #[error("invalid prompt: {message}")]
     InvalidPrompt { message: String },
+    #[error("{message}")]
+    ContentPolicyViolation {
+        message: String,
+        status: Option<StatusCode>,
+    },
     #[error("cyber policy: {message}")]
     CyberPolicy { message: String },
     #[error("bio policy: {message}")]
@@ -87,6 +92,17 @@ pub(crate) fn parse_terminal_provider_error(
     let error = error?;
     let code = error.get("code")?.as_str()?;
     match (code, status) {
+        ("content_policy_violation", None | Some(StatusCode::BAD_REQUEST)) => {
+            Some(ApiError::ContentPolicyViolation {
+                message: error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .filter(|message| !message.trim().is_empty())
+                    .unwrap_or("The input was rejected by the content policy.")
+                    .to_owned(),
+                status,
+            })
+        }
         // HTTP 403s retain their request ID and headers in the API bridge.
         ("access_program_not_enabled", None) => Some(ApiError::AccessProgramNotEnabled {
             message: error

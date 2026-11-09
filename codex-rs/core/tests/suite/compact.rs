@@ -1140,11 +1140,15 @@ async fn reasoning_effort_override_remote_v2_compaction_resets_pinned_effort(
     Ok(())
 }
 
-#[test_case::test_case(non_openai_model_provider; "local")]
-#[test_case::test_case(openai_model_provider; "remote")]
+#[test_case::test_case(non_openai_model_provider, 403, json!({"detail": {"code": "invalid_workspace_selected"}}); "local workspace denial")]
+#[test_case::test_case(openai_model_provider, 403, json!({"detail": {"code": "invalid_workspace_selected"}}); "remote workspace denial")]
+#[test_case::test_case(non_openai_model_provider, 400, json!({"error": {"code": "content_policy_violation", "param": "input"}}); "local content policy denial")]
+#[test_case::test_case(openai_model_provider, 400, json!({"error": {"code": "content_policy_violation", "param": "input"}}); "remote content policy denial")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn workspace_denial_stops_compaction_on_model_downshift(
+async fn explicit_denial_stops_compaction_on_model_downshift(
     provider: fn(&MockServer) -> ModelProviderInfo,
+    status: u16,
+    body: Value,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
@@ -1177,9 +1181,8 @@ async fn workspace_denial_stops_compaction_on_model_downshift(
     .await;
     test.submit_turn("first turn").await?;
 
-    let denied = responses::mount_response_handler(&server, |_| {
-        wiremock::ResponseTemplate::new(403)
-            .set_body_json(json!({ "detail": { "code": "invalid_workspace_selected" } }))
+    let denied = responses::mount_response_handler(&server, move |_| {
+        wiremock::ResponseTemplate::new(status).set_body_json(&body)
     })
     .await;
     test.codex

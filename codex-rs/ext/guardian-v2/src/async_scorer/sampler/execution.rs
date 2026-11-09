@@ -164,6 +164,7 @@ impl SamplingExecution {
                 | ApiError::ModelNotFound { .. }
                 | ApiError::InvalidPrompt { .. }
                 | ApiError::AccessProgramNotEnabled { .. }
+                | ApiError::ContentPolicyViolation { .. }
                 | ApiError::MisalignmentPolicyViolation { .. }
                 | ApiError::CyberPolicy { .. }
                 | ApiError::BioPolicy { .. },
