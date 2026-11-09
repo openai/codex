@@ -4464,22 +4464,25 @@ async fn manual_compact_retries_after_context_window_error() {
         ev_assistant_message("m1", FIRST_REPLY),
         ev_completed("r1"),
     ]);
-    let compact_failed = sse_failed(
-        "resp-fail",
-        "context_length_exceeded",
-        CONTEXT_LIMIT_MESSAGE,
-    );
+    let compact_failed = wiremock::ResponseTemplate::new(/*s*/ 400).set_body_json(json!({
+        "error": {
+            "type": "invalid_request_error",
+            "code": "context_length_exceeded",
+            "message": CONTEXT_LIMIT_MESSAGE,
+            "param": "input",
+        }
+    }));
     let compact_succeeds = sse(vec![
         ev_assistant_message("m2", SUMMARY_TEXT),
         ev_completed("r2"),
     ]);
 
-    let request_log = mount_sse_sequence(
+    let request_log = mount_response_sequence(
         &server,
         vec![
-            user_turn.clone(),
-            compact_failed.clone(),
-            compact_succeeds.clone(),
+            sse_response(user_turn),
+            compact_failed,
+            sse_response(compact_succeeds),
         ],
     )
     .await;

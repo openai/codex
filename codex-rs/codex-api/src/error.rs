@@ -96,6 +96,9 @@ pub(crate) fn parse_terminal_provider_error(
         .and_then(Value::as_str)
         .filter(|message| !message.trim().is_empty());
     match (code, status) {
+        ("context_length_exceeded", None | Some(StatusCode::BAD_REQUEST)) => {
+            Some(ApiError::ContextWindowExceeded)
+        }
         // A non-streaming 400 already follows the ordinary invalid-request path.
         ("invalid_access_program" | "unsupported_access_program", None) => {
             Some(ApiError::InvalidRequest {

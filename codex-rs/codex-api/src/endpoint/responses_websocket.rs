@@ -1327,6 +1327,32 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_context_length_error_respects_http_status() {
+        for status in [400, 503] {
+            let payload = json!({
+                "type": "error",
+                "status": status,
+                "error": {"code": "context_length_exceeded"}
+            })
+            .to_string();
+            let event = parse_wrapped_websocket_error_event(&payload).unwrap();
+            let error = map_wrapped_websocket_error_event(event, payload).unwrap();
+            let error = crate::api_bridge::map_api_error(error);
+            assert_eq!(
+                matches!(
+                    error.details(),
+                    codex_protocol::error::CodexErrorDetails::ContextWindowExceeded
+                ),
+                status == 400
+            );
+            assert_eq!(
+                error.retry_delay(/*retry_count*/ 1).is_some(),
+                status == 503
+            );
+        }
+    }
+
+    #[test]
     fn parse_wrapped_websocket_error_event_with_connection_limit_maps_retryable() {
         let payload = json!({
             "type": "error",
