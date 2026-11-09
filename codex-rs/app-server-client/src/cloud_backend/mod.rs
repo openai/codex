@@ -9,6 +9,7 @@ use crate::AppServerClient;
 use crate::AppServerEvent;
 use crate::CloudClient;
 use crate::CloudOperation;
+use crate::cloud::CloudStreamLosses;
 use codex_app_server_protocol as protocol;
 use codex_cloud_client as cloud;
 use color_eyre::eyre::Result;
@@ -41,6 +42,7 @@ struct Attachment {
 #[derive(Default)]
 struct Replies {
     active: Option<Attachment>,
+    stream_losses: CloudStreamLosses,
     // Keep the last observed status through EOF until this conversation is unloaded.
     latest_status: Option<(String, cloud::ThreadStatus)>,
 }
@@ -53,14 +55,13 @@ impl Replies {
         match active.stream.next().await {
             Some(Ok(event)) => forward(&active.thread_id, event, output, &mut self.latest_status),
             Some(Err(_)) | None => {
-                send_notification(
-                    output,
-                    cloud_error(
-                        &active.thread_id,
-                        "Cloud stream ended. Reopen the conversation to reconnect.",
-                    ),
+                let error = cloud_error(
+                    &active.thread_id,
+                    "Cloud stream ended. Reopen the conversation to reconnect.",
                 );
                 self.active = None;
+                self.stream_losses.record(&error.thread_id);
+                let _ = output.send(AppServerEvent::ThreadStreamDisconnected(Box::new(error)));
             }
         }
     }
@@ -96,14 +97,15 @@ impl Replies {
             Some(Some(Ok(event))) => Some(event),
             None => None,
         };
-        self.latest_status = None;
-        if let Some(event) = first_event {
-            forward(id, event, output, &mut self.latest_status);
-        }
         self.active = Some(Attachment {
             thread_id: id.to_owned(),
             stream,
         });
+        self.stream_losses.supersede(id);
+        self.latest_status = None;
+        if let Some(event) = first_event {
+            forward(id, event, output, &mut self.latest_status);
+        }
         Ok(())
     }
 
@@ -155,8 +157,12 @@ fn start_worker(client: cloud::Client, account: protocol::GetAccountResponse) ->
         loaded: None,
         warned_partial_history: None,
     };
+    let mut replies = Replies {
+        stream_losses: app_client.stream_losses.clone(),
+        ..Default::default()
+    };
     tokio::spawn(async move {
-        run_worker(commands, &mut requests, &mut Replies::default(), &output).await;
+        run_worker(commands, &mut requests, &mut replies, &output).await;
     });
     AppServerClient::Cloud(app_client)
 }
@@ -298,7 +304,10 @@ fn forward(
         cloud::Event::Transcript(event) => match events::transcript(event.thread_id, event.update) {
             Ok(Some(notification)) => notification,
             Ok(None) => return,
-            Err(_) => cloud_error(id, "The cloud sent an unsupported transcript event."),
+            Err(_) => protocol::ServerNotification::Error(cloud_error(
+                id,
+                "The cloud sent an unsupported transcript event.",
+            )),
         },
         cloud::Event::ServerRequest(_) => protocol::ServerNotification::Warning(protocol::WarningNotification {
             thread_id: Some(id.to_owned()),
@@ -316,8 +325,8 @@ fn send_notification(
     let _ = output.send(AppServerEvent::ServerNotification(Box::new(notification)));
 }
 
-fn cloud_error(id: &str, message: &str) -> protocol::ServerNotification {
-    protocol::ServerNotification::Error(protocol::ErrorNotification {
+fn cloud_error(id: &str, message: &str) -> protocol::ErrorNotification {
+    protocol::ErrorNotification {
         thread_id: id.to_owned(),
         turn_id: String::new(),
         will_retry: false,
@@ -327,7 +336,7 @@ fn cloud_error(id: &str, message: &str) -> protocol::ServerNotification {
             codex_error_info: None,
             misalignment: None,
         },
-    })
+    }
 }
 
 #[cfg(test)]

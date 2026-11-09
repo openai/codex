@@ -156,6 +156,13 @@ impl App {
                     .await;
                 self.repaint_agents_overview();
             }
+            AppServerEvent::ThreadStreamDisconnected(error) => {
+                self.handle_server_notification_event(
+                    app_server_client,
+                    ServerNotification::Error(*error),
+                )
+                .await;
+            }
             AppServerEvent::Disconnected { message } => {
                 // The request result distinguishes a refused start from a lost reply.
                 if self.pending_startup_thread_start

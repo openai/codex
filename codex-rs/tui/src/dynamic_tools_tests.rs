@@ -256,6 +256,7 @@ stream_max_retries = 0
                         return Ok::<_, color_eyre::eyre::Report>(());
                     }
                 }
+                codex_app_server_client::AppServerEvent::ThreadStreamDisconnected(_) => {}
                 codex_app_server_client::AppServerEvent::Lagged { .. }
                 | codex_app_server_client::AppServerEvent::Disconnected { .. } => {
                     panic!("lost app-server events during the tool round trip");

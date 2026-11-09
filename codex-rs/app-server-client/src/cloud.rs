@@ -11,7 +11,12 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStartParams;
+use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::PoisonError;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
@@ -59,7 +64,54 @@ pub struct CloudRequestHandle {
     commands: mpsc::Sender<CloudCommand>,
 }
 
+/// Tracks only losses queued for delivery. The worker remains the sole owner
+/// of the active attachment. A successful replacement supersedes earlier losses
+/// for that conversation, even if the replacement itself later ends.
+#[derive(Clone, Default)]
+pub(super) struct CloudStreamLosses(Arc<Mutex<HashMap<String, PendingLosses>>>);
+
+#[derive(Default)]
+struct PendingLosses {
+    remaining: usize,
+    superseded: usize,
+}
+
+impl CloudStreamLosses {
+    fn pending(&self) -> MutexGuard<'_, HashMap<String, PendingLosses>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn record(&self, thread_id: &str) {
+        self.pending()
+            .entry(thread_id.to_owned())
+            .or_default()
+            .remaining += 1;
+    }
+
+    pub(super) fn supersede(&self, thread_id: &str) {
+        if let Some(losses) = self.pending().get_mut(thread_id) {
+            losses.superseded = losses.remaining;
+        }
+    }
+
+    fn should_deliver(&self, thread_id: &str) -> bool {
+        let mut pending = self.pending();
+        let Some(losses) = pending.get_mut(thread_id) else {
+            return true;
+        };
+        // A single worker sends losses in the same order as it records them.
+        let deliver = losses.superseded == 0;
+        losses.superseded = losses.superseded.saturating_sub(1);
+        losses.remaining -= 1;
+        if losses.remaining == 0 {
+            pending.remove(thread_id);
+        }
+        deliver
+    }
+}
+
 pub struct CloudClient {
+    pub(super) stream_losses: CloudStreamLosses,
     handle: CloudRequestHandle,
     events: mpsc::UnboundedReceiver<AppServerEvent>,
 }
@@ -79,6 +131,7 @@ impl CloudClient {
         let (events, event_receiver) = mpsc::unbounded_channel();
         (
             Self {
+                stream_losses: CloudStreamLosses::default(),
                 handle: CloudRequestHandle { commands },
                 events: event_receiver,
             },
@@ -92,7 +145,15 @@ impl CloudClient {
     }
 
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
-        self.events.recv().await
+        while let Some(event) = self.events.recv().await {
+            if let AppServerEvent::ThreadStreamDisconnected(error) = &event
+                && !self.stream_losses.should_deliver(&error.thread_id)
+            {
+                continue;
+            }
+            return Some(event);
+        }
+        None
     }
 
     pub(crate) async fn request(&self, request: ClientRequest) -> io::Result<RequestResult> {

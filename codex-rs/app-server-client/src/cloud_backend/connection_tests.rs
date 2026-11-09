@@ -44,16 +44,59 @@ async fn failed_replacement_keeps_old_thread_until_new_attachment_succeeds() -> 
 
     let _ = close.send(());
     assert!(replies.admit_turn("new", &output).is_err());
-    let AppServerEvent::ServerNotification(notification) = notifications.try_recv()? else {
+    let AppServerEvent::ThreadStreamDisconnected(notification) = notifications.try_recv()? else {
         panic!("expected a disconnect notification");
     };
     assert_eq!(
-        serde_json::to_value(notification)?,
-        serde_json::to_value(cloud_error(
+        serde_json::to_value(protocol::ServerNotification::Error(*notification))?,
+        serde_json::to_value(protocol::ServerNotification::Error(cloud_error(
             "new",
             "Cloud stream ended. Reopen the conversation to reconnect."
-        ))?
+        )))?
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn successful_reopen_supersedes_only_earlier_losses_for_that_thread() -> Result<()> {
+    let (mut client, _commands, output) = CloudClient::channel(/*capacity*/ 1);
+    let mut replies = Replies {
+        stream_losses: client.stream_losses.clone(),
+        ..Default::default()
+    };
+
+    for id in ["reopened", "different", "reopened"] {
+        let (sender, stream) = futures::channel::mpsc::unbounded();
+        replies
+            .replace(id, async { Ok(stream.boxed()) }, &output)
+            .await?;
+        drop(sender);
+        replies.forward_next(&output).await;
+    }
+    assert!(
+        replies
+            .replace("reopened", async { Ok(stream::empty().boxed()) }, &output)
+            .await
+            .is_err()
+    );
+
+    // The first EOF was followed by a successful reopen. A different thread's
+    // EOF and the reopened thread's newer EOF must still be delivered, in order.
+    drop(output);
+    for expected in ["different", "reopened"] {
+        let Some(AppServerEvent::ThreadStreamDisconnected(error)) = client.next_event().await
+        else {
+            panic!("expected a thread stream disconnect");
+        };
+        assert_eq!(
+            *error,
+            cloud_error(
+                expected,
+                "Cloud stream ended. Reopen the conversation to reconnect."
+            )
+        );
+    }
+    assert!(client.next_event().await.is_none());
     Ok(())
 }
 

@@ -11,26 +11,32 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() -> Result<()> {
     let (mut app, mut events, _) = make_test_app_with_channels().await;
-    let (server, requests, proxy) =
+    let (mut server, requests, proxy) =
         session_lifecycle_requests::start_recording_remote_app_server(&app.config).await?;
     let id = ThreadId::new();
     app.primary_thread_id = Some(id);
-    app.active_thread_id = Some(id);
     set_test_initial_prompt(&mut app, String::new());
     app.chat_widget
         .handle_thread_session(test_thread_session(id, app.config.cwd.to_path_buf()));
     app.chat_widget
         .restore_user_message_to_composer("keep draft".into());
     app.ensure_thread_channel(id);
+    app.activate_thread_channel(id).await;
     while events.try_recv().is_ok() {}
     requests.lock().unwrap().clear();
     let input = app.chat_widget.capture_thread_input_state();
     let hard_stop_generation = app.rate_limit_hard_stop_generation;
     let foreign = BackendId::new();
     let request = exec_approval_request(id, "foreign-turn", "command", /*approval_id*/ None);
+    let loss: codex_app_server_protocol::ErrorNotification =
+        serde_json::from_value(serde_json::json!({
+            "threadId": id.to_string(), "turnId": "", "willRetry": false,
+            "error": { "message": "Cloud stream ended. Reopen the conversation to reconnect." }
+        }))?;
     for event in [
         AppServerEvent::ServerNotification(Box::new(turn_started_notification(id, "foreign-turn"))),
         AppServerEvent::ServerRequest(Box::new(request.clone())),
+        AppServerEvent::ThreadStreamDisconnected(Box::new(loss.clone())),
         AppServerEvent::Lagged { skipped: 1 },
         AppServerEvent::Disconnected {
             message: "foreign disconnected".into(),
@@ -107,6 +113,21 @@ async fn foreign_backend_events_leave_thread_cache_and_connection_untouched() ->
             .active_turn_id(),
         Some("owned-turn")
     );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.drain_active_thread_events(&mut tui).await?;
+    app.handle_backend_event(
+        &server,
+        AppServerSessionEvent {
+            backend_id: server.backend_id(),
+            event: AppServerEvent::ThreadStreamDisconnected(Box::new(loss)),
+        },
+    )
+    .await;
+    app.drain_active_thread_events(&mut tui).await?;
+    let history =
+        super::active_reconnect::drain_history(&mut app, &mut tui, &mut server, &mut events)
+            .await?;
+    insta::assert_snapshot!(history, @"■ Cloud stream ended. Reopen the conversation to reconnect.");
     server.shutdown().await?;
     proxy.await??;
     Ok(())
