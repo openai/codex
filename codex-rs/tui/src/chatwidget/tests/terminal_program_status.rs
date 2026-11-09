@@ -2,6 +2,7 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 use crate::terminal_program_status::ProgramStatus::Blocked;
+use crate::terminal_program_status::ProgramStatus::Done;
 use crate::terminal_program_status::ProgramStatus::Idle;
 use crate::terminal_program_status::ProgramStatus::Working;
 use crate::terminal_program_status::ProgramStatusKind;
@@ -11,7 +12,7 @@ async fn session_status_follows_existing_lifecycle_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut states = vec![chat.desired_program_status()];
 
-    chat.bottom_pane.set_task_running(/*running*/ true);
+    handle_turn_started(&mut chat, "session-status-turn");
     states.push(chat.desired_program_status());
 
     handle_exec_approval_request(
@@ -38,17 +39,11 @@ async fn session_status_follows_existing_lifecycle_state() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     states.push(chat.desired_program_status());
 
-    chat.bottom_pane.set_task_running(/*running*/ false);
+    begin_unified_exec_startup(&mut chat, "background-call", "42", "sleep 5");
+    handle_turn_completed(&mut chat, "session-status-turn", /*duration_ms*/ None);
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("1 background terminal running"));
     states.push(chat.desired_program_status());
-
-    chat.unified_exec_processes.push(UnifiedExecProcessSummary {
-        key: "background-process".to_string(),
-        call_id: "background-call".to_string(),
-        command_display: "sleep 5".to_string(),
-        recent_chunks: Vec::new(),
-    });
-    states.push(chat.desired_program_status());
-    chat.unified_exec_processes.clear();
+    chat.acknowledge_program_status();
     states.push(chat.desired_program_status());
 
     assert_eq!(
@@ -58,8 +53,7 @@ async fn session_status_follows_existing_lifecycle_state() {
             Working,
             Blocked(ProgramStatusKind::Permission),
             Working,
-            Idle,
-            Working,
+            Done,
             Idle
         ]
     );

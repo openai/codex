@@ -325,7 +325,6 @@ impl ChatWidget {
             ProgramStatus::Blocked(kind)
         } else if self.bottom_pane.is_task_running()
             || self.is_user_turn_pending_or_running()
-            || !self.unified_exec_processes.is_empty()
             || (self.status_state.program_status_after_turn == ProgramStatus::Done
                 && self
                     .current_goal_status
