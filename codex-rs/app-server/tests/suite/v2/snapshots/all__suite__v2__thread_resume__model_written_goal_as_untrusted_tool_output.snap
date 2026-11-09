@@ -1,0 +1,10 @@
+---
+source: app-server/tests/suite/v2/thread_resume.rs
+expression: "serde_json::to_string_pretty(&wire_item)?"
+---
+{
+  "name": "goal_objective",
+  "namespace": "agent",
+  "output": "keep its original owner",
+  "type": "function_call_output"
+}

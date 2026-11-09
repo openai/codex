@@ -757,6 +757,13 @@ impl CodexThread {
         self.session.inject_if_running(items).await
     }
 
+    /// Delivers an extension's untrusted context only to the turn that produced it.
+    pub async fn inject_untrusted_context_for_turn(&self, turn_id: &str, key: &str, value: String) {
+        self.session
+            .inject_untrusted_context_for_turn(turn_id, key, value)
+            .await;
+    }
+
     /// Environment selections captured by the active turn, before later settings updates.
     /// Includes environments that are still starting or have failed. Hosts use this snapshot
     /// to authorize steering against every executor that the active turn selected.

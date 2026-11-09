@@ -54,6 +54,17 @@ impl AdditionalContextStore {
         format: AdditionalContextFormat,
         telemetry: &SessionTelemetry,
     ) -> Vec<ResponseItemEnvelope> {
+        self.values.retain(|key, _| values.contains_key(key));
+        self.extend(values, format, telemetry)
+    }
+
+    /// Adds a producer's updates without dropping unrelated client context.
+    pub(crate) fn extend(
+        &mut self,
+        values: BTreeMap<String, AdditionalContextEntry>,
+        format: AdditionalContextFormat,
+        telemetry: &SessionTelemetry,
+    ) -> Vec<ResponseItemEnvelope> {
         for entry in values.values() {
             Self::record_metrics(entry, telemetry);
         }
@@ -106,7 +117,7 @@ impl AdditionalContextStore {
                 }
             })
             .collect();
-        self.values = values;
+        self.values.extend(values);
         fragments
     }
 

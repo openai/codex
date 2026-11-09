@@ -1,4 +1,6 @@
+use codex_core::ThreadManager;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::JsonToolOutput;
@@ -20,12 +22,14 @@ use crate::analytics::GoalAnalytics;
 use crate::analytics::GoalEventAttribution;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::runtime::GoalRuntimeHandle;
 use crate::spec::CREATE_GOAL_TOOL_NAME;
 use crate::spec::GET_GOAL_TOOL_NAME;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::spec::create_create_goal_tool;
 use crate::spec::create_get_goal_tool;
 use crate::spec::create_update_goal_tool;
+use crate::steering::GOAL_OBJECTIVE_CONTEXT;
 
 #[derive(Clone)]
 pub(crate) struct GoalToolExecutor {
@@ -40,10 +44,10 @@ pub(crate) struct GoalToolExecutor {
     max_goal_token_budget: Option<i64>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum GoalToolKind {
     Get,
-    Create,
+    Create(Weak<ThreadManager>),
     Update,
 }
 
@@ -97,20 +101,20 @@ impl GoalToolExecutor {
     }
 
     pub(crate) fn create(
-        thread_id: ThreadId,
+        runtime: &GoalRuntimeHandle,
+        thread_manager: Weak<ThreadManager>,
         state_db: Arc<codex_state::StateRuntime>,
-        accounting_state: Arc<GoalAccountingState>,
         analytics: GoalAnalytics,
         event_emitter: GoalEventEmitter,
         metrics: GoalMetrics,
         max_goal_token_budget: Option<i64>,
     ) -> Self {
         Self {
-            kind: GoalToolKind::Create,
+            kind: GoalToolKind::Create(thread_manager),
             execution_allowed: true,
-            thread_id,
+            thread_id: runtime.thread_id(),
             state_db,
-            accounting_state,
+            accounting_state: runtime.accounting_state(),
             analytics,
             event_emitter,
             metrics,
@@ -144,7 +148,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(match self.kind {
             GoalToolKind::Get => GET_GOAL_TOOL_NAME,
-            GoalToolKind::Create => CREATE_GOAL_TOOL_NAME,
+            GoalToolKind::Create(_) => CREATE_GOAL_TOOL_NAME,
             GoalToolKind::Update => UPDATE_GOAL_TOOL_NAME,
         })
     }
@@ -156,7 +160,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
     fn spec(&self) -> ToolSpec {
         match self.kind {
             GoalToolKind::Get => create_get_goal_tool(),
-            GoalToolKind::Create => create_create_goal_tool(),
+            GoalToolKind::Create(_) => create_create_goal_tool(),
             GoalToolKind::Update => create_update_goal_tool(),
         }
     }
@@ -174,9 +178,11 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
                     "Goal tools require a persistent thread.".to_string(),
                 ));
             }
-            match self.kind {
+            match &self.kind {
                 GoalToolKind::Get => self.handle_get(invocation).await,
-                GoalToolKind::Create => self.handle_create(invocation).await,
+                GoalToolKind::Create(thread_manager) => {
+                    self.handle_create(invocation, thread_manager).await
+                }
                 GoalToolKind::Update => self.handle_update(invocation).await,
             }
         })
@@ -204,6 +210,7 @@ impl GoalToolExecutor {
     async fn handle_create(
         &self,
         invocation: ToolCall<'_>,
+        thread_manager: &Weak<ThreadManager>,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let mut request: CreateGoalRequest = parse_arguments(invocation.function_arguments()?)?;
         request.objective = request.objective.trim().to_string();
@@ -234,6 +241,17 @@ impl GoalToolExecutor {
         let turn_id = self
             .accounting_state
             .mark_current_turn_goal_active(goal.goal_id.clone());
+        if let Some(manager) = thread_manager.upgrade()
+            && let Ok(thread) = manager.get_thread(self.thread_id).await
+        {
+            thread
+                .inject_untrusted_context_for_turn(
+                    &invocation.turn_id,
+                    GOAL_OBJECTIVE_CONTEXT,
+                    goal.objective.clone(),
+                )
+                .await;
+        }
         self.metrics.record_created();
         self.analytics.created(
             &goal,

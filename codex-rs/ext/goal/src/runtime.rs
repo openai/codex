@@ -5,8 +5,6 @@ use std::sync::atomic::Ordering;
 
 use codex_core::StartIfIdleSubmission;
 use codex_core::ThreadManager;
-use codex_core::TurnInput;
-use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
@@ -18,7 +16,7 @@ use crate::analytics::GoalAnalytics;
 use crate::analytics::GoalEventAttribution;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
-use crate::steering::continuation_steering_item;
+use crate::steering::continuation_request;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 use tokio::sync::Semaphore;
@@ -482,18 +480,16 @@ impl GoalRuntimeHandle {
             .get::<TurnStartOptions>()
             .map(|options| options.as_ref().clone())
             .unwrap_or_default();
-        let item = continuation_steering_item(
+        let request = continuation_request(
             &protocol_goal_from_state(goal),
             thread.config().await.update_plan_enabled,
         );
 
         match thread
-            .start_turn_if_idle(
-                TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
-                    turn_trigger: Some("goal".to_string()),
-                    ..start_options
-                }),
-            )
+            .start_turn_if_idle(request.on_start(TurnStartOptions {
+                turn_trigger: Some("goal".to_string()),
+                ..start_options
+            }))
             .await
         {
             Ok(StartIfIdleSubmission::Started { turn_id, .. }) => {
