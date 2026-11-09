@@ -201,6 +201,120 @@ async fn cloud_enter_recovers_drafts_from_server_receipts() -> Result<()> {
 }
 
 #[tokio::test]
+async fn cloud_async_question_reply_uses_cloud_admission() -> Result<()> {
+    use codex_app_server_client::CloudOperation;
+    use codex_app_server_client::CloudUserMessageReceipt;
+    use codex_app_server_protocol::AsyncUserInputQuestion;
+    use codex_app_server_protocol::ItemCompletedNotification;
+    use codex_context_fragments::AnsweredQuestion;
+    use codex_context_fragments::ContextualUserFragment;
+    use codex_protocol_test_support::ContentItemTestExt;
+
+    let title = "Which region?";
+    let answer = "Europe";
+    let question_id = serde_json::json!(["request_user_input_async", "question", 0]).to_string();
+    let input = vec![UserInput::Text {
+        text: AnsweredQuestion::new(&question_id, title, answer)
+            .render()
+            .expect_text(),
+        text_elements: Vec::new(),
+    }];
+
+    for rejected in [false, true] {
+        let (mut app, _events, mut ops) = make_test_app_with_channels().await;
+        let id = ThreadId::new();
+        app.enqueue_primary_thread_session(
+            test_thread_session(id, app.config.cwd.to_path_buf()),
+            Vec::new(),
+        )
+        .await?;
+        app.ensure_thread_channel(id)
+            .store
+            .lock()
+            .await
+            .set_active_turn_id("active".into());
+        let chat = &mut app.chat_widget;
+        chat.handle_server_notification(
+            turn_started_notification(id, "active"),
+            /*replay_kind*/ None,
+        );
+        chat.handle_server_notification(
+            ServerNotification::ItemCompleted(ItemCompletedNotification::new(
+                id.to_string(),
+                "active".into(),
+                ThreadItemPayload::AgentMessage {
+                    moderation: None,
+                    id: "question".into(),
+                    text: title.into(),
+                    phase: None,
+                    memory_citation: None,
+                    delivery: None,
+                    questions: Some(vec![AsyncUserInputQuestion {
+                        title: title.into(),
+                        options: None,
+                    }]),
+                },
+                /*started_at_ms*/ None,
+                /*completed_at_ms*/ 1,
+            )),
+            /*replay_kind*/ None,
+        );
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        chat.handle_paste(answer.into());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        let op = next_user_turn_op(&mut ops);
+        let Op::UserTurn {
+            client_user_message_id,
+            ..
+        } = &op
+        else {
+            unreachable!();
+        };
+        let expected_id = client_user_message_id.clone();
+        let (client, mut commands, _events) =
+            codex_app_server_client::CloudClient::channel(/*capacity*/ 1);
+        let mut server = AppServerSession::new(
+            crate::backend_id::BackendId::new(),
+            codex_app_server_client::AppServerClient::Cloud(client),
+            crate::ThreadParamsMode::Cloud,
+        );
+        let (result, ()) = tokio::join!(app.submit_thread_op(&mut server, id, op), async {
+            let command = commands.recv().await.unwrap();
+            let CloudOperation::SubmitUserMessage(params) = command.operation else {
+                panic!("a Cloud question reply should use native start-or-steer admission");
+            };
+            assert_eq!(params.thread_id, id.to_string());
+            assert_eq!(params.client_user_message_id, Some(expected_id));
+            assert_eq!(params.input, input);
+            let receipt = if rejected {
+                Err(JSONRPCErrorError {
+                    code: -32602,
+                    message: "reply stream closed before submission".into(),
+                    data: None,
+                })
+            } else {
+                let turn = test_turn("active", TurnStatus::InProgress, Vec::new());
+                Ok(serde_json::to_value(CloudUserMessageReceipt::Steered(turn)).unwrap())
+            };
+            command.response.send(Ok(receipt)).unwrap();
+        });
+        result?;
+        let composer = app.chat_widget.composer_text_with_pending();
+        if rejected {
+            insta::assert_snapshot!(composer, @r"
+            > Which region?
+
+            Europe
+            ");
+        } else {
+            assert_eq!(composer, "");
+        }
+        assert!(commands.try_recv().is_err());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn cloud_resume_picker_reconciles_admitted_steers() -> Result<()> {
     use crate::app::agents_overview::tests::overview_thread;
     use crate::app_server_session::user_message_submission::UserMessageAdmission;

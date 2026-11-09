@@ -81,13 +81,13 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         op: &AppCommand,
+        intent: CloudSubmissionIntent,
         active_turn: &mut Option<String>,
         preflight: impl FnOnce() -> Result<Option<CyberAccessProgram>, String>,
         start_settings: impl FnOnce() -> TurnStartSettings<'a>,
     ) -> Result<UserMessageAdmission, UserMessageSubmissionFailure> {
         let AppCommand::UserTurn {
             turn_trigger,
-            cloud_submission,
             client_user_message_id,
             items,
             final_output_json_schema,
@@ -101,11 +101,6 @@ impl AppServerSession {
         } = op
         else {
             unreachable!("user-message submission requires a user turn")
-        };
-        let intent = if *turn_trigger == "user" {
-            *cloud_submission
-        } else {
-            CloudSubmissionIntent::UseKnownTurn
         };
         let cloud = self.thread_params_mode() == ThreadParamsMode::Cloud;
         if (!cloud || intent == CloudSubmissionIntent::UseKnownTurn) && active_turn.is_some() {

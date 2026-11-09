@@ -102,6 +102,8 @@ pub(crate) enum CloudSubmissionIntent {
     StartOrSteer,
     /// A message leaving the local queue starts a fresh turn.
     StartIfIdle,
+    /// Use Cloud admission for answers, with steering enabled during a running turn.
+    QuestionAnswer { during_turn: bool },
 }
 
 #[allow(clippy::large_enum_variant)]
