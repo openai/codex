@@ -19,8 +19,8 @@ pub(super) fn same_source(previous: Option<&CodexAuth>, current: Option<&CodexAu
     }
     let previous_subject = previous.api_workload_identity();
     let current_subject = current.api_workload_identity();
-    if previous_subject.is_some() || current_subject.is_some() {
-        return previous_subject == current_subject;
+    if previous_subject != current_subject {
+        return false;
     }
     if let (CodexAuth::AgentIdentity(previous), CodexAuth::AgentIdentity(current)) =
         (previous, current)
@@ -34,30 +34,34 @@ pub(super) fn same_source(previous: Option<&CodexAuth>, current: Option<&CodexAu
     if previous_token == current_token {
         return true;
     }
-    match previous {
-        CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
-            if previous_token.split('.').count() != 3 || current_token.split('.').count() != 3 {
-                return false;
-            }
-            let (Ok(previous), Ok(current)) = (
-                decode_jwt_payload::<OAuthSource>(&previous_token),
-                decode_jwt_payload::<OAuthSource>(&current_token),
-            ) else {
-                // Sessionless credentials must refresh during bootstrap before a
-                // source-bound runtime can be registered. Never guess continuity.
-                return false;
-            };
-            !previous.iss.trim().is_empty()
-                && !previous.session_id.trim().is_empty()
-                && previous == current
-        }
-        CodexAuth::ApiKey(_)
-        | CodexAuth::PersonalAccessToken(_)
-        | CodexAuth::Headers(_)
-        | CodexAuth::AgentIdentity(_)
-        | CodexAuth::BedrockApiKey(_)
-        | CodexAuth::BedrockAccessKeys(_) => false,
+    let platform_wif = previous_subject.is_some();
+    if !platform_wif
+        && !matches!(
+            previous,
+            CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_)
+        )
+    {
+        return false;
     }
+    match (
+        parse_oauth_source(&previous_token),
+        parse_oauth_source(&current_token),
+    ) {
+        (Some(previous), Some(current)) => previous == current,
+        _ => false,
+    }
+}
+
+pub(super) fn has_session_claim(token: &str) -> bool {
+    parse_oauth_source(token).is_some()
+}
+
+fn parse_oauth_source(token: &str) -> Option<OAuthSource> {
+    if token.split('.').count() != 3 {
+        return None;
+    }
+    let source = decode_jwt_payload::<OAuthSource>(token).ok()?;
+    (!source.iss.trim().is_empty() && !source.session_id.trim().is_empty()).then_some(source)
 }
 
 #[derive(Deserialize, PartialEq, Eq)]
@@ -84,4 +88,7 @@ struct OAuthIdentity {
     wif_external_issuer: Option<String>,
     wif_principal_kind: Option<String>,
     wif_product: Option<String>,
+    wif_runtime_authorization_version: Option<u32>,
+    wif_provider_revision: Option<String>,
+    wif_mapping_revision: Option<String>,
 }

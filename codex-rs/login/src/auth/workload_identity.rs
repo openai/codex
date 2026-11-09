@@ -435,10 +435,17 @@ impl WorkloadIdentityExternalAuth {
         previous_account_id: Option<&str>,
     ) -> std::io::Result<CodexAuth> {
         let auth = match &token.metadata {
-            WorkloadIdentityMetadata::Api(metadata) => CodexAuth::ApiKey(ApiKeyAuth {
-                api_key: token.access_token.clone(),
-                workload_identity: Some(metadata.clone()),
-            }),
+            WorkloadIdentityMetadata::Api(metadata) => {
+                if !super::source::has_session_claim(&token.access_token) {
+                    return Err(std::io::Error::other(
+                        WorkloadIdentityError::InvalidExchangeResponse,
+                    ));
+                }
+                CodexAuth::ApiKey(ApiKeyAuth {
+                    api_key: token.access_token.clone(),
+                    workload_identity: Some(metadata.clone()),
+                })
+            }
             WorkloadIdentityMetadata::Chatgpt(metadata) => {
                 let auth = CodexAuth::from_external_chatgpt_tokens(
                     &token.access_token,

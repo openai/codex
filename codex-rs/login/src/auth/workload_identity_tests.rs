@@ -42,6 +42,27 @@ fn api_response(access_token: &str) -> serde_json::Value {
     })
 }
 
+fn api_access_token(assertion: &str) -> String {
+    let claims = serde_json::json!({
+        "iss": "https://auth.api.openai.org",
+        "sub": "service-account-one",
+        "session_id": "family-one",
+        "jti": assertion,
+        "https://api.openai.com/auth": {
+            "user_id": "service-account-one",
+            "wif_product": "api",
+            "wif_identity_provider_id": "provider-one",
+            "wif_federation_rule_id": "rule-one",
+            "wif_runtime_authorization_version": 1,
+            "wif_provider_revision": "provider-revision-one",
+            "wif_mapping_revision": "mapping-revision-one"
+        }
+    });
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&claims).expect("serialize API WIF claims"));
+    format!("e30.{payload}.sig")
+}
+
 #[tokio::test]
 async fn api_platform_auth_refreshes_with_a_rotated_assertion() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -54,8 +75,7 @@ async fn api_platform_auth_refreshes_with_a_rotated_assertion() {
                 .find(|(name, _)| name == "assertion")
                 .expect("assertion")
                 .1;
-            ResponseTemplate::new(200)
-                .set_body_json(api_response(&format!("access-for-{assertion}")))
+            ResponseTemplate::new(200).set_body_json(api_response(&api_access_token(&assertion)))
         })
         .expect(2)
         .mount(&server)
@@ -79,7 +99,7 @@ async fn api_platform_auth_refreshes_with_a_rotated_assertion() {
             .expect("initial auth")
             .get_token()
             .expect("token"),
-        "access-for-assertion-one"
+        api_access_token("assertion-one")
     );
     let before = *manager.auth_change_state_receiver().borrow();
     std::fs::write(&assertion_file, "assertion-two").expect("rotate assertion");
@@ -96,7 +116,7 @@ async fn api_platform_auth_refreshes_with_a_rotated_assertion() {
             .expect("renewed auth")
             .get_token()
             .expect("token"),
-        "access-for-assertion-two"
+        api_access_token("assertion-two")
     );
     assert_eq!(
         *manager.auth_change_state_receiver().borrow(),
@@ -123,6 +143,64 @@ async fn api_platform_auth_refreshes_with_a_rotated_assertion() {
                 ("assertion".into(), assertion.into()),
                 ("federation_rule_id".into(), "rule-one".into()),
             ]),
+        );
+    }
+}
+
+#[tokio::test]
+async fn api_platform_auth_requires_a_runtime_family() {
+    for family in [None, Some(""), Some(" ")] {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut claims: serde_json::Value =
+            crate::token_data::decode_jwt_payload(&api_access_token("unsupported"))
+                .expect("valid API WIF claims");
+        if let Some(family) = family {
+            claims["session_id"] = family.into();
+        } else {
+            claims
+                .as_object_mut()
+                .expect("claims object")
+                .remove("session_id");
+        }
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&claims).expect("serialize API WIF claims"));
+        let invalid = format!("e30.{payload}.sig");
+        let server = MockServer::start().await;
+        let count = AtomicUsize::new(0);
+        Mock::given(method("POST"))
+            .respond_with(move |_request: &wiremock::Request| {
+                let token = if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    invalid.clone()
+                } else {
+                    api_access_token("supported")
+                };
+                ResponseTemplate::new(200).set_body_json(api_response(&token))
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        let registry = WorkloadIdentitySessionRegistry::default();
+        let adapter = WorkloadIdentityExternalAuth::from_config_with_registry(
+            session_config(temp_dir.path(), &server),
+            &registry,
+        )
+        .expect("adapter");
+        let error = adapter
+            .resolve()
+            .await
+            .expect_err("Platform WIF requires a nonempty runtime family");
+        assert!(matches!(
+            adapter.classify_error(error),
+            RefreshTokenError::Permanent(_)
+        ));
+        assert_eq!(
+            adapter
+                .resolve()
+                .await
+                .expect("unsupported credentials are evicted and re-exchanged")
+                .get_token()
+                .expect("token"),
+            api_access_token("supported")
         );
     }
 }
@@ -436,16 +514,18 @@ async fn api_refresh_preserves_product_and_identity() {
         Mock::given(method("POST"))
             .respond_with(move |_request: &wiremock::Request| {
                 match response_count.fetch_add(1, Ordering::SeqCst) {
-                    0 => ResponseTemplate::new(200).set_body_json(api_response("access-one")),
+                    0 => ResponseTemplate::new(200)
+                        .set_body_json(api_response(&api_access_token("access-one"))),
                     1 => match changed_field {
                         Some(field) => {
-                            let mut body = api_response("access-two");
+                            let mut body = api_response(&api_access_token("access-two"));
                             body[field] = "another-identity".into();
                             ResponseTemplate::new(200).set_body_json(body)
                         }
                         None => success_response("access-two", "account-user-one", "user-one"),
                     },
-                    _ => ResponseTemplate::new(200).set_body_json(api_response("access-three")),
+                    _ => ResponseTemplate::new(200)
+                        .set_body_json(api_response(&api_access_token("access-three"))),
                 }
             })
             .mount(&server)
@@ -458,7 +538,7 @@ async fn api_refresh_preserves_product_and_identity() {
         .expect("adapter");
         assert_eq!(
             adapter.resolve().await.expect("initial API auth"),
-            CodexAuth::from_api_key("access-one")
+            CodexAuth::from_api_key(&api_access_token("access-one"))
         );
         let error = adapter
             .refresh(ExternalAuthRefreshContext {
@@ -476,7 +556,7 @@ async fn api_refresh_preserves_product_and_identity() {
                 .resolve()
                 .await
                 .expect("corrected token is re-exchanged"),
-            CodexAuth::from_api_key("access-three")
+            CodexAuth::from_api_key(&api_access_token("access-three"))
         );
         assert_eq!(request_count.load(Ordering::SeqCst), 3);
     }
@@ -512,7 +592,7 @@ async fn resolved_product_obeys_login_and_workspace_restrictions() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let server = MockServer::start().await;
         let response = if product == "api" {
-            ResponseTemplate::new(200).set_body_json(api_response("api-access"))
+            ResponseTemplate::new(200).set_body_json(api_response(&api_access_token("api-access")))
         } else {
             success_response("chatgpt-access", "account-user-one", "user-one")
         };

@@ -115,6 +115,72 @@ fn api_workload_identity_changes_retire_previous_owner() {
     }
 }
 
+#[test]
+fn platform_wif_refresh_preserves_source_but_family_changes_retire_it() {
+    let claims = json!({
+        "iss": "https://auth.openai.com",
+        "sub": "service-account",
+        "session_id": "family-a",
+        "iat": 100,
+        "exp": 200,
+        "jti": "token-a",
+        "https://api.openai.com/auth": {
+            "user_id": "service-account",
+            "wif_product": "api",
+            "wif_identity_provider_id": "provider-a",
+            "wif_federation_rule_id": "mapping-a",
+            "wif_runtime_authorization_version": 1,
+            "wif_provider_revision": "provider-revision-a",
+            "wif_mapping_revision": "mapping-revision-a"
+        }
+    });
+    let auth = |claims: &serde_json::Value| {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
+        CodexAuth::ApiKey(ApiKeyAuth {
+            api_key: format!("header.{payload}.signature"),
+            workload_identity: Some(ApiTokenMetadata {
+                api_organization_id: "organization".into(),
+                api_project_id: "project".into(),
+                user_id: "service-account".into(),
+            }),
+        })
+    };
+    let mut refreshed = claims.clone();
+    refreshed["iat"] = json!(200);
+    refreshed["exp"] = json!(300);
+    refreshed["jti"] = json!("token-b");
+    let mut new_family = refreshed.clone();
+    new_family["session_id"] = json!("family-b");
+    let mut new_provider = refreshed.clone();
+    new_provider["https://api.openai.com/auth"]["wif_provider_revision"] =
+        json!("provider-revision-b");
+    let mut new_mapping = refreshed.clone();
+    new_mapping["https://api.openai.com/auth"]["wif_mapping_revision"] =
+        json!("mapping-revision-b");
+    let mut missing_family = refreshed.clone();
+    missing_family.as_object_mut().unwrap().remove("session_id");
+    let mut empty_family = refreshed.clone();
+    empty_family["session_id"] = json!("");
+    for (replacement, same_source) in [
+        (refreshed, true),
+        (new_family, false),
+        (new_provider, false),
+        (new_mapping, false),
+        (missing_family, false),
+        (empty_family, false),
+    ] {
+        let manager = AuthManager::from_auth_for_testing(auth(&claims));
+        let before = *manager.auth_change_state_receiver().borrow();
+        manager.set_cached_auth(Some(auth(&replacement)));
+        let after = *manager.auth_change_state_receiver().borrow();
+        assert_eq!(
+            after.source_generation == before.source_generation,
+            same_source
+        );
+        assert_eq!(after.generation, before.generation + 1);
+    }
+}
+
 #[tokio::test]
 #[serial_test::serial(codex_auth_env)]
 async fn auth_reload_and_refresh_read_failure_preserves_network_permit() {
