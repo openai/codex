@@ -3496,6 +3496,37 @@ async fn pre_sampling_compact_advised_errors_fall_back_then_retry_on_selected_mo
     assert_eq!(actual_models, expected_models);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_local_compaction_retries_only_when_the_error_allows_it() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let overload = wiremock::ResponseTemplate::new(503)
+        .set_body_json(json!({ "error": { "code": "server_is_overloaded" } }));
+    for (failure, expected_requests) in [
+        (invalid_request_response("invalid compact input"), 1),
+        (overload.clone(), 1),
+        (overload.insert_header("Retry-After", "0"), 2),
+    ] {
+        let server = start_mock_server().await;
+        let requests = responses::mount_response_handler(&server, move |_| failure.clone()).await;
+        let mut provider = local_compaction_provider(&server);
+        provider.request_max_retries = Some(0);
+        provider.stream_max_retries = Some(1);
+        let test = test_codex()
+            .with_config(move |config| config.model_provider = provider)
+            .build_with_auto_env(&server)
+            .await?;
+
+        test.codex.submit(Op::Compact).await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        assert_eq!(requests.requests().len(), expected_requests);
+    }
+    Ok(())
+}
+
 /// Manual compaction keeps the configured retry limit even when the server supplies advice.
 #[test_case::test_case(0; "no_retries")]
 #[test_case::test_case(2; "two_retries")]
