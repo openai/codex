@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: popup
+---
+  You’re no longer close to your usage limit.
+  Dismissing in 5 seconds…
+
+
+› 1. Dismiss
+
+  enter select · esc back

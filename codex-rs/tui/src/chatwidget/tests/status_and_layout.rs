@@ -1438,6 +1438,54 @@ async fn rate_limit_switch_prompt_clears_pending_when_workspace_credits_become_u
 }
 
 #[tokio::test]
+async fn rate_limit_switch_prompt_clears_when_account_usage_recovers() {
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.has_chatgpt_account = true;
+
+    chat.on_rolling_rate_limit_snapshot(snapshot(/*percent*/ 95.0));
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 0.0)));
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.start_usage_notice_read(/*request_id*/ 1);
+    chat.on_rolling_rate_limit_snapshot(snapshot(/*percent*/ 95.0));
+    chat.maybe_show_pending_rate_limit_prompt();
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.apply_usage_notice_read(/*request_id*/ 1);
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 0.0)));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.start_usage_notice_read(/*request_id*/ 2);
+    chat.apply_usage_notice_read(/*request_id*/ 2);
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 0.0)));
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("rate_limit_switch_prompt_recovered", popup);
+    let RateLimitSwitchPromptState::Recovering { deadline, .. } = chat.rate_limit_switch_prompt
+    else {
+        panic!("expected recovery countdown");
+    };
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 0.0)));
+    chat.tick_rate_limit_recovery_prompt(deadline - Duration::from_secs(/*secs*/ 1));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Dismissing in 1 second…"));
+    chat.tick_rate_limit_recovery_prompt(deadline);
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+}
+
+#[tokio::test]
+async fn rate_limit_recovery_prompt_can_be_dismissed_manually() {
+    for key in [KeyCode::Enter, KeyCode::Esc] {
+        let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+        chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 95.0)));
+        chat.maybe_show_pending_rate_limit_prompt();
+        chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 0.0)));
+        assert!(!chat.bottom_pane.no_modal_or_popup_active());
+        chat.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE));
+        assert!(chat.bottom_pane.no_modal_or_popup_active());
+    }
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_dismisses_shown_when_workspace_credits_become_usable() {
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.has_chatgpt_account = true;

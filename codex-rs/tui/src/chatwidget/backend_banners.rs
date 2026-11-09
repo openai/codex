@@ -436,6 +436,10 @@ impl ChatWidget {
             if self
                 .bottom_pane
                 .dismiss_view_by_id(super::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID)
+                && matches!(
+                    self.rate_limit_switch_prompt,
+                    super::RateLimitSwitchPromptState::Shown
+                )
             {
                 // Replacing the view is not the user's decision to dismiss the prompt.
                 self.rate_limit_switch_prompt = super::RateLimitSwitchPromptState::Pending;
