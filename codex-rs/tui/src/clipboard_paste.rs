@@ -1,5 +1,7 @@
 //! Read clipboard images and text on the TUI host. Text reads run on the clipboard worker.
 
+#[cfg(target_os = "macos")]
+mod macos;
 pub(crate) mod text;
 
 use std::path::Path;
@@ -50,70 +52,66 @@ pub struct PastedImageInfo {
     pub encoded_format: EncodedImageFormat, // Always PNG for now.
 }
 
-/// Capture image from system clipboard, encode to PNG, and return bytes + info.
+/// Read the first clipboard image and encode it as a PNG attachment.
 #[cfg(not(target_os = "android"))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     let _span = tracing::debug_span!("paste_image_as_png").entered();
     tracing::debug!("attempting clipboard image read");
-    let mut cb = arboard::Clipboard::new()
+    let mut clipboard = arboard::Clipboard::new()
         .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()))?;
-    // Sometimes images on the clipboard come as files (e.g. when copy/pasting from
-    // Finder), sometimes they come as image data (e.g. when pasting from Chrome).
-    // Accept both, and prefer files if both are present.
-    let files = cb
-        .get()
-        .file_list()
-        .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()));
-    let dyn_img = if let Some(img) = files
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|f| image::open(f).ok())
-    {
+    let image = read_clipboard_image(&mut clipboard)?;
+
+    let span = tracing::debug_span!("encode_image", byte_length = tracing::field::Empty).entered();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| PasteImageError::EncodeFailed(e.to_string()))?;
+    span.record("byte_length", png.get_ref().len());
+    let info = PastedImageInfo {
+        width: image.width(),
+        height: image.height(),
+        encoded_format: EncodedImageFormat::Png,
+    };
+    Ok((png.into_inner(), info))
+}
+
+#[cfg(not(target_os = "android"))]
+fn read_clipboard_image(
+    clipboard: &mut arboard::Clipboard,
+) -> Result<image::DynamicImage, PasteImageError> {
+    // A copied file takes precedence over its clipboard preview.
+    let files = clipboard.get().file_list().unwrap_or_default();
+    if let Some(image) = files.into_iter().find_map(|path| {
+        let reader = image::ImageReader::open(path).ok()?;
+        crate::image_decode::decode_oriented(reader, image::Limits::default()).ok()
+    }) {
         tracing::debug!(
             "clipboard image opened from file: {}x{}",
-            img.width(),
-            img.height()
+            image.width(),
+            image.height()
         );
-        img
-    } else {
-        let _span = tracing::debug_span!("get_image").entered();
-        let img = cb.get_image().map_err(|e| {
-            if cfg!(windows) && !matches!(e, arboard::Error::ContentNotAvailable) {
-                PasteImageError::ClipboardUnavailable(e.to_string())
-            } else {
-                PasteImageError::NoImage(e.to_string())
-            }
-        })?;
-        let w = img.width as u32;
-        let h = img.height as u32;
-        tracing::debug!("clipboard image opened from image: {}x{}", w, h);
-
-        let Some(rgba_img) = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()) else {
-            return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));
-        };
-
-        image::DynamicImage::ImageRgba8(rgba_img)
-    };
-
-    let mut png: Vec<u8> = Vec::new();
-    {
-        let span =
-            tracing::debug_span!("encode_image", byte_length = tracing::field::Empty).entered();
-        let mut cursor = std::io::Cursor::new(&mut png);
-        dyn_img
-            .write_to(&mut cursor, image::ImageFormat::Png)
-            .map_err(|e| PasteImageError::EncodeFailed(e.to_string()))?;
-        span.record("byte_length", png.len());
+        return Ok(image);
     }
 
-    Ok((
-        png,
-        PastedImageInfo {
-            width: dyn_img.width(),
-            height: dyn_img.height(),
-            encoded_format: EncodedImageFormat::Png,
-        },
-    ))
+    #[cfg(target_os = "macos")]
+    if let Some(image) = macos::clipboard_image() {
+        return Ok(image);
+    }
+
+    let _span = tracing::debug_span!("get_image").entered();
+    let bitmap = clipboard.get_image().map_err(|e| {
+        if cfg!(windows) && !matches!(e, arboard::Error::ContentNotAvailable) {
+            PasteImageError::ClipboardUnavailable(e.to_string())
+        } else {
+            PasteImageError::NoImage(e.to_string())
+        }
+    })?;
+    let width = bitmap.width as u32;
+    let height = bitmap.height as u32;
+    tracing::debug!("clipboard image opened from image: {width}x{height}");
+    let rgba = image::RgbaImage::from_raw(width, height, bitmap.bytes.into_owned())
+        .ok_or_else(|| PasteImageError::EncodeFailed("invalid RGBA buffer".into()))?;
+    Ok(image::DynamicImage::ImageRgba8(rgba))
 }
 
 /// Android/Termux does not support arboard; return a clear error.

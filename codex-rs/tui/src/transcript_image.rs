@@ -15,7 +15,6 @@ use crossterm::cursor::RestorePosition;
 use crossterm::cursor::SavePosition;
 use crossterm::queue;
 use image::DynamicImage;
-use image::ImageDecoder;
 use image::ImageFormat;
 use image::RgbaImage;
 use ratatui::layout::Rect;
@@ -80,7 +79,7 @@ impl TranscriptImage {
         if max_width == 0 || !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
             return None;
         }
-        let mut reader = image::ImageReader::open(path)
+        let reader = image::ImageReader::open(path)
             .ok()?
             .with_guessed_format()
             .ok()?;
@@ -88,15 +87,7 @@ impl TranscriptImage {
         // screenshots usable, but never allocate hundreds of MB for an optional thumbnail.
         let mut limits = image::Limits::default();
         limits.max_alloc = Some(32 * 1024 * 1024);
-        reader.limits(limits.clone());
-        let mut decoder = reader.into_decoder().ok()?;
-        limits.reserve(decoder.total_bytes()).ok()?;
-        decoder.set_limits(limits).ok()?;
-        let orientation = decoder.orientation().ok();
-        let mut image = DynamicImage::from_decoder(decoder).ok()?;
-        if let Some(orientation) = orientation {
-            image.apply_orientation(orientation);
-        }
+        let image = crate::image_decode::decode_oriented(reader, limits).ok()?;
         Some(
             image
                 .thumbnail(max_width.min(image.width()), max_height.min(image.height()))
