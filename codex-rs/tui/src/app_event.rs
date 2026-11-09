@@ -279,6 +279,12 @@ pub(crate) enum RecapTrigger {
 }
 
 #[derive(Debug)]
+pub(crate) enum SavedSideChatData {
+    Choices(Vec<crate::app_server_session::SideChat>),
+    LatestPrompts(std::collections::HashMap<ThreadId, String>),
+}
+
+#[derive(Debug)]
 pub(crate) struct AgentsOverviewThreadRefresh {
     pub(crate) cleared_unread: Vec<ThreadId>,
     pub(crate) threads: std::collections::HashMap<ThreadId, Option<(Thread, bool, Option<String>)>>,
@@ -503,7 +509,7 @@ pub(crate) enum AppEvent {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,
         request: uuid::Uuid,
-        result: Result<Vec<crate::app_server_session::SideChat>, String>,
+        result: Result<SavedSideChatData, String>,
     },
 
     /// Submit an op to the specified thread, regardless of current focus.

@@ -11,6 +11,8 @@ pub(super) struct TurnLifecycleState {
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     pub(super) agent_turn_running: bool,
     pub(super) last_turn_id: Option<String>,
+    /// A live or restored turn makes the parent available for side-chat creation.
+    pub(super) has_turn_history: bool,
     /// Cloud confirmed admission to a turn whose live start we have yet to process.
     pub(super) admitted_turn_id: Option<String>,
     pub(super) budget_limited_turn_ids: HashSet<String>,
@@ -25,6 +27,7 @@ impl TurnLifecycleState {
             sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             agent_turn_running: false,
             last_turn_id: None,
+            has_turn_history: false,
             admitted_turn_id: None,
             budget_limited_turn_ids: HashSet::new(),
             rendered_completion_turn_ids: HashSet::new(),
@@ -58,6 +61,7 @@ impl TurnLifecycleState {
     pub(super) fn reset_thread(&mut self) {
         self.finish();
         self.last_turn_id = None;
+        self.has_turn_history = false;
         self.admitted_turn_id = None;
         self.budget_limited_turn_ids.clear();
         self.rendered_completion_turn_ids.clear();

@@ -11,6 +11,7 @@ use super::start_config_write_test_app_server;
 use super::test_thread_session;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::chatwidget::ReplayKind;
 use crate::chatwidget::tests::helpers::render_bottom_popup;
 use crate::chatwidget::tests::helpers::set_active_cell;
 use crate::keymap::KeymapContext;
@@ -22,6 +23,7 @@ use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ToolRequestUserInputOption;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
+use codex_app_server_protocol::TurnStatus;
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
 use codex_config::types::TuiKeymap;
@@ -1227,6 +1229,33 @@ async fn sidebar_chooser_resize_survives_startup_thread_assignment() -> Result<(
             .await
     );
     assert!(app.pane_resize.is_none());
+    let frame = super::side_frame(&mut app, &mut tui, size)?;
+    let body = frame
+        .lines()
+        .skip(1)
+        .filter_map(|row| row.split_once('│'))
+        .map(|(_, sidebar)| sidebar.trim())
+        .filter(|row| !row.is_empty())
+        .take(3)
+        .collect::<Vec<_>>();
+    insta::assert_snapshot!(body.join("\n"), @"
+    Open in sidebar
+    You can start a side chat after your first message
+    in the main chat.
+    ");
+    Box::pin(press(&mut app, &mut tui, &mut server, ctrl('x'))).await?;
+    Box::pin(press(
+        &mut app,
+        &mut tui,
+        &mut server,
+        KeyCode::Enter.into(),
+    ))
+    .await?;
+    assert_eq!(
+        app.chooser_focus(),
+        Some(crate::app::sidebar::PaneFocus::Sidebar)
+    );
+    assert!(app.sidebar().unwrap().creation.is_none());
     server.shutdown().await?;
     Ok(())
 }
@@ -1243,6 +1272,14 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
     server.remember_thread_history_mode(parent, ThreadHistoryMode::Legacy);
     app.chat_widget
         .handle_thread_session(test_thread_session(parent, app.config.cwd.to_path_buf()));
+    app.chat_widget.replay_thread_turns(
+        vec![super::test_turn(
+            "parent-turn",
+            TurnStatus::Completed,
+            Vec::new(),
+        )],
+        ReplayKind::ResumeInitialMessages,
+    );
     app.chat_widget.local_settings.tui.status_line = Some(vec!["model-with-reasoning".into()]);
     app.chat_widget.refresh_status_line();
     app.chat_widget.insert_str("parent draft");
@@ -1443,7 +1480,7 @@ prepared.
         draft.contains("first prompt") && draft.contains("second prompt"),
         "{draft}"
     );
-    // The pinned New action leaves room for two scrolling chats.
+    // A page fits a chat with a subtitle or two title-only chats.
     let pane = app.sidebar_mut();
     for _ in 0..4 {
         pane.chat_ready(ThreadId::new());
@@ -1453,13 +1490,23 @@ prepared.
         crate::app::sidebar::PaneFocus::Sidebar,
     );
     pane.choice = 2;
-    let two_rows = ratatui::layout::Size::new(/*width*/ 120, /*height*/ 11);
+    let id = pane.chat_tabs().choice(/*index*/ 2).unwrap();
+    pane.latest_prompts.insert(id, "Latest request".into());
+    let two_rows = ratatui::layout::Size::new(/*width*/ 120, /*height*/ 12);
     tui.terminal = terminal_at(two_rows);
     super::side_frame(&mut app, &mut tui, two_rows)?;
-    for (key, expected) in [(KeyCode::PageDown, 4), (KeyCode::PageUp, 2)] {
+    for (key, expected) in [
+        (KeyCode::PageDown, 3),
+        (KeyCode::PageDown, 5),
+        (KeyCode::PageUp, 3),
+        (KeyCode::PageUp, 2),
+    ] {
         Box::pin(press(&mut app, &mut tui, &mut server, key.into())).await?;
         assert_eq!(app.sidebar().unwrap().choice, expected);
     }
+    Box::pin(press(&mut app, &mut tui, &mut server, ctrl('c'))).await?;
+    assert_eq!(app.chooser_focus(), None);
+    assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
     tokio::time::resume();
     server.shutdown().await?;
     Ok(())

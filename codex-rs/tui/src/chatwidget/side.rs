@@ -7,6 +7,14 @@
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn side_chat_creation_state(&self) -> crate::sidebar_chooser::NewChatState {
+        if self.thread_id.is_some() && self.turn_lifecycle.has_turn_history {
+            crate::sidebar_chooser::NewChatState::Available
+        } else {
+            crate::sidebar_chooser::NewChatState::WaitingForMainMessage
+        }
+    }
+
     pub(crate) fn submit_user_message_as_plain_user_turn(
         &mut self,
         user_message: UserMessage,

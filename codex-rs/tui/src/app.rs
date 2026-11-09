@@ -878,7 +878,7 @@ impl App {
         tui.link_hover.observe(&event);
         let current = tui.link_hover.position();
         if previous != current
-            && self.hovered_sidebar_tab(previous) != self.hovered_sidebar_tab(current)
+            && self.hovered_sidebar_target(previous) != self.hovered_sidebar_target(current)
         {
             tui.frame_requester().schedule_frame();
         }
@@ -989,6 +989,7 @@ impl App {
         }
         if self.reconnect.offline
             && !transcript_owns_input
+            && self.chooser_focus() != Some(sidebar::PaneFocus::Sidebar)
             && !self.chat_widget.keymap_contexts().is_warnings()
             && !self
                 .chat_widget

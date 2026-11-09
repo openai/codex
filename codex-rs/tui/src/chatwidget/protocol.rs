@@ -87,6 +87,7 @@ impl ChatWidget {
                 self.on_thread_settings_updated(notification);
             }
             ServerNotification::TurnStarted(notification) => {
+                self.turn_lifecycle.has_turn_history = true;
                 if self
                     .bottom_pane
                     .dismiss_view_by_id(safety_recourse::VIEW_ID)

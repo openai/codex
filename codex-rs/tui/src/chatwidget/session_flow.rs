@@ -124,7 +124,10 @@ impl ChatWidget {
             self.review.recent_auto_review_denials = RecentAutoReviewDenials::default();
             self.clear_thread_usage_state();
         }
+        let has_turn_history =
+            previous_thread_id == self.thread_id && self.turn_lifecycle.has_turn_history;
         self.turn_lifecycle.reset_thread();
+        self.turn_lifecycle.has_turn_history = has_turn_history;
         self.safety_recourse = None;
         self.clear_safety_buffering();
         self.thread_name = session.thread_name.clone();

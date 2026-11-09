@@ -1,5 +1,6 @@
 //! Draw sidebar tabs and hit-test the same visible cells. When space runs out,
 //! keep the selected tab visible and reserve the add button at the right edge.
+//! A one-column gap separates tabs and is excluded from their click targets.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
@@ -8,6 +9,9 @@ use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
+
+/// Adjacent tabs have one unpainted, noninteractive terminal column between them.
+const TAB_GAP: u16 = 1;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TabState {
@@ -23,19 +27,11 @@ pub(crate) struct TabStrip<'a, Id> {
     pub(crate) tab_width: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TabTarget<Id> {
     Tab(Id),
     Overflow { tab: Id, glyph: &'static str },
     Add,
-}
-
-impl<Id: Copy> TabTarget<Id> {
-    pub(crate) fn tab_id(&self) -> Option<Id> {
-        match self {
-            Self::Tab(id) | Self::Overflow { tab: id, .. } => Some(*id),
-            Self::Add => None,
-        }
-    }
 }
 
 impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
@@ -51,12 +47,17 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
         let plus = width.min(3);
         let available = width - plus;
         let height = area.height.min(1);
-        let overflow = self.ids.len() > usize::from((available / self.tab_width).max(1));
+        let stride = self.tab_width.saturating_add(TAB_GAP);
+        let overflow = self.ids.len() > usize::from(((available + TAB_GAP) / stride).max(1));
         // Reserve both arrow gutters so the tabs stay in place while switching.
         let gutter = if overflow && available >= 7 { 2 } else { 0 };
         let space = available - 2 * gutter;
         let tab_width = space.min(self.tab_width);
-        let count = usize::from(space.checked_div(tab_width).unwrap_or_default());
+        let count = if tab_width == 0 {
+            0
+        } else {
+            usize::from((space + TAB_GAP) / (tab_width + TAB_GAP))
+        };
         let first = self
             .selected_index()
             .map_or(0, |index| (index + 1).saturating_sub(count));
@@ -69,7 +70,7 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
         let tabs = self.ids[first..end].iter().enumerate().map(move |(i, id)| {
             (
                 TabTarget::Tab(*id),
-                rect(gutter + i as u16 * tab_width, tab_width),
+                rect(gutter + i as u16 * (tab_width + TAB_GAP), tab_width),
             )
         });
         left.into_iter()
@@ -89,35 +90,36 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
         buf: &mut Buffer,
         add_state: TabState,
         selected_state: TabState,
-        hovered_tab: Option<Id>,
+        hovered_target: Option<TabTarget<Id>>,
         paint: impl Fn(Id, Rect, Style, &mut Buffer),
     ) {
         let style = |state| match state {
             TabState::Active => crate::style::selection_style().not_underlined(),
-            TabState::Inactive => crate::bottom_pane::active_tab_style(),
+            TabState::Inactive => crate::style::quiet_workspace_style(),
             TabState::Absent => crate::style::secondary_text_style()
                 .bg(Color::Reset)
                 .not_underlined()
                 .not_reversed(),
         };
+        let rest = style(TabState::Absent).patch(crate::style::user_message_style());
+        let rest = rest.fg(crate::style::readable_color_on(
+            rest.fg.unwrap_or(Color::Reset),
+            rest.bg,
+        ));
+        let hover = crate::style::hover_style(style(TabState::Absent).fg(Color::Reset));
+        let selected_style = match selected_state {
+            TabState::Active => style(selected_state),
+            TabState::Inactive => hover.bold(),
+            TabState::Absent => rest,
+        };
         for (target, rect) in self.strip_targets(area) {
-            let quiet = if hovered_tab.is_some() && target.tab_id() == hovered_tab {
-                let hover = crate::style::quiet_workspace_style()
-                    .fg(Color::Reset)
-                    .not_dim();
-                if hover.bg == Some(Color::Reset) {
-                    hover.underlined()
-                } else {
-                    hover
-                }
-            } else {
-                style(TabState::Absent)
-            };
+            let hovered = Some(target) == hovered_target;
+            let quiet = if hovered { hover } else { rest };
             match target {
                 TabTarget::Tab(id) => {
                     let tab_style =
                         if Some(id) == self.selected && selected_state != TabState::Absent {
-                            style(selected_state)
+                            selected_style
                         } else {
                             quiet
                         };
@@ -126,7 +128,16 @@ impl<'a, Id: Copy + Eq> TabStrip<'a, Id> {
                 TabTarget::Overflow { glyph, .. } => {
                     Line::from(glyph).style(quiet).render(rect, buf)
                 }
-                TabTarget::Add => Line::from(" + ").style(style(add_state)).render(rect, buf),
+                TabTarget::Add => {
+                    let add = match (hovered, add_state) {
+                        (true, TabState::Active) => crate::style::hover_style(style(add_state)),
+                        (true, TabState::Inactive | TabState::Absent) => hover,
+                        (false, TabState::Active | TabState::Inactive | TabState::Absent) => {
+                            style(add_state)
+                        }
+                    };
+                    Line::from(" + ").style(add).render(rect, buf);
+                }
             }
         }
     }

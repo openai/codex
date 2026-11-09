@@ -3330,6 +3330,7 @@ async fn sidebar_reopens_saved_side_chat_after_restart() -> Result<()> {
     use crate::app_server_session::ResumeModelSettings;
     use crate::app_server_session::SideChatStorage;
     use codex_app_server_client::AppServerEvent;
+    use std::io::Write;
 
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let model = core_test_support::responses::start_mock_server().await;
@@ -3385,6 +3386,16 @@ async fn sidebar_reopens_saved_side_chat_after_restart() -> Result<()> {
     let children = [fork.thread.session.thread_id, child];
     server.shutdown().await?;
 
+    // The legacy name predates the boundary. Give it a fixed timestamp because the
+    // index has finer precision than the rollout and both writes can share a millisecond.
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(config.codex_home.join("session_index.jsonl"))?,
+        "{}",
+        serde_json::json!({"id": child, "thread_name": "New name", "updated_at": "2020-01-01T00:00:00Z"})
+    )?;
+
     let child_id = child.to_string();
     // A cold resume before the first prompt can seed the summary from the parent's history.
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
@@ -3426,49 +3437,194 @@ async fn sidebar_reopens_saved_side_chat_after_restart() -> Result<()> {
     app.local_settings.tui.animations = false;
     tui.set_owned_screen(/*owned*/ true)?;
 
-    for key in [
+    let open_chooser = [
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         KeyCode::Char('t').into(),
+    ];
+    for key in open_chooser {
+        boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
+    }
+    let size = Size::new(/*width*/ 208, /*height*/ 14);
+    let narrow = Size::new(/*width*/ 106, size.height);
+    let mut states = Vec::new();
+    let mut capture = |label: &str, frame: String| {
+        let sidebar = frame
+            .lines()
+            .skip(1)
+            .take(usize::from(size.height - 2))
+            .map(|line| line.split_once('│').expect("sidebar divider").1.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
+        states.push(format!("{label}\n{}", sidebar.trim_end()));
+    };
+    let mut finish_discovery =
+        async |app: &mut App, tui: &mut tui::Tui, server: &mut AppServerSession| -> Result<()> {
+            time::timeout(Duration::from_secs(5), async {
+                while app.sidebar().unwrap().discovery.request().is_some() {
+                    let event = events.recv().await.expect("discovery response");
+                    boxed_future!(app.handle_event(tui, server, event)).await?;
+                }
+                Ok(())
+            })
+            .await?
+        };
+    let enter = KeyEvent::from(KeyCode::Enter);
+    let release_enter =
+        KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release);
+    capture("Loading", side_frame(&mut app, &mut tui, size)?);
+    finish_discovery(&mut app, &mut tui, &mut server).await?;
+    assert_eq!(
+        app.sidebar().unwrap().latest_prompts,
+        HashMap::from([
+            (children[0], String::new()),
+            (child, "Child-only prompt".to_string())
+        ])
+    );
+    assert_eq!(app.sidebar().unwrap().choice, 1);
+    // The last frame showed New, but the first saved chat is now selected.
+    boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(enter))).await?;
+    assert_eq!(app.current_displayed_thread_id(), Some(parent));
+    boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(release_enter)))
+        .await?;
+    app.refresh_saved_chats(&server, parent);
+    let request = app.sidebar().unwrap().discovery.request().unwrap();
+    let empty = AppEvent::SavedSideChatsLoaded {
+        backend_id: server.backend_id(),
+        parent,
+        request,
+        result: Ok(crate::app_event::SavedSideChatData::Choices(Vec::new())),
+    };
+    boxed_future!(app.handle_event(&mut tui, &mut server, empty)).await?;
+    capture("Empty result", side_frame(&mut app, &mut tui, size)?);
+    app.refresh_saved_chats(&server, parent);
+    let request = app.sidebar().unwrap().discovery.request().unwrap();
+    let backend_id = server.backend_id();
+    let failure = |request, message: &str| AppEvent::SavedSideChatsLoaded {
+        backend_id,
+        parent,
+        request,
+        result: Err(message.into()),
+    };
+    let failed = failure(request, "Permission denied by storage");
+    boxed_future!(app.handle_event(&mut tui, &mut server, failed)).await?;
+    capture("Initial failure", side_frame(&mut app, &mut tui, narrow)?);
+    boxed_future!(app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyCode::Enter.into())
+    ))
+    .await?;
+    let retry = app.sidebar().unwrap().discovery.request().unwrap();
+    assert_ne!(request, retry);
+    capture("Retry in progress", side_frame(&mut app, &mut tui, size)?);
+    finish_discovery(&mut app, &mut tui, &mut server).await?;
+    side_frame(&mut app, &mut tui, size)?;
+    // A held Enter can keep producing Press events after the retry row disappears.
+    for key in [
+        KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Repeat),
+        enter,
     ] {
         boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
     }
-    let size = Size::new(/*width*/ 208, /*height*/ 12);
-    let loading = side_frame(&mut app, &mut tui, size)?;
-    let (_, loading) = loading
-        .lines()
-        .find_map(|line| {
-            line.split_once('│')
-                .filter(|(_, pane)| pane.contains("Loading side chats"))
-        })
-        .expect("pending side-chat discovery");
-    insta::assert_snapshot!(loading.trim(), @"Loading side chats…");
-    loop {
-        let event = time::timeout(Duration::from_secs(5), events.recv())
-            .await?
-            .expect("event stream");
-        let loaded = matches!(event, AppEvent::SavedSideChatsLoaded { .. });
-        boxed_future!(app.handle_event(&mut tui, &mut server, event)).await?;
-        if loaded {
-            break;
-        }
+    assert_eq!(app.current_displayed_thread_id(), Some(parent));
+    boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(release_enter)))
+        .await?;
+    app.sidebar_mut().choice = 1;
+    app.refresh_saved_chats(&server, parent);
+    let request = app.sidebar().unwrap().discovery.request().unwrap();
+    capture(
+        "Refreshing cached chats",
+        side_frame(&mut app, &mut tui, size)?,
+    );
+    let failed = failure(request, "Refresh failed");
+    boxed_future!(app.handle_event(&mut tui, &mut server, failed)).await?;
+    capture(
+        "Cached chats after failure",
+        side_frame(&mut app, &mut tui, size)?,
+    );
+    assert_eq!(app.sidebar().unwrap().choice, 1);
+
+    // Another client writes to the first chat while this chooser stays open.
+    let sibling = children[0];
+    server
+        .resume_thread(
+            &app.local_settings,
+            app.config.clone(),
+            sibling,
+            ResumeModelSettings::PreserveExistingThread,
+        )
+        .await?;
+    server
+        .thread_set_name(sibling, "Named sibling".into())
+        .await?;
+    let latest = "Latest request\nwith 界界界 and enough words to overflow a narrow sidebar";
+    for prompt in ["Earlier request", latest] {
+        side_chat_policy_tests::ask(&mut server, &model, sibling, prompt).await?;
     }
-    let frame = side_frame(&mut app, &mut tui, size)?;
-    let picker = frame
-        .lines()
-        .filter_map(|line| line.split_once('│').map(|(_, pane)| pane.trim_end()))
-        .skip_while(|line| !line.contains("Open in sidebar"))
-        .take_while(|line| !line.contains(" open · "))
-        .collect::<Vec<_>>()
-        .join("\n");
-    insta::assert_snapshot!(picker.trim_end(), @"
-    Open in sidebar
+    for key in [KeyCode::Char('k'), KeyCode::Char('j')] {
+        boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into())))
+            .await?;
+    }
+    assert!(app.sidebar().unwrap().discovery.request().is_none());
+    assert!(app.sidebar().unwrap().latest_prompts[&sibling].is_empty());
+    // Only the selected sibling fits. + starts the refresh and the chord joins it.
+    side_frame(&mut app, &mut tui, Size::new(size.width, /*height*/ 10))?;
+    let strip = app.conversation_frame.sidebar_tab_strip().unwrap();
+    let click = mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        strip.right() - 3,
+        strip.y,
+    );
+    boxed_future!(app.handle_tui_event(&mut tui, &mut server, click)).await?;
+    let request = app.sidebar().unwrap().discovery.request().unwrap();
+    for key in open_chooser {
+        boxed_future!(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
+    }
+    assert_eq!(app.sidebar().unwrap().discovery.request(), Some(request));
+    finish_discovery(&mut app, &mut tui, &mut server).await?;
+    assert_eq!(
+        app.sidebar().unwrap().latest_prompts,
+        HashMap::from([(sibling, latest.replace('\n', " "))])
+    );
+    // One unreadable chat must not discard the other chats' refreshed previews.
+    let missing = ThreadId::new();
+    assert_eq!(
+        server
+            .latest_side_chat_prompts(vec![sibling, missing, child])
+            .await,
+        HashMap::from([
+            (sibling, latest.replace('\n', " ")),
+            (missing, String::new()),
+            (child, "Child-only prompt".to_string()),
+        ])
+    );
+    capture("Refreshed chats", side_frame(&mut app, &mut tui, narrow)?);
 
-      + New side chat                        Start from the main chat
+    let reply = format!(
+        "<send_user_message_question_reply>{}</send_user_message_question_reply>",
+        serde_json::json!({"questionItemId": "choice", "question": "Which branch?", "answer": "Keep ## My request for Codex: literal"})
+    );
+    for (prompt, expected) in [
+        (
+            "# Context\n## My request for Codex:\nOld context\n## My request for Codex:\nActual request",
+            "Actual request",
+        ),
+        (
+            reply.as_str(),
+            "> Which branch? Keep ## My request for Codex: literal",
+        ),
+    ] {
+        side_chat_policy_tests::ask(&mut server, &model, sibling, prompt).await?;
+        assert_eq!(
+            server.latest_side_chat_prompts(vec![sibling]).await,
+            HashMap::from([(sibling, expected.to_string())])
+        );
+    }
+    app.refresh_saved_chats(&server, parent);
+    finish_discovery(&mut app, &mut tui, &mut server).await?;
+    capture("Readable reply", side_frame(&mut app, &mut tui, narrow)?);
+    insta::assert_snapshot!("saved_chat_discovery_states", states.join("\n\n"));
 
-      Side chats  2
-    › ○ Side chat 1
-      ○ Child-only prompt
-    ");
     app.local_settings.tui.keymap = toml::from_str("[list]\naccept = ['f5 g']")?;
     enable_side_retention(&mut app)?;
     for key in [KeyCode::Char('j'), KeyCode::F(5), KeyCode::Char('g')] {
@@ -4985,12 +5141,42 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         fg: (224, 224, 224),
         bg: (20, 20, 20),
     };
+    let light = crate::terminal_probe::DefaultColors {
+        fg: (80, 80, 106),
+        bg: (238, 241, 246),
+    };
     let mut tab_styles = Vec::new();
     let mut redraws = crate::tui::test_support::record_frame_requests(&mut tui);
-    for (focus, owner) in [("sidebar", sibling), ("main", parent_thread_id)] {
+    for (focus, owner, key, expected_focus) in [
+        ("sidebar", sibling, None, None),
+        ("main", parent_thread_id, Some(main), None),
+        (
+            "chooser",
+            parent_thread_id,
+            Some(chooser_key),
+            Some(sidebar::PaneFocus::Sidebar),
+        ),
+        (
+            "chooser main",
+            parent_thread_id,
+            Some(main),
+            Some(sidebar::PaneFocus::Main),
+        ),
+    ] {
+        if let Some(key) = key {
+            let (code, modifiers) = app.keymap.chords.leader[0].parts();
+            keys!(KeyEvent::new(code, modifiers), key);
+        }
         assert_eq!(app.current_displayed_thread_id(), Some(owner));
+        // The earlier /quit completion leaves a popup on the main composer.
+        if !app.chat_widget.no_modal_or_popup_active() {
+            keys!(KeyCode::Esc.into());
+        }
+        assert_eq!(app.chooser_focus(), expected_focus, "{focus}");
         side_frame(&mut app, &mut tui, even)?;
-        let strip = app.conversation_frame.chat_strip.unwrap();
+        let strip = app.conversation_frame.sidebar_tab_strip().unwrap();
+        let chooser = app.conversation_frame.chat_strip.is_none();
+        let add = strip.right() - 3;
         let tabs = app
             .sidebar()
             .unwrap()
@@ -4999,17 +5185,24 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             .strip_targets(strip);
         let [inactive, selected] = tabs
             .filter_map(|(target, area)| {
-                matches!(target, crate::sidebar_tab_strip::TabTarget::Tab(_)).then_some(area.x + 1)
+                matches!(target, crate::sidebar_tab_strip::TabTarget::Tab(_)).then_some(area)
             })
             .collect::<Vec<_>>()
             .try_into()
             .expect("both side-chat tabs are visible");
+        assert_eq!(selected.x, inactive.right() + 1);
+        let [inactive, selected] = [inactive, selected].map(|area| area.x + 1);
         for (state, column, row, palette, redraw) in [
             ("rest", selected, strip.y + 1, Some(colors), None),
             ("hover", inactive, strip.y, Some(colors), Some(true)),
             ("fallback", inactive + 1, strip.y, None, Some(false)),
             ("selected", selected, strip.y, Some(colors), Some(true)),
-            ("leave", selected, strip.y + 1, Some(colors), Some(false)),
+            ("leave", selected, strip.y + 1, Some(colors), Some(chooser)),
+            ("light rest", selected, strip.y + 1, Some(light), None),
+            ("light hover", inactive, strip.y, Some(light), Some(true)),
+            ("light add", add, strip.y, Some(light), Some(true)),
+            ("add", add + 1, strip.y, Some(colors), Some(false)),
+            ("add fallback", add, strip.y, None, Some(false)),
         ] {
             while redraws.try_recv().is_ok() {}
             let event = mouse(MouseEventKind::Moved, column, row);
@@ -5026,9 +5219,10 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
                 format!("{:?}/{:?}/{:?}", cell.fg, cell.bg, cell.modifier)
             };
             tab_styles.push(format!(
-                "{focus} {state}  inactive {}  selected {}",
+                "{focus} {state}  inactive {}  selected {}  add {}",
                 style(inactive),
                 style(selected),
+                style(add),
             ));
         }
         if owner == sibling {
@@ -5036,8 +5230,8 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
             assert!(app.pane_resize.is_some());
             let event = mouse(MouseEventKind::Moved, inactive, strip.y);
             boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, event)).await?;
-            assert_eq!(app.hovered_sidebar_tab(tui.link_hover.position()), None);
-            keys!(KeyCode::Esc.into(), prefix, main);
+            assert_eq!(app.hovered_sidebar_target(tui.link_hover.position()), None);
+            keys!(KeyCode::Esc.into());
         }
     }
     assert_app_snapshot!("side_chat_tab_hover", tab_styles.join("\n"));

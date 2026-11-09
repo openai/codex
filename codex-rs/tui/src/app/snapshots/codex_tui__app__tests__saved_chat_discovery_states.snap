@@ -1,0 +1,86 @@
+---
+source: tui/src/app/tests.rs
+expression: "states.join(\"\\n\\n\")"
+---
+Loading
+
+ Open in sidebar
+ ◌ Loading side chats…
+ › + New side chat                        Start from the main chat
+
+Empty result
+
+ Open in sidebar
+
+ › + New side chat                        Start from the main chat
+
+Initial failure
+
+ Open in sidebar
+ Permission denied by storage
+   + New side chat
+     Start from the main chat
+
+
+ ›   Retry loading side chats
+
+Retry in progress
+
+ Open in sidebar
+ ◌ Loading side chats…
+   + New side chat                        Start from the main chat
+
+
+ ›   Retrying…
+
+Refreshing cached chats
+
+ Open in sidebar
+ ◌ Refreshing side chats…
+   + New side chat                        Start from the main chat
+
+ Side chats  2
+
+ › ○ Side chat 1
+   ○ Child-only prompt
+     Child-only prompt
+
+Cached chats after failure
+
+ Open in sidebar
+ Refresh failed
+   + New side chat                        Start from the main chat
+
+ Side chats  2
+
+ › ○ Side chat 1
+   ○ Child-only prompt
+     Child-only prompt
+     Retry loading side chats
+
+Refreshed chats
+
+ Open in sidebar
+
+   + New side chat
+     Start from the main chat
+
+ Side chats  2
+
+ › ○ Named sibling
+     Latest request with 界 界 界  a…
+   ○ Child-only prompt
+
+Readable reply
+
+ Open in sidebar
+
+   + New side chat
+     Start from the main chat
+
+ Side chats  2
+
+ › ○ Named sibling
+     > Which branch? Keep ## My r…
+   ○ Child-only prompt
+     Child-only prompt

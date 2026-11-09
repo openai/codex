@@ -36,7 +36,7 @@ pub(super) struct ConversationFrame {
     inset: Option<Rect>,
     pub(super) sidebar: Option<sidebar::SidebarLayout>,
     pub(super) chat_strip: Option<Rect>,
-    pub(super) sidebar_input: Option<(usize, Option<ThreadId>, usize)>,
+    pub(super) sidebar_input: Option<sidebar::SidebarInputState>,
     pub(super) leader_hud: Option<Rect>,
     pub(super) close_buttons: [Rect; 2],
     /// A dialog can obscure neighboring content in the terminal's completed buffer.
@@ -295,7 +295,7 @@ impl App {
         }
         let highlight_divider =
             self.pane_resize.is_some() || tui.link_hover.shape == tui::PointerShape::Resize;
-        let hovered_tab = self.hovered_sidebar_tab(tui.link_hover.position());
+        let hovered_target = self.hovered_sidebar_target(tui.link_hover.position());
         // An input refresh opens a fresh terminal buffer. Carry the outer owner's
         // completed cells through it when only the conversation is being redrawn.
         let backdrop = caller_inset.map(|_| {
@@ -372,23 +372,20 @@ impl App {
                         ratatui::widgets::Paragraph::new(text)
                             .wrap(ratatui::widgets::Wrap { trim: false })
                             .render(body, frame.buffer);
-                    } else if self
-                        .sidebar()
-                        .is_some_and(|pane| pane.saved_chats_request.is_some())
-                    {
-                        ratatui::widgets::Clear.render(*sidebar, frame.buffer);
-                        Line::from("Loading side chats…").dim().render(
-                            sidebar.inner(ratatui::layout::Margin::new(1, 1)),
-                            frame.buffer,
-                        );
                     } else if let Some(pane) = self.sidebar() {
                         let footer = if let Some(hint) = resize_hint {
                             let row = crate::sidebar_chooser::body_row(*sidebar, sidebar.y);
                             crate::sidebar_chooser::resize_hint(hint, row.width)
                         } else {
-                            crate::sidebar_chooser::footer(&self.keymap, *sidebar, pane.choice)
-                                .0
-                                .line
+                            crate::sidebar_chooser::footer(
+                                &self.keymap,
+                                *sidebar,
+                                pane.choice,
+                                pane.chat_tabs(),
+                                self.chat_widget.side_chat_creation_state(),
+                            )
+                            .0
+                            .line
                         };
                         crate::sidebar_chooser::paint(
                             focused,
@@ -397,7 +394,14 @@ impl App {
                             footer,
                             pane.chat_tabs(),
                             pane.choice,
-                            self.local_settings.tui.status_line_use_colors,
+                            &crate::sidebar_chooser::SidebarStyle {
+                                new_chat: self.chat_widget.side_chat_creation_state(),
+                                use_theme_colors: self.local_settings.tui.status_line_use_colors,
+                                motion: MotionMode::from_animations_enabled(
+                                    self.local_settings.tui.animations,
+                                ),
+                                frames: &frames,
+                            },
                         );
                         let chooser = if focused {
                             TabState::Active
@@ -409,7 +413,7 @@ impl App {
                             chooser,
                             TabState::Absent,
                             pane.chat_tabs(),
-                            hovered_tab,
+                            hovered_target,
                             frame.buffer,
                         );
                     }
@@ -430,7 +434,7 @@ impl App {
                     TabState::Absent,
                     chat,
                     pane.chat_tabs(),
-                    hovered_tab,
+                    hovered_target,
                     frame.buffer,
                 );
             }

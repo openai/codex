@@ -9,9 +9,9 @@ expression: "chooser.lines().filter_map(|line|\nline.split_once('│').map(|(_, 
    + New side chat
      Start from the main chat
 
-   Side chats  1
- › ○ Side chat
+ Side chats  1
 
+ › ○ Side chat
 
 
 

@@ -314,7 +314,7 @@ pub(super) async fn forget_archived(
     app.abandoned_side_threads.insert(target);
     app.discard_thread_local_state(target).await;
     if let Some(pane) = app.sidebars.get_mut(&Some(parent)) {
-        pane.set_saved_chats_request(/*request*/ None);
+        pane.set_discovery(crate::sidebar_chooser::Discovery::Idle);
         pane.remove_choice(target);
         if hide {
             pane.hide();

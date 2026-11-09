@@ -5,10 +5,14 @@ use super::App;
 use super::pane_motion::PaneMotion;
 use super::side_pane;
 use super::side_pane::SidePaneLayout;
+use crate::app_event::AppEvent;
+use crate::app_event::SavedSideChatData;
+use crate::app_server_session::AppServerSession;
 use crate::app_server_session::SideChat;
 use crate::app_server_session::SideChatStorage;
 use crate::app_server_session::side_chat_prompt_preview;
 use crate::sidebar_chooser::ChatTabs;
+use crate::sidebar_chooser::Discovery;
 use crate::tui::Tui;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItemPayload;
@@ -56,6 +60,20 @@ impl SideCreation {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ChooserSelection {
+    New,
+    Chat(ThreadId),
+    Retry,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct SidebarInputState {
+    pub(super) revision: usize,
+    pub(super) selected_chat: Option<ThreadId>,
+    pub(super) choice: ChooserSelection,
+}
+
 #[derive(Default)]
 pub(super) struct SidebarPane {
     pub(super) creation: Option<SideCreation>,
@@ -64,7 +82,9 @@ pub(super) struct SidebarPane {
     tabs: Vec<ThreadId>,
     // The chooser keeps the same order when an attached chat becomes a live tab.
     choices: Vec<SideChat>,
-    pub(super) saved_chats_request: Option<uuid::Uuid>,
+    // A snapshot of the visible rows at the last explicit chooser refresh.
+    pub(super) latest_prompts: HashMap<ThreadId, String>,
+    pub(super) discovery: Discovery,
     pub(super) closing_chats: HashMap<ThreadId, JoinHandle<()>>,
     // Visit order is independent of the order in which tabs appear.
     visits: Vec<ThreadId>,
@@ -93,18 +113,26 @@ impl SidebarPane {
 
     pub(super) fn chat_tabs(&self) -> ChatTabs<'_> {
         ChatTabs {
+            discovery: &self.discovery,
             ids: &self.tabs,
             choices: &self.choices,
+            latest_prompts: &self.latest_prompts,
             selected: self.selected_chat(),
         }
     }
 
-    pub(super) fn set_saved_chats_request(&mut self, request: Option<uuid::Uuid>) {
-        self.saved_chats_request = request;
+    pub(super) fn set_discovery(&mut self, discovery: Discovery) {
+        if matches!(discovery, Discovery::Failed(_)) && self.choices.is_empty() {
+            self.choice = 1;
+        }
+        self.discovery = discovery;
+        self.choice = self.choice.min(self.chat_tabs().choice_count() - 1);
         self.tabs_revision += 1;
     }
 
     pub(super) fn update_saved_chats(&mut self, mut chats: Vec<SideChat>) {
+        let selection = self.chat_tabs().choice(self.choice);
+        let keep_new = self.choice == 0 && !self.choices.is_empty();
         for chat in &mut self.choices {
             if !self.tabs.contains(&chat.id) {
                 continue;
@@ -123,7 +151,11 @@ impl SidebarPane {
         self.choices = chats;
         if reordered {
             self.tabs_revision += 1;
-            self.reset_choice();
+            if let Some(index) = selection.and_then(|id| self.chat_tabs().choice_index(id)) {
+                self.choice = index;
+            } else if !keep_new {
+                self.reset_choice();
+            }
         }
     }
 
@@ -149,8 +181,20 @@ impl SidebarPane {
         self.visits.last().copied()
     }
 
-    pub(super) fn input_state(&self) -> (usize, Option<ThreadId>, usize) {
-        (self.tabs_revision, self.selected_chat(), self.choice)
+    pub(super) fn input_state(&self) -> SidebarInputState {
+        let tabs = self.chat_tabs();
+        let choice = if let Some(id) = tabs.choice(self.choice) {
+            ChooserSelection::Chat(id)
+        } else if tabs.retry_row(self.choice) {
+            ChooserSelection::Retry
+        } else {
+            ChooserSelection::New
+        };
+        SidebarInputState {
+            revision: self.tabs_revision,
+            selected_chat: tabs.selected,
+            choice,
+        }
     }
 
     fn add_tab(&mut self, id: ThreadId) {
@@ -220,6 +264,51 @@ impl SidebarPane {
 }
 
 impl App {
+    pub(super) fn refresh_visible_side_chat_prompts(
+        &mut self,
+        tui: &Tui,
+        server: &AppServerSession,
+        parent: ThreadId,
+        request: uuid::Uuid,
+    ) {
+        let area = if self.sidebar_parent() == Some(parent) && self.chooser_focus().is_some() {
+            let screen: Rect = tui.terminal.last_known_screen_size.into();
+            self.conversation_frame.chooser_area().or_else(|| {
+                match side_pane::split_layout(self, tui, screen) {
+                    Some(SidebarLayout::Chooser { sidebar, .. }) => Some(sidebar),
+                    _ if screen.width < 100 && self.chooser_focus() == Some(PaneFocus::Sidebar) => {
+                        Some(screen)
+                    }
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        };
+        let Some(pane) = self.sidebars.get_mut(&Some(parent)) else {
+            return;
+        };
+        let ids = area.map_or_else(Vec::new, |area| {
+            pane.chat_tabs().visible_chat_ids(area, pane.choice)
+        });
+        if ids.is_empty() {
+            pane.latest_prompts.clear();
+            pane.set_discovery(Discovery::Idle);
+            return;
+        }
+        let view = server.request_view();
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let prompts = view.latest_side_chat_prompts(ids).await;
+            tx.send(AppEvent::SavedSideChatsLoaded {
+                backend_id: view.backend_id(),
+                parent,
+                request,
+                result: Ok(SavedSideChatData::LatestPrompts(prompts)),
+            });
+        });
+    }
+
     pub(super) fn track_side_chat_title(
         &mut self,
         id: ThreadId,

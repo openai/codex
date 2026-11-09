@@ -6,8 +6,10 @@ use crate::keymap::KeymapContext;
 use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use crate::live_wrap::take_prefix_by_width;
 use crate::sidebar_tab_strip::TabState;
 use crate::sidebar_tab_strip::TabStrip;
+use crate::sidebar_tab_strip::TabTarget;
 use codex_protocol::ThreadId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -16,6 +18,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
+use std::collections::HashMap;
 use std::ops::Range;
 
 const WIDE_WIDTH: u16 = 58;
@@ -38,6 +41,12 @@ pub(crate) enum ChooserAction {
     Open(usize),
     Back,
     Hide,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NewChatState {
+    WaitingForMainMessage,
+    Available,
 }
 
 fn list_hint(keymap: &RuntimeKeymap, action: ListAction) -> Option<String> {
@@ -63,10 +72,13 @@ pub(crate) fn footer(
     keymap: &RuntimeKeymap,
     area: Rect,
     choice: usize,
+    tabs: ChatTabs<'_>,
+    new_chat: NewChatState,
 ) -> (footer_hint::HintLine, Vec<Option<ChooserAction>>) {
     let hint = |action| list_hint(keymap, action);
     let movement = [ListAction::MoveUp, ListAction::MoveDown]
         .into_iter()
+        .filter(|_| new_chat == NewChatState::Available)
         .filter_map(hint)
         .collect::<Vec<_>>()
         .join("/");
@@ -75,8 +87,12 @@ pub(crate) fn footer(
         .map(super::key_hint::ShortcutHint::display_label);
     let (hints, actions): (Vec<_>, Vec<_>) = [
         (
-            hint(ListAction::Accept),
-            "open",
+            hint(ListAction::Accept).filter(|_| new_chat == NewChatState::Available),
+            if tabs.retry_row(choice) {
+                "retry"
+            } else {
+                "open"
+            },
             Some(ChooserAction::Open(choice)),
         ),
         (hint(ListAction::Cancel), "back", Some(ChooserAction::Back)),
@@ -103,21 +119,79 @@ pub(crate) fn close_cell(tab: Rect) -> Rect {
     )
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Default)]
+pub(crate) enum Discovery {
+    #[default]
+    Idle,
+    Loading {
+        request: uuid::Uuid,
+        started: std::time::Instant,
+        retry: bool,
+    },
+    Failed(String),
+}
+
+impl Discovery {
+    pub(crate) fn request(&self) -> Option<uuid::Uuid> {
+        match self {
+            Self::Loading { request, .. } => Some(*request),
+            Self::Idle | Self::Failed(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct ChatTabs<'a> {
+    pub(crate) discovery: &'a Discovery,
     pub(crate) ids: &'a [ThreadId],
     // Chooser index zero is reserved for New side chat.
     pub(crate) choices: &'a [SideChat],
+    pub(crate) latest_prompts: &'a HashMap<ThreadId, String>,
     pub(crate) selected: Option<ThreadId>,
 }
 
 impl<'a> ChatTabs<'a> {
+    pub(crate) fn visible_chat_ids(self, area: Rect, choice: usize) -> Vec<ThreadId> {
+        choice_rows(area, self, choice)
+            .visible_chats(self, choice)
+            .filter_map(|(index, _)| self.choice(index))
+            .collect()
+    }
+
     pub(crate) fn choice_count(self) -> usize {
-        self.choices.len() + 1
+        self.choices.len() + 1 + usize::from(self.retry_row(self.choices.len() + 1))
+    }
+
+    pub(crate) fn retry_row(self, index: usize) -> bool {
+        matches!(
+            self.discovery,
+            Discovery::Failed(_) | Discovery::Loading { retry: true, .. }
+        ) && index == self.choices.len() + 1
     }
 
     pub(crate) fn choice(self, index: usize) -> Option<ThreadId> {
         Some(self.choices.get(index.checked_sub(1)?)?.id)
+    }
+
+    fn prompt(self, index: usize) -> Option<&'a str> {
+        self.latest_prompts
+            .get(&self.choice(index)?)
+            .map(String::as_str)
+            .filter(|prompt| !prompt.is_empty())
+    }
+
+    fn row_height(self, index: usize) -> u16 {
+        1 + u16::from(self.prompt(index).is_some())
+    }
+
+    fn fitting_choices(self, indices: impl Iterator<Item = usize>, height: usize) -> usize {
+        let mut used = 0;
+        indices
+            .take_while(|&index| {
+                used += usize::from(self.row_height(index));
+                used <= height
+            })
+            .count()
     }
 
     pub(crate) fn choice_index(self, id: ThreadId) -> Option<usize> {
@@ -141,7 +215,7 @@ pub(crate) fn tab_strip(
     chooser: TabState,
     chat: TabState,
     tabs: ChatTabs<'_>,
-    hovered_tab: Option<ThreadId>,
+    hovered_target: Option<TabTarget<ThreadId>>,
     buf: &mut Buffer,
 ) {
     tabs.strip().render(
@@ -149,7 +223,7 @@ pub(crate) fn tab_strip(
         buf,
         chooser,
         chat,
-        hovered_tab,
+        hovered_target,
         |id, area, style, buf| {
             let close = close_cell(area);
             let label = Rect::new(area.x, area.y, area.width - close.width, area.height);
@@ -184,46 +258,88 @@ struct ChoiceRows {
     wide: bool,
     new_chat: Range<u16>,
     group: Option<u16>,
-    chat_start: u16,
-    chats: Range<usize>,
+    chats: Range<u16>,
 }
 
-fn choice_rows(area: Rect, count: usize, choice: usize) -> ChoiceRows {
+impl ChoiceRows {
+    /// Title and subtitle occupy one selectable entry, even when the last line is clipped.
+    fn visible_chats(
+        &self,
+        tabs: ChatTabs<'_>,
+        choice: usize,
+    ) -> impl Iterator<Item = (usize, Range<u16>)> {
+        let mut rows = self.chats.clone();
+        let selected = choice.max(1);
+        let spare = rows
+            .len()
+            .saturating_sub(usize::from(tabs.row_height(selected)));
+        let first = selected - tabs.fitting_choices((1..selected).rev(), spare);
+        (first..tabs.choice_count()).map_while(move |index| {
+            let start = rows.next()?;
+            if tabs.prompt(index).is_some() {
+                rows.next();
+            }
+            Some((index, start..rows.start))
+        })
+    }
+}
+
+fn choice_rows(area: Rect, tabs: ChatTabs<'_>, choice: usize) -> ChoiceRows {
+    let count = tabs.choice_count();
     let wide = body_row(area, area.y).width >= WIDE_WIDTH;
     let new_height = if wide { 1 } else { 2 };
     let footer = area.height.saturating_sub(1);
     let new_end = (FIRST_CHOICE_ROW + new_height).min(footer);
-    let group = (count > 1 && footer > new_end + 2).then_some(new_end + 1);
+    let after_group = 1 + u16::from(!tabs.choices.is_empty());
+    let group = (count > 1 && footer >= new_end + 1 + after_group + tabs.row_height(choice))
+        .then_some(new_end + 1);
     // In short panes, let the New row scroll away so the selection remains visible.
     let new_chat = FIRST_CHOICE_ROW..if choice == 0 || group.is_some() {
         new_end.max(FIRST_CHOICE_ROW)
     } else {
         FIRST_CHOICE_ROW
     };
-    let chat_start = group.map_or(new_chat.end, |row| row + 1);
-    let visible = usize::from(footer.saturating_sub(chat_start));
-    let first = (choice + 1).saturating_sub(visible).max(1);
+    let chat_start = group.map_or(new_chat.end, |row| row + after_group);
     ChoiceRows {
         wide,
         new_chat,
         group,
-        chat_start,
-        chats: first..(first + visible).min(count),
+        chats: chat_start..footer,
     }
 }
 
-pub(crate) fn page_size(area: Rect, count: usize, choice: usize) -> usize {
-    choice_rows(area, count, choice).chats.len().max(1)
+pub(crate) fn page_size(
+    area: Rect,
+    tabs: ChatTabs<'_>,
+    choice: usize,
+    action: ListAction,
+) -> usize {
+    let rows = choice_rows(area, tabs, choice);
+    let height = rows.chats.len();
+    match action {
+        ListAction::PageUp => tabs.fitting_choices((0..choice).rev(), height),
+        ListAction::PageDown if choice == 0 => rows.visible_chats(tabs, choice).count(),
+        ListAction::PageDown => tabs.fitting_choices(choice..tabs.choice_count(), height),
+        _ => 1,
+    }
+    .max(1)
 }
 
-pub(crate) fn choice_at(area: Rect, count: usize, choice: usize, y: u16) -> Option<usize> {
-    let mut rows = choice_rows(area, count, choice);
+pub(crate) fn choice_at(area: Rect, tabs: ChatTabs<'_>, choice: usize, y: u16) -> Option<usize> {
+    let rows = choice_rows(area, tabs, choice);
     let offset = y.checked_sub(area.y)?;
     if rows.new_chat.contains(&offset) {
         return Some(0);
     }
-    rows.chats
-        .nth(usize::from(offset.checked_sub(rows.chat_start)?))
+    rows.visible_chats(tabs, choice)
+        .find_map(|(index, lines)| lines.contains(&offset).then_some(index))
+}
+
+pub(crate) struct SidebarStyle<'a> {
+    pub(crate) new_chat: NewChatState,
+    pub(crate) use_theme_colors: bool,
+    pub(crate) motion: crate::motion::MotionMode,
+    pub(crate) frames: &'a crate::tui::FrameRequester,
 }
 
 pub(crate) fn paint(
@@ -233,7 +349,7 @@ pub(crate) fn paint(
     footer: Line<'_>,
     tabs: ChatTabs<'_>,
     choice: usize,
-    use_theme_colors: bool,
+    sidebar_style: &SidebarStyle<'_>,
 ) {
     Clear.render(area, buf);
     if area.is_empty() {
@@ -253,60 +369,114 @@ pub(crate) fn paint(
         }
     };
     paint(2, Line::from("Open in sidebar").bold());
-    let count = tabs.choice_count();
-    let rows = choice_rows(area, count, choice);
+    if sidebar_style.new_chat == NewChatState::WaitingForMainMessage {
+        for (offset, text) in (FIRST_CHOICE_ROW..).zip(textwrap::wrap(
+            "You can start a side chat after your first message in the main chat.",
+            usize::from(row(area.y).width.max(1)),
+        )) {
+            paint(offset, Line::from(text).dim());
+        }
+        footer.render(row(footer_y), buf);
+        return;
+    }
+    match tabs.discovery {
+        Discovery::Loading { started, .. } => {
+            let glyph =
+                crate::motion::loading_glyph(*started, sidebar_style.motion, sidebar_style.frames);
+            let label = if tabs.choices.is_empty() {
+                "Loading side chats…"
+            } else {
+                "Refreshing side chats…"
+            };
+            paint(3, Line::from(format!("{glyph} {label}").dim()));
+        }
+        Discovery::Failed(error) => paint(3, Line::from(error.as_str().red())),
+        Discovery::Idle => {}
+    }
+    let rows = choice_rows(area, tabs, choice);
+    let secondary = crate::style::secondary_text_style();
     let row_style = |index| {
         if index == choice {
-            ('›', style)
+            ('›', style, style.not_bold())
         } else {
-            (' ', Default::default())
+            (' ', Default::default(), secondary)
         }
     };
-    let secondary = crate::style::secondary_text_style();
     if !rows.new_chat.is_empty() {
         let y = rows.new_chat.start;
-        let (marker, fill) = row_style(0);
+        let (marker, fill, subtitle) = row_style(0);
         let title = format!("{marker} + New side chat");
-        let detail = "Start from the main chat";
+        let detail = Span::styled("Start from the main chat", subtitle);
         if rows.wide {
-            let pad = usize::from(row(area.y).width - 1) - detail.len();
-            paint(y, Line::from(format!("{title:<pad$}{detail}")).style(fill));
+            let pad = usize::from(row(area.y).width - 1) - detail.width();
+            paint(
+                y,
+                Line::from(vec![format!("{title:<pad$}").into(), detail]).style(fill),
+            );
         } else {
             paint(y, Line::from(title).style(fill));
-            paint(y + 1, Line::from(format!("    {detail}")).style(fill));
+            paint(y + 1, Line::from(vec!["    ".into(), detail]).style(fill));
         }
     }
-    if let Some(y) = rows.group {
-        let total = count - 1;
+    if let Some(y) = rows.group
+        && !tabs.choices.is_empty()
+    {
+        let total = tabs.choices.len();
         paint(
             y,
-            Line::from(format!("  Side chats  {total}")).style(secondary),
+            Line::from(format!("Side chats  {total}")).style(secondary),
         );
     }
-    for (offset, index) in rows.chats.enumerate() {
+    let width = usize::from(row(area.y).width);
+    for (index, lines) in rows.visible_chats(tabs, choice) {
+        let (marker, fill, subtitle) = row_style(index);
+        if tabs.retry_row(index) {
+            let label = if tabs.discovery.request().is_some() {
+                "Retrying…"
+            } else {
+                "Retry loading side chats"
+            };
+            paint(
+                lines.start,
+                Line::from(format!("{marker}   {label}")).style(fill),
+            );
+            continue;
+        }
         let chat = &tabs.choices[index - 1];
         let selected = index == choice && focused;
-        let (marker, fill) = row_style(index);
         let title = if let Some(label) = side_chat_label(chat) {
             label.to_owned()
-        } else if count == 2 {
+        } else if tabs.choices.len() == 1 {
             "Side chat".to_string()
         } else {
             format!("Side chat {index}")
         };
-        let title = if use_theme_colors && !selected {
+        let title = if sidebar_style.use_theme_colors && !selected {
             let identity = crate::thread_color::thread_color(chat.id);
             title.fg(crate::style::readable_color_on(identity, fill.bg))
         } else {
             title.into()
         };
         let symbol = Span::styled("○ ", if selected { style } else { secondary });
-        let y = rows.chat_start + offset as u16;
         let line = Line::from(vec![format!("{marker} ").into(), symbol, title]).style(fill);
         paint(
-            y,
-            truncate_line_with_ellipsis_if_overflow(line, usize::from(row(area.y).width)),
+            lines.start,
+            truncate_line_with_ellipsis_if_overflow(line, width),
         );
+        if lines.len() == 2
+            && let Some(prompt) = tabs.prompt(index)
+        {
+            // Bound the copy for large pastes before clipping the indented line.
+            let (mut preview, rest, _) = take_prefix_by_width(prompt, width);
+            if !rest.is_empty() {
+                preview.push('…');
+            }
+            let line = Line::from(format!("    {preview}")).style(subtitle);
+            paint(
+                lines.start + 1,
+                truncate_line_with_ellipsis_if_overflow(line, width),
+            );
+        }
     }
     if footer_y > area.y {
         footer.render(row(footer_y), buf);
