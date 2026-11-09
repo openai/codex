@@ -37,13 +37,14 @@ impl Client {
             .await
     }
 
-    /// Prewarm a coding thread with an optional project checkout.
+    /// Prewarm a coding thread, deferring executor readiness for a selected project checkout.
     pub async fn prewarm_thread(
         &self,
         model: Option<String>,
         model_provider: Option<String>,
         project: Option<ProjectEnvironment>,
     ) -> Result<crate::ThreadActivation, Error> {
+        let deferred_environment = project.is_some().then_some(true);
         let managed = match project {
             Some(ProjectEnvironment {
                 name,
@@ -71,6 +72,7 @@ impl Client {
                 wire::PrewarmRequest {
                     model,
                     model_provider,
+                    deferred_environment,
                     environments: Some(wire::EnvironmentList {
                         values: vec![wire::EnvironmentSelection {
                             managed: Some(managed),
@@ -116,6 +118,8 @@ mod wire {
         pub model: Option<String>,
         #[prost(string, optional, tag = "16")]
         pub model_provider: Option<String>,
+        #[prost(bool, optional, tag = "29")]
+        pub deferred_environment: Option<bool>,
     }
     #[derive(Clone, Message)]
     pub(super) struct EnvironmentList {

@@ -232,7 +232,7 @@ async fn activation_preserves_native_settings_and_thread_metadata() {
 }
 
 #[tokio::test]
-async fn prewarm_encodes_blank_and_project_managed_environments() {
+async fn prewarm_defers_readiness_only_for_selected_projects() {
     let mut fixture = fixture_responses(vec![
         response(vec![frame(&[])], tonic::Status::ok("")),
         response(vec![frame(&[])], tonic::Status::ok("")),
@@ -274,7 +274,7 @@ async fn prewarm_encodes_blank_and_project_managed_environments() {
         b"git@github.com:acme/app.git",
         b"\x0a\x21\x2a\x1f",
         b"https://github.com/acme/lib.git",
-        b"\x12\x03App",
+        b"\x12\x03App\xe8\x01\x01",
     ]
     .concat();
     assert_request(&mut fixture, "Prewarm", &expected).await;
