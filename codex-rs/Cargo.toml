@@ -428,7 +428,8 @@ lazy_static = "1"
 libc = "0.2.182"
 # Keep SQLx's bundled SQLite on a version containing the WAL-reset corruption fix:
 # https://www.sqlite.org/wal.html#the_wal_reset_bug
-libsqlite3-sys = { version = "0.37", default-features = false }
+# SQLite 3.54 also fixes RUSTSEC-2026-0459 when opening a database with a WAL.
+libsqlite3-sys = { version = "0.39.1", default-features = false }
 linkify = "0.11"
 log = "0.4"
 lru = "0.18.2"
@@ -680,6 +681,10 @@ opt-level = 0
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "ed1cdab335221515706178d68495bba2aed1924f" }
+# SQLx 0.9.0 excludes libsqlite3-sys 0.39. Keep its driver and Core traits on
+# the same reviewed source until a release includes transact-rs/sqlx#4502.
+sqlx-core = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c" }
+sqlx-sqlite = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c" }
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "02cb49fa827411e9279e3688d19ab9e82661b0e8" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "db4be399bc1b8b5de2edb46c7187834edabf7e30" }
 v8 = { git = "https://github.com/openai-oss-forks/rusty_v8.git", rev = "90a65f887a0c0f048f3784afbcb320b373c8a2e0" }
