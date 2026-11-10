@@ -113,6 +113,14 @@ fn writable_root_presence_matches_materialized_roots() {
         )]),
     ];
 
+    assert_eq!(
+        policies
+            .iter()
+            .map(|policy| policy.has_legacy_write_intent(cwd.path()))
+            .collect::<Vec<_>>(),
+        vec![false, false, false, true, true, true, false],
+    );
+
     for policy in policies {
         assert_eq!(
             policy.has_configured_writable_roots_with_cwd(cwd.path()),

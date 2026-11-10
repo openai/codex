@@ -1494,6 +1494,42 @@ impl FileSystemSandboxPolicy {
         self.get_writable_roots_with_cwd_impl(cwd, FileSystemPolicyProjection::LinuxMounts)
     }
 
+    /// Reports full-disk writes when every explicit writable path can be projected locally.
+    /// Preserves the legacy fallback used by startup checks and diagnostic labels,
+    /// using this host's path convention.
+    pub fn has_legacy_full_disk_write_access(&self) -> bool {
+        self.has_full_disk_write_access()
+            && self
+                .entries
+                .iter()
+                .all(|entry| entry.legacy_writable_path().is_ok())
+    }
+
+    /// Reports entry write intent recognized by the legacy adapter and its diagnostic labels.
+    /// This does not inspect path existence or apply read/deny precedence: missing and
+    /// unrenderable writable paths still count, while unknown special paths and globs do not.
+    pub fn has_legacy_write_intent(&self, cwd: &Path) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.access.can_write()
+                && match &entry.path {
+                    FileSystemPath::Path { .. } => true,
+                    FileSystemPath::GlobPattern { .. } => false,
+                    FileSystemPath::Special { value } => match value {
+                        FileSystemSpecialPath::Root
+                        | FileSystemSpecialPath::Tmpdir
+                        | FileSystemSpecialPath::ProjectRoots { subpath: None } => true,
+                        FileSystemSpecialPath::ProjectRoots { subpath: Some(_) } => {
+                            AbsolutePathBuf::from_absolute_path(cwd).is_ok()
+                        }
+                        FileSystemSpecialPath::SlashTmp => cfg!(unix),
+                        FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => {
+                            false
+                        }
+                    },
+                }
+        })
+    }
+
     /// Reports configured writable roots for diagnostics without inspecting the filesystem.
     ///
     /// Unlike runtime root resolution, this includes configured roots even if they
@@ -1888,7 +1924,6 @@ impl FileSystemSandboxPolicy {
                 let mut writable_roots = Vec::new();
                 let mut tmpdir_writable = false;
                 let mut slash_tmp_writable = false;
-                let mut unbridgeable_root_write = false;
 
                 for entry in &self.entries {
                     match &entry.path {
@@ -1903,14 +1938,7 @@ impl FileSystemSandboxPolicy {
                             }
                         }
                         FileSystemPath::Special { value } => match value {
-                            FileSystemSpecialPath::Root => match entry.access {
-                                FileSystemAccessMode::Deny => {}
-                                FileSystemAccessMode::Read => {}
-                                FileSystemAccessMode::Write => {
-                                    unbridgeable_root_write = true;
-                                }
-                            },
-                            FileSystemSpecialPath::Minimal => {}
+                            FileSystemSpecialPath::Root | FileSystemSpecialPath::Minimal => {}
                             FileSystemSpecialPath::ProjectRoots { subpath } => {
                                 if subpath.is_none() && entry.access.can_write() {
                                     workspace_root_writable = true;
@@ -1956,11 +1984,7 @@ impl FileSystemSandboxPolicy {
                         exclude_tmpdir_env_var: !tmpdir_writable,
                         exclude_slash_tmp: !slash_tmp_writable,
                     }
-                } else if unbridgeable_root_write
-                    || !writable_roots.is_empty()
-                    || tmpdir_writable
-                    || (cfg!(unix) && slash_tmp_writable)
-                {
+                } else if self.has_legacy_write_intent(cwd) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "permissions profile requests filesystem writes outside the workspace root, which is not supported until the runtime enforces FileSystemSandboxPolicy directly",

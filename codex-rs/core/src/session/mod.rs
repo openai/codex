@@ -842,12 +842,9 @@ impl Session {
             let permission_profile = config.permissions.effective_permission_profile();
             if permission_profile.enforcement() != SandboxEnforcement::External
                 && permission_profile.network_sandbox_policy().is_enabled()
-                && {
-                    let file_system = permission_profile.file_system_sandbox_policy();
-                    file_system.has_full_disk_write_access()
-                        // Preserve the legacy fallback for writable URIs that cannot be projected locally.
-                        && file_system.entries.iter().all(|entry| entry.legacy_writable_path().is_ok())
-                }
+                && permission_profile
+                    .file_system_sandbox_policy()
+                    .has_legacy_full_disk_write_access()
             {
                 let config = Arc::make_mut(&mut config);
                 let permission_profile = PermissionProfile::workspace_write();

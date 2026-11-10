@@ -48,11 +48,11 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ToolResultLogConfig;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrKind;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
@@ -62,6 +62,7 @@ use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use reqwest::Error;
 use reqwest::Response;
 use std::future::Future;
+use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::time::error::Elapsed;
@@ -693,10 +694,12 @@ impl SessionTelemetry {
         context_window: Option<i64>,
         auto_compact_token_limit: Option<i64>,
         approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        permission_profile: &PermissionProfile,
+        cwd: &Path,
         mcp_servers: Vec<&str>,
         legacy_multi_agent_disabled_sources: &[&str],
     ) {
+        let sandbox_policy = permission_profile.legacy_sandbox_policy_label(cwd);
         log_and_trace_event!(
             self,
             common: {

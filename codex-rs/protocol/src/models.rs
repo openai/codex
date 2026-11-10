@@ -689,6 +689,30 @@ impl PermissionProfile {
         }
     }
 
+    /// Returns the historical `sandbox_policy` diagnostic label without constructing
+    /// a legacy policy. Retains native-path compatibility fallbacks rather than
+    /// evaluating executor authorization.
+    pub fn legacy_sandbox_policy_label(&self, cwd: &Path) -> &'static str {
+        match self {
+            Self::Disabled => "danger-full-access",
+            Self::External { .. } => "external-sandbox",
+            Self::Managed { network, .. } => {
+                let file_system = self.file_system_sandbox_policy();
+                if file_system.has_legacy_full_disk_write_access() {
+                    if network.is_enabled() {
+                        "danger-full-access"
+                    } else {
+                        "external-sandbox"
+                    }
+                } else if file_system.has_legacy_write_intent(cwd) {
+                    "workspace-write"
+                } else {
+                    "read-only"
+                }
+            }
+        }
+    }
+
     pub fn to_legacy_sandbox_policy(&self, cwd: &Path) -> io::Result<SandboxPolicy> {
         match self {
             Self::Managed {
