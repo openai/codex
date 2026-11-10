@@ -63,7 +63,8 @@ async fn audio_helper_omits_short_wav_in_all_input_forms() {
             ExecuteRequest {
                 source: format!(
                     r#"audio({audio_url:?}); audio({{audio_url:{audio_url:?}}});
-audio({{type:"audio",mimeType:"audio/wav",data:{payload:?}}});"#
+const block = {{type:"audio",mimeType:"audio/wav",data:{payload:?}}};
+audio(block); content(block);"#
                 ),
                 yield_time_ms: None,
                 ..execute_request("")
@@ -82,7 +83,7 @@ audio({{type:"audio",mimeType:"audio/wav",data:{payload:?}}});"#
             RuntimeResponse::Result {
                 code_mode_host_duration: None,
                 cell_id: cell_id("1"),
-                content_items: vec![expected; 3],
+                content_items: vec![expected; 4],
                 result_buffered_for: std::time::Duration::ZERO,
                 error_text: None,
             },

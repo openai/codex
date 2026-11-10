@@ -1,5 +1,6 @@
 use super::callbacks::audio_callback;
 use super::callbacks::clear_timeout_callback;
+use super::callbacks::content_block_callback;
 use super::callbacks::exit_callback;
 use super::callbacks::generated_image_callback;
 use super::callbacks::image_callback;
@@ -27,6 +28,7 @@ pub(super) fn install_globals(
     let clear_timeout = helper_function(scope, "clearTimeout", clear_timeout_callback)?;
     let set_timeout = helper_function(scope, "setTimeout", set_timeout_callback)?;
     let text = helper_function(scope, "text", text_callback)?;
+    let content_block = helper_function(scope, "content", content_block_callback)?;
     let image = helper_function(scope, "image", image_callback)?;
     let audio = helper_function(scope, "audio", audio_callback)?;
     let generated_image = helper_function(scope, "generatedImage", generated_image_callback)?;
@@ -41,6 +43,7 @@ pub(super) fn install_globals(
     set_global(scope, global, "clearTimeout", clear_timeout.into())?;
     set_global(scope, global, "setTimeout", set_timeout.into())?;
     set_global(scope, global, "text", text.into())?;
+    set_global(scope, global, "content", content_block.into())?;
     set_global(scope, global, "image", image.into())?;
     set_global(scope, global, "audio", audio.into())?;
     set_global(scope, global, "generatedImage", generated_image.into())?;
@@ -50,11 +53,12 @@ pub(super) fn install_globals(
     set_global(scope, global, "yield_control", yield_control.into())?;
     set_global(scope, global, "exit", exit.into())?;
 
-    let source = v8::String::new(scope, include_str!("settled.js"))
-        .ok_or_else(|| "failed to allocate settlement helpers".to_string())?;
+    let helpers = concat!(include_str!("settled.js"), "\n", include_str!("content.js"));
+    let source = v8::String::new(scope, helpers)
+        .ok_or_else(|| "failed to allocate JavaScript helpers".to_string())?;
     v8::Script::compile(scope, source, /*origin*/ None)
         .and_then(|script| script.run(scope))
-        .ok_or_else(|| "failed to initialize settlement helpers".to_string())?;
+        .ok_or_else(|| "failed to initialize JavaScript helpers".to_string())?;
     Ok(())
 }
 

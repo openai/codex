@@ -687,7 +687,7 @@ async fn run_code_mode_turn_with_rmcp(
     run_code_mode_turn_with_rmcp_model(server, prompt, code, "test-gpt-5.1-codex").await
 }
 
-async fn run_code_mode_turn_with_rmcp_model(
+pub(super) async fn run_code_mode_turn_with_rmcp_model(
     server: &MockServer,
     prompt: &str,
     code: &str,

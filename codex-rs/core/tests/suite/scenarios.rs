@@ -875,6 +875,30 @@ async fn unavailable_images_are_rechecked_without_rewriting_history() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_forwards_mixed_mcp_content() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server binary");
+    let server = start_mock_server().await;
+    let (_test, response) = super::code_mode::run_code_mode_turn_with_rmcp_model(
+        &server,
+        "Show the caption and image from the MCP image tool.",
+        r#"const result = await tools.mcp__rmcp__image_scenario({scenario: "text_then_image", caption: "sample"});
+content(result.content);"#,
+        "gpt-5.5",
+    )
+    .await?;
+    let output = response.single_request().custom_tool_call_output("call-1");
+    assert_eq!(output["output"][1]["text"], "sample");
+    assert_eq!(output["output"][2]["type"], "input_image");
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "Code Mode forwards MCP text and image blocks to the model in their original order.",
+        &core_test_support::responses::received_responses_requests(&server).await,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_mcp_schema_limits_preserve_explicit_overrides() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let requests = super::code_mode::mcp_schema_max_bytes_scenario().await?;

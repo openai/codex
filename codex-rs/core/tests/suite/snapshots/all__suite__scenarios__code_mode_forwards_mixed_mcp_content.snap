@@ -1,0 +1,28 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Code Mode forwards MCP text and image blocks to the model in their original order.\",\n&core_test_support::responses::received_responses_requests(&server).await,\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Code Mode forwards MCP text and image blocks to the model in their original order.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - mcp__rmcp: Use these tools to exercise the rmcp test server.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Show the caption and image from the MCP image tool.
+-- request 2 (turn) --
+04:custom_tool_call/exec:const result = await tools.mcp__rmcp__image_scenario({scenario: "text_then_image", caption: "sample"});
+    content(result.content);
+05:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | sample | <input_image>

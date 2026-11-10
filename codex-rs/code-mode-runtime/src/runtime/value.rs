@@ -3,10 +3,13 @@ use serde_json::Value as JsonValue;
 use crate::session_runtime::OutputItem;
 use codex_code_mode_protocol::DEFAULT_IMAGE_DETAIL;
 use codex_code_mode_protocol::ImageDetail;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageReference;
 
 use super::RuntimeState;
 use super::audio::wav_duration_seconds;
 
+const CONTENT_HELPER_EXPECTS_MESSAGE: &str = "content expects one MCP ContentBlock";
 const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block";
 const AUDIO_HELPER_EXPECTS_MESSAGE: &str = "audio expects a non-empty audio URL string, an object with audio_url, or a raw MCP audio block";
 const REMOTE_IMAGE_URL_ERROR: &str = "Tool call failed: remote image URLs are not supported in tool outputs. Pass a base64 data URI instead";
@@ -14,7 +17,6 @@ const INVALID_IMAGE_URL_ERROR: &str =
     "Tool call failed: invalid image output. Pass a base64 data URI instead";
 const INVALID_AUDIO_URL_ERROR: &str =
     "Tool call failed: invalid audio output. Pass a base64 data URI instead";
-const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
 
 pub(super) fn serialize_output_text(
     scope: &mut v8::PinScope<'_, '_>,
@@ -30,35 +32,65 @@ pub(super) fn serialize_output_text(
         return Ok(value.to_rust_string_lossy(scope));
     }
 
+    if let Some(text) = stringify_json_value(scope, value)? {
+        return Ok(text);
+    }
     let tc = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut tc = tc.init();
-    if let Some(stringified) = v8::json::stringify(&tc, value) {
-        return Ok(stringified.to_rust_string_lossy(&tc));
+    Ok(value.to_rust_string_lossy(&tc.init()))
+}
+
+pub(super) fn normalize_output_content(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Result<OutputItem, String> {
+    let block = v8_value_to_json(scope, value)?
+        .filter(JsonValue::is_object)
+        .ok_or_else(|| CONTENT_HELPER_EXPECTS_MESSAGE.to_string())?;
+    mcp_output_item(&block)
+}
+
+fn mcp_output_item(block: &JsonValue) -> Result<OutputItem, String> {
+    let item = FunctionCallOutputContentItem::from_mcp_content_block(block)
+        .map_err(|_| CONTENT_HELPER_EXPECTS_MESSAGE.to_string())?;
+    match item {
+        FunctionCallOutputContentItem::InputText { text } => Ok(OutputItem::InputText { text }),
+        FunctionCallOutputContentItem::InputImage {
+            image: ImageReference::Inline { image_url },
+            detail,
+        } => Ok(OutputItem::InputImage { image_url, detail }),
+        FunctionCallOutputContentItem::InputAudio { audio_url } => Ok(output_audio_item(audio_url)),
+        FunctionCallOutputContentItem::EncryptedContent { .. } => {
+            Err("content cannot emit encrypted MCP text".to_string())
+        }
+        FunctionCallOutputContentItem::InputImage {
+            image: ImageReference::File { .. },
+            ..
+        } => Err("content expects inline MCP image data".to_string()),
     }
-    if tc.has_caught() {
-        return Err(tc
-            .exception()
-            .map(|exception| value_to_error_text(&mut tc, exception))
-            .unwrap_or_else(|| "unknown code mode exception".to_string()));
-    }
-    Ok(value.to_rust_string_lossy(&tc))
 }
 
 pub(super) fn normalize_output_image(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-    detail_override: Option<String>,
+    detail_override: Option<v8::Local<'_, v8::Value>>,
 ) -> Result<OutputItem, ()> {
     let result = (|| -> Result<OutputItem, String> {
-        let (image_url, detail) = if value.is_string() {
+        let mut explicit_detail = parse_image_detail_value(scope, detail_override)?;
+        let (image_url, mcp_detail) = if value.is_string() {
             (value.to_rust_string_lossy(scope), None)
         } else if value.is_object() && !value.is_array() {
             let object = v8::Local::<v8::Object>::try_from(value)
                 .map_err(|_| IMAGE_HELPER_EXPECTS_MESSAGE.to_string())?;
-            if let Some(image) = parse_non_mcp_output_image(scope, object)? {
-                image
+            if let Some((image_url, detail)) = parse_non_mcp_output_image(scope, object)? {
+                explicit_detail = explicit_detail.or(detail);
+                (image_url, None)
             } else {
-                parse_mcp_output_image(scope, value)?
+                let OutputItem::InputImage { image_url, detail } =
+                    parse_mcp_media_block(scope, value, "image", IMAGE_HELPER_EXPECTS_MESSAGE)?
+                else {
+                    return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
+                };
+                (image_url, detail)
             }
         } else {
             return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
@@ -77,26 +109,18 @@ pub(super) fn normalize_output_image(
             return Err(INVALID_IMAGE_URL_ERROR.to_string());
         }
 
-        let detail = detail_override.or(detail);
-        let detail = match detail {
-            Some(detail) => {
-                let normalized = detail.to_ascii_lowercase();
-                Some(match normalized.as_str() {
-                    "auto" => ImageDetail::Auto,
-                    "low" => ImageDetail::Low,
-                    "high" => ImageDetail::High,
-                    "original" => ImageDetail::Original,
-                    _ => {
-                        return Err(
-                            "image detail must be one of: auto, low, high, original".to_string()
-                        );
-                    }
-                })
-            }
-            None => Some(DEFAULT_IMAGE_DETAIL),
+        let detail = if let Some(mut detail) = explicit_detail {
+            detail.make_ascii_lowercase();
+            serde_json::from_value::<ImageDetail>(JsonValue::String(detail))
+                .map_err(|_| "image detail must be one of: auto, low, high, original".to_string())?
+        } else {
+            mcp_detail.unwrap_or(DEFAULT_IMAGE_DETAIL)
         };
 
-        Ok(OutputItem::InputImage { image_url, detail })
+        Ok(OutputItem::InputImage {
+            image_url,
+            detail: Some(detail),
+        })
     })();
 
     match result {
@@ -129,56 +153,47 @@ fn parse_non_mcp_output_image(
     Ok(Some((image_url.to_rust_string_lossy(scope), detail)))
 }
 
-fn parse_mcp_output_image(
+fn parse_mcp_media_block(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-) -> Result<(String, Option<String>), String> {
-    let Some(result) = v8_value_to_json(scope, value)? else {
-        return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
+    expected_type: &str,
+    expects_message: &str,
+) -> Result<OutputItem, String> {
+    let Some(JsonValue::Object(mut block)) = v8_value_to_json(scope, value)? else {
+        return Err(expects_message.to_string());
     };
-    let JsonValue::Object(result) = result else {
-        return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
+    let Some(item_type) = block.get("type").and_then(JsonValue::as_str) else {
+        return Err(expects_message.to_string());
     };
-    let Some(item_type) = result.get("type").and_then(JsonValue::as_str) else {
-        return Err(IMAGE_HELPER_EXPECTS_MESSAGE.to_string());
-    };
-    if item_type != "image" {
+    if item_type != expected_type {
         return Err(format!(
-            "image only accepts MCP image blocks, got \"{item_type}\""
+            "{expected_type} only accepts MCP {expected_type} blocks, got \"{item_type}\""
         ));
     }
-    let data = result
+    if block
         .get("data")
         .and_then(JsonValue::as_str)
-        .ok_or_else(|| "image expected MCP image data".to_string())?;
-    if data.is_empty() {
-        return Err("image expected MCP image data".to_string());
+        .is_none_or(str::is_empty)
+    {
+        return Err(format!("{expected_type} expected MCP {expected_type} data"));
     }
-
-    let image_url = if data.to_ascii_lowercase().starts_with("data:") {
-        data.to_string()
-    } else {
-        let mime_type = result
-            .get("mimeType")
-            .or_else(|| result.get("mime_type"))
-            .and_then(JsonValue::as_str)
-            .filter(|mime_type| !mime_type.is_empty())
-            .unwrap_or("application/octet-stream");
-        format!("data:{mime_type};base64,{data}")
-    };
-    let detail = result
-        .get("_meta")
-        .and_then(JsonValue::as_object)
-        .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
-        .and_then(JsonValue::as_str)
-        .filter(|detail| matches!(*detail, "auto" | "low" | "high" | "original"))
-        .map(str::to_string);
-    Ok((image_url, detail))
+    // image() and audio() historically prefer mimeType over its alias and treat
+    // an empty or non-string MIME type as absent.
+    if let Some(alias) = block.remove("mime_type") {
+        block.entry("mimeType").or_insert(alias);
+    }
+    if block
+        .get("mimeType")
+        .is_some_and(|mime| mime.as_str().is_none_or(str::is_empty))
+    {
+        block.remove("mimeType");
+    }
+    mcp_output_item(&JsonValue::Object(block))
 }
 
-fn parse_image_detail_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
+fn parse_image_detail_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: Option<v8::Local<'_, v8::Value>>,
 ) -> Result<Option<String>, String> {
     match value {
         Some(value) if value.is_string() => Ok(Some(value.to_rust_string_lossy(scope))),
@@ -201,7 +216,7 @@ pub(super) fn normalize_output_audio(
             if let Some(audio_url) = parse_non_mcp_output_audio(scope, object)? {
                 audio_url
             } else {
-                parse_mcp_output_audio(scope, value)?
+                return parse_mcp_media_block(scope, value, "audio", AUDIO_HELPER_EXPECTS_MESSAGE);
             }
         } else {
             return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
@@ -217,15 +232,7 @@ pub(super) fn normalize_output_audio(
             return Err(INVALID_AUDIO_URL_ERROR.to_string());
         }
 
-        // Tiny tool-generated clips cannot be encoded reliably by audio models.
-        if wav_duration_seconds(&audio_url).is_some_and(|duration| duration < 0.025) {
-            return Ok(OutputItem::InputText {
-                text: "Audio output omitted because the clip is shorter than 25 ms; use a longer clip."
-                    .to_string(),
-            });
-        }
-
-        Ok(OutputItem::InputAudio { audio_url })
+        Ok(output_audio_item(audio_url))
     })();
 
     match result {
@@ -234,6 +241,18 @@ pub(super) fn normalize_output_audio(
             throw_type_error(scope, &error_text);
             Err(())
         }
+    }
+}
+
+fn output_audio_item(audio_url: String) -> OutputItem {
+    // Tiny tool-generated clips cannot be encoded reliably by audio models.
+    if wav_duration_seconds(&audio_url).is_some_and(|duration| duration < 0.025) {
+        OutputItem::InputText {
+            text: "Audio output omitted because the clip is shorter than 25 ms; use a longer clip."
+                .to_string(),
+        }
+    } else {
+        OutputItem::InputAudio { audio_url }
     }
 }
 
@@ -255,43 +274,22 @@ fn parse_non_mcp_output_audio(
     Ok(Some(audio_url.to_rust_string_lossy(scope)))
 }
 
-fn parse_mcp_output_audio(
+fn stringify_json_value(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-) -> Result<String, String> {
-    let Some(result) = v8_value_to_json(scope, value)? else {
-        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
-    };
-    let JsonValue::Object(result) = result else {
-        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
-    };
-    let Some(item_type) = result.get("type").and_then(JsonValue::as_str) else {
-        return Err(AUDIO_HELPER_EXPECTS_MESSAGE.to_string());
-    };
-    if item_type != "audio" {
-        return Err(format!(
-            "audio only accepts MCP audio blocks, got \"{item_type}\""
-        ));
+) -> Result<Option<String>, String> {
+    let tc = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut tc = tc.init();
+    if let Some(stringified) = v8::json::stringify(&tc, value) {
+        return Ok(Some(stringified.to_rust_string_lossy(&tc)));
     }
-    let data = result
-        .get("data")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| "audio expected MCP audio data".to_string())?;
-    if data.is_empty() {
-        return Err("audio expected MCP audio data".to_string());
+    if tc.has_caught() {
+        return Err(tc
+            .exception()
+            .map(|exception| value_to_error_text(&mut tc, exception))
+            .unwrap_or_else(|| "unknown code mode exception".to_string()));
     }
-
-    if data.to_ascii_lowercase().starts_with("data:") {
-        Ok(data.to_string())
-    } else {
-        let mime_type = result
-            .get("mimeType")
-            .or_else(|| result.get("mime_type"))
-            .and_then(JsonValue::as_str)
-            .filter(|mime_type| !mime_type.is_empty())
-            .unwrap_or("application/octet-stream");
-        Ok(format!("data:{mime_type};base64,{data}"))
-    }
+    Ok(None)
 }
 
 pub(super) fn v8_value_to_json(
@@ -307,18 +305,9 @@ pub(super) fn v8_value_to_json(
         return Ok(None);
     }
 
-    let tc = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut tc = tc.init();
-    let Some(stringified) = v8::json::stringify(&tc, value) else {
-        if tc.has_caught() {
-            return Err(tc
-                .exception()
-                .map(|exception| value_to_error_text(&mut tc, exception))
-                .unwrap_or_else(|| "unknown code mode exception".to_string()));
-        }
+    let Some(json) = stringify_json_value(scope, value)? else {
         return Ok(None);
     };
-    let json = stringified.to_rust_string_lossy(&tc);
     // V8 emits compact JSON with these ASCII key names unescaped. The object/comma
     // prefix and colon distinguish keys from string contents. Reject these before
     // Serde can reinterpret them as values and bypass its normal recursion limit.

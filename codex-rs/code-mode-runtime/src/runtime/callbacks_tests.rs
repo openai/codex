@@ -41,6 +41,7 @@ async fn host_callbacks_admit_no_new_effects_after_exit_is_requested() {
             r#"
 markExit();
 text("still working");
+content({type: "text", text: "late"});
 image("data:image/png;base64,AAA");
 audio("data:audio/mpeg;base64,YXVkaW8=");
 generatedImage({image_url: "data:image/png;base64,AAA", output_hint: "late"});
@@ -52,6 +53,14 @@ clearTimeout(earlyTimer); setTimeout(() => {}, 60000);
         (
             "text conversion",
             r#"text({toJSON() { return markExit("late"); }});"#,
+        ),
+        (
+            "content getter",
+            r#"content({type: "text", get text() { return markExit("late"); }});"#,
+        ),
+        (
+            "content iterator",
+            r#"content((function* () { yield markExit({type: "text", text: "late"}); })());"#,
         ),
         (
             "notify conversion",

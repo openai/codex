@@ -1,16 +1,7 @@
+pub use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+pub use codex_protocol::models::ImageDetail;
 use serde::Deserialize;
 use serde::Serialize;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ImageDetail {
-    Auto,
-    Low,
-    High,
-    Original,
-}
-
-pub const DEFAULT_IMAGE_DETAIL: ImageDetail = ImageDetail::High;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
