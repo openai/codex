@@ -16,6 +16,7 @@ async fn discovery_preserves_pagination_and_order_on_each_request() {
         limit: Some(7),
         sort_key: ThreadSortKey::UpdatedAt,
         sort_direction: ThreadSortDirection::Asc,
+        archived: false,
         originators: vec!["tui".into()],
     };
     let page = fixture.client.list_threads(&query).await.unwrap();
@@ -44,6 +45,45 @@ async fn discovery_preserves_pagination_and_order_on_each_request() {
     )
     .await;
     assert!(fixture.requests.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn discovery_lists_archived_threads_and_restores_the_selected_thread() {
+    let thread = Bytes::from_static(
+        b"\x22\x00\x28\x00\x32\x01/\x48\x00\x72\x06legacy\x82\x01\x00\xaa\x01\x00\xda\x01\x00\xe2\x01\x02\x08\x01\xea\x01\x02\x12\x00\xfa\x01\x00\x80\x02\x00",
+    );
+    let mut response_thread = Vec::new();
+    prost::encoding::bytes::encode(1, &thread, &mut response_thread);
+    let mut response_page = Vec::new();
+    prost::encoding::bytes::encode(1, &Bytes::from(response_thread.clone()), &mut response_page);
+    let mut fixture = fixture_responses(vec![
+        response(vec![frame(&response_page)], tonic::Status::ok("")),
+        response(vec![frame(&response_thread)], tonic::Status::ok("")),
+    ])
+    .await;
+
+    let page = fixture
+        .client
+        .list_threads(&ThreadListQuery {
+            archived: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let [row] = page.data.as_slice() else {
+        panic!("expected one archived conversation");
+    };
+    assert_eq!(row.id, "legacy");
+    assert_request(
+        &mut fixture,
+        "ListThreads",
+        b"\x18\x01\x20\x02\x28\x01\x32\x00",
+    )
+    .await;
+
+    let restored = fixture.client.unarchive_thread(&row.id).await.unwrap();
+    assert_eq!(restored, *row);
+    assert_request(&mut fixture, "UnarchiveThread", b"\x0a\x06legacy").await;
 }
 
 #[tokio::test]

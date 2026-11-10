@@ -89,6 +89,7 @@ use codex_http_client::RouteAwareClientPool;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use http_body_util::BodyExt;
+use prost::Message;
 use std::io;
 use std::time::Duration;
 use tonic::body::Body;
@@ -217,13 +218,56 @@ impl Client {
                 http::uri::PathAndQuery::from_static(
                     "/oaiproto.codex_app_server_backend.ThreadService/Resume",
                 ),
-                ProstCodec::<ResumeRequest, wire::ResumeResponse>::default(),
+                ProstCodec::<ResumeRequest, wire::EmptyResponse>::default(),
             ),
         )
         .await
         .map_err(|_| Error::Timeout)?
         .map_err(Error::from)?;
         Ok(())
+    }
+
+    /// Archives a conversation using the current account, without opening an attachment.
+    pub async fn archive_thread(&self, thread_id: &str) -> Result<(), MutationError> {
+        if thread_id.trim().is_empty() {
+            return Err(MutationError::InvalidRequest);
+        }
+        let payload = self
+            .mutate(
+                wire::ThreadIdRequest {
+                    thread_id: thread_id.to_owned(),
+                },
+                "/oaiproto.codex_app_server_backend.ThreadService/ArchiveThread",
+            )
+            .await?;
+        wire::EmptyResponse::decode(payload)
+            .map_err(|_| MutationError::OutcomeUnknown(Error::InvalidResponse))?;
+        Ok(())
+    }
+
+    /// Restores an archived conversation without resuming it.
+    pub async fn unarchive_thread(&self, thread_id: &str) -> Result<ThreadSnapshot, MutationError> {
+        if thread_id.trim().is_empty() {
+            return Err(MutationError::InvalidRequest);
+        }
+        let payload = self
+            .mutate(
+                wire::ThreadIdRequest {
+                    thread_id: thread_id.to_owned(),
+                },
+                "/oaiproto.codex_app_server_backend.ThreadService/UnarchiveThread",
+            )
+            .await?;
+        let response = wire::UnarchiveResponse::decode(payload)
+            .map_err(|_| MutationError::OutcomeUnknown(Error::InvalidResponse))?;
+        let raw_thread = response
+            .thread
+            .ok_or(MutationError::OutcomeUnknown(Error::InvalidResponse))?;
+        let thread = ThreadSnapshot::decode(raw_thread).map_err(MutationError::OutcomeUnknown)?;
+        if thread.id != thread_id {
+            return Err(MutationError::OutcomeUnknown(Error::InvalidResponse));
+        }
+        Ok(thread)
     }
 
     /// Live events only, without history or automatic reconnect. The stream terminates
@@ -233,7 +277,7 @@ impl Client {
         thread_id: &str,
     ) -> Result<BoxStream<'static, Result<Event, Error>>, Error> {
         let mut grpc = self.grpc.clone();
-        let mut request = tonic::Request::new(wire::AttachRequest {
+        let mut request = tonic::Request::new(wire::ThreadIdRequest {
             thread_id: thread_id.to_owned(),
         });
         *request.metadata_mut() =
@@ -245,7 +289,7 @@ impl Client {
                 http::uri::PathAndQuery::from_static(
                     "/oaiproto.codex_app_server_backend.ThreadService/Attach",
                 ),
-                ProstCodec::<wire::AttachRequest, wire::AttachResponse>::default(),
+                ProstCodec::<wire::ThreadIdRequest, wire::AttachResponse>::default(),
             ),
         )
         .await

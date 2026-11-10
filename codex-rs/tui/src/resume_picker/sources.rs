@@ -121,10 +121,10 @@ pub(super) fn spawn(
                             } else {
                                 let error = std::io::Error::other("The session's backend is unavailable.");
                                 let event = match request {
-                                    PickerLoadRequest::Preview { thread_id, .. } => BackgroundEvent::Preview { thread_id, preview: Err(error) },
+                                    PickerLoadRequest::Preview { thread_id, .. } => BackgroundEvent::Preview { backend_id: backend, thread_id, preview: Err(error) },
                                     PickerLoadRequest::Acknowledge { .. } => continue,
                                     PickerLoadRequest::Transcript { thread_id, .. } => BackgroundEvent::Transcript { backend_id: backend, thread_id, transcript: Err(error) },
-                                    PickerLoadRequest::Archive { thread_id, .. } => BackgroundEvent::Archive { thread_id, result: Err(error) },
+                                    PickerLoadRequest::Archive { thread_id, .. } => BackgroundEvent::Archive { backend_id: backend, thread_id, result: Err(error) },
                                     PickerLoadRequest::Unarchive { thread_id, .. } => BackgroundEvent::Unarchive { thread_id, result: Err(error) },
                                     PickerLoadRequest::Page(_) => unreachable!(),
                                 };

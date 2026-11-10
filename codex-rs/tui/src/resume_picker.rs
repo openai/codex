@@ -158,7 +158,9 @@ pub enum SessionPickerAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionPickerLaunchContext {
     Startup,
-    ExistingSession { current_thread_id: Option<ThreadId> },
+    ExistingSession {
+        current_thread_id: Option<(BackendId, ThreadId)>,
+    },
 }
 
 impl SessionPickerAction {
@@ -365,6 +367,7 @@ enum BackgroundEvent {
         page: std::io::Result<PickerPage>,
     },
     Preview {
+        backend_id: BackendId,
         thread_id: ThreadId,
         preview: std::io::Result<Vec<TranscriptPreviewLine>>,
     },
@@ -374,6 +377,7 @@ enum BackgroundEvent {
         transcript: std::io::Result<LoadedTranscript>,
     },
     Archive {
+        backend_id: BackendId,
         thread_id: ThreadId,
         result: std::io::Result<()>,
     },
@@ -580,7 +584,9 @@ pub(crate) async fn run_resume_picker_from_existing_session_with_app_servers(
         show_all,
         backends,
         displayed_owner,
-        SessionPickerLaunchContext::ExistingSession { current_thread_id },
+        SessionPickerLaunchContext::ExistingSession {
+            current_thread_id: current_thread_id.map(|id| (displayed_owner, id)),
+        },
     )
     .await
 }
@@ -1003,7 +1009,11 @@ fn spawn_app_server_source(backend: AppServerPickerBackend) -> sources::Source {
                         preview = load_transcript_preview(&mut app_server, thread_id, config.as_ref()) => preview,
                         _ = bg_tx.closed() => continue,
                     };
-                    let _ = bg_tx.send(BackgroundEvent::Preview { thread_id, preview });
+                    let _ = bg_tx.send(BackgroundEvent::Preview {
+                        backend_id,
+                        thread_id,
+                        preview,
+                    });
                 }
                 PickerLoadRequest::Transcript {
                     thread_id,
@@ -1042,7 +1052,11 @@ fn spawn_app_server_source(backend: AppServerPickerBackend) -> sources::Source {
                         .await
                         .map(|_| ())
                         .map_err(std::io::Error::other);
-                    let _ = bg_tx.send(BackgroundEvent::Archive { thread_id, result });
+                    let _ = bg_tx.send(BackgroundEvent::Archive {
+                        backend_id,
+                        thread_id,
+                        result,
+                    });
                 }
                 PickerLoadRequest::Unarchive { thread_id, .. } => {
                     let result = archive_request_handle
@@ -1152,8 +1166,8 @@ struct PickerState {
     sort_key: ThreadSortKey,
     inline_error: Option<String>,
     archive_state: archive::ArchiveState,
-    expanded_thread_id: Option<ThreadId>,
-    transcript_previews: HashMap<ThreadId, TranscriptPreviewState>,
+    expanded_thread_id: Option<(BackendId, ThreadId)>,
+    transcript_previews: HashMap<(BackendId, ThreadId), TranscriptPreviewState>,
     transcript_cells: HashMap<(BackendId, ThreadId), SessionTranscriptState>,
     pending_transcript_open: Option<(BackendId, ThreadId)>,
     unread: HashMap<(BackendId, ThreadId), String>,
@@ -1903,9 +1917,20 @@ impl PickerState {
                 let completed_token = self.search_state.active_token();
                 self.continue_search_if_token_matches(completed_token);
             }
-            BackgroundEvent::Preview { thread_id, preview } => {
+            BackgroundEvent::Preview {
+                backend_id,
+                thread_id,
+                preview,
+            } => {
+                // Archiving removes the owned cache entry; ignore its late preview.
+                if !matches!(
+                    self.transcript_previews.get(&(backend_id, thread_id)),
+                    Some(TranscriptPreviewState::Loading)
+                ) {
+                    return Ok(None);
+                }
                 self.transcript_previews.insert(
-                    thread_id,
+                    (backend_id, thread_id),
                     match preview {
                         Ok(lines) => TranscriptPreviewState::Loaded(lines),
                         Err(_) => TranscriptPreviewState::Failed,
@@ -1954,8 +1979,12 @@ impl PickerState {
                 }
                 self.request_frame();
             }
-            BackgroundEvent::Archive { thread_id, result } => {
-                self.handle_archive_result(thread_id, result);
+            BackgroundEvent::Archive {
+                backend_id,
+                thread_id,
+                result,
+            } => {
+                self.handle_archive_result(backend_id, thread_id, result);
             }
             BackgroundEvent::Unarchive { thread_id, result } => {
                 return Ok(self.handle_unarchive_result(thread_id, result));
@@ -2378,14 +2407,14 @@ impl PickerState {
             return;
         };
         let backend_id = row.backend_id.unwrap_or(self.backend_id);
-        if self.expanded_thread_id == Some(thread_id) {
+        if self.expanded_thread_id == Some((backend_id, thread_id)) {
             self.expanded_thread_id = None;
             self.request_frame();
             return;
         }
-        self.expanded_thread_id = Some(thread_id);
+        self.expanded_thread_id = Some((backend_id, thread_id));
         if let std::collections::hash_map::Entry::Vacant(e) =
-            self.transcript_previews.entry(thread_id)
+            self.transcript_previews.entry((backend_id, thread_id))
         {
             e.insert(TranscriptPreviewState::Loading);
             (self.picker_loader)(PickerLoadRequest::Preview {
@@ -2407,7 +2436,10 @@ impl PickerState {
                 let is_selected = row_idx == self.selected;
                 let is_expanded = is_selected
                     && row.thread_id.is_some()
-                    && self.expanded_thread_id == row.thread_id;
+                    && self.expanded_thread_id
+                        == row
+                            .thread_id
+                            .map(|id| (row.backend_id.unwrap_or(self.backend_id), id));
                 render_session_lines(
                     row,
                     self,
@@ -2438,8 +2470,12 @@ impl PickerState {
         for (offset, row) in self.filtered_rows[self.scroll_top..].iter().enumerate() {
             let row_idx = self.scroll_top + offset;
             let is_selected = row_idx == self.selected;
-            let is_expanded =
-                is_selected && row.thread_id.is_some() && self.expanded_thread_id == row.thread_id;
+            let is_expanded = is_selected
+                && row.thread_id.is_some()
+                && self.expanded_thread_id
+                    == row
+                        .thread_id
+                        .map(|id| (row.backend_id.unwrap_or(self.backend_id), id));
             let row_height = render_session_lines(
                 row,
                 self,
@@ -3216,8 +3252,12 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
         }
         let row_idx = start + idx;
         let is_selected = row_idx == state.selected;
-        let is_expanded =
-            is_selected && row.thread_id.is_some() && state.expanded_thread_id == row.thread_id;
+        let is_expanded = is_selected
+            && row.thread_id.is_some()
+            && state.expanded_thread_id
+                == row
+                    .thread_id
+                    .map(|id| (row.backend_id.unwrap_or(state.backend_id), id));
         let is_zebra = row_idx.is_multiple_of(2);
         for line in render_session_lines(row, state, is_selected, is_expanded, is_zebra, area.width)
         {
@@ -3746,7 +3786,10 @@ fn render_transcript_preview_lines(
     let Some(thread_id) = row.thread_id else {
         return details;
     };
-    let preview_lines = match state.transcript_previews.get(&thread_id) {
+    let preview_lines = match state
+        .transcript_previews
+        .get(&(row.backend_id.unwrap_or(state.backend_id), thread_id))
+    {
         Some(TranscriptPreviewState::Loading) => {
             vec![
                 vec![
@@ -6140,7 +6183,10 @@ session_picker_view = "dense"
             .await
             .unwrap();
 
-        assert_eq!(state.expanded_thread_id, Some(thread_id));
+        assert_eq!(
+            state.expanded_thread_id,
+            Some((state.backend_id, thread_id))
+        );
         assert_eq!(*recorded_requests.lock().unwrap(), vec![thread_id]);
 
         state
@@ -6182,7 +6228,10 @@ session_picker_view = "dense"
             .await
             .unwrap();
 
-        assert_eq!(state.expanded_thread_id, Some(thread_id));
+        assert_eq!(
+            state.expanded_thread_id,
+            Some((state.backend_id, thread_id))
+        );
     }
 
     #[test]
@@ -6508,9 +6557,9 @@ session_picker_view = "dense"
         state.filtered_rows = vec![row];
         state.relative_time_reference =
             Some(parse_timestamp_str("2026-04-28T18:00:00Z").expect("timestamp"));
-        state.expanded_thread_id = Some(thread_id);
+        state.expanded_thread_id = Some((state.backend_id, thread_id));
         state.transcript_previews.insert(
-            thread_id,
+            (state.backend_id, thread_id),
             TranscriptPreviewState::Loaded(vec![
                 TranscriptPreviewLine {
                     speaker: TranscriptPreviewSpeaker::User,

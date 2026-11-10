@@ -1,4 +1,4 @@
-//! Server RPCs own lifecycle outcomes; successful actions invalidate dashboard group caches.
+//! Server RPCs own lifecycle outcomes; cache cleanup follows the backend's removal scope.
 //! Keep the dashboard browsable during RPCs while deferring task notifications.
 //! Removing the current root leaves an unattached dashboard, even when it is empty.
 
@@ -202,6 +202,15 @@ impl App {
             .filter(|name| !name.is_empty())
             .unwrap_or("Untitled task");
         let (title, description, label) = match action {
+            AgentsOverviewAction::Archive
+                if self.app_server_target == crate::AppServerTarget::Cloud =>
+            {
+                (
+                    format!("Archive “{name}”?"),
+                    "This stops any running work in this task and archives it. Child agents stay unchanged. Its history can be restored from the resume picker.",
+                    "Archive task",
+                )
+            }
             AgentsOverviewAction::Archive => (
                 format!("Archive “{name}”?"),
                 "This stops any running work in this task and its child agents, then archives them. Their history can be restored from the resume picker.",
@@ -278,6 +287,10 @@ impl App {
         if self.windows_sandbox_blocks_thread_switch() {
             return Ok(());
         }
+        // Cloud archives only the selected thread; Local lifecycle actions include descendants.
+        let removes_subtree = action != AgentsOverviewAction::Archive
+            || app_server.thread_params_mode()
+                != crate::app_server_session::ThreadParamsMode::Cloud;
         // The overview may lack intermediate ancestors, or even the primary's metadata.
         let mut removes_primary = self.primary_thread_id == Some(thread_id);
         let mut attempted = false;
@@ -296,13 +309,17 @@ impl App {
             state.rename_target = None;
         }
         self.repaint_agents_overview();
-        let voice_result = self
-            .stop_voice_for_removed_thread(app_server, thread_id)
-            .await;
+        let voice_result = if removes_subtree || self.voice_owner_thread_id() == Some(thread_id) {
+            self.stop_voice_for_removed_thread(app_server, thread_id)
+                .await
+        } else {
+            Ok(())
+        };
         let operation = async {
             let result = async {
                 voice_result?;
-                if let Some(primary) = primary_thread_id
+                if removes_subtree
+                    && let Some(primary) = primary_thread_id
                     && primary != thread_id
                 {
                     removes_primary = app_server
@@ -369,8 +386,11 @@ impl App {
             self.agents_overview.refresh_notifications.clear();
         }
         if result.is_ok() {
-            // Invalidate cached details for the displayed group, without inferring child outcomes.
-            let mut removed = self.known_thread_subtree(thread_id);
+            let mut removed = if removes_subtree {
+                self.known_thread_subtree(thread_id)
+            } else {
+                HashSet::from([thread_id])
+            };
             if let Some(primary) = self.primary_thread_id
                 && removes_primary
             {

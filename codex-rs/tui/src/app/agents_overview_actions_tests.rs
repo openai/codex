@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::agents_overview_discovery::list_pinned_threads;
+use crate::app::tests::test_thread_session;
 use crate::app_event::AgentsOverviewAction;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
@@ -63,6 +64,120 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
     }
 
     app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cloud_archive_preserves_attached_child_and_other_tasks() -> Result<()> {
+    use codex_app_server_client::AppServerClient;
+    use codex_app_server_client::CloudClient;
+    use codex_app_server_client::CloudOperation;
+    use serde_json::json;
+
+    let mut app = make_test_app().await;
+    app.app_server_target = AppServerTarget::Cloud;
+    let parent = ThreadId::new();
+    let child = ThreadId::new();
+    let other = ThreadId::new();
+    let threads = HashMap::from([
+        (
+            parent,
+            Some(overview_thread(
+                parent,
+                /*parent_thread_id*/ None,
+                "Cloud parent",
+                ThreadStatus::Idle,
+            )),
+        ),
+        (
+            child,
+            Some(overview_thread(
+                child,
+                Some(parent),
+                "Cloud child",
+                ThreadStatus::Active {
+                    active_flags: Vec::new(),
+                },
+            )),
+        ),
+        (
+            other,
+            Some(overview_thread(
+                other,
+                /*parent_thread_id*/ None,
+                "Other task",
+                ThreadStatus::Idle,
+            )),
+        ),
+    ]);
+    app.agents_overview.threads = threads.clone();
+    app.primary_thread_id = Some(child);
+    app.active_thread_id = Some(child);
+    app.chat_widget
+        .handle_thread_session(test_thread_session(child, app.config.cwd.to_path_buf()));
+    app.chat_widget
+        .apply_external_edit("Keep child draft".into());
+    let draft = app.chat_widget.capture_thread_input_state();
+    crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, child);
+
+    app.confirm_agents_overview_action(parent, AgentsOverviewAction::Archive);
+    insta::assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 80), @"
+          Archive “Cloud parent”?
+    › Ke  This stops any running work in this task and archives it. Child
+          agents stay unchanged. Its history can be restored from the resume
+      gp  picker.
+
+
+        › 1. Cancel
+          2. Archive task
+
+          enter select · esc back
+    ");
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+
+    let (client, mut commands, _events) = CloudClient::channel(/*capacity*/ 1);
+    let mut session = AppServerSession::new(
+        crate::backend_id::BackendId::new(),
+        AppServerClient::Cloud(client),
+        crate::app_server_session::ThreadParamsMode::Cloud,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.pause_events();
+    let (result, ()) = tokio::join!(
+        Box::pin(app.run_agents_overview_action(
+            &mut tui,
+            &mut session,
+            parent,
+            AgentsOverviewAction::Archive
+        )),
+        async {
+            let command = commands.recv().await.expect("archive request");
+            let CloudOperation::Request(request) = command.operation else {
+                panic!("expected archive request");
+            };
+            assert!(
+                matches!(*request, ClientRequest::ThreadArchive { params, .. } if params.thread_id == parent.to_string())
+            );
+            command.response.send(Ok(Ok(json!({})))).unwrap();
+        },
+    );
+    result?;
+    let mut expected = threads;
+    expected.remove(&parent);
+    assert_eq!(app.agents_overview.threads, expected);
+    assert_eq!(
+        (
+            app.primary_thread_id,
+            app.current_displayed_thread_id(),
+            app.chat_widget.thread_id()
+        ),
+        (Some(child), Some(child), Some(child))
+    );
+    assert_eq!(app.chat_widget.capture_thread_input_state(), draft);
+    assert_eq!(app.voice_owner_thread_id(), Some(child));
+    if let Some(refresh) = app.agents_overview.refresh_task.take() {
+        refresh.abort();
+    }
     Ok(())
 }
 

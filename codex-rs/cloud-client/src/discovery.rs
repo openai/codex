@@ -23,14 +23,15 @@ pub enum ThreadSortDirection {
     Desc,
 }
 
-/// Lists unarchived threads with the server's default source selection.
-/// Reuse the same originators and order when continuing with an opaque cursor.
+/// Lists threads with the server's default source selection.
+/// Reuse the same filters and order when continuing with an opaque cursor.
 #[derive(Clone, Default)]
 pub struct ThreadListQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
     pub sort_key: ThreadSortKey,
     pub sort_direction: ThreadSortDirection,
+    pub archived: bool,
     /// Empty means all originators, including conversations created by other clients.
     pub originators: Vec<String>,
 }
@@ -88,7 +89,7 @@ impl Client {
                         ThreadSortDirection::Asc => 1,
                         ThreadSortDirection::Desc => 2,
                     }),
-                    archived: Some(false),
+                    archived: Some(query.archived),
                     originators: Some(wire::StringList {
                         values: query.originators.clone(),
                     }),

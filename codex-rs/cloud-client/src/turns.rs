@@ -257,7 +257,7 @@ impl Client {
                 "/oaiproto.codex_app_server_backend.ThreadService/InterruptTurn",
             )
             .await?;
-        crate::wire::ResumeResponse::decode(payload)
+        crate::wire::EmptyResponse::decode(payload)
             .map_err(|_| MutationError::OutcomeUnknown(Error::InvalidResponse))?;
         Ok(())
     }
