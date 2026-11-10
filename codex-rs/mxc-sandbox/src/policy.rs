@@ -15,6 +15,7 @@ use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use codex_windows_sandbox::cmd_script_command_line;
 use codex_windows_sandbox::expand_windows_deny_read_paths;
 use codex_windows_sandbox::resolve_windows_deny_read_paths;
 use mxc_sdk::mxc_common::cmdline::CommandLineContext;
@@ -320,10 +321,13 @@ pub(super) fn build_request(
         });
     }
     Ok(ExecutionRequest {
-        script_code: cmdline_from_argv_for_context(
-            &command.command,
-            CommandLineContext::WindowsCreateProcess,
-        )?,
+        script_code: match cmd_script_command_line(&command.command) {
+            Some(script) => script,
+            None => cmdline_from_argv_for_context(
+                &command.command,
+                CommandLineContext::WindowsCreateProcess,
+            )?,
+        },
         working_directory: command_cwd
             .to_str()
             .ok_or(PolicyError::NonUnicodeCommandCwd)?

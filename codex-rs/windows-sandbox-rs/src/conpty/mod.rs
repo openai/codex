@@ -8,8 +8,8 @@
 
 use crate::desktop::LaunchDesktop;
 use crate::proc_thread_attr::ProcThreadAttributeList;
+use crate::winutil::argv_to_command_line;
 use crate::winutil::format_last_error;
-use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::Context;
 use anyhow::Result;
@@ -112,11 +112,7 @@ pub fn spawn_conpty_process_as_user(
     env_map: &HashMap<String, String>,
     desktop: LaunchDesktop,
 ) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
-    let cmdline_str = argv
-        .iter()
-        .map(|arg| quote_windows_arg(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
     let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
