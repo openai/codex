@@ -94,11 +94,13 @@ async fn vertex_credential_file_is_retained_when_refreshing_after_401() -> Resul
     Ok(())
 }
 
-#[test_case("gpt-6.1-sol"; "sol")]
-#[test_case("gpt-6.1-terra"; "terra")]
+#[test_case("gpt-6.1-sol", false; "sol")]
+#[test_case("gpt-6.1-terra", false; "terra")]
+#[test_case("gpt-6.1-sol", true; "sol_incremental")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search(
     model: &str,
+    incremental_tools: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -132,6 +134,10 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search(
             config.model_provider_id = GCP_PROVIDER_ID.to_string();
             config.model_provider = provider;
             config.base_instructions = Some("Vertex test instructions".to_string());
+            config
+                .features
+                .set_enabled(Feature::IncrementalToolsLegacy, incremental_tools)
+                .expect("configure incremental tools on Vertex");
         })
         .build_with_auto_env(&server)
         .await?;
@@ -183,16 +189,22 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search(
         request.header("x-openai-internal-codex-responses-lite"),
         None
     );
-    assert!(
-        request.inputs_of_type("additional_tools").is_empty(),
-        "Vertex request must omit Responses Lite additional_tools inputs"
-    );
+    let additional_tools = request.inputs_of_type("additional_tools");
+    assert_eq!(additional_tools.len(), usize::from(incremental_tools));
     let body = request.body_json();
     assert_eq!(body["model"], model);
     assert_eq!(request.instructions_text(), "Vertex test instructions");
-    let tools = body["tools"]
+    let top_level_tools = body["tools"]
         .as_array()
         .context("Vertex request should include model tools")?;
+    let tools = if incremental_tools {
+        assert!(top_level_tools.is_empty());
+        additional_tools[0]["tools"]
+            .as_array()
+            .context("Vertex request should include incremental model tools")?
+    } else {
+        top_level_tools
+    };
     assert_eq!(
         test.codex.multi_agent_version(),
         Some(MultiAgentVersion::V2)
@@ -221,9 +233,14 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search(
         "Vertex request should expose client-side tool search: {tools:?}"
     );
     assert!(
-        tools
-            .iter()
-            .any(|tool| tool.get("name").and_then(Value::as_str) == Some("exec_command")),
+        if incremental_tools {
+            responses::namespace_child_tool(&additional_tools[0], "functions", "exec_command")
+                .is_some()
+        } else {
+            tools
+                .iter()
+                .any(|tool| tool.get("name").and_then(Value::as_str) == Some("exec_command"))
+        },
         "Vertex request should preserve the exec_command function tool: {tools:?}"
     );
 
