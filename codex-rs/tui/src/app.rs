@@ -892,13 +892,12 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
         if let TuiEvent::Mouse(mouse) = &event
-            && (self.key_chord_matcher.workspace_leader().is_some()
-                || self.chat_widget.quick_dial_menu_open())
+            && (self.key_chord_matcher.is_pending() || self.chat_widget.quick_dial_menu_open())
             && !matches!(
                 mouse.kind,
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
             )
-            && self.conversation_frame.hud_contains(*mouse)
+            && tui.shortcut_hud_contains(*mouse)
         {
             if matches!(mouse.kind, crossterm::event::MouseEventKind::Down(_)) {
                 self.cancel_pending_key_chord();
@@ -1438,6 +1437,7 @@ impl App {
             self.schedule_immediate_resize_reflow(tui);
             self.maybe_run_resize_reflow(tui, screen_size)?;
         }
+        let hud = self.workspace_hud(tui, screen_size.into());
         self.with_chat_widget_frame(screen_size.width, |desired_height, chat_widget| {
             let desired_height = if dashboard_visible {
                 screen_size.height
@@ -1445,7 +1445,7 @@ impl App {
                 desired_height
             };
             let mut rendered_area = Rect::default();
-            tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {
+            tui.draw_with_resize_reflow(desired_height, screen_size, hud, |frame| {
                 let area = frame.area();
                 rendered_area = area;
                 chat_widget.render(area, frame.buffer);

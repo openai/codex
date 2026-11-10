@@ -9,6 +9,7 @@ use super::make_test_app;
 use super::make_test_app_with_channels;
 use super::start_config_write_test_app_server;
 use super::test_thread_session;
+use crate::app::owned_transcript::tests::buffer_text;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::chatwidget::ReplayKind;
@@ -17,7 +18,6 @@ use crate::chatwidget::tests::helpers::set_active_cell;
 use crate::keymap::KeymapContext;
 #[cfg(unix)]
 use crate::pager_overlay::TranscriptHistoryState;
-use crate::test_support::test_path_display;
 use crate::tui::Tui;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ToolRequestUserInputOption;
@@ -162,24 +162,61 @@ async fn vim_buffer_jumps_route_default_chords_in_normal_and_operator_contexts()
 async fn global_chord_keeps_hints_and_completes_before_deadline() -> Result<()> {
     let (mut app, mut tui, mut app_server) = chord_app().await?;
 
-    press(&mut app, &mut tui, &mut app_server, ctrl('x')).await?;
+    let config = toml::from_str(
+        r#"
+        [global]
+        open_transcript = "f12 ctrl-t"
+        open_external_editor = "f12 e"
+        copy = "f12 c"
+        open_agents = "f12 a"
+        toggle_vim_mode = "f12 v"
+        toggle_fast_mode = "f12 f"
+        clear_terminal = "f12 k"
+    "#,
+    )?;
+    app.keymap = RuntimeKeymap::from_config(&config).expect("valid custom prefix");
+    app.chat_widget.apply_keymap_update(config, &app.keymap);
+    tui.set_owned_screen(/*owned*/ true)?;
+    tokio::time::pause();
+    press(&mut app, &mut tui, &mut app_server, KeyCode::F(12).into()).await?;
     assert!(app.key_chord_matcher.is_pending());
     assert!(app.overlay.is_none());
-    tokio::time::pause();
-    tokio::time::advance(std::time::Duration::from_millis(/*millis*/ 500)).await;
     app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
         .await?;
-    assert!(app.key_chord_matcher.is_pending());
-    insta::assert_snapshot!(
-        render_bottom_popup(&app.chat_widget, /*width*/ 80)
-            .replace(&test_path_display("/tmp/project"), "/tmp/project"),
-        @"
-    › Ask Codex to do anything
-
-      ⌃x then · ⌃t open transcript · ⌃u interrupt turn · esc cancel
-    "
+    assert_eq!(tui.shortcut_hud_area, None);
+    tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+        .await?;
+    let mut panel =
+        ratatui::buffer::Buffer::empty(tui.shortcut_hud_area.expect("visible chord guide"));
+    for pos in panel.area.positions() {
+        panel[pos] = tui.terminal.previous_buffer()[pos].clone();
+    }
+    insta::assert_snapshot!("pending_custom_chord", buffer_text(&panel));
+    let narrow_size = ratatui::layout::Size::new(/*width*/ 36, /*height*/ 9);
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize(narrow_size))
+        .await?;
+    let narrow = buffer_text(tui.terminal.previous_buffer());
+    assert!(
+        narrow.contains("… more shortcuts") && narrow.contains("Esc cancel"),
+        "{narrow}"
     );
+    tui.set_owned_screen(/*owned*/ false)?;
+    let inline_size = ratatui::layout::Size::new(/*width*/ 36, /*height*/ 5);
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Resize(inline_size))
+        .await?;
+    assert_eq!(tui.shortcut_hud_area, Some(tui.terminal.viewport_area));
+    insta::assert_snapshot!(
+        "pending_custom_chord_inline",
+        buffer_text(tui.terminal.previous_buffer())
+    );
+    tokio::time::advance(std::time::Duration::from_millis(/*millis*/ 650)).await;
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+        .await?;
+    assert!(!app.key_chord_matcher.is_pending());
+    assert_eq!(tui.shortcut_hud_area, None);
 
+    press(&mut app, &mut tui, &mut app_server, KeyCode::F(12).into()).await?;
     press(&mut app, &mut tui, &mut app_server, ctrl('t')).await?;
     assert!(!app.key_chord_matcher.is_pending());
     assert!(app.overlay.is_some());
@@ -855,10 +892,13 @@ async fn dashboard_chord_hint_survives_refresh_and_clears_on_cancel() -> Result<
     let before = render_bottom_popup(&app.chat_widget, /*width*/ 80);
     assert_eq!(app.route_key_chord_event(&mut tui, ctrl('x')), None);
     let _ = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
-    insta::assert_snapshot!(
-        render_bottom_popup(&app.chat_widget, /*width*/ 80).lines().last().unwrap(),
-        @"  ⌃x then  n new task  esc cancel"
-    );
+    tokio::time::pause();
+    tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
+    app.render_chat_widget_frame(
+        &mut tui,
+        ratatui::layout::Size::new(/*width*/ 80, /*height*/ 24),
+    )?;
+    assert!(buffer_text(tui.terminal.previous_buffer()).contains("New Task"));
     assert_eq!(
         app.route_key_chord_event(&mut tui, KeyCode::Esc.into()),
         None

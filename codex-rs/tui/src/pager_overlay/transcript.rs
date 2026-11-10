@@ -24,7 +24,6 @@ pub(crate) struct TranscriptOverlay {
     content_area: Rect,
     cursor: Option<(u16, u16)>,
     notice: Option<String>,
-    pub(crate) key_chord_hint: Option<Vec<(String, String)>>,
     pub(crate) browsing_footer: Option<Line<'static>>,
     find_transcript: Vec<crate::key_hint::KeyBinding>,
     select_transcript: Vec<crate::key_hint::KeyBinding>,
@@ -65,7 +64,6 @@ impl TranscriptOverlay {
             content_area: Rect::default(),
             cursor: None,
             notice: None,
-            key_chord_hint: None,
             browsing_footer: None,
             find_transcript: Vec::new(),
             select_transcript: Vec::new(),
@@ -116,11 +114,7 @@ impl TranscriptOverlay {
         .intersection(area);
         self.cursor = None;
         if browsing && let Some(footer) = &self.browsing_footer {
-            if let Some(items) = &self.key_chord_hint {
-                crate::bottom_pane::footer_hint_items_line(items).render(status, buf);
-            } else {
-                Widget::render(footer, status, buf);
-            }
+            Widget::render(footer, status, buf);
             return;
         }
         let hints = Rect::new(area.x, status.bottom(), area.width, /*height*/ 2).intersection(area);
@@ -165,11 +159,6 @@ impl TranscriptOverlay {
                     .render(status, buf);
             }
             self.render_hints(hints, buf);
-        }
-        if let Some(items) = &self.key_chord_hint {
-            let row = Rect::new(hints.x, hints.y, hints.width, 1).intersection(area);
-            Clear.render(row, buf);
-            crate::bottom_pane::footer_hint_items_line(items).render(row, buf);
         }
     }
 

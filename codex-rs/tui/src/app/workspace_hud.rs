@@ -1,50 +1,40 @@
-//! Show the active conversation’s leader shortcuts after the reveal delay.
+//! Present pending shortcuts with workspace-specific labels when pane controls are active.
 //! Dispatch stays with the originating control, including before the reveal delay elapses.
 
 use super::App;
 use crate::bottom_pane::ShortcutHud;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
-use std::time::Duration;
-
-/// Let fast two-key shortcuts complete before showing the panel.
-pub(super) const REVEAL_DELAY: Duration = Duration::from_millis(350);
 
 impl App {
     pub(super) fn workspace_hud(&self, tui: &crate::tui::Tui, area: Rect) -> Option<ShortcutHud> {
-        if !self.conversation_focus_available(tui) || self.conversation_frame.has_caller_inset() {
-            return None;
-        }
-        if self.chat_widget.quick_dial_menu_open() {
+        let workspace =
+            self.conversation_focus_available(tui) && !self.conversation_frame.has_caller_inset();
+        if workspace && self.chat_widget.quick_dial_menu_open() {
             return Some(self.chat_widget.quick_dial_hud());
         }
-        let leader = self.key_chord_matcher.workspace_leader()?;
-        let wait = REVEAL_DELAY.saturating_sub(leader.started_at.elapsed());
-        if !wait.is_zero() {
-            tui.frame_requester().schedule_frame_in(wait);
-            return None;
+        let pending = self
+            .key_chord_matcher
+            .visible_pending(&tui.frame_requester())?;
+        if !workspace
+            || (self.key_chord_matcher.workspace_leader().is_none()
+                && !pending
+                    .completions(&self.keymap.chords)
+                    .any(|binding| binding.action.is_side_pane()))
+        {
+            return pending.guide(&self.keymap.chords, |_| true);
         }
         let side = self.sidebar_has_focus();
         let can_switch = self.chooser_focus().is_some() || self.switchable_side_child().is_some();
         let can_size = super::side_pane::split_layout(self, tui, area).is_some();
         let can_resize = can_size && side && self.zoomed_thread.is_none();
-        let mut actions = Vec::<(&str, Vec<String>)>::new();
-        for binding in leader.completions(&self.keymap.chords) {
-            let action = binding.action.action;
-            let key = binding.chord.completion.display_label();
-            if let Some((_, keys)) = actions.iter_mut().find(|(id, _)| *id == action) {
-                keys.push(key);
-            } else {
-                actions.push((action, vec![key]));
-            }
-        }
         let mut groups = [
             ("Panes", Vec::new()),
             ("Move", Vec::new()),
             ("This pane", Vec::new()),
         ];
-        for (action, keys) in actions {
-            let (group, label) = match action {
+        for (action, keys) in pending.actions(&self.keymap.chords) {
+            let (group, label) = match action.action {
                 "focus_command_center" => (0, "Command Center"),
                 "focus_main_composer" => (0, "Main composer"),
                 "focus_sidebar_tabs" => (0, "Open in sidebar"),
@@ -84,7 +74,7 @@ impl App {
         }
         let origin = if side { "Sidebar" } else { "Conversation" };
         Some(ShortcutHud::leader(
-            format!("{} · {origin}", leader.prefix.display_label()),
+            format!("{} · {origin}", pending.prefix.display_label()),
             groups
                 .into_iter()
                 .filter_map(|(title, items)| {

@@ -130,7 +130,7 @@ impl App {
         let shape = if tui
             .link_hover
             .mouse
-            .is_some_and(|mouse| self.conversation_frame.hud_contains(mouse))
+            .is_some_and(|mouse| tui.shortcut_hud_contains(mouse))
             || !tui.is_owned_screen()
             || self.overlay.is_some()
         {

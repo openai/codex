@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests.rs
+expression: panel_text(&tui)
+---
+Presets   n · new   s · from settings   e · edit   d · delete   esc · close
+No presets saved. Press n to create one.

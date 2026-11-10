@@ -320,7 +320,7 @@ define_keymap_actions! {
 /// This is intentionally presentation-only: the returned string must never be
 /// parsed back into an action name, because underscores and casing are part of
 /// the stable config contract.
-pub(super) fn action_label(action: &str) -> String {
+pub(crate) fn action_label(action: &str) -> String {
     if action == "change_host" {
         return "Change Where to Run".to_string();
     }

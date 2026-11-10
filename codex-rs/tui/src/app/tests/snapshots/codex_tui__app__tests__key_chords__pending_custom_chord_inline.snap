@@ -1,0 +1,9 @@
+---
+source: tui/src/app/tests/key_chords.rs
+expression: buffer_text(tui.terminal.previous_buffer())
+---
+f12   Esc cancel
+a · Open Agents
+⌃t · Open Transcript
+e · Open External Editor
+… more shortcuts

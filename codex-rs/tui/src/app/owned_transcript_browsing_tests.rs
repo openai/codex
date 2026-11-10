@@ -336,6 +336,7 @@ async fn browsing_details_use_the_remapped_chord_without_cancelling_preview() ->
     app.keymap = RuntimeKeymap::from_config(&config).expect("valid transcript chord");
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
+    tokio::time::pause();
     for owned in [true, false] {
         tui.set_owned_screen(owned)?;
         app.handle_backtrack_esc_key(&mut tui);
@@ -380,12 +381,13 @@ async fn browsing_details_use_the_remapped_chord_without_cancelling_preview() ->
                 )
                 .await?;
                 if code == 'x' {
+                    tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
                     app.handle_tui_event(&mut tui, &mut server, TuiEvent::Draw)
                         .await?;
                     let text = buffer_text(
                         crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
                     );
-                    assert!(text.contains("page down"), "pending pager chord is visible");
+                    assert!(text.contains("Page Down"), "pending pager chord is visible");
                 }
             }
         }

@@ -152,7 +152,7 @@ impl App {
         {
             let point = (mouse.column, mouse.row).into();
             let frame = &self.conversation_frame;
-            if frame.hud_contains(*mouse) {
+            if tui.shortcut_hud_contains(*mouse) {
                 return false;
             }
             let chooser = frame.chooser_area();

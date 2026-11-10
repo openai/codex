@@ -129,9 +129,6 @@ impl AgentsOverviewView {
 
     pub(super) fn center_footer_hints(&self) -> Vec<(String, String)> {
         let state = self.state();
-        if let Some(items) = &state.key_chord_hint {
-            return items.clone();
-        }
         let mut hints = Vec::new();
         if !state.help
             && !state.editing_metadata()

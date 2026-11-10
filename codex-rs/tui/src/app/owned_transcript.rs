@@ -38,7 +38,6 @@ pub(super) struct ConversationFrame {
     pub(super) sidebar: Option<sidebar::SidebarLayout>,
     pub(super) chat_strip: Option<Rect>,
     pub(super) sidebar_input: Option<sidebar::SidebarInputState>,
-    pub(super) leader_hud: Option<Rect>,
     pub(super) close_buttons: [Rect; 2],
     /// A dialog can obscure neighboring content in the terminal's completed buffer.
     behind_dialog: Option<ratatui::buffer::Buffer>,
@@ -46,11 +45,6 @@ pub(super) struct ConversationFrame {
 }
 
 impl ConversationFrame {
-    pub(super) fn hud_contains(&self, mouse: crossterm::event::MouseEvent) -> bool {
-        self.leader_hud
-            .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
-    }
-
     pub(super) fn has_caller_inset(&self) -> bool {
         self.inset.is_some() && self.sidebar.is_none() && self.chat_strip.is_none()
     }
@@ -312,10 +306,13 @@ impl App {
                 .take()
                 .unwrap_or_else(|| tui.terminal.previous_buffer().clone())
         });
-        let hud = self.workspace_hud(tui, screen_size.into());
+        let mut hud = self.workspace_hud(tui, screen_size.into());
+        if let Some(hud) = &mut hud {
+            hud.viewport = caller_inset;
+        }
         prepared.floating_shortcuts = hud.is_some();
         let mut painted = PaintedConversation::default();
-        tui.draw(screen_size.height, |frame| {
+        tui.draw_with_shortcut_hud(screen_size.height, hud, |frame| {
             if let Some(backdrop) = backdrop {
                 let viewport = frame.area();
                 frame.image_placements.extend(
@@ -476,16 +473,6 @@ impl App {
                 self.conversation_frame.close_buttons = buttons;
             }
             self.paint_centered_dialog(frame);
-            self.conversation_frame.leader_hud = hud.map(|hud| {
-                let area = hud.render_overlay(frame.area(), frame.buffer);
-                if frame.cursor_position.is_some_and(|pos| area.contains(pos)) {
-                    frame.cursor_position = None;
-                }
-                frame
-                    .image_placements
-                    .retain(|image| !area.intersects(image.area));
-                area
-            });
         })?;
         self.finish_conversation(tui, painted)
     }
@@ -664,17 +651,8 @@ impl App {
                 && view.composer_gap_has_content(transcript_width, prepared.composer_hint.as_ref(), now);
         }
         // Refresh the hint using the rows just painted.
-        let mut footer = prompt_footer
+        let footer = prompt_footer
             .or_else(|| view.footer_with_navigation(footer_width, motion, latest_navigation));
-        if let Some(footer) = footer.as_mut().filter(|footer| footer.is_interactive)
-            && self.key_chord_matcher.workspace_leader().is_none()
-            && let Some(items) = self
-                .key_chord_matcher
-                .pending_hint_items(&self.keymap.chords, footer_width)
-            && let Some(progress) = footer.text.lines.last_mut()
-        {
-            *progress = crate::bottom_pane::footer_hint_items_line(&items);
-        }
         let bottom = chat_widget.bottom_pane_renderable(ComposerRenderOptions {
             footer: footer.as_ref(),
             composer_gap: composer_gap.as_ref(),

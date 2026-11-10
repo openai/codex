@@ -5030,39 +5030,38 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
     tokio::time::pause();
     keys!(prefix);
     side_frame(&mut app, &mut tui, even)?;
-    assert_eq!(app.conversation_frame.leader_hud, None);
-    tokio::time::advance(super::workspace_hud::REVEAL_DELAY).await;
+    assert_eq!(tui.shortcut_hud_area, None);
+    tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
     let composer = app.render_owned_transcript(&mut tui, even)?;
-    let panel_text = |app: &App, tui: &tui::Tui| {
-        let mut panel = ratatui::buffer::Buffer::empty(
-            app.conversation_frame
-                .leader_hud
-                .expect("visible shortcut panel"),
-        );
+    let panel_text = |tui: &tui::Tui| {
+        let mut panel =
+            ratatui::buffer::Buffer::empty(tui.shortcut_hud_area.expect("visible shortcut panel"));
         for pos in panel.area.positions() {
             panel[pos] = tui.terminal.previous_buffer()[pos].clone();
         }
         buffer_text(&panel)
     };
     app.transcript_view.jump_to_latest();
-    let hud = app
-        .conversation_frame
-        .leader_hud
-        .expect("visible shortcut panel");
+    let hud = tui.shortcut_hud_area.expect("visible shortcut panel");
     let scroll = mouse(MouseEventKind::ScrollUp, hud.left(), hud.top());
     boxed_future!(app.handle_tui_event(&mut tui, &mut app_server, scroll)).await?;
     app.render_owned_transcript(&mut tui, even)?;
     assert!(!app.transcript_view.is_following());
-    insta::assert_snapshot!("workspace_leader_hints", panel_text(&app, &tui));
+    insta::assert_snapshot!("workspace_leader_hints", panel_text(&tui));
     app.reconnect.offline = true;
     app.render_owned_transcript(&mut tui, even)?;
-    let offline = panel_text(&app, &tui);
+    let offline = panel_text(&tui);
     assert!(!offline.contains("Pane right") && offline.contains("Zoom pane"));
     app.reconnect.offline = false;
     let draft = app.chat_widget.composer_text_with_pending();
     keys!(KeyCode::Char('p').into());
     assert_eq!(app.render_owned_transcript(&mut tui, even)?, composer);
-    insta::assert_snapshot!("workspace_presets", panel_text(&app, &tui));
+    insta::assert_snapshot!("workspace_presets", panel_text(&tui));
+    let compact = Size::new(/*width*/ 80, /*height*/ 6);
+    tui.terminal = terminal_at(compact);
+    app.render_owned_transcript(&mut tui, compact)?;
+    insta::assert_snapshot!("workspace_presets_compact", panel_text(&tui));
+    tui.terminal = terminal_at(even);
     keys!(KeyCode::Esc.into());
     assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
     tokio::time::resume();
@@ -5409,13 +5408,12 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
 
     tokio::time::pause();
     keys!(prefix);
-    tokio::time::advance(super::workspace_hud::REVEAL_DELAY).await;
+    tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
     side_frame(&mut app, &mut tui, even)?;
-    insta::assert_snapshot!("sidebar_tab_shortcuts", panel_text(&app, &tui));
+    insta::assert_snapshot!("sidebar_tab_shortcuts", panel_text(&tui));
     side_frame(&mut app, &mut tui, Size::new(even.width, /*height*/ 10))?;
-    let overlap = app
-        .conversation_frame
-        .leader_hud
+    let overlap = tui
+        .shortcut_hud_area
         .unwrap()
         .intersection(app.conversation_frame.chat_strip.unwrap());
     assert!(!overlap.is_empty());

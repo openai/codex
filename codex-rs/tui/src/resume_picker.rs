@@ -794,11 +794,7 @@ async fn run_session_picker_event_loop(
             Some(ev) = tui_events.next() => {
                 alt.tui.clipboard.poll();
                 let screen_size = alt.tui.screen_size_for_event(&ev)?;
-                if matches!(&ev, TuiEvent::Paste(_) | TuiEvent::FocusLost)
-                    || matches!(&ev, TuiEvent::Mouse(mouse) if mouse.kind != crossterm::event::MouseEventKind::Moved)
-                {
-                    state.chord_matcher.cancel();
-                }
+                if alt.tui.dismiss_shortcut_on_input(&ev, &mut state.chord_matcher) { continue; }
                 let ev = if let TuiEvent::Key(key) = ev {
                     let Some(key) = state.route_key_chord(key) else {
                         continue;
@@ -1398,7 +1394,9 @@ impl PickerState {
     fn route_key_chord(&mut self, key: KeyEvent) -> Option<KeyEvent> {
         if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key))
         {
-            self.chord_matcher.cancel();
+            if self.chord_matcher.cancel() {
+                self.requester.schedule_frame();
+            }
             return Some(key);
         }
         let context = if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_search_editing())
@@ -1409,16 +1407,23 @@ impl PickerState {
         } else {
             crate::keymap::KeymapContext::List
         };
-        match self.chord_matcher.advance(
+        let was_pending = self.chord_matcher.is_pending();
+        let result = self.chord_matcher.advance(
             key,
             &self.keymap.chords,
             crate::keymap::KeymapContextSet::new(context),
-        ) {
+        );
+        if was_pending && !self.chord_matcher.is_pending() {
+            self.requester.schedule_frame();
+        }
+        match result {
             crate::keymap::KeyChordMatch::PassThrough => Some(key),
             crate::keymap::KeyChordMatch::Completed(dispatch_event) => Some(dispatch_event),
-            crate::keymap::KeyChordMatch::Pending(_)
-            | crate::keymap::KeyChordMatch::Cancelled
-            | crate::keymap::KeyChordMatch::Ignored => None,
+            crate::keymap::KeyChordMatch::Pending(_) | crate::keymap::KeyChordMatch::Cancelled => {
+                self.requester.schedule_frame();
+                None
+            }
+            crate::keymap::KeyChordMatch::Ignored => None,
         }
     }
 
@@ -1490,7 +1495,10 @@ impl PickerState {
             event,
             TuiEvent::Draw | TuiEvent::FocusGained | TuiEvent::Resume | TuiEvent::Resize(_)
         );
-        overlay.handle_event(tui, event)?;
+        let hud = self
+            .chord_matcher
+            .guide(&self.keymap.chords, &self.requester);
+        tui.with_shortcut_hud(hud, |tui| overlay.handle_event(tui, event))?;
         if draw
             && tui.is_terminal_focused()
             && let Some(receipt) = self.overlay_receipt.take()
@@ -2616,7 +2624,12 @@ fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState, screen_size: Size) -> std::io::Result<()> {
-    tui.draw(screen_size.height, |frame| layout::render(frame, state))
+    let hud = state
+        .chord_matcher
+        .guide(&state.keymap.chords, &state.requester);
+    tui.draw_with_shortcut_hud(screen_size.height, hud, |frame| {
+        layout::render(frame, state)
+    })
 }
 
 fn list_viewport_width(width: u16) -> u16 {
@@ -5915,8 +5928,8 @@ mod tests {
             None
         );
         assert!(state.chord_matcher.is_pending());
-        assert_eq!(state.route_key_chord(select), Some(select));
-        assert!(!state.chord_matcher.is_pending());
+        tokio::time::pause();
+        tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
         let mut tui = crate::tui::test_support::make_test_tui().expect("tui");
         assert!(receipts.try_recv().is_err());
         tui.defer_screen_size(Size::new(80, 24));
@@ -5928,6 +5941,14 @@ mod tests {
             matches!(receipts.try_recv(), Ok(PickerLoadRequest::Acknowledge { backend_id, thread_id: id, revision })
             if backend_id == owner && id == thread_id && revision == "observed")
         );
+        assert!(tui.shortcut_hud_area.is_some());
+        let (requester, mut frames) = FrameRequester::test_channel();
+        state.requester = requester;
+        assert_eq!(state.route_key_chord(select), Some(select));
+        assert!(!state.chord_matcher.is_pending());
+        frames
+            .try_recv()
+            .expect("redraw after a transcript key clears the guide");
         state
             .handle_overlay_event(
                 &mut tui,
@@ -5975,6 +5996,24 @@ mod tests {
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
         assert!(text.contains("BAtail"), "Find query: {text}");
+
+        state.overlay = None;
+        state.keymap = RuntimeKeymap::from_config(
+            &serde_json::from_value(serde_json::json!({"list": {"page_up": "leader p"}})).unwrap(),
+        )
+        .unwrap();
+        for completion in [KeyCode::Char('p'), KeyCode::F(12)] {
+            assert_eq!(
+                state.route_key_chord(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+                None
+            );
+            while frames.try_recv().is_ok() {}
+            let _ = state.route_key_chord(KeyEvent::new(completion, KeyModifiers::NONE));
+            assert!(!state.chord_matcher.is_pending());
+            frames
+                .try_recv()
+                .expect("redraw even when the routed key has no effect");
+        }
     }
 
     #[tokio::test]

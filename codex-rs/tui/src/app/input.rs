@@ -182,8 +182,8 @@ impl App {
             .advance(key_event, &self.keymap.chords, contexts)
         {
             crate::keymap::KeyChordMatch::PassThrough => {
-                if was_pending && !self.key_chord_matcher.is_pending() {
-                    self.set_key_chord_hint_override(/*items*/ None);
+                if was_pending {
+                    self.chat_widget.request_redraw();
                 }
                 Some(key_event)
             }
@@ -191,27 +191,17 @@ impl App {
                 if self.backtrack.primed && !self.backtrack.overlay_preview_active {
                     self.reset_backtrack_state();
                 }
-                if self.key_chord_matcher.workspace_leader().is_some() {
-                    tui.frame_requester()
-                        .schedule_frame_in(super::workspace_hud::REVEAL_DELAY);
-                    return None;
-                }
-                self.set_key_chord_hint_override(self.key_chord_matcher.pending_hint_items(
-                    &self.keymap.chords,
-                    tui.terminal.last_known_screen_size.width,
-                ));
-                tui.frame_requester()
-                    .schedule_frame_in(crate::keymap::KEY_CHORD_TIMEOUT);
+                tui.frame_requester().schedule_frame();
                 None
             }
             crate::keymap::KeyChordMatch::Completed(dispatch_event) => {
-                self.set_key_chord_hint_override(/*items*/ None);
+                self.chat_widget.request_redraw();
                 // A view transition needs the physical completion key to suppress held input.
                 self.routed_key_activation = Some(KeyBinding::from_event(key_event));
                 Some(dispatch_event)
             }
             crate::keymap::KeyChordMatch::Cancelled => {
-                self.set_key_chord_hint_override(/*items*/ None);
+                self.chat_widget.request_redraw();
                 None
             }
             crate::keymap::KeyChordMatch::Ignored => None,
@@ -224,27 +214,15 @@ impl App {
         }
         let contexts = self.key_chord_contexts(tui);
         if self.key_chord_matcher.expire(contexts) {
-            self.set_key_chord_hint_override(/*items*/ None);
+            self.chat_widget.request_redraw();
         }
     }
 
     pub(super) fn cancel_pending_key_chord(&mut self) {
         self.chat_widget.cancel_quick_dial_menu();
         if self.key_chord_matcher.cancel() {
-            self.set_key_chord_hint_override(/*items*/ None);
+            self.chat_widget.request_redraw();
         }
-    }
-
-    fn set_key_chord_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
-        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
-            overlay.key_chord_hint = items.clone();
-        }
-        self.agents_overview
-            .view_state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .key_chord_hint = items.clone();
-        self.chat_widget.set_footer_hint_override(items);
     }
 
     fn focused_sidebar_chooser(&self, tui: &tui::Tui) -> bool {

@@ -61,7 +61,8 @@ pub(crate) use bindings::configured_binding_for_action;
 pub(crate) use bindings::keymap_action_id;
 pub(crate) use bindings::keymap_action_ids;
 use bindings::runtime_action_bindings;
-pub(crate) use chords::KEY_CHORD_TIMEOUT;
+#[cfg(test)]
+pub(crate) use chords::CHORD_REVEAL_DELAY;
 pub(crate) use chords::KeyChordMatch;
 pub(crate) use chords::KeyChordMatcher;
 pub(crate) use chords::KeymapContextSet;

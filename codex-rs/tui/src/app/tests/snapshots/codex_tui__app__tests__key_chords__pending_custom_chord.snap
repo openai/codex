@@ -1,0 +1,15 @@
+---
+source: tui/src/app/tests/key_chords.rs
+expression: buffer_text(&panel)
+---
+─ f12 ──────────────────────────────────
+
+  a · Open Agents
+  ⌃t · Open Transcript
+  e · Open External Editor
+  c · Copy
+  k · Clear Terminal
+  v · Toggle Vim Mode
+  f · Toggle Fast Mode
+
+  Esc cancel

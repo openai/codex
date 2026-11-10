@@ -62,7 +62,7 @@ use crate::keymap::bindings_for_action;
 use crate::keymap::keymap_action_id;
 use crate::style::accent_color;
 use actions::KEYMAP_ACTIONS;
-use actions::action_label;
+pub(crate) use actions::action_label;
 use actions::binding_slot;
 use actions::format_action_binding_summary;
 #[cfg(test)]

@@ -165,7 +165,6 @@ pub(super) struct AgentsOverviewViewState {
     help: bool,
     pub(super) input: TextArea,
     pub(super) vim_enabled: bool,
-    pub(super) key_chord_hint: Option<Vec<(String, String)>>,
     pub(super) creating_worktree: bool,
     pub(super) refresh_failed: bool,
     pub(super) loading: bool,

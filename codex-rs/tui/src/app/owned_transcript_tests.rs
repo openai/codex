@@ -1216,6 +1216,7 @@ async fn find_owns_editor_chords_without_changing_the_composer_draft() -> Result
     .expect("independent query bindings");
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
+    tokio::time::pause();
     for owned in [true, false] {
         tui.set_owned_screen(owned)?;
         if !owned {
@@ -1251,6 +1252,7 @@ async fn find_owns_editor_chords_without_changing_the_composer_draft() -> Result
                 );
             }
             if app.key_chord_matcher.is_pending() {
+                tokio::time::advance(crate::keymap::CHORD_REVEAL_DELAY).await;
                 app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
                     .await?;
                 let rendered = buffer_text(
@@ -1261,18 +1263,17 @@ async fn find_owns_editor_chords_without_changing_the_composer_draft() -> Result
                     .lines()
                     .nth(usize::from(cursor.y))
                     .expect("visible query caret");
-                assert_eq!(query_row.trim(), "Find: alpha betax");
-                assert!(rendered.contains("h move line start"));
-                insta::assert_snapshot!(
-                    "owned_find_pending_chord_footer",
-                    rendered
-                        .lines()
-                        .skip(usize::from(cursor.y))
-                        .take(/*n*/ 2)
-                        .map(str::trim)
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                let hud = tui.shortcut_hud_area.expect("visible editor completions");
+                assert!(cursor.x < hud.x);
+                assert_eq!(
+                    query_row
+                        .chars()
+                        .take(usize::from(hud.x))
+                        .collect::<String>()
+                        .trim(),
+                    "Find: alpha betax"
                 );
+                assert!(rendered.contains("h · Move Line Start"), "{rendered}");
             }
         }
         app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)

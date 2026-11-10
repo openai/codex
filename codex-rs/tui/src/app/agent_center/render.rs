@@ -235,7 +235,7 @@ impl Renderable for AgentsOverviewView {
                 (failed && !state.loading).then(|| "Error loading tasks".to_owned())
             })
             .or_else(|| state.server_version_notice.clone());
-        if let Some(notice) = notice.filter(|_| !state.help && state.key_chord_hint.is_none()) {
+        if let Some(notice) = notice.filter(|_| !state.help) {
             line(notice.dim(), inset(layout.footer), buf);
         } else {
             line(hint_line(&footer_hints), inset(layout.footer), buf);

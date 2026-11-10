@@ -1,0 +1,9 @@
+---
+source: tui/src/startup_draft_tests.rs
+expression: text
+---
+─ f12 ──────────────────────────────────
+
+  e · Move Line End
+
+  Esc cancel
