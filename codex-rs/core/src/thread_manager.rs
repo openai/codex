@@ -299,6 +299,7 @@ pub enum McpRefreshReason {
     RuntimeAuthChanged,
     SelectedCapabilityRootsChanged,
     SessionMcpInputsChanged,
+    SessionPermissionsGranted,
     SkillMcpDependenciesAdded,
     TaskStartedExecutorDiscovery,
     TurnStartContributorPreparedMcp,

@@ -3810,7 +3810,7 @@ impl Session {
                     environment_id,
                     response.permissions.clone().into(),
                 );
-                self.mark_mcp_runtime_dirty();
+                self.mark_mcp_runtime_dirty(McpRefreshReason::SessionPermissionsGranted);
             }
         }
     }
