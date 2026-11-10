@@ -884,6 +884,7 @@ impl App {
         };
         tui.frame_requester().schedule_frame();
         if let Err(message) = result {
+            pending.message = None;
             pending.state = sidebar::CreationState::Failed {
                 message,
                 cleanup: None,
@@ -1032,7 +1033,6 @@ impl App {
                 }
             }
             Err(err) => {
-                self.restore_side_user_message(user_message.take());
                 self.chat_widget
                     .set_side_conversation_context_label(/*label*/ None);
                 self.chat_widget.add_error_message(err);

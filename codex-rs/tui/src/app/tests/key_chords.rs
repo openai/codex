@@ -1421,7 +1421,7 @@ async fn sidebar_chooser_preserves_the_parent_draft_and_starts_a_side_chat() -> 
             request,
             started: std::time::Instant::now(),
         },
-        message: Some(first_prompt.clone()),
+        message: Some(first_prompt),
     });
     app.finish_side_creation(
         &mut tui,
@@ -1471,15 +1471,10 @@ prepared.
         super::side_frame(&mut app, &mut tui, ratatui::layout::Size::new(30, 8))?
             .contains("Open in sidebar")
     );
-    assert_eq!(
-        app.chat_widget.composer_draft_snapshot().remote_image_urls,
-        first_prompt.remote_image_urls
-    );
-    let draft = app.chat_widget.composer_text_with_pending();
-    assert!(
-        draft.contains("first prompt") && draft.contains("second prompt"),
-        "{draft}"
-    );
+    let draft = app.chat_widget.composer_draft_snapshot();
+    assert!(draft.remote_image_urls.is_empty());
+    insta::assert_snapshot!(draft.text, @"second prompt
+parent draft!");
     // A page fits a chat with a subtitle or two title-only chats.
     let pane = app.sidebar_mut();
     for _ in 0..4 {
@@ -1506,7 +1501,7 @@ prepared.
     }
     Box::pin(press(&mut app, &mut tui, &mut server, ctrl('c'))).await?;
     assert_eq!(app.chooser_focus(), None);
-    assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
+    assert_eq!(app.chat_widget.composer_text_with_pending(), draft.text);
     tokio::time::resume();
     server.shutdown().await?;
     Ok(())
