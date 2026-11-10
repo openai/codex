@@ -42,6 +42,7 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_core_plugins::PluginMetricsSidecar;
 use codex_features::Feature;
+use codex_file_system::WindowsSandboxSelection;
 use codex_network_proxy::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
@@ -545,18 +546,28 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
         }
         // The executor selection is Disabled for non-Windows target paths, so this
         // preparation is a no-op for PowerShell on other platforms.
-        let command = prepare_powershell_command_for_windows_sandbox(
+        let windows_sandbox = executor_windows_sandbox_selection(
+            attempt.windows_sandbox_type,
+            attempt.windows_sandbox_level,
+            attempt.sandbox_cwd,
+        );
+        let mut command = prepare_powershell_command_for_windows_sandbox(
             &command,
             Some(&requested_shell.shell_type),
             attempt.sandbox_requested,
-            executor_windows_sandbox_selection(
-                attempt.windows_sandbox_type,
-                attempt.windows_sandbox_level,
-                attempt.sandbox_cwd,
-            ),
+            windows_sandbox,
             environment_is_remote,
         );
         let command = if matches!(requested_shell.shell_type, ShellType::PowerShell) {
+            if attempt.sandbox_requested
+                && windows_sandbox == WindowsSandboxSelection::Mxc
+                && let [_, .., flag, script] = command.as_mut_slice()
+                && flag.eq_ignore_ascii_case("-Command")
+            {
+                // Temporary workaround for https://github.com/PowerShell/PowerShell/issues/27899.
+                // Remove the prefix once supported PowerShell versions initialize $PWD under a denied ancestor.
+                script.insert_str(0, include_str!("../../../assets/tools/mxc_pwsh_cwd.ps1"));
+            }
             prefix_powershell_script_with_utf8(&command)
         } else {
             command
