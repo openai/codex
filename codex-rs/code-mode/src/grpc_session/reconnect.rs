@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::GrpcCodeModeSession;
 use super::GrpcCodeModeSessionProvider;
+use super::GrpcSessionOpenError;
 use super::SHUTDOWN_ERROR;
 use super::generation;
 use super::generation::GenerationDelegate;
@@ -66,7 +67,7 @@ impl ReconnectableSession {
         }
     }
 
-    pub(super) async fn initialize(&self) -> Result<(), String> {
+    pub(super) async fn initialize(&self) -> Result<(), GrpcSessionOpenError> {
         self.inner.get_or_open_binding().await.map(|_| ())
     }
 }
@@ -151,7 +152,10 @@ impl Drop for ReconnectableSession {
 
 impl ReconnectInner {
     async fn binding_for_request(&self, generation: Option<u64>) -> Result<SessionBinding, String> {
-        let binding = self.get_or_open_binding().await?;
+        let binding = self
+            .get_or_open_binding()
+            .await
+            .map_err(|error| error.to_string())?;
         if generation != Some(binding.generation) {
             return Err(concat!(
                 "The exec runtime was replaced. Stored values and running cells were lost. ",
@@ -162,9 +166,9 @@ impl ReconnectInner {
         Ok(binding)
     }
 
-    async fn get_or_open_binding(&self) -> Result<SessionBinding, String> {
+    async fn get_or_open_binding(&self) -> Result<SessionBinding, GrpcSessionOpenError> {
         if self.shutdown_requested.is_cancelled() {
-            return Err(SHUTDOWN_ERROR.to_string());
+            return Err(SHUTDOWN_ERROR.into());
         }
         if let Some(binding) = self.live_binding() {
             return Ok(binding);
@@ -173,13 +177,13 @@ impl ReconnectInner {
         let _opening_permit = tokio::select! {
             biased;
             _ = self.shutdown_requested.cancelled() => {
-                return Err(SHUTDOWN_ERROR.to_string());
+                return Err(SHUTDOWN_ERROR.into());
             }
             permit = self.opening_permit.acquire() => permit
                 .map_err(|_| "gRPC code-mode session opening coordinator closed".to_string())?,
         };
         if self.shutdown_requested.is_cancelled() {
-            return Err(SHUTDOWN_ERROR.to_string());
+            return Err(SHUTDOWN_ERROR.into());
         }
         if let Some(binding) = self.live_binding() {
             return Ok(binding);
@@ -196,7 +200,7 @@ impl ReconnectInner {
         let session = tokio::select! {
             biased;
             _ = self.shutdown_requested.cancelled() => {
-                return Err(SHUTDOWN_ERROR.to_string());
+                return Err(SHUTDOWN_ERROR.into());
             }
             session = self.provider.open_binding(&self.options, self.output_truncation.get().copied()) => session?,
         };
@@ -217,7 +221,7 @@ impl ReconnectInner {
         };
         if !published {
             let _ = wait_for_watch(binding.session.inner.request_shutdown()).await;
-            return Err(SHUTDOWN_ERROR.to_string());
+            return Err(SHUTDOWN_ERROR.into());
         }
         Ok(binding)
     }

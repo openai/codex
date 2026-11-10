@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::fmt::Formatter;
 use std::future::Future;
 use std::time::Duration;
 
@@ -6,6 +7,35 @@ use super::SessionInner;
 
 const TRANSPORT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_ERROR_BYTES: usize = 512;
+
+/// Terminal failure while establishing a new gRPC code-mode session.
+#[derive(Debug, PartialEq, Eq)]
+pub enum GrpcSessionOpenError {
+    /// Final status from OpenSession or the first read of its lease, with the bounded diagnostic.
+    AdmissionStatus { code: tonic::Code, message: String },
+    /// The client deadline elapsed while waiting for admission, including retries.
+    AdmissionTimeout(String),
+    /// Setup failed outside admission, for example during transport setup or tool subscription.
+    Other(String),
+}
+
+impl Display for GrpcSessionOpenError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AdmissionStatus { message, .. }
+            | Self::AdmissionTimeout(message)
+            | Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for GrpcSessionOpenError {}
+
+impl<T: Into<String>> From<T> for GrpcSessionOpenError {
+    fn from(message: T) -> Self {
+        Self::Other(message.into())
+    }
+}
 
 pub(super) async fn startup<T, E: Display>(
     operation: &str,
@@ -85,7 +115,7 @@ pub(super) fn failure(operation: &str, error: impl Display) -> String {
     message
 }
 
-async fn enforce<T, E>(
+pub(super) async fn enforce<T, E>(
     operation: &str,
     runtime_timeout: Duration,
     request: impl Future<Output = Result<T, E>>,
@@ -100,7 +130,7 @@ async fn enforce<T, E>(
     }
 }
 
-enum RequestError<E> {
+pub(super) enum RequestError<E> {
     Failed(E),
     TimedOut(String),
 }

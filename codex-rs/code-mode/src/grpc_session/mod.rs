@@ -27,6 +27,7 @@ use codex_code_mode_protocol::grpc;
 use codex_code_mode_protocol::grpc::code_mode_host_client::CodeModeHostClient;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use futures::TryFutureExt;
 use rand::Rng;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
@@ -35,6 +36,8 @@ use tokio_util::task::TaskTracker;
 use tonic::transport::Channel;
 use tracing::Instrument;
 
+pub use self::deadline::GrpcSessionOpenError;
+use self::deadline::RequestError;
 use self::operations::WaitSlot;
 use self::state::ClosedCell;
 use self::state::SessionState;
@@ -134,12 +137,22 @@ impl GrpcCodeModeSessionProvider {
         }
     }
 
+    /// Opens a new session and preserves the terminal admission status for the caller.
+    pub async fn open_session(
+        &self,
+        options: CodeModeSessionOptions,
+    ) -> Result<Arc<dyn CodeModeSession>, GrpcSessionOpenError> {
+        let session = Arc::new(reconnect::ReconnectableSession::new(self.clone(), options));
+        session.initialize().await?;
+        Ok(session)
+    }
+
     #[tracing::instrument(name = "code_mode.grpc.open_binding", level = "info", skip_all)]
     async fn open_binding(
         &self,
         options: &CodeModeSessionOptions,
         pinned_mode: Option<CodeModeOutputTruncation>,
-    ) -> Result<Arc<GrpcCodeModeSession>, String> {
+    ) -> Result<Arc<GrpcCodeModeSession>, GrpcSessionOpenError> {
         let client = deadline::startup("transport connection", self.transport.client()).await?;
         let requested_mode = pinned_mode.unwrap_or(options.output_truncation);
         let limits = &options.cell_execution_limits;
@@ -155,7 +168,8 @@ impl GrpcCodeModeSessionProvider {
             || limits.max_heap_size_bytes.is_some())
         .then_some(limits);
         let open_session_span = tracing::info_span!("code_mode.grpc.open_session");
-        let (lease, first, route) = deadline::startup("session opening", async {
+        let operation = "session opening";
+        let (lease, first, route) = deadline::enforce(operation, Duration::ZERO, async {
             let mut retries = 0;
             loop {
                 let mut request = tonic::Request::new(grpc::OpenSessionRequest {
@@ -211,9 +225,16 @@ impl GrpcCodeModeSessionProvider {
             }
         })
         .instrument(open_session_span.clone())
-        .await?;
+        .await
+        .map_err(|error| match error {
+            RequestError::Failed(status) => GrpcSessionOpenError::AdmissionStatus {
+                code: status.code(),
+                message: deadline::failure(operation, status),
+            },
+            RequestError::TimedOut(reason) => GrpcSessionOpenError::AdmissionTimeout(reason),
+        })?;
         let Some(grpc::session_event::Event::Opened(opened)) = first.event else {
-            return Err("gRPC code-mode session lease omitted its opening event".to_string());
+            return Err("gRPC code-mode session lease omitted its opening event".into());
         };
         validate_identifier(&opened.session_id, "session ID")?;
         let host_mode =
@@ -230,13 +251,13 @@ impl GrpcCodeModeSessionProvider {
         {
             return Err(format!(
                 "gRPC code-mode host selected {output_truncation:?} output truncation, requested {requested_mode:?}"
-            ));
+            ).into());
         }
         if pinned_mode.is_some_and(|previous| previous != output_truncation) {
             // Dropping the opening lease releases this incompatible session before subscribing.
             return Err(
                 "gRPC code-mode host changed the session output truncation mode on reconnect"
-                    .to_string(),
+                    .into(),
             );
         }
 
@@ -277,7 +298,7 @@ impl GrpcCodeModeSessionProvider {
                 Ok(response) => response,
                 Err(error) => {
                     let _ = wait_for_watch(inner.request_shutdown()).await;
-                    return Err(error);
+                    return Err(error.into());
                 }
             };
         inner.spawn_tool_subscription(response.into_inner());
@@ -313,11 +334,10 @@ impl CodeModeSessionProvider for GrpcCodeModeSessionProvider {
         &'a self,
         options: CodeModeSessionOptions,
     ) -> CodeModeSessionProviderFuture<'a> {
-        Box::pin(async move {
-            let session = Arc::new(reconnect::ReconnectableSession::new(self.clone(), options));
-            session.initialize().await?;
-            Ok(session as _)
-        })
+        Box::pin(
+            self.open_session(options)
+                .map_err(|error| error.to_string()),
+        )
     }
 }
 
