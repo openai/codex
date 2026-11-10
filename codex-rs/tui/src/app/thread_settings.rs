@@ -256,7 +256,10 @@ impl App {
     }
 }
 
-fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: &ThreadSettings) {
+pub(super) fn apply_thread_settings_to_session(
+    session: &mut ThreadSessionState,
+    settings: &ThreadSettings,
+) {
     if settings.collaboration_mode.mode == ModeKind::Default {
         session.model = settings.model.clone();
         session.reasoning_effort = settings.effort.clone();

@@ -127,6 +127,7 @@ pub(crate) async fn make_test_app() -> Box<App> {
         agent_navigation: AgentNavigationState::default(),
         agents_overview: Default::default(),
         side_threads: HashMap::new(),
+        saved_openings: Default::default(),
         sidebars: HashMap::new(),
         side_companions: HashMap::new(),
         zoomed_thread: None,

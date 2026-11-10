@@ -84,6 +84,7 @@ pub(super) struct SidebarPane {
     choices: Vec<SideChat>,
     // A snapshot of the visible rows at the last explicit chooser refresh.
     pub(super) latest_prompts: HashMap<ThreadId, String>,
+    pub(super) opening: Option<crate::sidebar_chooser::Opening>,
     pub(super) discovery: Discovery,
     pub(super) closing_chats: HashMap<ThreadId, JoinHandle<()>>,
     // Visit order is independent of the order in which tabs appear.
@@ -107,6 +108,9 @@ impl SidebarPane {
             }
             SidebarContent::Chooser => {}
         }
+        if content != SidebarContent::Chooser || focus == PaneFocus::Main {
+            self.opening = None;
+        }
         self.content = content;
         self.focus = Some(focus);
     }
@@ -114,6 +118,7 @@ impl SidebarPane {
     pub(super) fn chat_tabs(&self) -> ChatTabs<'_> {
         ChatTabs {
             discovery: &self.discovery,
+            opening: self.opening.as_ref(),
             ids: &self.tabs,
             choices: &self.choices,
             latest_prompts: &self.latest_prompts,
@@ -222,6 +227,7 @@ impl SidebarPane {
     }
 
     pub(super) fn hide(&mut self) {
+        self.opening = None;
         self.focus = None;
     }
 
@@ -249,6 +255,13 @@ impl SidebarPane {
     }
 
     pub(super) fn remove_choice(&mut self, id: ThreadId) {
+        if self
+            .opening
+            .as_ref()
+            .is_some_and(|opening| opening.target.child == id)
+        {
+            self.opening = None;
+        }
         if let Some(index) = self.chat_tabs().choice_index(id) {
             self.choices.remove(index - 1);
             if index < self.choice {

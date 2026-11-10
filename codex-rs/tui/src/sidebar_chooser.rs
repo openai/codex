@@ -88,14 +88,30 @@ pub(crate) fn footer(
     let (hints, actions): (Vec<_>, Vec<_>) = [
         (
             hint(ListAction::Accept).filter(|_| new_chat == NewChatState::Available),
-            if tabs.retry_row(choice) {
+            if tabs.retry_row(choice)
+                || tabs.opening.is_some_and(|o| {
+                    Some(o.target.child) == tabs.choice(choice)
+                        && matches!(o.state, OpenState::Failed(_))
+                })
+            {
                 "retry"
             } else {
                 "open"
             },
             Some(ChooserAction::Open(choice)),
         ),
-        (hint(ListAction::Cancel), "back", Some(ChooserAction::Back)),
+        (
+            hint(ListAction::Cancel),
+            if tabs
+                .opening
+                .is_some_and(|o| !matches!(o.state, OpenState::Failed(_)))
+            {
+                "cancel opening"
+            } else {
+                "back"
+            },
+            Some(ChooserAction::Back),
+        ),
         ((!movement.is_empty()).then_some(movement), "move", None),
         (hide, "hide pane", Some(ChooserAction::Hide)),
     ]
@@ -140,9 +156,21 @@ impl Discovery {
     }
 }
 
+pub(crate) struct Opening {
+    pub(crate) target: crate::app::thread_attachment::Target,
+    pub(crate) state: OpenState,
+}
+
+pub(crate) enum OpenState {
+    Waiting,
+    Loading(std::time::Instant),
+    Failed(String),
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ChatTabs<'a> {
     pub(crate) discovery: &'a Discovery,
+    pub(crate) opening: Option<&'a Opening>,
     pub(crate) ids: &'a [ThreadId],
     // Chooser index zero is reserved for New side chat.
     pub(crate) choices: &'a [SideChat],
@@ -457,8 +485,37 @@ pub(crate) fn paint(
         } else {
             title.into()
         };
-        let symbol = Span::styled("○ ", if selected { style } else { secondary });
-        let line = Line::from(vec![format!("{marker} ").into(), symbol, title]).style(fill);
+        let opening = tabs.opening.filter(|o| o.target.child == chat.id);
+        let symbol = if let Some(Opening {
+            state: OpenState::Loading(started),
+            ..
+        }) = opening
+        {
+            Span::styled(
+                crate::motion::loading_glyph(*started, sidebar_style.motion, sidebar_style.frames),
+                fill,
+            )
+        } else {
+            Span::styled("○", if selected { style } else { secondary })
+        };
+        let mut spans = vec![format!("{marker} ").into(), symbol, " ".into()];
+        if let Some(opening) = opening {
+            let status = match &opening.state {
+                OpenState::Waiting => "Waiting to open…".dim(),
+                OpenState::Loading(_) => "Opening…".dim(),
+                OpenState::Failed(error) => format!("Retry · {error}").red(),
+            };
+            let width = usize::from(row(area.y).width.saturating_sub(6));
+            let title = truncate_line_with_ellipsis_if_overflow(
+                Line::from(title),
+                width.saturating_sub(status.width()).max(width / 3),
+            );
+            spans.extend(title.spans);
+            spans.extend(["  ".into(), status]);
+        } else {
+            spans.push(title);
+        }
+        let line = Line::from(spans).style(fill);
         paint(
             lines.start,
             truncate_line_with_ellipsis_if_overflow(line, width),

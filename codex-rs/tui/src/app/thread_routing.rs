@@ -134,6 +134,9 @@ impl App {
         let Some(active_id) = self.active_thread_id else {
             return;
         };
+        if let Some(pane) = self.sidebars.get_mut(&Some(active_id)) {
+            pane.opening = None;
+        }
         let input_state = self.chat_widget.capture_thread_input_state();
         let recap_progress = self.recap.progress();
         if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
@@ -158,7 +161,12 @@ impl App {
             .keys()
             .copied()
             .chain(self.agent_navigation.tracked_thread_ids())
-            .filter(|id| !self.side_threads.contains_key(id))
+            .filter(|id| {
+                !self.side_threads.contains_key(id)
+                    && !self
+                        .saved_openings
+                        .preparing(*id, self.thread_event_channels.get(id))
+            })
         {
             self.agents_overview
                 .dispatched_requests
@@ -304,6 +312,12 @@ impl App {
         thread_id: ThreadId,
         request: &ServerRequest,
     ) -> std::io::Result<Option<ThreadInteractiveRequest>> {
+        if self
+            .saved_openings
+            .preparing(thread_id, self.thread_event_channels.get(&thread_id))
+        {
+            return Ok(None);
+        }
         let thread_label = Some(self.thread_label(thread_id));
         Ok(match request {
             ServerRequest::CommandExecutionRequestApproval { params, .. } => {
@@ -1032,7 +1046,11 @@ impl App {
                 continue;
             }
 
-            if store.lock().await.has_pending_thread_approvals() {
+            let pending = {
+                let store = store.lock().await;
+                store.attachment_prefix.is_none() && store.has_pending_thread_approvals()
+            };
+            if pending {
                 pending_thread_ids.insert(thread_id);
                 // Approval requests can arrive before the thread's metadata.
                 if self.agent_navigation.get(&thread_id).is_none() {
@@ -1164,7 +1182,10 @@ impl App {
             // Lifecycle responses already contain authoritative session state. Their rollout may
             // not exist until the first turn, so inferring it again can wait through reader retries.
             let already_has_session = match self.thread_event_channels.get(&thread_id) {
-                Some(channel) => channel.store.lock().await.session.is_some(),
+                Some(channel) => {
+                    let store = channel.store.lock().await;
+                    store.session.is_some() || store.attachment_prefix.is_some()
+                }
                 None => false,
             };
 

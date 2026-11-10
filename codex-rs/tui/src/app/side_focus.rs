@@ -7,7 +7,6 @@ use super::sidebar_close::Action::CloseTab;
 use super::*;
 use crate::activation_key_guard::ActivationKeySuppression;
 use crate::app_event::SideStartMode;
-use crate::app_server_session::SideChatStorage;
 use crate::bottom_pane::ScrollState;
 use crate::keymap::ListAction;
 use crate::sidebar_chooser;
@@ -326,6 +325,19 @@ impl App {
             self.guard_chooser_key(activation);
             return true;
         }
+        if matches!(action, ChooserAction::Back)
+            && pane
+                .opening
+                .take()
+                .is_some_and(|o| !matches!(o.state, sidebar_chooser::OpenState::Failed(_)))
+        {
+            self.guard_chooser_key(activation);
+            return true;
+        }
+        if let ChooserAction::Open(index) = action {
+            pane.choice = index;
+        }
+        pane.opening = None;
         if let Some(creation) = &pane.creation {
             match (&creation.state, open) {
                 (sidebar::CreationState::Waiting { .. }, true) => {}
@@ -373,20 +385,16 @@ impl App {
                 }
                 let saved = !pane.chat_tabs().ids.contains(&id);
                 if saved && let Some(parent) = self.current_displayed_thread_id() {
-                    self.abandoned_side_threads.remove(&id);
-                    self.side_threads.insert(
-                        id,
-                        side::SideThreadState {
-                            storage: SideChatStorage::Attached,
-                            ..side::SideThreadState::new(parent)
-                        },
-                    );
-                }
-                if let Err(err) = self.select_agent_thread(tui, server, id).await {
+                    let target = super::sidebar_loading::Target {
+                        backend_id: server.backend_id(),
+                        parent,
+                        child: id,
+                    };
+                    if let Err(err) = Box::pin(self.open_saved_chat(tui, server, target)).await {
+                        self.chat_widget.add_error_message(err.to_string());
+                    }
+                } else if let Err(err) = self.select_agent_thread(tui, server, id).await {
                     self.chat_widget.add_error_message(err.to_string());
-                }
-                if saved && self.current_displayed_thread_id() != Some(id) {
-                    self.side_threads.remove(&id);
                 }
             } else if open && let Some(parent_thread_id) = self.chat_widget.thread_id() {
                 self.app_event_tx.send(AppEvent::StartSide {

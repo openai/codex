@@ -373,6 +373,7 @@ impl App {
         bootstrap: AppServerBootstrap,
     ) {
         let outgoing = backends.displayed_owner();
+        self.saved_openings.abandon();
         self.capture_session_inputs().await;
         for channel in self.thread_event_channels.values_mut() {
             channel.backend_id.get_or_insert(outgoing);

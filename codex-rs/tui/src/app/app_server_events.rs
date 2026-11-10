@@ -265,8 +265,8 @@ impl App {
             return;
         }
         // Hidden helper threads must not enter visible thread routing or overview refreshes.
-        if let ServerNotificationThreadTarget::Thread(thread_id) =
-            server_notification_thread_target(&notification)
+        let target = server_notification_thread_target(&notification);
+        if let ServerNotificationThreadTarget::Thread(thread_id) = target
             && let Some(sender) = self.temporary_structured_requests.get(&thread_id)
         {
             if matches!(
@@ -492,8 +492,16 @@ impl App {
             _ => {}
         }
 
-        match server_notification_thread_target(&notification) {
+        match target {
             ServerNotificationThreadTarget::Thread(thread_id) => {
+                if self.saved_openings.observe(
+                    app_server_client.backend_id(),
+                    thread_id,
+                    self.thread_event_channels.get(&thread_id),
+                    &notification,
+                ) {
+                    return;
+                }
                 if self.current_displayed_thread_id() != Some(thread_id)
                     && let ServerNotification::ItemCompleted(item) = &notification
                     && let ThreadItemPayload::UserMessage {

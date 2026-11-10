@@ -99,6 +99,7 @@ pub(super) struct ThreadEventStore {
     pub(super) session: Option<ThreadSessionState>,
     pub(super) turns: Vec<Turn>,
     pub(super) buffer: VecDeque<ThreadBufferedEvent>,
+    pub(super) attachment_prefix: Option<usize>,
     pub(super) pending_interactive_replay: PendingInteractiveReplayState,
     pub(super) active_turn_id: Option<String>,
     // Replay still needs the current turn's start after it falls out of the event buffer.
@@ -150,6 +151,7 @@ impl ThreadEventStore {
             session: None,
             turns: Vec::new(),
             buffer: VecDeque::new(),
+            attachment_prefix: None,
             pending_interactive_replay: PendingInteractiveReplayState::default(),
             active_turn_id: None,
             evicted_active_turn: None,
@@ -184,8 +186,15 @@ impl ThreadEventStore {
     }
 
     pub(super) fn rebase_buffer_after_session_refresh(&mut self) {
+        let tail = self
+            .attachment_prefix
+            .take()
+            .map(|prefix| self.buffer.split_off(prefix.min(self.buffer.len())));
         self.buffer.retain_mut(Self::event_survives_session_refresh);
         self.buffered_agent_message_delta_bytes = 0;
+        for event in tail.into_iter().flatten() {
+            self.push_buffered_event(event);
+        }
     }
 
     pub(super) fn set_turns(&mut self, turns: Vec<Turn>) {
@@ -657,6 +666,10 @@ impl ThreadEventChannel {
             backend_id: None,
             attachment: ThreadEventAttachment::Live,
         }
+    }
+
+    pub(super) fn mark_live(&mut self) {
+        self.attachment = ThreadEventAttachment::Live;
     }
 
     pub(super) fn mark_replay_only(&mut self) {

@@ -505,6 +505,16 @@ pub(crate) enum AppEvent {
         target: ThreadId,
     },
 
+    SavedChatPrepared {
+        target: crate::app::sidebar_loading::Target,
+        request: uuid::Uuid,
+        result: Box<crate::app::thread_attachment::Prepared>,
+    },
+    SavedChatReleased {
+        target: crate::app::sidebar_loading::Target,
+        request: uuid::Uuid,
+    },
+    StartQueuedSavedChat,
     SavedSideChatsLoaded {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,

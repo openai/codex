@@ -376,13 +376,21 @@ impl AppServerSession {
             return Ok(());
         }
 
-        let page = self
-            .thread_turns_page(thread_id, turn_cursor, INITIAL_HISTORY_TURN_LIMIT)
-            .await?;
-        thread.turns = page.data.into_iter().rev().collect();
+        // A missing cursor in a paginated saved-chat resume means this stream was
+        // empty when subscribed. An unanchored page would also contain later live events.
+        let anchored = self.attachment_subscribed == Some(true);
+        let next_turn_cursor = if !anchored || turn_cursor.is_some() {
+            let page = self
+                .thread_turns_page(thread_id, turn_cursor, INITIAL_HISTORY_TURN_LIMIT)
+                .await?;
+            thread.turns = page.data.into_iter().rev().collect();
+            page.next_cursor
+        } else {
+            None
+        };
         let mut state = ThreadHistoryPagination {
             history_mode: ThreadHistoryMode::Paginated,
-            next_turn_cursor: page.next_cursor,
+            next_turn_cursor,
             next_item_cursor: item_cursor,
             ..ThreadHistoryPagination::default()
         };
@@ -392,6 +400,10 @@ impl AppServerSession {
         let mut scanned_items = 0;
         let mut rendered_rows = 0;
         while let Some(limit) = budget.next_page_size(rendered_rows, scanned_items) {
+            if anchored && state.next_item_cursor.is_none() {
+                break;
+            }
+
             let page = self
                 .thread_items_page(
                     thread_id,

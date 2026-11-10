@@ -2422,7 +2422,8 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths_sc
         resumed["config"]["mcp_servers.codex_tui"],
         starts[0]["config"]["mcp_servers.codex_tui"]
     );
-    Box::pin(app_server.resume_thread(
+    let mut attachment = app_server.attachment_view(delegation_source);
+    Box::pin(attachment.resume_thread(
         &app.local_settings,
         app.config.clone(),
         delegation_source,

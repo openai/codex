@@ -105,6 +105,13 @@ impl ChatWidget {
             .suppress_current_view_key_until_release(key, activated_at, suppression);
     }
 
+    /// Held keys belong to the terminal input stream across conversation switches.
+    pub(crate) fn inherit_view_transition_key_guard(&mut self, previous: &mut Self) {
+        if let Some(guard) = previous.bottom_pane.view_transition_key_guard.take() {
+            self.bottom_pane.view_transition_key_guard = Some(guard);
+        }
+    }
+
     pub(crate) fn consume_view_transition_key_event(&mut self, key_event: KeyEvent) -> bool {
         self.bottom_pane
             .consume_view_transition_key_event(key_event)

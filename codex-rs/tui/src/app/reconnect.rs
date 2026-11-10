@@ -233,6 +233,10 @@ impl App {
                 owner.reset_realtime_conversation();
             }
             self.retire_background_voice();
+            self.saved_openings.abandon();
+            if let Some(pane) = self.sidebars.get_mut(&self.sidebar_parent()) {
+                pane.opening = None;
+            }
             self.reconnect.offline = true;
             self.account_email_request_id = None;
             // Cached blank sessions are usable only while this connection owns a subscription.

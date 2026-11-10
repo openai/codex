@@ -93,6 +93,8 @@ impl App {
                     | AppEvent::SideCreated { .. }
                     | AppEvent::SideChatRemovalFinished { .. }
                     | AppEvent::SideChatArchived { .. }
+                    | AppEvent::SavedChatPrepared { .. } | AppEvent::SavedChatReleased { .. }
+                    | AppEvent::StartQueuedSavedChat
                     | AppEvent::SavedSideChatsLoaded { .. }
                     | AppEvent::SideReplayFinished(_)
                     | AppEvent::ResetTranscriptForThreadSwitch
@@ -3447,6 +3449,20 @@ impl App {
             AppEvent::SideChatArchived { backend_id, target } => {
                 if backend_id == app_server.backend_id() {
                     sidebar_close::forget_archived(self, tui, app_server, target).await?;
+                }
+            }
+            AppEvent::SavedChatPrepared { target, request, result } => {
+                Box::pin(self.finish_saved_chat(tui, app_server, target, request, *result)).await?;
+            }
+            AppEvent::SavedChatReleased { target, request } => {
+                self.finish_saved_release(target, request);
+            }
+            AppEvent::StartQueuedSavedChat => {
+                if let Some(target) = self.waiting_saved_chat()
+                    && target.backend_id == app_server.backend_id()
+                    && self.wants_saved_chat(target)
+                {
+                    Box::pin(self.open_saved_chat(tui, app_server, target)).await?;
                 }
             }
             AppEvent::SavedSideChatsLoaded { backend_id, parent, request, result } => {

@@ -151,6 +151,20 @@ fn thread_event_store_coalesces_only_adjacent_matching_agent_message_deltas() {
     );
     assert!(!store.has_pending_thread_approvals());
 
+    // A refreshed snapshot already includes earlier deltas. Later deltas for the same item
+    // must still replay, even if buffering the live turn evicts an event before the boundary.
+    let mut installing = ThreadEventStore::new(/*capacity*/ 2);
+    installing.push_notification(delta("old", "old", "evicted"));
+    installing.push_notification(delta("turn", "item", "already in snapshot"));
+    installing.attachment_prefix = Some(installing.buffer.len());
+    installing.push_notification(delta("turn", "item", "during"));
+    installing.push_notification(delta("turn", "item", " install"));
+    installing.rebase_buffer_after_session_refresh();
+    assert_eq!(
+        snapshot_events(&installing),
+        vec![serde_json::to_value(delta("turn", "item", "during install")).unwrap()]
+    );
+
     let mut store = ThreadEventStore::new(/*capacity*/ THREAD_EVENT_CHANNEL_CAPACITY);
     store.push_request(exec_approval_request(
         thread_id,

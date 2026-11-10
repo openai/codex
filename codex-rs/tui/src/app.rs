@@ -282,10 +282,12 @@ mod side_focus;
 mod side_pane;
 mod sidebar;
 mod sidebar_close;
+pub(crate) mod sidebar_loading;
 mod startup;
 pub(crate) mod startup_bootstrap;
 mod startup_prompts;
 mod startup_warnings;
+pub(crate) mod thread_attachment;
 mod thread_event_buffer;
 mod thread_events;
 mod thread_goal_actions;
@@ -661,6 +663,7 @@ pub(crate) struct App {
     agent_navigation: AgentNavigationState,
     agents_overview: agents_overview::AgentsOverviewState,
     side_threads: HashMap<ThreadId, SideThreadState>,
+    saved_openings: sidebar_loading::Openings,
     sidebars: HashMap<Option<ThreadId>, sidebar::SidebarPane>,
     /// A parked parent view survives child cleanup until its own replay finishes.
     side_companions: HashMap<ThreadId, SideCompanion>,

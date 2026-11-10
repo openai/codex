@@ -1,0 +1,25 @@
+---
+source: tui/src/app/tests/saved_chat_loading_tests.rs
+expression: "format!(\"Waiting\\n{waiting}\\n\\nRetry\\n{retry}\")"
+---
+Waiting
+                                                                  +
+ Open in sidebar
+   + New side chat                        Start from the main chat
+ Side chats  4
+   ○ Side chat 1
+   ○ Side chat 2
+   ○ Side chat 3
+ › ○ Side chat 4  Waiting to open…
+ enter open · esc cancel opening · ↑/↓ move · ⌃x - hide pane
+
+Retry
+                                                                  +
+ Open in sidebar
+   + New side chat                        Start from the main chat
+ Side chats  4
+   ○ Side chat 1
+   ○ Side chat 2
+   ○ Side chat 3
+ › ○ Side chat 4  Retry · thread not loaded: offline
+ enter retry · esc back · ↑/↓ move · ⌃x - hide pane
