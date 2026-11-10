@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+expression: frame(&buf)
+---
+|› /model     choose what model and reasoning effort to use                      |
+|  /memories  configure memory use and generation                                |
+|  /mention   mention a file                                                     |
+|                                                                                |
+|› /m                                                                            |
+|                                                                                |
+|  one…                                                                          |

@@ -605,6 +605,7 @@ async fn clipped_voice_composer_keeps_the_draft_and_cursor_visible() {
 
     insta::assert_snapshot!(layouts.join("\n\n"), @"
     5 rows:
+    voice ● listening     f9 mute     /voice stop
     › typed
 
     6 rows:

@@ -28,6 +28,7 @@ fn render(
 ) -> (Buffer, Option<(u16, u16)>) {
     let options = composer.resolve_render_options(ComposerRenderOptions {
         footer,
+        separate_status_line: true,
         ..ComposerRenderOptions::default()
     });
     let width = 60;
@@ -75,6 +76,7 @@ fn retained_command_suggestions_yield_paint_and_cursor_to_find() {
     let options = composer.resolve_render_options(ComposerRenderOptions {
         footer: Some(&footer),
         command_popup_placement: CommandPopupPlacement::Hidden,
+        separate_status_line: true,
         ..ComposerRenderOptions::default()
     });
     let mut frames = Vec::new();
@@ -122,7 +124,10 @@ fn copying_from_find_preserves_the_query_above_selection_feedback() {
     );
     let (buffer, cursor) = render(&composer, Some(&footer));
     assert_eq!(cursor, None);
-    insta::assert_snapshot!("transcript_find_copy_footer", text(&buffer));
+    let output = text(&buffer);
+    assert!(output.contains("Find: needle"));
+    assert!(output.contains("Copied selection to clipboard"));
+    insta::assert_snapshot!("transcript_find_copy_footer", output);
 }
 
 #[test]

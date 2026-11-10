@@ -31,11 +31,13 @@ fn composer_mouse_edits_flush_typing_and_reconcile_placeholders() {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 4,
     );
-    composer.render(area, &mut Buffer::empty(area));
+    let mut buf = Buffer::empty(area);
+    composer.render(area, &mut buf);
     let (x, y) = composer.cursor_pos(area).unwrap();
+    assert_eq!(buf[(x - 5, y)].symbol(), "h");
     mouse(&mut composer, area, Down(Left), x - 5, y);
     composer.insert_str("X");
-    assert_eq!(composer.current_text(), "hello\nXworld");
+    assert_eq!(composer.current_text(), "Xhello\nworld");
     composer.handle_paste("z".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1));
     for path in [Some("first.png"), Some("second.png"), None] {
         composer.render(area, &mut Buffer::empty(area));

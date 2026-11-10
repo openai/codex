@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+expression: frame(&buffer)
+---
+|       |
+|› a    |
+|  b    |
+|  c    |
+|       |
+|  one  |
+|  two… |

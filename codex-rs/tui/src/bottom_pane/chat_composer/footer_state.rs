@@ -80,7 +80,7 @@ pub(crate) struct ComposerRenderOptions<'a> {
     pub(crate) working_tip: Option<&'a crate::turn_tip::TurnTip>,
     pub(crate) warning_count: usize,
     pub(crate) textarea_right_reserve: u16,
-    /// The host is using the separate fullscreen transcript layout.
+    /// Fullscreen scales the footer cap with the composer budget. Inline scrollback allows two rows.
     pub(crate) separate_status_line: bool,
     /// A centered dialog owns input while the composer is painted behind it.
     pub(crate) is_dialog_backdrop: bool,
@@ -289,19 +289,48 @@ impl super::ChatComposer {
         if options.is_dialog_backdrop {
             return 0;
         }
-        if self.show_warning_notice(options) || self.shortcuts_above_composer(options) {
+        // The inactive pane keeps its bottom hints row blank.
+        if options.unfocused || self.shortcuts_above_composer(options) {
             return 1;
         }
-        options
-            .footer
-            .map_or_else(
-                || {
-                    self.custom_footer_height()
-                        .unwrap_or_else(|| footer_height(&self.hint_footer_props(), width))
-                },
-                |footer| footer.text.height().try_into().unwrap_or(u16::MAX),
+        if self.footer.status_line_enabled
+            && options.footer.is_none()
+            && self.custom_footer_height().is_none()
+            && matches!(
+                self.footer_mode(),
+                FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
             )
-            .max(u16::from(options.separate_status_line))
+        {
+            let mode = self.footer_mode();
+            let navigation = mode == FooterMode::ComposerEmpty
+                && !self.is_in_paste_burst()
+                && (self.agents_navigation_available()
+                    || self.footer.toggle_shortcuts_key.is_some());
+            let queue = mode == FooterMode::ComposerHasDraft
+                && self.is_task_running
+                && self.footer.queue_key.is_some();
+            return u16::from(
+                self.warning_notice_layout(
+                    super::inset_footer_hint_area(Rect::new(0, 0, width, 1)),
+                    options,
+                )
+                .is_some()
+                    || navigation
+                    || queue
+                    || self
+                        .mode_indicator_line(/*show_cycle_hint*/ false)
+                        .is_some()
+                    || self.shell_mode_footer_line().is_some()
+                    || self.footer.side_conversation_context_label.is_some(),
+            );
+        }
+        options.footer.map_or_else(
+            || {
+                self.custom_footer_height()
+                    .unwrap_or_else(|| footer_height(&self.hint_footer_props(), width))
+            },
+            |footer| footer.text.height().try_into().unwrap_or(u16::MAX),
+        )
     }
 
     pub(super) fn render_transcript_footer(

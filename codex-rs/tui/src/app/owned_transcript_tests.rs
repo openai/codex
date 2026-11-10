@@ -647,7 +647,8 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
         app.transcript_view.link_at(column, row).as_deref(),
         Some("https://example.com/docs")
     );
-    assert_eq!(tui.terminal.last_known_cursor_pos, caret);
+    let copied_cursor = tui.terminal.last_known_cursor_pos;
+    assert_eq!((copied_cursor.x, copied_cursor.y + 1), (caret.x, caret.y));
     let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
     for pos in Rect::from(outer)
         .positions()
@@ -1895,11 +1896,16 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
         assert!(!app.handle_composer_copy_event(&mut tui, event, |_, _| unreachable!()));
     }
 
+    // The selection hint can move the draft by one row.
+    app.render_owned_transcript(&mut tui, size)?;
+    let y = row_containing(&tui, "hellox world");
     // A fresh composer click takes ownership away from the transcript selection.
     app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Down(Left), x, y))?;
     assert!(!app.transcript_view.has_active_interaction());
     app.chat_widget.apply_external_edit("/".into());
     assert!(!app.chat_widget.no_modal_or_popup_active());
+    app.render_owned_transcript(&mut tui, size)?;
+    let y = tui.terminal.last_known_cursor_pos.y;
     assert!(app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Down(Left), x, y))?);
     app.handle_owned_transcript_event(&mut tui, &mut server, &mouse(Drag(Left), x + 1, y))?;
     assert!(app.chat_widget.no_modal_or_popup_active());

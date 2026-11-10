@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+expression: "frames.join(\"\\n\\n\")"
+---
+height 8
+|                                |
+|› [Image #1]draft               |
+|                                |
+|  one…                          |
+|     Plan mode (⇧tab to cycle)  |
+
+height 9
+|                                |
+|  [Image                        |
+|  #1]                           |
+|                                |
+|                                |
+|› [Image #1]draft               |
+|                                |
+|  one…                          |
+|     Plan mode (⇧tab to cycle)  |

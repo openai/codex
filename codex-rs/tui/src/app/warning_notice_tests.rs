@@ -28,7 +28,7 @@ async fn warning_notice_keeps_details_in_transcript_and_preserves_draft() -> Res
     app.chat_widget
         .apply_external_edit("draft stays here".into());
     let before = app.render_owned_transcript(&mut tui, size)?;
-    let cursor = tui.terminal.last_known_cursor_pos;
+    let original_cursor = tui.terminal.last_known_cursor_pos;
     for message in [
         "MCP example handshake failed",
         "MCP startup incomplete (example)",
@@ -50,8 +50,17 @@ async fn warning_notice_keeps_details_in_transcript_and_preserves_draft() -> Res
             )),
         );
     }
-    assert_eq!(app.render_owned_transcript(&mut tui, size)?, before);
-    assert_eq!(tui.terminal.last_known_cursor_pos, cursor);
+    let after = app.render_owned_transcript(&mut tui, size)?;
+    let cursor = tui.terminal.last_known_cursor_pos;
+    assert_eq!(
+        (after.bottom(), after.height, cursor.x, cursor.y + 1),
+        (
+            before.bottom(),
+            before.height + 1,
+            original_cursor.x,
+            original_cursor.y
+        )
+    );
     let live = screen(&tui);
     assert!(live.contains("⚠ 2 warnings"));
     let shortcut = app

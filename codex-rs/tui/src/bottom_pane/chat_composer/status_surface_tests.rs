@@ -66,7 +66,11 @@ fn extension_status_line_clips_links_to_footer_layout() {
                 .collect();
             assert_eq!(
                 linked_text,
-                if width == 12 { "PR#" } else { "PR #42" },
+                match (width, separate_status_line) {
+                    (12, false) => "P",
+                    (12, true) => "PR#",
+                    _ => "PR #42",
+                },
                 "{buffer:?}"
             );
             assert!(linked.iter().all(|cell| !cell.symbol().contains('…')));
@@ -112,6 +116,21 @@ fn render_status(
     (buf, rows)
 }
 
+fn frame(buffer: &Buffer) -> String {
+    buffer
+        .content
+        .chunks(usize::from(buffer.area.width))
+        .map(|row| {
+            let row = row
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>();
+            format!("|{}|", strip_osc8(&row))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn extension_uses_the_full_width_after_resize() {
     let mut composer = composer();
@@ -131,7 +150,7 @@ fn extension_uses_the_full_width_after_resize() {
     for fullscreen in [false, true] {
         for (width, mode, expected_rows) in [
             (16, None, 1),
-            (15, None, 2),
+            (15, None, if fullscreen { 2 } else { 1 }),
             (16, None, 1),
             (27, Some(CollaborationModeIndicator::Plan), 1),
             (19, Some(CollaborationModeIndicator::Plan), 1),
@@ -156,17 +175,61 @@ fn extension_uses_the_full_width_after_resize() {
 }
 
 #[test]
-fn status_rows_yield_to_the_composer_and_shared_footer_overrides() {
+fn provider_status_and_hints_use_separate_rows() {
+    let mut composer = composer();
+    let tree: crate::ui_tree::UiTree = r#"{"type":"row","props":{"wrap":"wrap","gap":2},"children":[{"type":"bold","children":["codex-internal"]},"feat/statusline","Build 1042","128 tests passed","Deploy ready"]}"#.parse().unwrap();
+    composer.set_status_line(Some(tree.into()));
+    composer.set_collaboration_modes_enabled(/*enabled*/ true);
+    composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
+    let options = ComposerRenderOptions {
+        warning_count: 2,
+        ..Default::default()
+    };
+    let frames = [22, 4].map(|height| {
+        let area = Rect::new(0, 0, 84, height);
+        let (buffer, _) = render_status(&composer, area, options);
+        let rect = composer.footer.warning_notice_area.get().unwrap();
+        assert_eq!(buffer[(rect.x, rect.y)].symbol(), "⚠");
+        let layout = composer.layout_with_options(area, options);
+        (layout.status.y..layout.footer.bottom())
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    insta::assert_snapshot!(frames.join("\n---\n"));
+}
+
+#[test]
+fn status_rows_respect_host_budget_and_yield_to_the_draft() {
     let mut composer = composer();
     let tree: crate::ui_tree::UiTree = r#""one\ntwo\nthree\nfour\nfive""#.parse().unwrap();
     composer.set_status_line(Some(FooterContent::from(tree)));
     composer.set_text_content("a\nb\nc".into(), Vec::new(), Vec::new());
+    composer.move_cursor_to_end();
     for separate_status_line in [false, true] {
-        let options = ComposerRenderOptions {
-            separate_status_line,
-            ..Default::default()
-        };
-        for (height, expected) in [(12, "one\ntwo\nthree\nfour…"), (7, "one…")] {
+        for (height, fullscreen) in [
+            (7, "one\ntwo…"),
+            (9, "one\ntwo…"),
+            (10, "one\ntwo\nthre…"),
+            (13, "one\ntwo\nthre…"),
+            (14, "one\ntwo\nthree\nfour…"),
+        ] {
+            let options = ComposerRenderOptions {
+                separate_status_line,
+                max_height: Some(height),
+                ..Default::default()
+            };
+            let expected = if separate_status_line {
+                fullscreen
+            } else {
+                "one\ntwo…"
+            };
             let area = Rect::new(/*x*/ 0, /*y*/ 0, /*width*/ 7, height);
             let (buffer, rows) = render_status(&composer, area, options);
             assert_eq!(rows.join("\n"), expected);
@@ -174,25 +237,30 @@ fn status_rows_yield_to_the_composer_and_shared_footer_overrides() {
             assert!(input.height >= 3);
             let draft = [0, 1, 2].map(|dy| buffer[(input.x, input.y + dy)].symbol());
             assert_eq!(draft, ["a", "b", "c"]);
-            let (x, y) = composer
-                .cursor_pos_with_options(area, options)
-                .expect("visible draft cursor");
-            assert!(input.contains((x, y).into()));
-            if separate_status_line && height == 7 {
-                let rows: Vec<String> = buffer
-                    .content
-                    .chunks(usize::from(area.width))
-                    .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect())
-                    .collect();
-                insta::assert_debug_snapshot!(rows);
+            assert_eq!(
+                composer.cursor_pos_with_options(area, options),
+                Some((input.x + 1, input.y + 2))
+            );
+            if height == 7 && separate_status_line {
+                insta::assert_snapshot!(
+                    "status_rows_respect_host_budget_and_yield_to_the_draft",
+                    frame(&buffer)
+                );
             }
         }
     }
+    composer.set_collaboration_modes_enabled(/*enabled*/ true);
+    composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
+    assert_eq!(
+        render_status(&composer, Rect::new(0, 0, 48, 12), Default::default()).1,
+        ["one…"]
+    );
+    composer.set_collaboration_mode_indicator(/*indicator*/ None);
     let tree: crate::ui_tree::UiTree = r#""x\ny""#.parse().unwrap();
     composer.set_status_line(Some(FooterContent::from(tree)));
     assert_eq!(
         composer.footer_hint_height(/*width*/ 7, ComposerRenderOptions::default()),
-        1
+        0
     );
     composer.show_footer_flash("Copied".into(), Duration::from_secs(/*secs*/ 3));
     assert_eq!(
@@ -231,6 +299,106 @@ fn sidebar_focus_collapses_extension_status_to_its_dim_line() {
     three
     four
     ");
+}
+
+#[test]
+fn thumbnails_fit_after_basic_footer_rows_and_before_extra_status() {
+    let mut composer = composer();
+    composer.attach_image(PathBuf::from("preview.png"));
+    composer.insert_str("draft");
+    let tree: crate::ui_tree::UiTree = r#""one\ntwo\nthree\nfour""#.parse().unwrap();
+    composer.set_status_line(Some(tree.into()));
+    composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
+    let previews = crate::transcript_image::composer::ComposerImages::for_terminal(
+        crate::pets::ImageProtocol::Kitty,
+        /*previous*/ None,
+    )
+    .unwrap();
+    let mut frames = Vec::new();
+    for (fullscreen, cap, expected) in [
+        (true, 4, (0, 0, 1)),
+        (true, 5, (0, 1, 1)),
+        (true, 6, (0, 1, 1)),
+        (true, 8, (0, 1, 1)),
+        (true, 9, (4, 1, 1)),
+        (true, 10, (4, 2, 1)),
+        (false, 8, (0, 1, 1)),
+        (false, 9, (4, 1, 1)),
+    ] {
+        let options = ComposerRenderOptions {
+            separate_status_line: fullscreen,
+            image_previews: Some(&previews),
+            max_height: Some(cap),
+            ..Default::default()
+        };
+        let height = composer.desired_height_with_options(/*width*/ 32, options);
+        assert_eq!(height, 3 + expected.0 + expected.1 + expected.2);
+        let area = Rect::new(0, 0, 32, height);
+        let layout = composer.layout_with_options(area, options);
+        assert_eq!(
+            (
+                layout.thumbnails.height,
+                layout.status.height,
+                layout.footer.height
+            ),
+            expected
+        );
+        if fullscreen && (cap == 8 || cap == 9) {
+            let (buffer, _) = render_status(&composer, area, options);
+            frames.push(format!("height {cap}\n{}", frame(&buffer)));
+        }
+    }
+    insta::assert_snapshot!(frames.join("\n\n"));
+
+    let options = ComposerRenderOptions {
+        image_previews: Some(&previews),
+        ..Default::default()
+    };
+    composer.popups.active = ActivePopup::File(FileSearchPopup::new());
+    let with_popup = composer.layout_with_options(Rect::new(0, 0, 32, 9), options);
+    assert!(with_popup.popup.height > 0);
+    assert_eq!(with_popup.thumbnails.height, 0);
+    composer.popups.active = ActivePopup::None;
+    composer.set_status_line(/*status_line*/ None);
+    let hints_only = composer.layout_with_options(Rect::new(0, 0, 32, 8), options);
+    assert_eq!(
+        (
+            hints_only.thumbnails.height,
+            hints_only.status.height,
+            hints_only.footer.height
+        ),
+        (4, 0, 1)
+    );
+
+    composer.insert_str("\nsecond line");
+    let search = TranscriptFooter {
+        text: "Find: abc".into(),
+        cursor_column: Some(9),
+        is_interactive: true,
+    };
+    for separate_status_line in [false, true] {
+        let options = ComposerRenderOptions {
+            separate_status_line,
+            image_previews: Some(&previews),
+            footer: Some(&search),
+            ..Default::default()
+        };
+        let area = Rect::new(0, 0, 32, 4);
+        let layout = composer.layout_with_options(area, options);
+        assert_eq!(
+            (
+                layout.textarea.height,
+                layout.thumbnails.height,
+                layout.status.height,
+                layout.footer.height
+            ),
+            (1, 0, 0, 1)
+        );
+        assert_eq!(
+            composer.cursor_pos_with_options(area, options),
+            Some((11, 3))
+        );
+    }
 }
 
 #[test]
@@ -297,7 +465,11 @@ fn extension_status_keeps_its_rows_when_effort_changes() {
         );
         assert_eq!(
             render_status(&composer, area, options).1,
-            ["one", "two", "three"]
+            if separate_status_line {
+                vec!["one", "two", "three"]
+            } else {
+                vec!["one…"]
+            }
         );
     }
 }
@@ -442,6 +614,26 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
         parent_owned.lines().last().unwrap().contains("Plan mode"),
         "{parent_owned}"
     );
+}
+
+#[test]
+fn footer_layout_in_fullscreen_and_scrollback() {
+    let mut composer = composer();
+    composer.set_status_line(Some("Build ready".into()));
+    composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 31, /*height*/ 4,
+    );
+    for separate_status_line in [false, true] {
+        let options = ComposerRenderOptions {
+            separate_status_line,
+            ..Default::default()
+        };
+        let layout = composer.layout_with_options(area, options);
+        assert_eq!((layout.status.height, layout.footer.height), (0, 1));
+        let (buf, _) = render_status(&composer, area, options);
+        assert!(frame(&buf).lines().last().unwrap().contains("Plan"));
+    }
 }
 
 #[test]
@@ -637,9 +829,26 @@ fn transcript_search_keeps_status_and_query_cursor() {
         cursor_column: Some(8),
         is_interactive: true,
     };
-    let (text, cursor) = render(&composer, /*width*/ 48, Some(&footer));
-    assert_eq!(cursor, Some((10, text.lines().count() as u16 - 2)));
-    assert!(text.contains("MODEL · ~/project · Context 20% used"));
+    let options = ComposerRenderOptions {
+        separate_status_line: true,
+        footer: Some(&footer),
+        ..Default::default()
+    };
+    for (height, status_rows, hint_rows) in [(4, 0, 1), (5, 0, 2), (6, 1, 2)] {
+        let area = Rect::new(0, 0, 48, height);
+        let layout = composer.layout_with_options(area, options);
+        assert_eq!(
+            (layout.status.height, layout.footer.height),
+            (status_rows, hint_rows)
+        );
+        let mut buf = Buffer::empty(area);
+        composer.render_with_options(area, &mut buf, /*mask_char*/ None, options);
+        assert_eq!(buf[(2, layout.footer.y)].symbol(), "F");
+        assert_eq!(
+            composer.cursor_pos_with_options(area, options),
+            Some((10, layout.footer.y))
+        );
+    }
 }
 
 #[test]
@@ -651,6 +860,27 @@ fn input_history_search_uses_the_final_row() {
         cursor.map(|(_, y)| y),
         Some(text.lines().count() as u16 - 1)
     );
+}
+
+#[test]
+fn slash_suggestions_take_space_before_status_expands() {
+    let mut composer = composer();
+    let tree: crate::ui_tree::UiTree = r#""one\ntwo\nthree\nfour""#.parse().unwrap();
+    composer.set_status_line(Some(tree.into()));
+    for ch in ['/', 'm'] {
+        composer.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+    }
+    let options = ComposerRenderOptions {
+        separate_status_line: true,
+        command_popup_placement: CommandPopupPlacement::AboveComposer,
+        ..Default::default()
+    };
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 7,
+    );
+    let (buf, rows) = render_status(&composer, area, options);
+    assert_eq!(rows, ["one…"]);
+    insta::assert_snapshot!(frame(&buf));
 }
 
 #[test]

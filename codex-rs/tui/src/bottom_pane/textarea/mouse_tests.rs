@@ -145,7 +145,7 @@ fn mouse_drag_highlights_and_edits_wrapped_selection() {
         mouse(&mut t, state, Drag(Left), end.0, end.1);
         mouse(&mut t, state, Up(Left), end.0, end.1);
         render(&t, area, &mut state);
-        assert_eq!(state.scroll, u16::from(end.1 > start.1));
+        assert_eq!(state.scroll, usize::from(end.1 > start.1));
         let buffer = render(&t, Rect { height: 2, ..area }, &mut state);
         let rows = buffer
             .content

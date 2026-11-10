@@ -82,14 +82,14 @@ impl TextArea {
             return false;
         };
         let lines = self.wrapped_lines(area.width);
-        let total = u16::try_from(lines.len()).unwrap_or(u16::MAX);
-        if total <= area.height {
+        let height = usize::from(area.height);
+        if lines.len() <= height {
             return false;
         }
         let scroll = state
             .scroll
-            .saturating_add_signed(rows)
-            .min(total - area.height);
+            .saturating_add_signed(isize::from(rows))
+            .min(lines.len() - height);
         if scroll != state.scroll {
             state.scroll = scroll;
             state.manual_cursor = Some(self.cursor_pos);
@@ -120,8 +120,8 @@ impl TextArea {
         }
         let line = {
             let lines = self.wrapped_lines(area.width);
-            let row = usize::from(state.scroll)
-                + usize::from(event.row.saturating_sub(area.y).min(area.height - 1));
+            let row =
+                state.scroll + usize::from(event.row.saturating_sub(area.y).min(area.height - 1));
             // Dragging beyond the viewport advances one wrapped row per event.
             let row = if event.row < area.y {
                 row.saturating_sub(1)

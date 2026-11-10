@@ -61,7 +61,11 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
             .scroll(&app.transcript_cells, /*rows*/ -10);
         tui.screen_size_for_event(&TuiEvent::Resize(size))?;
         app.render_owned_transcript(&mut tui, size)?;
-        assert_eq!(tui.terminal.last_known_cursor_pos, cursor);
+        let scrolled_cursor = tui.terminal.last_known_cursor_pos;
+        assert_eq!(
+            (scrolled_cursor.x, scrolled_cursor.y + u16::from(!running)),
+            (cursor.x, cursor.y)
+        );
         let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
         let scrolled = super::tests::buffer_text(buffer);
         let first_row = scrolled.lines().next().expect("visible transcript row");
@@ -106,7 +110,7 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
                 (
                     "draft stays here".to_string(),
                     cursor.x,
-                    size.height - cursor.y,
+                    size.height - scrolled_cursor.y,
                     false
                 )
             );

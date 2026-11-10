@@ -2,6 +2,7 @@
 source: tui/src/app/warnings_tests.rs
 expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(screen)"
 ---
+Earlier transcript row 11
 Earlier transcript row 12
 Earlier transcript row 13
 Earlier transcript row 14
@@ -19,7 +20,6 @@ Earlier transcript row 25
 Earlier transcript row 26
 Earlier transcript row 27
 Earlier transcript row 28
-Earlier transcript row 29
                              ↓ Back to bottom · esc
 
 › draft

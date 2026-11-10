@@ -5008,8 +5008,8 @@ impl ChatComposer {
             if state.scroll > 0 {
                 buf.set_span(textarea_rect.right(), textarea_rect.y, &"↑".dim(), 1);
             }
-            if state.scroll.saturating_add(textarea_rect.height)
-                < self.draft.textarea.desired_height(textarea_rect.width)
+            if state.scroll + usize::from(textarea_rect.height)
+                < self.draft.textarea.row_count(textarea_rect.width)
             {
                 buf.set_span(
                     textarea_rect.right(),
