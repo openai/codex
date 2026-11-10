@@ -84,7 +84,7 @@ pub(super) struct FeedbackThreadEvent {
     pub(super) category: FeedbackCategory,
     pub(super) include_logs: bool,
     pub(super) feedback_audience: FeedbackAudience,
-    pub(super) result: Result<String, String>,
+    pub(super) result: Result<crate::app_event::FeedbackReceipt, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

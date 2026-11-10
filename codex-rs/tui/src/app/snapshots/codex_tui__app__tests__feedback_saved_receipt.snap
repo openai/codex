@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests.rs
+expression: next_history_message(&mut events)
+---
+• Feedback ZIP saved to /home/dev/.codex/feedback/codex-diagnostics-2026-11-09T23-53-00Z-a1b2c3d4.zip

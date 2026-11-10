@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/feedback_note_view_tests.rs
+expression: "render(&view, 60)"
+---
+▌ Tell us more (bug)
+▌
+▌ Feedback uploads are disabled.
+▌ You can save feedback to a ZIP file, which is not sent to
+▌ OpenAI.
+▌
+▌ Review before sharing
+
+⌃s save ZIP · esc cancel

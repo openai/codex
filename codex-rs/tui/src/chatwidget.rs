@@ -1001,18 +1001,36 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn open_feedback(&mut self, mode: crate::ThreadParamsMode) {
+        use crate::ThreadParamsMode;
+        let unavailable = match mode {
+            ThreadParamsMode::Cloud => "Feedback is unavailable in Cloud threads.",
+            ThreadParamsMode::Remote if !self.config.feedback_enabled => {
+                "Feedback uploads are disabled, and saving a ZIP requires a local app server."
+            }
+            _ => {
+                return self.show_selection_view(crate::bottom_pane::feedback_selection_params(
+                    self.app_event_tx.clone(),
+                ));
+            }
+        };
+        self.add_info_message(unavailable.to_string(), /*hint*/ None);
+    }
+
     pub(crate) fn open_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
         feedback_audience: crate::bottom_pane::FeedbackAudience,
+        can_save: bool,
     ) {
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
             self.turn_lifecycle.last_turn_id.clone(),
             self.app_event_tx.clone(),
             include_logs,
-            feedback_audience,
+            self.config.feedback_enabled.then_some(feedback_audience),
+            can_save,
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
@@ -1054,7 +1072,11 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
+    pub(crate) fn open_feedback_consent(
+        &mut self,
+        category: crate::app_event::FeedbackCategory,
+        can_save: bool,
+    ) {
         let snapshot = self.feedback.snapshot(self.thread_id);
         #[cfg(target_os = "windows")]
         let include_windows_sandbox_log =
@@ -1064,13 +1086,14 @@ impl ChatWidget {
             .is_file();
         #[cfg(not(target_os = "windows"))]
         let include_windows_sandbox_log = false;
-        let params = crate::bottom_pane::feedback_upload_consent_params(
+        let params = crate::bottom_pane::feedback_consent_params(
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
             self.thread_id
                 .map(|thread_id| format!("auto-review-rollout-{thread_id}.jsonl")),
             include_windows_sandbox_log,
+            can_save,
             snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);

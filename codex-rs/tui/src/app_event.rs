@@ -1771,13 +1771,16 @@ pub(crate) enum AppEvent {
         crate::bottom_pane::user_verification::UserVerificationRequest,
     ),
 
+    /// Open feedback for the active connection.
+    OpenFeedback,
+
     /// Open the feedback note entry overlay after the user selects a category.
     OpenFeedbackNote {
         category: FeedbackCategory,
         include_logs: bool,
     },
 
-    /// Open the upload consent popup for feedback after selecting a category.
+    /// Open the attachment consent popup for feedback after selecting a category.
     OpenFeedbackConsent {
         category: FeedbackCategory,
     },
@@ -1788,14 +1791,15 @@ pub(crate) enum AppEvent {
         reason: Option<String>,
         turn_id: Option<String>,
         include_logs: bool,
+        destination: FeedbackDestination,
     },
 
-    /// Result of a feedback upload request initiated by the TUI.
+    /// Delivery result for the thread that requested feedback.
     FeedbackSubmitted {
         origin_thread_id: Option<ThreadId>,
         category: FeedbackCategory,
         include_logs: bool,
-        result: Result<String, String>,
+        result: Result<FeedbackReceipt, String>,
     },
 
     /// Launch the external editor after a normal draw has completed.
@@ -1979,6 +1983,18 @@ pub(crate) enum FeedbackCategory {
     Bug,
     SafetyCheck,
     Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FeedbackDestination {
+    OpenAi,
+    LocalZip,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FeedbackReceipt {
+    Uploaded { thread_id: String },
+    Saved { path: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

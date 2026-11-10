@@ -2,10 +2,11 @@
 source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
-      Upload logs?
+      Include logs and session history?
 › As
-      The following files will be sent:
-  GP    • codex-logs.log
+      Saving a ZIP does not submit feedback to OpenAI.
+  GP  Files may contain prompts, commands, and tool output:
+        • codex-logs.log
         • client-logs.txt (if available)
         • codex-doctor-report.json
         • codex-apps-tools-cache.json (if available)
@@ -14,8 +15,7 @@ expression: popup
         • codex-connectivity-diagnostics.txt
 
 
-    › 1. Yes  Share the current Codex session logs and diagnostics with the
-              team for troubleshooting
-      2. No
+    › 1. Yes  Include session logs and diagnostics in the report
+      2. No   Keep only your note and report metadata
 
       enter select · esc back

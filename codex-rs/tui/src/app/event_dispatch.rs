@@ -2703,22 +2703,29 @@ impl App {
             AppEvent::ApplyPermissionShortcut { thread_id, selection } => {
                 self.apply_permission_shortcut(app_server, thread_id, selection).await;
             }
+            AppEvent::OpenFeedback => self.chat_widget.open_feedback(app_server.thread_params_mode()),
             AppEvent::OpenFeedbackNote {
                 category,
                 include_logs,
             } => {
-                self.chat_widget.open_feedback_note(category, include_logs, self.feedback_audience);
+                self.chat_widget.open_feedback_note(
+                    category,
+                    include_logs,
+                    self.feedback_audience,
+                    !app_server.uses_remote_workspace(),
+                );
             }
             AppEvent::OpenFeedbackConsent { category } => {
-                self.chat_widget.open_feedback_consent(category);
+                self.chat_widget.open_feedback_consent(category, !app_server.uses_remote_workspace());
             }
             AppEvent::SubmitFeedback {
                 category,
                 reason,
                 turn_id,
                 include_logs,
+                destination,
             } => {
-                self.submit_feedback(app_server, category, reason, turn_id, include_logs);
+                self.submit_feedback(app_server, category, reason, turn_id, include_logs, destination);
             }
             AppEvent::FeedbackSubmitted {
                 origin_thread_id,

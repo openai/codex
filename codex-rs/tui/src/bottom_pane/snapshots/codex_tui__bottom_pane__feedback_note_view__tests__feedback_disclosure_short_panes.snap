@@ -5,8 +5,8 @@ expression: "rendered.join(\"\\n\\n\")"
 40x12 initial
 ▌ Tell us more (bug)
 ▌
-▌ Your data may be used to improve our
-▌ models and products
+▌ Feedback sent to OpenAI may be used to
+▌ improve our models and products
 ▌ By submitting feedback, you agree that
 ▌ OpenAI can use your feedback for
 ▌ safety purposes and internal model
@@ -14,27 +14,27 @@ expression: "rendered.join(\"\\n\\n\")"
 ▌
 ▌ A visible note.
 pgup/pgdn scroll disclosure
-Press enter to submit or esc to cancel
+⌃s save · enter send · esc cancel
 
 40x12 scrolled
-▌ By submitting feedback, you agree that
-▌ OpenAI can use your feedback for
 ▌ safety purposes and internal model
 ▌ training, as explained in more detail
 ▌ here. Please avoid sharing tented
 ▌ information under NDA, or privileged,
 ▌ HR-related, or sensitive personal
 ▌ information.
+▌ You can also save feedback to a ZIP
+▌ file, which is not sent to OpenAI.
 ▌
 ▌ A visible note.
 pgup/pgdn scroll disclosure
-Press enter to submit or esc to cancel
+⌃s save · enter send · esc cancel
 
 40x12 restored
 ▌ Tell us more (bug)
 ▌
-▌ Your data may be used to improve our
-▌ models and products
+▌ Feedback sent to OpenAI may be used to
+▌ improve our models and products
 ▌ By submitting feedback, you agree that
 ▌ OpenAI can use your feedback for
 ▌ safety purposes and internal model
@@ -42,34 +42,34 @@ Press enter to submit or esc to cancel
 ▌
 ▌ A visible note.
 pgup/pgdn scroll disclosure
-Press enter to submit or esc to cancel
+⌃s save · enter send · esc cancel
 
 80x8 initial
 ▌ Tell us more (bug)
 ▌
-▌ Your data may be used to improve our models and products
+▌ Feedback sent to OpenAI may be used to improve our models and products
 ▌ By submitting feedback, you agree that OpenAI can use your feedback for safety
 ▌
 ▌ A visible note.
 pgup/pgdn scroll disclosure
-Press enter to submit or esc to cancel
+⌃s save ZIP · enter send to OpenAI · esc cancel
 
 80x8 scrolled
-▌ By submitting feedback, you agree that OpenAI can use your feedback for safety
 ▌ purposes and internal model training, as explained in more detail here. Please
 ▌ avoid sharing tented information under NDA, or privileged, HR-related, or
 ▌ sensitive personal information.
+▌ You can also save feedback to a ZIP file, which is not sent to OpenAI.
 ▌
 ▌ A visible note.
 pgup/pgdn scroll disclosure
-Press enter to submit or esc to cancel
+⌃s save ZIP · enter send to OpenAI · esc cancel
 
 80x8 restored
 ▌ Tell us more (bug)
 ▌
-▌ Your data may be used to improve our models and products
+▌ Feedback sent to OpenAI may be used to improve our models and products
 ▌ By submitting feedback, you agree that OpenAI can use your feedback for safety
 ▌
 ▌ A visible note.
 pgup/pgdn scroll disclosure
-Press enter to submit or esc to cancel
+⌃s save ZIP · enter send to OpenAI · esc cancel

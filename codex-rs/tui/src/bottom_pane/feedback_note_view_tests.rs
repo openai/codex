@@ -43,7 +43,8 @@ fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
         /*turn_id*/ None,
         tx,
         /*include_logs*/ true,
-        FeedbackAudience::External,
+        Some(FeedbackAudience::External),
+        /*can_save*/ true,
     )
 }
 
@@ -92,7 +93,7 @@ fn feedback_disclosure_matches_audience_at_normal_and_narrow_widths() {
         ),
     ] {
         let mut view = make_view(FeedbackCategory::Bug);
-        view.feedback_audience = audience;
+        view.upload_audience = Some(audience);
         for width in [80, 40] {
             let area = Rect::new(
                 /*x*/ 0,
@@ -116,6 +117,12 @@ fn feedback_disclosure_matches_audience_at_normal_and_narrow_widths() {
             ));
         }
     }
+    let mut remote_view = make_view(FeedbackCategory::Bug);
+    remote_view.can_save = false;
+    rendered.push(format!(
+        "remote server (80 columns)\n{}",
+        render(&remote_view, /*width*/ 80)
+    ));
     insta::assert_snapshot!("feedback_disclosures", rendered.join("\n\n"));
 }
 
@@ -124,7 +131,7 @@ fn feedback_disclosure_scrolls_without_hiding_input_in_short_panes() {
     let mut rendered = Vec::new();
     for (width, height) in [(40, 12), (80, 8)] {
         let mut view = make_view(FeedbackCategory::Bug);
-        view.feedback_audience = FeedbackAudience::OpenAiEmployee;
+        view.upload_audience = Some(FeedbackAudience::OpenAiEmployee);
         view.handle_paste("A visible note.".to_string());
         let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
         for (stage, key) in [
@@ -139,7 +146,7 @@ fn feedback_disclosure_scrolls_without_hiding_input_in_short_panes() {
             view.render(area, &mut buf);
             let text = render_buffer(area, &buf);
             assert!(text.contains("A visible note."));
-            assert!(text.contains("enter to submit"));
+            assert!(text.contains("enter send"));
             assert!(
                 view.cursor_pos(area)
                     .is_some_and(|(x, y)| x < width && y < height)
@@ -157,7 +164,7 @@ fn feedback_disclosure_scrolls_without_hiding_input_in_short_panes() {
 #[test]
 fn feedback_disclosure_keeps_editor_visible_in_four_rows() {
     let mut view = make_view(FeedbackCategory::Bug);
-    view.feedback_audience = FeedbackAudience::OpenAiEmployee;
+    view.upload_audience = Some(FeedbackAudience::OpenAiEmployee);
     view.handle_paste("A visible note.".to_string());
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 4,
@@ -170,14 +177,20 @@ fn feedback_disclosure_keeps_editor_visible_in_four_rows() {
             .is_some_and(|(x, y)| area.contains((x, y).into()))
     );
     let initial = render_buffer(area, &buf);
-    assert!(initial.contains("Your data may be used to improve our models and products"));
+    assert!(
+        initial.contains("Feedback sent to OpenAI may be used to improve our models and products")
+    );
+    let mut saw_sensitive_information_notice = false;
     for _ in view.intro_lines(area.width, IntroContent::Full) {
         view.handle_key_event(KeyEvent::from(KeyCode::PageDown));
         buf = Buffer::empty(area);
         view.render(area, &mut buf);
+        saw_sensitive_information_notice |=
+            render_buffer(area, &buf).contains("personal information.");
     }
     let scrolled = render_buffer(area, &buf);
-    assert!(scrolled.contains("personal information."));
+    assert!(saw_sensitive_information_notice);
+    assert!(scrolled.contains("which is not sent to OpenAI"));
     insta::assert_snapshot!(
         "feedback_disclosure_four_rows",
         format!("{initial}\n\n{scrolled}")
@@ -186,15 +199,14 @@ fn feedback_disclosure_keeps_editor_visible_in_four_rows() {
     let narrow_area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 4,
     );
-    for (audience, disclosure) in [
-        (FeedbackAudience::OpenAiEmployee, "Your data"),
-        (FeedbackAudience::External, "Your feedback"),
-    ] {
+    for audience in [FeedbackAudience::OpenAiEmployee, FeedbackAudience::External] {
         let mut view = make_view(FeedbackCategory::SafetyCheck);
-        view.feedback_audience = audience;
+        view.upload_audience = Some(audience);
         let mut buf = Buffer::empty(narrow_area);
         view.render(narrow_area, &mut buf);
-        assert!(render_buffer(narrow_area, &buf).contains(disclosure));
+        let text = render_buffer(narrow_area, &buf);
+        assert!(text.contains("Feedback sent to"));
+        assert!(text.contains("save · enter send"));
     }
 }
 
@@ -208,7 +220,8 @@ fn feedback_paste_burst_preserves_multiline_note_until_submit() {
                 /*turn_id*/ None,
                 AppEventSender::new(tx),
                 include_logs,
-                FeedbackAudience::External,
+                Some(FeedbackAudience::External),
+                /*can_save*/ true,
             );
             let now = Instant::now();
             for (index, ch) in note.chars().enumerate() {
@@ -240,6 +253,7 @@ fn feedback_paste_burst_preserves_multiline_note_until_submit() {
                 reason,
                 turn_id,
                 include_logs: submitted_logs,
+                destination: FeedbackDestination::OpenAi,
             } = rx.try_recv().expect("submit feedback event")
             else {
                 panic!("expected feedback submission");
@@ -270,7 +284,8 @@ fn feedback_bracketed_paste_does_not_reach_chat_composer() {
             /*turn_id*/ None,
             tx,
             include_logs,
-            FeedbackAudience::External,
+            Some(FeedbackAudience::External),
+            /*can_save*/ true,
         )));
         // An explicit paste ends any preceding keystroke burst.
         pane.handle_key_event(KeyEvent::from(KeyCode::Char('x')));
@@ -298,7 +313,7 @@ fn feedback_bracketed_paste_does_not_reach_chat_composer() {
 }
 
 #[test]
-fn submit_feedback_emits_submit_event_with_trimmed_note() {
+fn remote_save_shortcut_keeps_the_note_for_explicit_upload() {
     let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let mut view = FeedbackNoteView::new(
@@ -306,9 +321,13 @@ fn submit_feedback_emits_submit_event_with_trimmed_note() {
         Some("turn-123".to_string()),
         tx,
         /*include_logs*/ true,
-        FeedbackAudience::OpenAiEmployee,
+        Some(FeedbackAudience::OpenAiEmployee),
+        /*can_save*/ false,
     );
     view.textarea.insert_str("  something broke  ");
+    view.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(!view.is_complete());
+    assert!(rx.try_recv().is_err());
 
     view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -320,6 +339,7 @@ fn submit_feedback_emits_submit_event_with_trimmed_note() {
             reason: Some(reason),
             turn_id: Some(turn_id),
             include_logs: true,
+            destination: FeedbackDestination::OpenAi,
         } if reason == "something broke" && turn_id == "turn-123"
     ));
     assert_eq!(view.is_complete(), true);
@@ -334,10 +354,11 @@ fn submit_feedback_omits_empty_note() {
         /*turn_id*/ None,
         tx,
         /*include_logs*/ false,
-        FeedbackAudience::External,
+        Some(FeedbackAudience::External),
+        /*can_save*/ true,
     );
 
-    view.submit();
+    view.handle_key_event(KeyCode::Enter.into());
 
     let event = rx.try_recv().expect("submit feedback event");
     assert!(matches!(
@@ -347,8 +368,43 @@ fn submit_feedback_omits_empty_note() {
             reason: None,
             turn_id: None,
             include_logs: false,
+            destination: FeedbackDestination::OpenAi,
         }
     ));
+}
+
+#[test]
+fn save_shortcut_keeps_note_and_consent_with_or_without_uploads() {
+    for audience in [None, Some(FeedbackAudience::External)] {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut view = FeedbackNoteView::new(
+            FeedbackCategory::Bug,
+            Some("turn-123".into()),
+            AppEventSender::new(tx),
+            /*include_logs*/ false,
+            audience,
+            /*can_save*/ true,
+        );
+        view.handle_paste("Review before sharing".into());
+        if audience.is_none() {
+            insta::assert_snapshot!(
+                "feedback_note_uploads_disabled",
+                render(&view, /*width*/ 60)
+            );
+            view.handle_key_event(KeyCode::Enter.into());
+            assert!(!view.is_complete());
+            assert!(rx.try_recv().is_err());
+        }
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::SubmitFeedback {
+            destination: FeedbackDestination::LocalZip,
+            category: FeedbackCategory::Bug,
+            reason: Some(note),
+            turn_id: Some(turn),
+            include_logs: false,
+        }) if note == "Review before sharing" && turn == "turn-123"));
+        assert!(view.is_complete());
+    }
 }
 
 #[test]
@@ -359,7 +415,8 @@ fn feedback_note_cancel_does_not_submit() {
         /*turn_id*/ None,
         AppEventSender::new(tx_raw),
         /*include_logs*/ false,
-        FeedbackAudience::OpenAiEmployee,
+        Some(FeedbackAudience::OpenAiEmployee),
+        /*can_save*/ true,
     );
     view.textarea.insert_str("unfinished feedback");
 

@@ -4318,25 +4318,54 @@ async fn auto_model_advertising_advanced_effort_opens_reasoning_picker() {
 
 #[tokio::test]
 async fn feedback_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    // Open the feedback category selection popup via slash command.
-    chat.dispatch_command(SlashCommand::Feedback);
+    chat.bottom_pane
+        .set_composer_text("/feedback".into(), Vec::new(), Vec::new());
+    assert_chatwidget_snapshot!(
+        "feedback_command_suggestion",
+        normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+    );
+    chat.handle_key_event(KeyCode::Enter.into());
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::OpenFeedback))
+    );
+    chat.open_feedback(crate::ThreadParamsMode::Embedded);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("feedback_selection_popup", popup);
 }
 
 #[tokio::test]
+async fn feedback_stops_before_collecting_a_note_when_no_destination_is_available() {
+    use crate::ThreadParamsMode;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.open_feedback(ThreadParamsMode::Cloud);
+    chat.config.feedback_enabled = false;
+    chat.open_feedback(ThreadParamsMode::Remote);
+
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    let messages = lines_to_single_string(&drain_insert_history(&mut rx).concat());
+    insta::assert_snapshot!(messages.trim(), @"
+    • Feedback is unavailable in Cloud threads.
+
+    • Feedback uploads are disabled, and saving a ZIP requires a local app server.
+    ");
+}
+
+#[tokio::test]
 async fn feedback_upload_consent_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
+    chat.show_selection_view(crate::bottom_pane::feedback_consent_params(
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::Bug,
         chat.current_rollout_path.clone(),
         Some("auto-review-rollout-thread-1.jsonl".to_string()),
         /*include_windows_sandbox_log*/ true,
+        /*can_save*/ true,
         &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
             headline: "Proxy environment variables are set and may affect connectivity."
                 .to_string(),
@@ -4352,12 +4381,13 @@ async fn feedback_upload_consent_popup_snapshot() {
 async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_filename() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
+    chat.show_selection_view(crate::bottom_pane::feedback_consent_params(
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::GoodResult,
         chat.current_rollout_path.clone(),
         Some("auto-review-rollout-thread-1.jsonl".to_string()),
         /*include_windows_sandbox_log*/ false,
+        /*can_save*/ true,
         &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
             headline: "Proxy environment variables are set and may affect connectivity."
                 .to_string(),

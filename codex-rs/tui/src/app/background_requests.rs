@@ -4,10 +4,12 @@
 //! limits, add-credit nudges, and feedback uploads. Results are routed back through `AppEvent` so
 //! the main event loop remains single-threaded.
 
-use super::feedback_upload::fetch_feedback_upload;
+use super::feedback_upload::deliver_feedback;
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
+use crate::app_event::FeedbackDestination;
+use crate::app_event::FeedbackReceipt;
 use crate::app_info::app_info_from_api;
 use crate::chatwidget::ThreadUsageOutcome;
 use crate::config_update::format_config_error;
@@ -633,30 +635,34 @@ impl App {
         reason: Option<String>,
         turn_id: Option<String>,
         include_logs: bool,
+        destination: FeedbackDestination,
     ) {
+        if destination == FeedbackDestination::LocalZip && app_server.uses_remote_workspace() {
+            self.chat_widget.add_info_message(
+                "Saving a feedback ZIP requires a local app server.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         let origin_thread_id = self.chat_widget.thread_id();
-        let rollout_path = if include_logs {
-            self.chat_widget.rollout_path()
-        } else {
-            None
-        };
-        let params = build_feedback_upload_params(
+        let params = build_feedback_params(
             origin_thread_id,
-            rollout_path,
+            self.chat_widget.rollout_path(),
             category,
             reason,
             turn_id,
             include_logs,
+            destination,
         );
         let codex_home = app_server.codex_home_path(&self.config.codex_home);
         let feedback = self.feedback.clone();
         tokio::spawn(async move {
-            let result = fetch_feedback_upload(request_handle, codex_home, params, feedback)
-                .await
-                .map(|response| response.thread_id)
-                .map_err(|err| err.to_string());
+            let result =
+                deliver_feedback(request_handle, codex_home, params, feedback, destination)
+                    .await
+                    .map_err(|err| format!("{err:#}"));
             app_event_tx.send(AppEvent::FeedbackSubmitted {
                 origin_thread_id,
                 category,
@@ -668,7 +674,7 @@ impl App {
 
     pub(super) fn handle_feedback_thread_event(&mut self, event: FeedbackThreadEvent) {
         match event.result {
-            Ok(thread_id) => {
+            Ok(FeedbackReceipt::Uploaded { thread_id }) => {
                 self.chat_widget
                     .add_to_history(crate::bottom_pane::feedback_success_cell(
                         event.category,
@@ -677,11 +683,16 @@ impl App {
                         event.feedback_audience,
                     ))
             }
+            Ok(FeedbackReceipt::Saved { path }) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_info_event(
+                        format!("Feedback ZIP saved to {path}"),
+                        /*hint*/ None,
+                    ))
+            }
             Err(err) => self
                 .chat_widget
-                .add_to_history(history_cell::new_error_event(format!(
-                    "Failed to upload feedback: {err}"
-                ))),
+                .add_to_history(history_cell::new_error_event(err)),
         }
     }
 
@@ -724,7 +735,7 @@ impl App {
         origin_thread_id: Option<ThreadId>,
         category: FeedbackCategory,
         include_logs: bool,
-        result: Result<String, String>,
+        result: Result<FeedbackReceipt, String>,
     ) {
         let event = FeedbackThreadEvent {
             category,
@@ -1296,15 +1307,18 @@ pub(super) async fn write_hook_enabled(
         .wrap_err("config/batchWrite failed while updating hook enablement in TUI")
 }
 
-pub(super) fn build_feedback_upload_params(
+pub(super) fn build_feedback_params(
     origin_thread_id: Option<ThreadId>,
     rollout_path: Option<PathBuf>,
     category: FeedbackCategory,
     reason: Option<String>,
     turn_id: Option<String>,
     include_logs: bool,
+    destination: FeedbackDestination,
 ) -> FeedbackUploadParams {
-    let extra_log_files = if include_logs {
+    // The app-server `feedback/save` RPC handler selects persisted transcripts by thread ID.
+    // The TUI can already know a future rollout path before the first turn writes it.
+    let extra_log_files = if include_logs && destination == FeedbackDestination::OpenAi {
         rollout_path.map(|rollout_path| vec![rollout_path])
     } else {
         None
@@ -1696,17 +1710,18 @@ mod tests {
     }
 
     #[test]
-    fn build_feedback_upload_params_includes_thread_id_and_rollout_path() {
+    fn build_feedback_params_includes_thread_id_and_rollout_path() {
         let thread_id = ThreadId::new();
         let rollout_path = PathBuf::from("/tmp/rollout.jsonl");
 
-        let params = build_feedback_upload_params(
+        let params = build_feedback_params(
             Some(thread_id),
             Some(rollout_path.clone()),
             FeedbackCategory::SafetyCheck,
             Some("needs follow-up".to_string()),
             Some("turn-123".to_string()),
             /*include_logs*/ true,
+            FeedbackDestination::OpenAi,
         );
 
         assert_eq!(params.classification, "safety_check");
@@ -1725,14 +1740,15 @@ mod tests {
     }
 
     #[test]
-    fn build_feedback_upload_params_omits_rollout_path_without_logs() {
-        let params = build_feedback_upload_params(
+    fn build_feedback_params_omits_rollout_path_without_logs() {
+        let params = build_feedback_params(
             /*origin_thread_id*/ None,
             Some(PathBuf::from("/tmp/rollout.jsonl")),
             FeedbackCategory::GoodResult,
             /*reason*/ None,
             /*turn_id*/ None,
             /*include_logs*/ false,
+            FeedbackDestination::OpenAi,
         );
 
         assert_eq!(params.classification, "good_result");

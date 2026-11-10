@@ -4958,7 +4958,9 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         origin_thread_id: Some(side_thread_id),
         category: FeedbackCategory::Bug,
         include_logs: false,
-        result: Ok("uploaded-thread".to_string()),
+        result: Ok(crate::app_event::FeedbackReceipt::Uploaded {
+            thread_id: "uploaded-thread".to_string(),
+        }),
     });
     app.select_agent_thread(&mut tui, &mut app_server, parent_thread_id)
         .await?;
@@ -10002,23 +10004,25 @@ async fn feedback_submission_stages_logs_cleans_up_and_emits_error_history_cell(
         if staging_fails {
             std::fs::write(&tmp, "not a directory")?;
         }
-        let mut params = background_requests::build_feedback_upload_params(
+        let mut params = background_requests::build_feedback_params(
             /*origin_thread_id*/ None,
             Some(PathBuf::from("existing-rollout.jsonl")),
             FeedbackCategory::Bug,
             /*reason*/ None,
             /*turn_id*/ None,
             include_logs,
+            crate::app_event::FeedbackDestination::OpenAi,
         );
         // Reject before network upload, after the client has staged its diagnostics.
         params.thread_id = Some("invalid-thread-id".into());
-        let error = feedback_upload::fetch_feedback_upload(
+        let error = feedback_upload::deliver_feedback(
             server.request_handle(),
             Some(AppServerPath::from_app_server(
                 home.path().display().to_string(),
             )),
             params,
             app.feedback.clone(),
+            crate::app_event::FeedbackDestination::OpenAi,
         )
         .await
         .unwrap_err();
@@ -10071,7 +10075,7 @@ async fn feedback_submission_stages_logs_cleans_up_and_emits_error_history_cell(
         /*origin_thread_id*/ None,
         FeedbackCategory::Bug,
         /*include_logs*/ true,
-        Err("boom".to_string()),
+        Err("Failed to upload feedback: boom".to_string()),
     )
     .await;
 
@@ -10084,6 +10088,112 @@ async fn feedback_submission_stages_logs_cleans_up_and_emits_error_history_cell(
         "■ Failed to upload feedback: boom"
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn local_feedback_saves_a_zip_with_only_consented_logs_and_never_uploads() -> Result<()> {
+    use crate::app_event::FeedbackDestination;
+    use crate::app_event::FeedbackReceipt;
+
+    let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    let (server, requests, proxy) =
+        session_lifecycle_requests::start_recording_remote_app_server(&app.config).await?;
+    // A queued local save must also respect the connection active at dispatch.
+    app.submit_feedback(
+        &server,
+        FeedbackCategory::Bug,
+        /*reason*/ None,
+        /*turn_id*/ None,
+        /*include_logs*/ true,
+        FeedbackDestination::LocalZip,
+    );
+    assert!(next_history_message(&mut events).contains("requires a local app server"));
+
+    let home = tempdir()?;
+    let save = |directory: &std::path::Path, include_logs| {
+        let params = background_requests::build_feedback_params(
+            /*origin_thread_id*/ None,
+            Some(directory.join("rollout-not-yet-created.jsonl")),
+            FeedbackCategory::Bug,
+            Some("Review before sharing".into()),
+            /*turn_id*/ None,
+            include_logs,
+            FeedbackDestination::LocalZip,
+        );
+        feedback_upload::deliver_feedback(
+            server.request_handle(),
+            Some(AppServerPath::from_app_server(
+                directory.display().to_string(),
+            )),
+            params,
+            app.feedback.clone(),
+            FeedbackDestination::LocalZip,
+        )
+    };
+    for include_logs in [true, false] {
+        let receipt = save(home.path(), include_logs).await?;
+        let FeedbackReceipt::Saved { path } = receipt else {
+            panic!("expected a saved ZIP");
+        };
+        let path = PathBuf::from(path);
+        assert_eq!(path.parent(), Some(home.path().join("feedback").as_path()));
+        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("zip"));
+        let name = path.file_stem().unwrap().to_str().unwrap();
+        let (timestamp, suffix) = name
+            .strip_prefix("codex-diagnostics-")
+            .unwrap()
+            .rsplit_once('-')
+            .unwrap();
+        chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H-%M-%SZ")?;
+        assert_eq!(suffix.len(), 8);
+        u32::from_str_radix(suffix, 16)?;
+        assert!(std::fs::read(&path)?.starts_with(b"PK"));
+        let recorded = std::mem::take(&mut *requests.lock().unwrap());
+        let save = recorded
+            .iter()
+            .find(|r| r.method == "feedback/save")
+            .unwrap();
+        let save: codex_app_server_protocol::FeedbackSaveParams =
+            serde_json::from_value(save.params.clone().unwrap())?;
+        assert_eq!(save.feedback.include_logs, include_logs);
+        assert_eq!(
+            recorded.iter().any(|r| r.method == "fs/writeFile"),
+            include_logs
+        );
+        assert!(!recorded.iter().any(|r| r.method == "feedback/upload"));
+    }
+    // A destination this server cannot write must never turn into an upload.
+    let invalid_home = home.path().join("plain-file");
+    std::fs::write(&invalid_home, "not a directory")?;
+    let error = save(&invalid_home, /*include_logs*/ false)
+        .await
+        .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(
+        message.starts_with("Failed to save feedback ZIP: Could not create the feedback directory")
+    );
+    assert!(message.contains("fs/createDirectory"));
+    let recorded = std::mem::take(&mut *requests.lock().unwrap());
+    assert!(!recorded.iter().any(|r| r.method == "feedback/upload"));
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn feedback_saved_receipt_shows_the_full_archive_path() {
+    let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    app.handle_feedback_submitted(
+        /*origin_thread_id*/ None,
+        FeedbackCategory::Bug,
+        /*include_logs*/ false,
+        Ok(crate::app_event::FeedbackReceipt::Saved {
+            path: "/home/dev/.codex/feedback/codex-diagnostics-2026-11-09T23-53-00Z-a1b2c3d4.zip"
+                .into(),
+        }),
+    )
+    .await;
+    insta::assert_snapshot!("feedback_saved_receipt", next_history_message(&mut events));
 }
 
 #[tokio::test]
@@ -10117,7 +10227,9 @@ async fn feedback_submission_for_inactive_thread_replays_into_origin_thread() {
         Some(origin_thread_id),
         FeedbackCategory::Bug,
         /*include_logs*/ true,
-        Ok("uploaded-thread".to_string()),
+        Ok(crate::app_event::FeedbackReceipt::Uploaded {
+            thread_id: "uploaded-thread".to_string(),
+        }),
     )
     .await;
 

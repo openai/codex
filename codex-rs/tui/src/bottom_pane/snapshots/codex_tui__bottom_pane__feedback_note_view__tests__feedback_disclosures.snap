@@ -5,40 +5,44 @@ expression: "rendered.join(\"\\n\\n\")"
 external (80 columns)
 ▌ Tell us more (bug)
 ▌
-▌ Your feedback can be used to improve ChatGPT. Learn more.
+▌ Feedback sent to OpenAI can be used to improve ChatGPT. Learn more.
+▌ You can also save feedback to a ZIP file, which is not sent to OpenAI.
 ▌
 ▌ (optional) Write a short description to help us further
 
-Press enter to submit or esc to cancel
+⌃s save ZIP · enter send to OpenAI · esc cancel
 
 external (40 columns)
 ▌ Tell us more (bug)
 ▌
-▌ Your feedback can be used to improve
-▌ ChatGPT. Learn more.
+▌ Feedback sent to OpenAI can be used to
+▌ improve ChatGPT. Learn more.
+▌ You can also save feedback to a ZIP
+▌ file, which is not sent to OpenAI.
 ▌
 ▌ (optional) Write a short description t
 
-Press enter to submit or esc to cancel
+⌃s save · enter send · esc cancel
 
 employee (80 columns)
 ▌ Tell us more (bug)
 ▌
-▌ Your data may be used to improve our models and products
+▌ Feedback sent to OpenAI may be used to improve our models and products
 ▌ By submitting feedback, you agree that OpenAI can use your feedback for safety
 ▌ purposes and internal model training, as explained in more detail here. Please
 ▌ avoid sharing tented information under NDA, or privileged, HR-related, or
 ▌ sensitive personal information.
+▌ You can also save feedback to a ZIP file, which is not sent to OpenAI.
 ▌
 ▌ (optional) Write a short description to help us further
 
-Press enter to submit or esc to cancel
+⌃s save ZIP · enter send to OpenAI · esc cancel
 
 employee (40 columns)
 ▌ Tell us more (bug)
 ▌
-▌ Your data may be used to improve our
-▌ models and products
+▌ Feedback sent to OpenAI may be used to
+▌ improve our models and products
 ▌ By submitting feedback, you agree that
 ▌ OpenAI can use your feedback for
 ▌ safety purposes and internal model
@@ -47,7 +51,18 @@ employee (40 columns)
 ▌ information under NDA, or privileged,
 ▌ HR-related, or sensitive personal
 ▌ information.
+▌ You can also save feedback to a ZIP
+▌ file, which is not sent to OpenAI.
 ▌
 ▌ (optional) Write a short description t
 
-Press enter to submit or esc to cancel
+⌃s save · enter send · esc cancel
+
+remote server (80 columns)
+▌ Tell us more (bug)
+▌
+▌ Feedback sent to OpenAI can be used to improve ChatGPT. Learn more.
+▌
+▌ (optional) Write a short description to help us further
+
+enter send to OpenAI · esc cancel

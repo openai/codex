@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
+---
+› /feedback  send logs to maintainers or save a ZIP
+
+› /feedback
+
+  GPT-5.6-Sol default · /tmp/project

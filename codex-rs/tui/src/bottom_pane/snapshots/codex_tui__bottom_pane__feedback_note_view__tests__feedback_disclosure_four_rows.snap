@@ -2,12 +2,12 @@
 source: tui/src/bottom_pane/feedback_note_view_tests.rs
 expression: "format!(\"{initial}\\n\\n{scrolled}\")"
 ---
-▌ Your data may be used to improve our models and products
+▌ Feedback sent to OpenAI may be used to improve our models and products
 ▌
 ▌ A visible note.
-Press enter to submit or esc to cancel
+⌃s save ZIP · enter send to OpenAI · esc cancel
 
-▌ sensitive personal information.
+▌ You can also save feedback to a ZIP file, which is not sent to OpenAI.
 ▌
 ▌ A visible note.
-Press enter to submit or esc to cancel
+⌃s save ZIP · enter send to OpenAI · esc cancel

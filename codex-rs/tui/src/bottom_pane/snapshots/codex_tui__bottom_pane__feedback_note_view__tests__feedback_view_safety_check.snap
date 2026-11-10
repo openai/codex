@@ -4,8 +4,11 @@ expression: rendered
 ---
 ▌ Tell us more (safety check)
 ▌
-▌ Your feedback can be used to improve ChatGPT. Learn more.
+▌ Feedback sent to OpenAI can be used to improve ChatGPT.
+▌ Learn more.
+▌ You can also save feedback to a ZIP file, which is not
+▌ sent to OpenAI.
 ▌
 ▌ (optional) Share what was refused and why it should have b
 
-Press enter to submit or esc to cancel
+⌃s save ZIP · enter send to OpenAI · esc cancel

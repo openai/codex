@@ -334,10 +334,9 @@ pub(crate) async fn request_thread_start_with_history_fallback(
     }
 }
 
-fn is_thread_settings_update_unsupported(source: &JSONRPCErrorError) -> bool {
+pub(crate) fn is_method_unsupported(source: &JSONRPCErrorError, method: &str) -> bool {
     source.code == JSONRPC_METHOD_NOT_FOUND
-        || (source.code == JSONRPC_INVALID_REQUEST
-            && source.message.contains(THREAD_SETTINGS_UPDATE_METHOD))
+        || (source.code == JSONRPC_INVALID_REQUEST && source.message.contains(method))
 }
 
 /// Data collected during the TUI bootstrap phase that the main event loop
@@ -1736,7 +1735,7 @@ impl AppServerSession {
         {
             Ok(_) => Ok(true),
             Err(TypedRequestError::Server { source, .. })
-                if is_thread_settings_update_unsupported(&source) =>
+                if is_method_unsupported(&source, THREAD_SETTINGS_UPDATE_METHOD) =>
             {
                 // Older remote app servers can reject this experimental method as
                 // method-not-found, experimental-capability-gated, or an unknown
@@ -3504,7 +3503,7 @@ mod tests {
                 message: message.to_string(),
             };
             assert_eq!(
-                is_thread_settings_update_unsupported(&source),
+                is_method_unsupported(&source, THREAD_SETTINGS_UPDATE_METHOD),
                 expected,
                 "{message}"
             );
