@@ -1,5 +1,6 @@
 use super::*;
 use crate::PluginGitMode;
+use crate::marketplace_staging::MarketplaceStagingDir;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::LoaderOverrides;
 use codex_config::loader::load_config_layers_state;
@@ -232,8 +233,7 @@ fn upgrade_uses_validated_source_for_git_operations() {
     let normalized_url = url::Url::from_directory_path(remote_repo.path())
         .expect("remote repository URL")
         .to_string();
-    let raw_source = codex_home.path().join("missing-raw-source");
-    let raw_source = raw_source.to_string_lossy().into_owned();
+    let raw_source = "example/good";
     let config = format!(
         r#"
 [marketplaces.good]
@@ -245,12 +245,12 @@ ref = "missing-ref"
     std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), config).expect("write config");
     let marketplace = ConfiguredGitMarketplace {
         name: "good".to_string(),
-        source: raw_source,
+        source: raw_source.to_string(),
         ref_name: Some("missing-ref".to_string()),
         sparse_paths: Vec::new(),
     };
     let normalized_source = MarketplaceSource::Git {
-        url: normalized_url,
+        url: normalized_url.clone(),
         ref_name: Some("HEAD".to_string()),
     };
     let install_root = marketplace_install_root(codex_home.path());
@@ -269,6 +269,12 @@ ref = "missing-ref"
     assert_eq!(
         upgraded_root,
         AbsolutePathBuf::try_from(install_root.join("good")).expect("installed marketplace root")
+    );
+    let snapshot = read_installed_marketplace_snapshot(upgraded_root.as_path(), &marketplace.name);
+    assert!(
+        snapshot
+            .git_reference(upgraded_root.as_path(), &marketplace, &normalized_url)
+            .is_some()
     );
 }
 

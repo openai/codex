@@ -427,25 +427,59 @@ async fn marketplace_upgrade_named_marketplace_only() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(unix, test_case(Some("git version 2.19.6"); "older Git"))]
+#[cfg_attr(unix, test_case(Some("unknown"); "unknown Git version"))]
+#[test_case(None; "installed Git")]
 #[tokio::test]
-async fn marketplace_upgrade_returns_empty_roots_when_already_up_to_date() -> Result<()> {
+async fn marketplace_upgrade_reuses_the_installed_revision_when_git_supports_it(
+    reported_version: Option<&str>,
+) -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
-    init_marketplace_repo(source.path(), "debug", "debug old")?;
-    commit_marketplace_marker(source.path(), "debug new")?;
-    record_git_marketplace(
+    let installed_revision = init_marketplace_repo(source.path(), "debug", "debug old")?;
+    // file:// exercises fetch negotiation even though the server is local.
+    let url = url::Url::from_directory_path(source.path())
+        .map_err(|()| anyhow::anyhow!("invalid marketplace source path"))?;
+    record_user_marketplace(
         codex_home.path(),
         "debug",
-        source.path(),
-        /*ref_name*/ None,
+        &configured_git_marketplace_update(url.as_str(), /*ref_name*/ None),
     )?;
     disable_plugin_startup_tasks(codex_home.path())?;
 
-    let mut mcp = TestAppServer::builder()
+    let packets = codex_home.path().join("packets.trace");
+    let builder = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build_initialized()
-        .await?;
+        .with_env_overrides(&[("GIT_TRACE_PACKET", packets.to_str())])
+        .without_auto_env();
+    #[cfg(unix)]
+    let builder = if let Some(version) = reported_version {
+        let path = std::env::var("PATH")?;
+        let bin = codex_home.path().join("bin");
+        std::fs::create_dir(&bin)?;
+        codex_utils_cargo_bin::write_executable(
+            &bin.join("git"),
+            r#"#!/bin/sh
+for arg do
+    if [ "$arg" = "--version" ]; then
+        printf '%s\n' "$TEST_GIT_VERSION"
+        exit 0
+    fi
+done
+PATH=$TEST_GIT_PATH exec git "$@"
+"#,
+        )?;
+        let wrapped_path =
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path)))?;
+        builder.with_env_overrides(&[
+            ("PATH", wrapped_path.to_str()),
+            ("TEST_GIT_PATH", Some(&path)),
+            ("TEST_GIT_VERSION", Some(version)),
+        ])
+    } else {
+        builder
+    };
+    let mut mcp = builder.build_initialized().await?;
     let first_response = send_marketplace_upgrade(&mut mcp, Some("debug")).await?;
     assert!(first_response.errors.is_empty());
 
@@ -458,6 +492,53 @@ async fn marketplace_upgrade_returns_empty_roots_when_already_up_to_date() -> Re
             upgraded_roots: Vec::new(),
             errors: Vec::new(),
         }
+    );
+
+    let root = expected_installed_root(codex_home.path(), "debug")?;
+    run_git(root.as_path(), &["checkout", "-b", "private"])?;
+    run_git(
+        root.as_path(),
+        &[
+            "-c",
+            "user.name=Codex",
+            "-c",
+            "user.email=codex@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "private",
+        ],
+    )?;
+    let private_revision = run_git(root.as_path(), &["rev-parse", "HEAD"])?;
+    std::fs::write(&packets, "")?;
+    let updated_revision = commit_marketplace_marker(source.path(), "debug new")?;
+    let update = send_marketplace_upgrade(&mut mcp, Some("debug")).await?;
+
+    assert!(update.errors.is_empty(), "{:?}", update.errors);
+    assert_eq!(
+        run_git(root.as_path(), &["rev-parse", "HEAD"])?,
+        updated_revision
+    );
+    let packets = std::fs::read_to_string(packets)?;
+    let can_reuse = reported_version.is_none()
+        && run_git(source.path(), &["help", "--config"])
+            .is_ok_and(|keys| keys.lines().any(|key| key == "core.alternateRefsCommand"));
+    assert_eq!(
+        packets.contains(&format!("have {installed_revision}")),
+        can_reuse
+    );
+    assert!(!packets.contains(&format!("have {private_revision}")));
+    assert!(!root.join(".git/objects/info/alternates").exists());
+    run_git(root.as_path(), &["fsck", "--full"])?;
+
+    // Git refuses to use a shallow repository as a reference. A clean retry still upgrades it.
+    std::fs::write(root.join(".git/shallow"), format!("{updated_revision}\n"))?;
+    let next_revision = commit_marketplace_marker(source.path(), "another update")?;
+    let update = send_marketplace_upgrade(&mut mcp, Some("debug")).await?;
+    assert!(update.errors.is_empty(), "{:?}", update.errors);
+    assert_eq!(
+        run_git(root.as_path(), &["rev-parse", "HEAD"])?,
+        next_revision
     );
     Ok(())
 }

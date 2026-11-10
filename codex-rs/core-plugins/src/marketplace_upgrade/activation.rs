@@ -1,4 +1,5 @@
 use super::ConfiguredGitMarketplace;
+use super::git::CloneReference;
 use codex_config::types::MarketplaceSourceType;
 use serde::Deserialize;
 use serde::Serialize;
@@ -70,6 +71,43 @@ pub(super) fn installed_marketplace_metadata_matches(
     revision: &str,
 ) -> bool {
     snapshot.metadata.as_ref() == Some(&installed_marketplace_metadata(marketplace, revision))
+}
+
+impl InstalledMarketplaceSnapshot {
+    /// Selects a self-contained Git object store and the commit Codex installed from this source.
+    pub(super) fn git_reference(
+        &self,
+        root: &Path,
+        marketplace: &ConfiguredGitMarketplace,
+        resolved_source: &str,
+    ) -> Option<CloneReference<'_>> {
+        let metadata = self.metadata.as_ref()?;
+        // A plain local clone already hard-links objects from the source.
+        if metadata.source_type != MarketplaceSourceType::Git
+            || metadata.source != marketplace.source
+            || metadata.sparse_paths != marketplace.sparse_paths
+            || Path::new(resolved_source).is_dir()
+        {
+            return None;
+        }
+        let revision = metadata.revision.as_str();
+        if !matches!(revision.len(), 40 | 64)
+            || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return None;
+        }
+
+        let git_dir = root.join(".git");
+        let objects = git_dir.join("objects");
+        let standalone = [root, &git_dir, &objects].into_iter().all(|dir| {
+            dir.symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_dir())
+        }) && !objects.join("info/alternates").exists();
+        standalone.then_some(CloneReference {
+            git_dir,
+            installed_revision: revision,
+        })
+    }
 }
 
 pub(super) fn write_installed_marketplace_metadata(

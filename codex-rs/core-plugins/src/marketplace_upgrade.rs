@@ -5,8 +5,9 @@ use self::activation::activate_marketplace_root;
 use self::activation::installed_marketplace_metadata_matches;
 use self::activation::read_installed_marketplace_snapshot;
 use self::activation::write_installed_marketplace_metadata;
-use self::git::clone_git_source;
+use self::git::checkout_git_source;
 use self::git::git_remote_revision;
+use self::git::stage_git_clone;
 use crate::PluginGitMode;
 use crate::installed_marketplaces::marketplace_install_root;
 use crate::marketplace::has_symlinked_marketplace_manifest;
@@ -14,7 +15,6 @@ use crate::marketplace::validate_marketplace_root;
 use crate::marketplace_add::MarketplaceSource;
 use crate::marketplace_policy::MarketplacePolicy;
 use crate::marketplace_policy::validate_marketplace_name_for_add;
-use crate::marketplace_staging::MarketplaceStagingDir;
 use crate::marketplace_staging::cleanup_marketplace_staging;
 use codex_config::ConfigLayerStack;
 use codex_config::types::MarketplaceConfig;
@@ -254,7 +254,7 @@ fn upgrade_configured_git_marketplace(
     mode: PluginGitMode,
 ) -> Result<Option<AbsolutePathBuf>, String> {
     validate_plugin_segment(&marketplace.name, "marketplace name")?;
-    let (source, ref_name) = match normalized_source {
+    let (resolved_source, ref_name) = match normalized_source {
         Some(MarketplaceSource::Git { url, ref_name }) => (url.as_str(), ref_name.as_deref()),
         Some(MarketplaceSource::Local { .. }) => {
             return Err("validated Git marketplace source resolved to a local path".to_string());
@@ -263,7 +263,7 @@ fn upgrade_configured_git_marketplace(
     };
     let remote_revision = git_remote_revision(
         codex_home,
-        source,
+        resolved_source,
         ref_name,
         MARKETPLACE_UPGRADE_GIT_TIMEOUT,
         mode,
@@ -293,7 +293,7 @@ fn upgrade_configured_git_marketplace(
                 .join(format!("{}.json", marketplace.name));
             let inputs = CheckoutInputs {
                 configured_name: Box::from(marketplace.name.as_str()),
-                source_sha256: format!("{:x}", Sha256::digest(source)).into_boxed_str(),
+                source_sha256: format!("{:x}", Sha256::digest(resolved_source)).into_boxed_str(),
                 ref_name: ref_name.map(Box::from),
                 sparse_paths: marketplace
                     .sparse_paths
@@ -313,22 +313,17 @@ fn upgrade_configured_git_marketplace(
         return Err(name_mismatch(&cached.found_name));
     }
 
-    let staged_dir = MarketplaceStagingDir::new(install_root).map_err(|err| {
-        format!(
-            "failed to create temporary marketplace upgrade directory in {}: {err}",
-            install_root.display()
-        )
-    })?;
-
-    let activated_revision = clone_git_source(
+    let reference = previous_snapshot.git_reference(&destination, marketplace, resolved_source);
+    let staged_dir = stage_git_clone(
         codex_home,
-        source,
-        ref_name,
+        install_root,
+        resolved_source,
         &marketplace.sparse_paths,
-        staged_dir.path(),
-        MARKETPLACE_UPGRADE_GIT_TIMEOUT,
+        reference,
         mode,
     )?;
+    let activated_revision =
+        checkout_git_source(staged_dir.path(), ref_name, &marketplace.sparse_paths, mode)?;
     let marketplace_name = validate_marketplace_root(staged_dir.path())
         .map_err(|err| format!("failed to validate upgraded marketplace root: {err}"))?;
     if marketplace_name != marketplace.name {
