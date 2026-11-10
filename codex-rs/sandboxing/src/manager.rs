@@ -115,6 +115,15 @@ pub struct SandboxExecRequest {
     pub arg0: Option<String>,
 }
 
+/// How the execution host selects a backend for this launch.
+#[derive(Clone, Copy)]
+pub enum SandboxSelection {
+    /// Use the selected backend, including an explicitly native launch.
+    Explicit(SandboxType),
+    /// Refuse the launch if this host cannot provide its platform sandbox.
+    RequirePlatform,
+}
+
 /// Bundled arguments for sandbox transformation.
 ///
 /// This keeps call sites self-documenting when several fields are optional.
@@ -123,7 +132,9 @@ pub struct SandboxTransformRequest<'a> {
     pub permissions: &'a PermissionProfile,
     /// Bind symbolic workspace rules to these executor roots. `None` means they are already resolved.
     pub workspace_roots: Option<&'a [PathUri]>,
-    pub sandbox: SandboxType,
+    /// Executor-selected helper binaries and validated trust bundles needed by the child.
+    pub runtime_readable_paths: &'a [AbsolutePathBuf],
+    pub selection: SandboxSelection,
     pub enforce_managed_network: bool,
     pub environment_id: Option<&'a str>,
     // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
@@ -200,6 +211,7 @@ pub enum SandboxTransformError {
         source: io::Error,
     },
     MissingLinuxSandboxExecutable,
+    SandboxUnavailable,
     WindowsMxcPreparation(String),
     EnvironmentNetworkProxy(String),
     #[cfg(target_os = "macos")]
@@ -226,6 +238,9 @@ impl std::fmt::Display for SandboxTransformError {
                 f,
                 "sandbox policy cwd URI `{cwd}` is not valid on this host: {source}"
             ),
+            Self::SandboxUnavailable => {
+                write!(f, "sandbox intent cannot be enforced on this executor")
+            }
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
@@ -257,7 +272,7 @@ impl std::error::Error for SandboxTransformError {
             Self::InvalidPolicy(source) => Some(source),
             Self::InvalidCommandCwd { source, .. }
             | Self::InvalidSandboxPolicyCwd { source, .. } => Some(source),
-            Self::MissingLinuxSandboxExecutable => None,
+            Self::MissingLinuxSandboxExecutable | Self::SandboxUnavailable => None,
             Self::WindowsMxcPreparation(_) => None,
             Self::EnvironmentNetworkProxy(_) => None,
             #[cfg(target_os = "macos")]
@@ -375,8 +390,29 @@ impl SandboxManager {
         &self,
         request: SandboxTransformRequest<'_>,
     ) -> Result<WrappedSandboxCommand, SandboxTransformError> {
+        let command = request.command;
+        let permissions = effective_permission_profile(
+            request.permissions,
+            command.additional_permissions.as_ref(),
+        );
+        let policy = PreparedLaunchPolicy::resolve(
+            permissions,
+            request.sandbox_policy_cwd,
+            request.workspace_roots,
+            request.runtime_readable_paths,
+        )
+        .map_err(SandboxTransformError::InvalidPolicy)?;
+        let backend = match request.selection {
+            SandboxSelection::Explicit(sandbox) => sandbox,
+            SandboxSelection::RequirePlatform => {
+                #[cfg(windows)]
+                crate::windows_mxc::record_availability_once();
+                get_platform_sandbox(request.windows_sandbox_level != WindowsSandboxLevel::Disabled)
+                    .ok_or(SandboxTransformError::SandboxUnavailable)?
+            }
+        };
         #[cfg(windows)]
-        if request.sandbox == SandboxType::WindowsRestrictedToken
+        if backend == SandboxType::WindowsRestrictedToken
             && request.enforce_managed_network
             && request.windows_sandbox_level != WindowsSandboxLevel::Elevated
         {
@@ -384,8 +420,6 @@ impl SandboxManager {
                 "managed networking requires the elevated Windows sandbox backend".into(),
             ));
         }
-        let backend = request.sandbox;
-        let command = request.command;
         let native_program = match backend {
             SandboxType::None => Some(command.program.as_os_str()),
             SandboxType::LinuxSeccomp | SandboxType::WindowsMxc => {
@@ -405,16 +439,6 @@ impl SandboxManager {
         let managed_mitm_ca_trust_bundle_path = request
             .network
             .and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
-        let permissions = effective_permission_profile(
-            request.permissions,
-            command.additional_permissions.as_ref(),
-        );
-        let policy = PreparedLaunchPolicy::resolve(
-            permissions,
-            request.sandbox_policy_cwd,
-            request.workspace_roots,
-        )
-        .map_err(SandboxTransformError::InvalidPolicy)?;
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program.to_string_lossy().into_owned());
         argv.extend(command.args);

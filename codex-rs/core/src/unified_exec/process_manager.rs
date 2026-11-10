@@ -27,7 +27,6 @@ use crate::exec_env::inject_session_env;
 use crate::exec_env::set_tool_call_id_env_var;
 use crate::guardian::GuardianReviewContext;
 use crate::plugins::metrics::finish_and_track_measurements;
-use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::ApprovalContext;
@@ -42,7 +41,6 @@ use crate::tools::runtimes::is_managed_proxy_env_var;
 use crate::tools::runtimes::unified_exec::UnifiedExecAttempt;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
-use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::ExecCommandRequest;
@@ -84,7 +82,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
-use codex_sandboxing::SandboxCommand;
 use codex_tools::ToolName;
 use codex_utils_head_tail_buffer::HeadTailBuffer;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
@@ -1310,36 +1307,29 @@ impl UnifiedExecProcessManager {
         &self,
         process_id: i32,
         tool_ctx: &ToolCtx,
-        command: SandboxCommand,
-        options: ExecOptions,
-        attempt: &SandboxAttempt<'_>,
+        request: ExecRequest,
         network: Option<&NetworkProxy>,
         network_proxy_launch: Option<codex_network_proxy::RemoteNetworkProxyLaunchConfig>,
-        environment_id: Option<&str>,
         exec_server_env_config: Option<ExecServerEnvConfig>,
         shell_snapshot: Option<codex_exec_server::ShellSnapshotRequest>,
         windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
         tty: bool,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, ToolError> {
-        let mut request = if environment.is_remote() || shell_snapshot.is_some() {
-            attempt.env_for_exec_server(command, options).await
-        } else {
-            attempt
-                .env_for(command, options, network, environment_id)
-                .await
-        }
-        .map_err(ToolError::Codex)?;
         let network_policy_decider = network_proxy_launch
             .as_ref()
             .filter(|launch| launch.policy_decision_timeout_ms.is_some())
             .and_then(|launch| network?.remote_policy_decider(launch.proxy.allow_local_binding));
-        if environment.is_remote() && network.is_some() && network_proxy_launch.is_none() {
-            request.exec_server_enforce_managed_network = false;
-        }
-        request.exec_server_network_proxy = network_proxy_launch;
-        request.exec_server_env_config = exec_server_env_config;
-        request.exec_server_shell_snapshot = shell_snapshot;
+        let missing_remote_proxy =
+            environment.is_remote() && network.is_some() && network_proxy_launch.is_none();
+        let request = ExecRequest {
+            exec_server_enforce_managed_network: request.exec_server_enforce_managed_network
+                && !missing_remote_proxy,
+            exec_server_network_proxy: network_proxy_launch,
+            exec_server_env_config,
+            exec_server_shell_snapshot: shell_snapshot,
+            ..request
+        };
         self.open_session_with_prepared_exec_env(
             process_id,
             &request,

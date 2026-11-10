@@ -14,17 +14,21 @@ use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::WindowsSandboxSelection;
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 pub(crate) use codex_protocol::sandbox::SandboxOverride;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -505,7 +509,8 @@ impl<'a> SandboxAttempt<'a> {
                 command,
                 permissions: self.permissions,
                 workspace_roots: None,
-                sandbox: self.sandbox,
+                runtime_readable_paths: &[],
+                selection: SandboxSelection::Explicit(self.sandbox),
                 enforce_managed_network: self.enforce_managed_network,
                 environment_id,
                 network,
@@ -527,32 +532,28 @@ impl<'a> SandboxAttempt<'a> {
 
     pub async fn env_for_exec_server(
         &self,
-        command: SandboxCommand,
+        argv: Vec<String>,
+        cwd: PathUri,
+        env: HashMap<String, String>,
+        managed_network: Option<ManagedNetworkSandboxContext>,
+        additional_permissions: Option<&AdditionalPermissionProfile>,
         options: ExecOptions,
     ) -> Result<crate::sandboxing::ExecRequest, CodexErr> {
-        let managed_network = command.managed_network.clone();
-        let exec_server_permissions = effective_permission_profile(
-            self.exec_server_permissions,
-            command.additional_permissions.as_ref(),
-        );
-        let mut request = self
-            .manager
-            .transform(SandboxTransformRequest {
-                command,
-                permissions: self.permissions,
-                workspace_roots: None,
-                // The exec-server must receive the native command, not this host's wrapper.
-                sandbox: SandboxType::None,
-                enforce_managed_network: self.enforce_managed_network,
-                environment_id: None,
-                network: None,
-                sandbox_policy_cwd: self.sandbox_cwd,
-                sandbox_exe: None,
-                use_legacy_landlock: self.use_legacy_landlock,
-                windows_sandbox_level: self.windows_sandbox_level,
-            })?
-            .into_command_request();
-        request.sandbox_override = self.sandbox_override;
+        let exec_server_permissions =
+            effective_permission_profile(self.exec_server_permissions, additional_permissions);
+        let request = SandboxExecRequest {
+            command: argv,
+            cwd,
+            env,
+            network: None,
+            network_environment_id: None,
+            sandbox: SandboxType::None,
+            sandbox_override: self.sandbox_override,
+            sandbox_policy_cwd: self.sandbox_cwd.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            permission_profile: exec_server_permissions.clone(),
+            arg0: None,
+        };
         let mut exec_request =
             crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options, Vec::new())
                 .await?;

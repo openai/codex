@@ -2,6 +2,7 @@ use super::SandboxCommand;
 #[cfg(windows)]
 use super::SandboxDirectSpawnTransformRequest;
 use super::SandboxManager;
+use super::SandboxSelection;
 use super::SandboxTransformRequest;
 use super::SandboxType;
 use super::SandboxablePreference;
@@ -116,7 +117,8 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
             },
             permissions: &permissions,
             workspace_roots: None,
-            sandbox: SandboxType::None,
+            runtime_readable_paths: &[],
+            selection: SandboxSelection::Explicit(SandboxType::None),
             enforce_managed_network: false,
             environment_id: Some("remote"),
             network: None,
@@ -178,7 +180,8 @@ fn symlinked_workspace_reports_seatbelt_preparation_error() {
             },
             permissions: &permissions,
             workspace_roots: None,
-            sandbox: SandboxType::MacosSeatbelt,
+            runtime_readable_paths: &[],
+            selection: SandboxSelection::Explicit(SandboxType::MacosSeatbelt),
             enforce_managed_network: false,
             environment_id: None,
             network: None,
@@ -234,7 +237,8 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             },
             permissions: &permissions,
             workspace_roots: None,
-            sandbox: SandboxType::None,
+            runtime_readable_paths: &[],
+            selection: SandboxSelection::Explicit(SandboxType::None),
             enforce_managed_network: false,
             environment_id: None,
             network: None,
@@ -323,7 +327,8 @@ fn transform_additional_permissions_preserves_denied_entries() {
             },
             permissions: &permissions,
             workspace_roots: Some(roots),
-            sandbox: SandboxType::None,
+            runtime_readable_paths: &[],
+            selection: SandboxSelection::Explicit(SandboxType::None),
             enforce_managed_network: false,
             network: None,
             environment_id: None,
@@ -409,7 +414,8 @@ fn transform_linux_seccomp_request(
             },
             permissions: &permissions,
             workspace_roots: None,
-            sandbox: SandboxType::LinuxSeccomp,
+            runtime_readable_paths: &[],
+            selection: SandboxSelection::Explicit(SandboxType::LinuxSeccomp),
             enforce_managed_network: false,
             environment_id: None,
             network: None,
@@ -670,7 +676,8 @@ async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Resu
             },
             permissions: &PermissionProfile::Disabled,
             workspace_roots: None,
-            sandbox: SandboxType::LinuxSeccomp,
+            runtime_readable_paths: &[],
+            selection: SandboxSelection::Explicit(SandboxType::LinuxSeccomp),
             enforce_managed_network,
             environment_id: None,
             network: live_proxy.then_some(&network),
@@ -817,7 +824,8 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                         },
                         permissions: &permissions,
                         workspace_roots: roots,
-                        sandbox: SandboxType::WindowsRestrictedToken,
+                        runtime_readable_paths: &[],
+                        selection: SandboxSelection::Explicit(SandboxType::WindowsRestrictedToken),
                         enforce_managed_network: false,
                         environment_id: None,
                         network: None,

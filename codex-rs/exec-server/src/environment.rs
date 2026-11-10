@@ -2024,7 +2024,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!(
-                "exec-server rejected request (-32602): sandbox cwd URI `{sandbox_cwd}` is not valid on this exec-server host: {source}"
+                "exec-server rejected request (-32602): failed to prepare process sandbox: invalid sandbox policy cwd: {source}"
             )
         );
     }

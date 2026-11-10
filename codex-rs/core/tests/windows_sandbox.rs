@@ -40,6 +40,7 @@ use codex_protocol::user_input::UserInput;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::WindowsSandboxProxySettingsMode;
@@ -518,7 +519,8 @@ async fn windows_elevated_temp_only_core_and_direct_spawn_enforce_carveouts() ->
                         },
                         permissions: &permission_profile,
                         workspace_roots: None,
-                        sandbox: SandboxType::WindowsRestrictedToken,
+                        runtime_readable_paths: &[],
+                        selection: SandboxSelection::Explicit(SandboxType::WindowsRestrictedToken),
                         enforce_managed_network: false,
                         environment_id: None,
                         network: None,

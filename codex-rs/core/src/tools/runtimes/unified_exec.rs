@@ -44,7 +44,6 @@ use codex_core_plugins::PluginMetricsSidecar;
 use codex_features::Feature;
 use codex_file_system::WindowsSandboxSelection;
 use codex_network_proxy::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
-use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::RemoteCredentialMasking;
 use codex_network_proxy::RemoteNetworkProxyConfig;
@@ -120,26 +119,6 @@ fn unified_exec_options(
         expiration,
         capture_policy: ExecCapturePolicy::ShellTool,
     }
-}
-
-fn build_unified_exec_sandbox_command(
-    command: &[String],
-    cwd: &PathUri,
-    env: &HashMap<String, String>,
-    managed_network: Option<ManagedNetworkSandboxContext>,
-    additional_permissions: Option<AdditionalPermissionProfile>,
-) -> Result<SandboxCommand, ToolError> {
-    let (program, args) = command
-        .split_first()
-        .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
-    Ok(SandboxCommand {
-        program: program.clone().into(),
-        args: args.to_vec(),
-        cwd: cwd.clone(),
-        env: env.clone(),
-        managed_network,
-        additional_permissions,
-    })
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -596,10 +575,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
             prepared.permissions.additional_permissions.as_ref(),
             internal_permissions.as_ref(),
         );
+        let executor_managed = self.uses_executor_managed_process_sandbox(req);
         let permissions = TerminalPermissions::for_launch(
             &prepared.turn_environment,
             &ctx.step_context.turn,
-            if self.uses_executor_managed_process_sandbox(req) {
+            if executor_managed {
                 TerminalSandboxSource::Executor
             } else {
                 TerminalSandboxSource::Native
@@ -624,31 +604,50 @@ impl<'a> ToolRuntime<UnifiedExecRequest<'_>, UnifiedExecAttempt> for UnifiedExec
             permissions
         };
 
-        let command = build_unified_exec_sandbox_command(
-            &command,
-            &prepared.cwd,
-            &env,
-            managed_network_context,
-            additional_permissions,
-        )
-        .map_err(|error| match error {
-            ToolError::Rejected(_) => {
-                ToolError::Rejected("missing command line for PTY".to_string())
-            }
-            error @ ToolError::Codex(_) => error,
-        })?;
+        let Some((program, args)) = command.split_first() else {
+            return Err(ToolError::Rejected(
+                "missing command line for PTY".to_string(),
+            ));
+        };
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
+        let request = if executor_managed {
+            attempt
+                .env_for_exec_server(
+                    command,
+                    prepared.cwd.clone(),
+                    env,
+                    managed_network_context,
+                    additional_permissions.as_ref(),
+                    options,
+                )
+                .await
+        } else {
+            let command = SandboxCommand {
+                program: program.as_str().into(),
+                args: args.to_vec(),
+                cwd: prepared.cwd.clone(),
+                env,
+                managed_network: managed_network_context,
+                additional_permissions,
+            };
+            attempt
+                .env_for(
+                    command,
+                    options,
+                    managed_network,
+                    Some(&prepared.turn_environment.selection.environment_id),
+                )
+                .await
+        }
+        .map_err(ToolError::Codex)?;
         let process = self
             .manager
             .open_session_with_exec_env(
                 req.process_id,
                 ctx,
-                command,
-                options,
-                attempt,
+                request,
                 managed_network,
                 network_proxy_launch,
-                /*environment_id*/ Some(&prepared.turn_environment.selection.environment_id),
                 req.exec_server_env_config.clone(),
                 req.shell_snapshot.clone(),
                 windows_sandbox_proxy_settings_mode,

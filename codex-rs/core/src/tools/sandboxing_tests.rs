@@ -363,15 +363,16 @@ async fn windows_sandbox_env_preserves_denied_reads_or_rejects_unsupported_backe
 
 #[tokio::test]
 async fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
-    let cwd: AbsolutePathBuf = std::env::current_dir()
-        .expect("current dir")
-        .try_into()
-        .expect("absolute cwd");
-    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let cwd_uri = PathUri::parse(if cfg!(windows) {
+        "file:///workspace"
+    } else {
+        "file:///C:/workspace"
+    })
+    .expect("foreign workspace");
     let exec_server_permissions = codex_protocol::models::PermissionProfile::workspace_write();
     let permissions = exec_server_permissions
         .clone()
-        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&cwd));
+        .materialize_project_roots_with_path_uris(std::slice::from_ref(&cwd_uri));
     let manager = SandboxManager::new();
     let mut attempt = SandboxAttempt {
         sandbox_override: SandboxOverride::NoOverride,
@@ -395,32 +396,33 @@ async fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
         allow_local_binding: false,
         ..Default::default()
     };
-    let command = || SandboxCommand {
-        program: "/bin/bash".into(),
-        args: vec!["-lc".to_string(), "pwd".to_string()],
-        cwd: cwd_uri.clone(),
-        env: HashMap::new(),
-        managed_network: Some(managed_network.clone()),
-        additional_permissions: None,
+    let argv = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf 'café au lait'".to_string(),
+        String::new(),
+    ];
+    let prepare = async |attempt: &SandboxAttempt<'_>| {
+        attempt
+            .env_for_exec_server(
+                argv.clone(),
+                cwd_uri.clone(),
+                HashMap::new(),
+                Some(managed_network.clone()),
+                /*additional_permissions*/ None,
+                crate::sandboxing::ExecOptions {
+                    expiration: crate::exec::ExecExpiration::DefaultTimeout,
+                    capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
+                },
+            )
+            .await
     };
-    let options = || crate::sandboxing::ExecOptions {
-        expiration: crate::exec::ExecExpiration::DefaultTimeout,
-        capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
-    };
-    let request = attempt
-        .env_for_exec_server(command(), options())
+    let request = prepare(&attempt)
         .await
         .expect("prepare remote exec request");
     assert!(!attempt.is_escalated());
 
-    assert_eq!(
-        request.command,
-        vec![
-            "/bin/bash".to_string(),
-            "-lc".to_string(),
-            "pwd".to_string()
-        ]
-    );
+    assert_eq!(request.command, argv);
     assert_eq!(request.arg0, None);
     assert_eq!(request.sandbox, SandboxType::None);
     assert_eq!(
@@ -433,9 +435,9 @@ async fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
             user_home_dir: None,
             temporary_directories: None,
             windows_sandbox_selection: if cfg!(windows) {
-                codex_file_system::WindowsSandboxSelection::RestrictedToken
-            } else {
                 codex_file_system::WindowsSandboxSelection::Disabled
+            } else {
+                codex_file_system::WindowsSandboxSelection::RestrictedToken
             },
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: false,
@@ -448,8 +450,7 @@ async fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     );
 
     attempt.sandbox_override = SandboxOverride::EscalatedSandboxWithRestrictions;
-    let escalated_request = attempt
-        .env_for_exec_server(command(), options())
+    let escalated_request = prepare(&attempt)
         .await
         .expect("prepare approved escalation with retained sandbox restrictions");
     let mut expected_context = request.exec_server_sandbox.expect("sandbox context");
@@ -460,8 +461,7 @@ async fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
     );
 
     attempt.sandbox_requested = false;
-    let request = attempt
-        .env_for_exec_server(command(), options())
+    let request = prepare(&attempt)
         .await
         .expect("prepare unsandboxed remote exec request");
     assert!(attempt.is_escalated());

@@ -28,6 +28,7 @@ use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType as SandboxBackend;
 use codex_sandboxing::SandboxType::WindowsMxc;
@@ -412,7 +413,8 @@ async fn run_command_under_sandbox(
         },
         permissions: &permission_profile,
         workspace_roots: workspace_roots.as_deref(),
-        sandbox,
+        runtime_readable_paths: &[],
+        selection: SandboxSelection::Explicit(sandbox),
         enforce_managed_network: network.is_some(),
         network: network.as_ref(),
         environment_id: None,

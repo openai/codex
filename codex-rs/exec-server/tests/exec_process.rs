@@ -1272,9 +1272,9 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> Result<()> {
+async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_reads() -> Result<()> {
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(
         &PermissionProfile::read_only(),
         &std::env::current_dir()?,
@@ -1283,7 +1283,16 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
         return Ok(());
     }
 
-    let context = create_process_context(/*use_remote*/ true).await?;
+    let server = exec_server().await?;
+    let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
+    let proxy_dir = server.codex_home().canonicalize()?.join("proxy");
+    std::fs::create_dir_all(&proxy_dir)?;
+    // The bundle name contains the SHA-256 of its contents.
+    let bundle = proxy_dir
+        .join("ca-bundle-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.pem");
+    std::fs::write(&bundle, b"abc")?;
+    let untrusted = proxy_dir.join("untrusted.pem");
+    std::fs::write(&untrusted, b"untrusted")?;
     let workspace = TempDir::new()?;
     let file = workspace.path().join("allowed.txt");
     std::fs::write(&file, b"allowed")?;
@@ -1309,22 +1318,30 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
         cwd.clone(),
     );
 
-    let session = context
-        .backend
+    let session = environment
+        .get_exec_backend()
         .start(ExecParams {
             metadata: Default::default(),
             process_id: ProcessId::from("proc-restricted-helper"),
-            argv: vec!["/bin/cat".to_string(), file.to_string_lossy().into_owned()],
+            argv: vec![
+                "/bin/sh".to_owned(), "-c".to_owned(),
+                r#"cat "$1" "$CURL_CA_BUNDLE" && ! cat "$SSL_CERT_FILE" 2>/dev/null"#.to_owned(),
+                "sh".to_owned(), file.to_string_lossy().into_owned(),
+            ],
             cwd,
             shell_snapshot: None,
             env_policy: /*env_policy*/ None,
-            env: HashMap::from([("PATH".to_string(), std::env::var("PATH")?)]),
+            env: HashMap::from([
+                ("PATH".to_owned(), std::env::var("PATH")?),
+                ("CURL_CA_BUNDLE".to_owned(), bundle.to_string_lossy().into_owned()),
+                ("SSL_CERT_FILE".to_owned(), untrusted.to_string_lossy().into_owned()),
+            ]),
             tty: false,
             pipe_stdin: false,
             arg0: None,
             sandbox: Some(sandbox),
             enforce_managed_network: false,
-            managed_network: None,
+            managed_network: Some(codex_network_proxy::ManagedNetworkSandboxContext::default()),
             network_proxy: None,
         })
         .await?;
@@ -1332,7 +1349,7 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
 
     assert_eq!(
         output,
-        ("allowed".to_string(), String::new(), Some(0), true)
+        ("allowedabc".to_string(), String::new(), Some(0), true)
     );
     Ok(())
 }

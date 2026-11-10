@@ -34,6 +34,7 @@ pub use manager::SandboxCommand;
 pub use manager::SandboxDirectSpawnTransformRequest;
 pub use manager::SandboxExecRequest;
 pub use manager::SandboxManager;
+pub use manager::SandboxSelection;
 pub use manager::SandboxTransformError;
 pub use manager::SandboxTransformRequest;
 pub use manager::SandboxType;
@@ -79,6 +80,9 @@ impl From<SandboxTransformError> for CodexErr {
             | error @ SandboxTransformError::InvalidCommandCwd { .. }
             | error @ SandboxTransformError::InvalidSandboxPolicyCwd { .. } => {
                 CodexErr::InvalidRequest(error.to_string())
+            }
+            error @ SandboxTransformError::SandboxUnavailable => {
+                CodexErr::UnsupportedOperation(error.to_string())
             }
             SandboxTransformError::MissingLinuxSandboxExecutable => {
                 CodexErr::LandlockSandboxExecutableNotProvided

@@ -70,11 +70,18 @@ impl PreparedLaunchPolicy {
         permissions: PermissionProfile,
         policy_cwd: &PathUri,
         roots: Option<&[PathUri]>,
+        runtime_readable_paths: &[AbsolutePathBuf],
     ) -> io::Result<Self> {
         let Some(roots) = roots else {
+            if !runtime_readable_paths.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "runtime read access requires explicit workspace roots",
+                ));
+            }
             return Ok(Self { permissions });
         };
-        native_path(policy_cwd, "sandbox policy cwd")?;
+        let cwd = native_path(policy_cwd, "sandbox policy cwd")?;
         let workspace_roots = native_workspace_roots(roots)?;
         let (file_system, network) = permissions.to_runtime_permissions();
         for entry in &file_system.entries {
@@ -82,8 +89,9 @@ impl PreparedLaunchPolicy {
                 native_path(path, "sandbox permission path")?;
             }
         }
-        let file_system =
-            file_system.materialize_project_roots_with_workspace_roots(&workspace_roots);
+        let file_system = file_system
+            .materialize_project_roots_with_workspace_roots(&workspace_roots)
+            .with_additional_readable_roots(&cwd, runtime_readable_paths);
         let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
             permissions.enforcement(),
             &file_system,

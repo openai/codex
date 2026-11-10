@@ -25,7 +25,6 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::WindowsSandboxFilesystemOverrides;
 use codex_sandboxing::WindowsSandboxProxySettingsMode;
 use codex_sandboxing::WindowsSandboxSpawnRequest;
-use codex_sandboxing::with_managed_mitm_ca_readable_root;
 #[cfg(windows)]
 use codex_shell_command::shell_detect::fallback_powershell_shell_for_windows_sandbox;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -38,7 +37,7 @@ use crate::process_telemetry::trace_process_id;
 use crate::protocol::ExecParams;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
-use crate::sandbox_selection::select_sandbox;
+use crate::sandbox_selection::sandbox_selection;
 
 const CREDENTIAL_MASKING_FAILURE_MODE: CredentialMaskingFailureMode =
     CredentialMaskingFailureMode::Warn;
@@ -152,24 +151,16 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     };
     let runtime_paths = runtime_paths
         .ok_or_else(|| invalid_params("sandbox runtime paths are not configured".to_string()))?;
-    sandbox_context
-        .validate_file_system_paths_for_current_host()
-        .map_err(|err| invalid_params(err.to_string()))?;
     let windows_sandbox_proxy_settings_mode = sandbox_context
         .windows_sandbox_proxy_settings_mode
         .unwrap_or_default();
-    // TODO(jif): Transport permissions before orchestrator-local paths are materialized,
-    // then resolve executor-local helper and workspace paths here.
-    let permissions = sandbox_context.permissions.clone();
-    let sandbox_policy_cwd = &sandbox_context.cwd;
-    let native_sandbox_policy_cwd = native_path(sandbox_policy_cwd, "sandbox cwd")?;
-    let native_workspace_roots = sandbox_context
-        .workspace_roots
-        .iter()
-        .map(|root| native_path(root, "sandbox workspace root"))
-        .collect::<Result<Vec<_>, _>>()?;
-    let workspace_roots = native_workspace_roots.as_slice();
-    let permissions = permissions.materialize_project_roots_with_workspace_roots(workspace_roots);
+    let mut runtime_readable_paths = Vec::new();
+    if cfg!(target_os = "linux") || (cfg!(unix) && params.arg0.is_some()) {
+        runtime_readable_paths.push(runtime_paths.codex_self_exe.clone());
+    }
+    if cfg!(target_os = "linux") {
+        runtime_readable_paths.extend(runtime_paths.codex_linux_sandbox_exe.iter().cloned());
+    }
     let managed_mitm_ca_trust_bundle_path = managed_network.as_ref().and_then(|_| {
         CUSTOM_CA_ENV_KEYS.iter().find_map(|key| {
             let path = env.get(*key)?;
@@ -179,55 +170,13 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
             AbsolutePathBuf::from_absolute_path(path).ok()
         })
     });
-    let permissions = with_managed_mitm_ca_readable_root(
-        permissions,
-        managed_mitm_ca_trust_bundle_path.as_ref(),
-        native_sandbox_policy_cwd.as_path(),
-    );
-    #[cfg(unix)]
-    let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
-    #[cfg(unix)]
-    let sandbox_helper_paths = params
-        .arg0
-        .iter()
-        .map(|_| runtime_paths.codex_self_exe.clone())
-        .collect::<Vec<_>>();
-    // Bubblewrap launches the configured helper, which may re-enter this executable to apply
-    // seccomp, so the outer filesystem sandbox must expose both paths.
-    #[cfg(target_os = "linux")]
-    let sandbox_helper_paths = {
-        let mut sandbox_helper_paths = sandbox_helper_paths;
-        if !sandbox_helper_paths.contains(&runtime_paths.codex_self_exe) {
-            sandbox_helper_paths.push(runtime_paths.codex_self_exe.clone());
-        }
-        sandbox_helper_paths.extend(runtime_paths.codex_linux_sandbox_exe.iter().cloned());
-        sandbox_helper_paths
-    };
-    #[cfg(unix)]
-    let file_system_policy = file_system_policy
-        .with_additional_readable_roots(native_sandbox_policy_cwd.as_path(), &sandbox_helper_paths);
-    #[cfg(unix)]
-    let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-        permissions.enforcement(),
-        &file_system_policy,
-        network_policy,
-    );
+    runtime_readable_paths.extend(managed_mitm_ca_trust_bundle_path);
     let sandbox_manager = SandboxManager::new()
         .with_linux_sandbox_pid_namespace(runtime_paths.linux_sandbox_pid_namespace);
     #[cfg(target_os = "macos")]
     let sandbox_manager = sandbox_manager
         .with_allowed_symlinked_codex_home(runtime_paths.allowed_symlinked_codex_home.clone());
-    let (sandbox, windows_sandbox_level) = select_sandbox(
-        &sandbox_manager,
-        &permissions,
-        sandbox_context,
-        params.enforce_managed_network,
-    );
-    if sandbox == SandboxType::None {
-        return Err(invalid_params(
-            "sandbox intent cannot be enforced on this executor".to_string(),
-        ));
-    }
+    let (selection, windows_sandbox_level) = sandbox_selection(sandbox_context);
     let (program, args) = params
         .argv
         .split_first()
@@ -276,33 +225,43 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
                 managed_network,
                 additional_permissions: None,
             },
-            permissions: &permissions,
-            workspace_roots: None,
-            sandbox,
+            permissions: &sandbox_context.permissions,
+            workspace_roots: Some(&sandbox_context.workspace_roots),
+            runtime_readable_paths: &runtime_readable_paths,
+            selection,
             enforce_managed_network: params.enforce_managed_network,
             environment_id: None,
             network: None,
-            sandbox_policy_cwd,
+            sandbox_policy_cwd: &sandbox_context.cwd,
             sandbox_exe: if cfg!(windows) {
                 Some(runtime_paths.codex_self_exe.as_path())
             } else {
                 runtime_paths.codex_linux_sandbox_exe.as_deref()
             },
             use_legacy_landlock: sandbox_context.use_legacy_landlock,
-            windows_sandbox_level: windows_sandbox_level.unwrap_or(WindowsSandboxLevel::Disabled),
+            windows_sandbox_level,
         })
-        .map_err(|err| invalid_params(format!("failed to prepare process sandbox: {err}")))?
+        .map_err(|err| match err {
+            codex_sandboxing::SandboxTransformError::SandboxUnavailable => {
+                invalid_params(err.to_string())
+            }
+            err => invalid_params(format!("failed to prepare process sandbox: {err}")),
+        })?
         .into_command_request();
     request.sandbox_override = sandbox_context.sandbox_override;
     crate::run_integrity_checks(&request).await;
-    let windows_sandbox = if sandbox == SandboxType::WindowsRestrictedToken {
-        let windows_sandbox_level = windows_sandbox_level.ok_or_else(|| {
-            invalid_params("restricted token sandbox requires a sandbox level".to_string())
-        })?;
+    let windows_sandbox = if request.sandbox == SandboxType::WindowsRestrictedToken {
+        let permissions = request.permission_profile;
+        let native_sandbox_policy_cwd = native_path(&request.sandbox_policy_cwd, "sandbox cwd")?;
+        let native_workspace_roots = sandbox_context
+            .workspace_roots
+            .iter()
+            .map(|root| native_path(root, "sandbox workspace root"))
+            .collect::<Result<_, _>>()?;
         request.arg0 = params.arg0.clone();
         let proxy_enforced = params.enforce_managed_network;
         let filesystem_overrides = WindowsSandboxFilesystemOverrides::resolve(
-            sandbox,
+            request.sandbox,
             &permissions,
             &native_sandbox_policy_cwd,
             windows_sandbox_level,

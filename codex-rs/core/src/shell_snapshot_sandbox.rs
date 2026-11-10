@@ -17,6 +17,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxSelection;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
@@ -165,7 +166,8 @@ impl ShellSnapshotSandbox {
                 },
                 permissions: &self.permissions,
                 workspace_roots: None,
-                sandbox: self.sandbox,
+                runtime_readable_paths: &[],
+                selection: SandboxSelection::Explicit(self.sandbox),
                 enforce_managed_network: self.enforce_managed_network,
                 environment_id: Some(&self.environment_id),
                 network: self.network.as_ref(),
