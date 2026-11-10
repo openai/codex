@@ -243,8 +243,11 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
             }
         ))
     );
-    chat.open_feedback_consent(crate::app_event::FeedbackCategory::SafetyCheck);
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Upload logs?"));
+    chat.open_feedback_consent(
+        crate::app_event::FeedbackCategory::SafetyCheck,
+        /*can_save*/ true,
+    );
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Include logs and session history?"));
     chat.handle_key_event(KeyCode::Esc.into());
     assert!(render_bottom_popup(&chat, /*width*/ 80).contains("1. Overview"));
     chat.handle_key_event(KeyCode::Char('4').into());
