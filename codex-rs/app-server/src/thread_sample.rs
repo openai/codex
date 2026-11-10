@@ -23,6 +23,8 @@ use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
@@ -56,6 +58,11 @@ const SAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 // Bytes conservatively bound tokens, including for byte-fallback tokenizers.
 const MAX_PROMPT_BYTES: usize = 4_000;
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+const THREAD_SNAPSHOT_NOTE: &str = concat!(
+    "\nThis snapshot is a copy of the source thread’s history taken while its turn was still running. ",
+    "Making the copy did not stop the source turn. ",
+    "A tool call that was pending at capture may appear as \"aborted\" in this copy.\n",
+);
 type SampleResult = Result<ThreadSampleResponse, JSONRPCErrorError>;
 type SampleSender = Arc<Mutex<Option<oneshot::Sender<SampleResult>>>>;
 
@@ -114,7 +121,7 @@ impl SampleTask {
             cancellation,
         } = self;
         let id = parent.startup_metadata().thread_id;
-        if parent.agent_status().await == AgentStatus::Running {
+        if !params.allow_in_progress_turn && parent.agent_status().await == AgentStatus::Running {
             return Err(invalid_request("sample source must be idle"));
         }
         let snapshot = parent.config_snapshot().await;
@@ -136,16 +143,12 @@ impl SampleTask {
             })
             .await
             .map_err(|error| invalid_request(error.to_string()))?;
-        let matches_source = match snapshot.history_mode {
+        let latest_turn_in_progress = match snapshot.history_mode {
             ThreadHistoryMode::Legacy => build_legacy_api_turns_from_rollout_items(&history.items)
                 .last()
-                .is_some_and(|turn| {
-                    turn.id == params.expected_turn_id
-                        && matches!(
-                            turn.status,
-                            TurnStatus::Completed | TurnStatus::Failed | TurnStatus::Interrupted
-                        )
-                }),
+                .filter(|turn| turn.id == params.expected_turn_id)
+                .map(|turn| turn.status == TurnStatus::InProgress),
+            // Paginated context can omit the turn start. Use the status observed at admission.
             ThreadHistoryMode::Paginated => store
                 .list_turns(ListTurnsParams {
                     thread_id: id,
@@ -159,21 +162,18 @@ impl SampleTask {
                 .map_err(|error| invalid_request(error.to_string()))?
                 .turns
                 .first()
-                .is_some_and(|turn| {
-                    turn.turn_id == params.expected_turn_id
-                        && matches!(
-                            turn.status,
-                            StoredTurnStatus::Completed
-                                | StoredTurnStatus::Failed
-                                | StoredTurnStatus::Interrupted
-                        )
-                }),
+                .filter(|turn| turn.turn_id == params.expected_turn_id)
+                .map(|turn| turn.status == StoredTurnStatus::InProgress),
         };
-        if !matches_source {
-            return Err(invalid_request(
-                "sample source turn must be the latest finished turn",
-            ));
-        }
+        let Some(source_in_progress) =
+            latest_turn_in_progress.filter(|running| !running || params.allow_in_progress_turn)
+        else {
+            return Err(invalid_request(if params.allow_in_progress_turn {
+                "sample source turn must be the latest turn"
+            } else {
+                "sample source turn must be the latest finished turn"
+            }));
+        };
         let (mut options, settings) = Box::pin(async {
             manager
                 .fork_options_from_parent(id)
@@ -190,6 +190,11 @@ impl SampleTask {
             )
             .await;
         options.config.ephemeral = true;
+        if params.allow_in_progress_turn {
+            // Mid-turn copy receives a custom interruption marker THREAD_SNAPSHOT_NOTE
+            // instead of default interrupt message
+            options.config.agent_interrupt_message_enabled = false;
+        }
         options
             .config
             .features
@@ -259,7 +264,7 @@ impl SampleTask {
             Box::pin(fork.thread.restore_thread_settings(*settings))
                 .await
                 .map_err(|error| internal_error(error.to_string()))?;
-            let input = TurnInputRequest::user_input(vec![UserInput::Text {
+            let mut input = TurnInputRequest::user_input(vec![UserInput::Text {
                 text: params.prompt,
                 text_elements: Vec::new(),
             }])
@@ -273,6 +278,15 @@ impl SampleTask {
             })
             .with_responses_metadata(params.responsesapi_client_metadata)
             .with_trace(trace);
+            if source_in_progress {
+                input.additional_context.insert(
+                    "thread_snapshot".to_string(),
+                    AdditionalContextEntry::new(
+                        THREAD_SNAPSHOT_NOTE.to_string(),
+                        AdditionalContextKind::Application,
+                    ),
+                );
+            }
             if !matches!(
                 fork.thread
                     .start_turn_if_idle(input)
@@ -331,11 +345,12 @@ impl SampleTask {
             .remove(&fork.thread_id.to_string());
         let mut response = result?;
         cleanup.map_err(|error| internal_error(error.to_string()))?;
-        if parent
-            .conversation_history_snapshot()
-            .await
-            .history_version()
-            != revision
+        if !params.allow_in_progress_turn
+            && parent
+                .conversation_history_snapshot()
+                .await
+                .history_version()
+                != revision
         {
             return Err(invalid_request("sample source changed"));
         }

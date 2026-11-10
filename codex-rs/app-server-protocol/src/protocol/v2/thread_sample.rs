@@ -14,9 +14,11 @@ use std::collections::HashMap;
 #[ts(export_to = "v2/")]
 pub struct ThreadSampleParams {
     pub thread_id: String,
-    /// The loaded source's latest completed, failed, or interrupted turn.
-    /// Stale or active sources are rejected.
+    /// The loaded source's latest turn, which must be finished (completed, failed, or interrupted) unless `allowInProgressTurn` is true.
     pub expected_turn_id: String,
+    /// Allow sampling the latest turn before it finishes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_in_progress_turn: bool,
     pub prompt: String,
     /// Applied only when the provider and model support cache-preserving reasoning-effort updates.
     #[ts(optional = nullable)]

@@ -1,0 +1,74 @@
+---
+source: app-server/tests/suite/v2/thread_sample.rs
+expression: "context_snapshot::format_context_snapshot(\"A child samples a compacted parent while a tool call is pending. The parent then receives the real tool result.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A child samples a compacted parent while a tool call is pending. The parent then receives the real tool result.
+
+## Window 1
+-- request 1 (request; Parent starts) --
+00:message/developer:
+    Help the user with their task.
+01:message/developer[2]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Initial turn
+
+## Window 2 (after request 1: settings changed (parallel_tool_calls, tools))
+-- request 2 (request; Parent compacts) --
+00:message/developer:
+    Help the user with their task.
+01:message/developer[2]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Initial turn
+04:function_call/unknown_tool:{}
+05:function_call_output:unsupported call: unknown_tool
+06:message/user:
+    <SUMMARIZATION_PROMPT>
+
+## Window 3 (after request 2: input diverged at item 04, settings changed (parallel_tool_calls, tools))
+-- request 3 (request; Parent requests a tool) --
+00:message/developer:
+    Help the user with their task.
+01:message/developer[2]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Initial turn
+04:message/user:
+    <COMPACTION_SUMMARY>
+    Mid-turn compaction summary
+-- request 4 (request; Child samples the open turn) --
+05:function_call/parent_tool:{}
+06:function_call_output:aborted
+07:message/developer:
+    <thread_snapshot>
+    This snapshot is a copy of the source thread’s history taken while its turn was still running. Making th...ding at capture may appear as "aborted" in this copy. [hash=2c3f1d1da57b6493]
+    </thread_snapshot>
+08:message/user:
+    Predict
+
+## Window 4 (after request 4: input diverged at item 06)
+-- request 5 (request; Parent receives the tool result) --
+00:message/developer:
+    Help the user with their task.
+01:message/developer[2]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Initial turn
+04:message/user:
+    <COMPACTION_SUMMARY>
+    Mid-turn compaction summary
+05:function_call/parent_tool:{}
+06:function_call_output:parent tool result

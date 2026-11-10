@@ -35,9 +35,12 @@ use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::SnapshotEntry;
 use core_test_support::responses;
 use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_remote;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -172,12 +175,14 @@ async fn prediction_fork(client: &mut TestAppServer, parent: &str) -> Result<Str
 
 #[test_matrix(
     [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated],
-    [TurnStatus::Completed, TurnStatus::Failed, TurnStatus::Interrupted]
+    [TurnStatus::Completed, TurnStatus::Failed, TurnStatus::Interrupted],
+    [false, true]
 )]
 #[tokio::test]
 async fn sample_preserves_context_and_keeps_source_unchanged(
     history_mode: ThreadHistoryMode,
     parent_status: TurnStatus,
+    allow_in_progress_turn: bool,
 ) -> Result<()> {
     let server = responses::start_mock_server().await;
     let compact_parent =
@@ -303,6 +308,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
         ThreadSampleParams {
             thread_id: parent.thread.id.clone(),
             expected_turn_id: completed.turn.id.clone(),
+            allow_in_progress_turn,
             prompt: "Continue identically".to_string(),
             effort: Some(ReasoningEffort::Medium),
             interrupt_on_cancel: Some(true),
@@ -372,6 +378,13 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
         );
     }
     let prediction = &requests[sample_index];
+    let sample_input = prediction.input();
+    assert_eq!(marker_count(&sample_input, "<thread_snapshot>"), 0);
+    assert_eq!(
+        marker_count(&sample_input, "<turn_aborted>"),
+        usize::from(parent_status == TurnStatus::Interrupted),
+        "only the parent's real interruption marker should be inherited"
+    );
     assert_eq!(
         comparable_request(prediction.body_json()),
         comparable_request(requests[sample_index + 1].body_json())
@@ -408,6 +421,329 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
             .expect("parent turn metadata"),
     )?;
     assert!(parent_metadata.get("generation_trigger").is_none());
+    Ok(())
+}
+
+fn marker_count(input: &[Value], marker: &str) -> usize {
+    input
+        .iter()
+        .filter_map(|item| item["content"].as_array())
+        .flatten()
+        .filter_map(|part| part["text"].as_str())
+        .map(|text| text.matches(marker).count())
+        .sum()
+}
+
+fn assert_open_sample_input(input: &[Value]) {
+    assert_eq!(
+        (
+            marker_count(input, "<thread_snapshot>"),
+            marker_count(input, "<turn_aborted>"),
+        ),
+        (1, 0),
+        "expected one snapshot note and no interruption marker"
+    );
+    let [.., note, prompt] = input else {
+        panic!("expected the snapshot note immediately before the sample prompt");
+    };
+    assert_eq!(note["role"], "developer");
+    let content = note["content"].as_array().expect("developer content");
+    assert_eq!(
+        content.last().expect("snapshot note")["text"],
+        concat!(
+            "<thread_snapshot>\n",
+            "This snapshot is a copy of the source thread’s history taken while its turn was still running. ",
+            "Making the copy did not stop the source turn. ",
+            "A tool call that was pending at capture may appear as \"aborted\" in this copy.\n",
+            "</thread_snapshot>"
+        )
+    );
+    assert_eq!(prompt["role"], "user");
+    assert_eq!(prompt["content"][0]["text"], "Predict");
+}
+
+#[test_case(ThreadHistoryMode::Legacy, false; "legacy")]
+#[test_case(ThreadHistoryMode::Paginated, false; "paginated")]
+#[test_case(ThreadHistoryMode::Paginated, true; "paginated_after_mid_turn_compaction")]
+#[tokio::test]
+async fn sample_in_progress_turn_uses_captured_history(
+    history_mode: ThreadHistoryMode,
+    compact_mid_turn: bool,
+) -> Result<()> {
+    let (release_sample, sample_gate) = tokio::sync::oneshot::channel();
+    let mut streams = Vec::new();
+    if compact_mid_turn {
+        // A tool call keeps the turn open while its token usage triggers compaction.
+        streams.push(vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_function_call("before-compaction", "unknown_tool", "{}"),
+                responses::ev_completed_with_tokens(
+                    "before-compaction",
+                    /*total_tokens*/ 330_000,
+                ),
+            ]),
+        }]);
+        streams.push(vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_assistant_message("summary", "Mid-turn compaction summary"),
+                responses::ev_completed_with_tokens("compacted", /*total_tokens*/ 200),
+            ]),
+        }]);
+    }
+    let child_request_index = streams.len() + 1;
+    streams.extend([
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_function_call("pending-call", "parent_tool", "{}"),
+                responses::ev_completed("parent"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: Some(sample_gate),
+            body: responses::sse(vec![
+                responses::ev_assistant_message("prediction", "Continue"),
+                responses::ev_completed("sample"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_completed("parent-done")]),
+        }],
+    ]);
+    let (server, _) = start_streaming_sse_server(streams).await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(server.uri())
+        .with_root_config("model_auto_compact_token_limit = 200000")
+        .write(home.path())?;
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized_with_timeout(WAIT)
+        .await?;
+    let parent = client
+        .start_thread(ThreadStartParams {
+            history_mode: Some(history_mode),
+            base_instructions: compact_mid_turn
+                .then(|| "Help the user with their task.".to_string()),
+            dynamic_tools: Some(vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "parent_tool".to_string(),
+                description: "Wait for the client.".to_string(),
+                input_schema: json!({"type":"object","properties":{}}),
+                defer_loading: false,
+            })]),
+            ..Default::default()
+        })
+        .await?
+        .thread
+        .id;
+    let start = client
+        .send_turn_start_request(TurnStartParams {
+            thread_id: parent.clone(),
+            input: input("Initial turn"),
+            ..Default::default()
+        })
+        .await?;
+    let started: TurnStartResponse = timeout(WAIT, client.read_response(start)).await??;
+    let ServerRequest::DynamicToolCall { request_id, .. } =
+        timeout(WAIT, client.read_stream_until_request_message()).await??
+    else {
+        anyhow::bail!("expected the parent's pending tool call");
+    };
+    let sample_id = client
+        .send_raw_request(
+            "thread/sample",
+            Some(json!({
+                "threadId": parent, "expectedTurnId": started.turn.id,
+                "allowInProgressTurn": true, "prompt": "Predict"
+            })),
+        )
+        .await?;
+    timeout(WAIT, server.wait_for_request_count(child_request_index + 1)).await?;
+    // Finish the parent after the child has captured the pending call.
+    client
+        .send_response(
+            request_id,
+            json!({
+                "contentItems": [{"type":"inputText","text":"parent tool result"}],
+                "success": true
+            }),
+        )
+        .await?;
+    let completed: TurnCompletedNotification =
+        timeout(WAIT, client.read_notification("turn/completed")).await??;
+    assert_eq!(completed.turn.id, started.turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+    let requests = server
+        .requests()
+        .await
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(request))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    if compact_mid_turn {
+        let [initial, compaction, continuation, sample, follow_up] = requests.as_slice() else {
+            anyhow::bail!("expected five model requests, got {}", requests.len());
+        };
+        let entries = [
+            SnapshotEntry::body(initial).labeled("Parent starts"),
+            SnapshotEntry::body(compaction).labeled("Parent compacts"),
+            SnapshotEntry::body(continuation).labeled("Parent requests a tool"),
+            SnapshotEntry::body(sample).labeled("Child samples the open turn"),
+            SnapshotEntry::body(follow_up).labeled("Parent receives the tool result"),
+        ];
+        insta::assert_snapshot!(
+            "sample_compacted_parent_with_pending_tool_call",
+            context_snapshot::format_context_snapshot(
+                "A child samples a compacted parent while a tool call is pending. The parent then receives the real tool result.",
+                &entries,
+                &ContextSnapshotOptions::default().rewrite_known_segments(),
+            )
+        );
+    }
+    let child = &requests[child_request_index];
+    let follow_up = &requests[child_request_index + 1];
+    let child_input = child["input"].as_array().expect("sample input");
+    let parent_input = follow_up["input"].as_array().expect("parent input");
+    assert_eq!(marker_count(parent_input, "<thread_snapshot>"), 0);
+    assert_eq!(marker_count(parent_input, "<turn_aborted>"), 0);
+    for (input, expected_output) in [
+        (parent_input, "parent tool result"),
+        (child_input, "aborted"),
+    ] {
+        let call = input
+            .iter()
+            .position(|item| item["type"] == "function_call" && item["call_id"] == "pending-call")
+            .expect("captured call");
+        assert_eq!(input[call]["name"], "parent_tool");
+        if compact_mid_turn {
+            assert!(input[..call].iter().any(|item| {
+                item["content"][0]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Mid-turn compaction summary"))
+            }));
+        }
+        let output = input
+            .iter()
+            .position(|item| {
+                item["type"] == "function_call_output" && item["call_id"] == "pending-call"
+            })
+            .expect("paired output");
+        assert!(call < output);
+        assert_eq!(input[output]["output"], expected_output);
+    }
+    assert_open_sample_input(child_input);
+    release_sample.send(()).expect("sample stream waiting");
+    let response: ThreadSampleResponse = timeout(WAIT, client.read_response(sample_id)).await??;
+    assert_eq!(response.source_turn_id, started.turn.id);
+    assert_eq!(response.text.as_deref(), Some("Continue"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn sample_after_mid_turn_compaction_without_a_pending_tool_call() -> Result<()> {
+    let (release_parent, parent_gate) = tokio::sync::oneshot::channel();
+    let mut first_response =
+        responses::ev_completed_with_tokens("before-compaction", /*total_tokens*/ 330_000);
+    first_response["response"]["end_turn"] = json!(false);
+    let stream = |gate, events| {
+        vec![StreamingSseChunk {
+            gate,
+            body: responses::sse(events),
+        }]
+    };
+    let (server, _) = start_streaming_sse_server(vec![
+        stream(None, vec![first_response]),
+        stream(
+            None,
+            vec![
+                responses::ev_assistant_message("summary", "Mid-turn compaction summary"),
+                responses::ev_completed_with_tokens("compacted", /*total_tokens*/ 200),
+            ],
+        ),
+        stream(
+            Some(parent_gate),
+            vec![responses::ev_completed("parent-done")],
+        ),
+        stream(
+            None,
+            vec![
+                responses::ev_assistant_message("prediction", "Continue"),
+                responses::ev_completed("sample"),
+            ],
+        ),
+    ])
+    .await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(server.uri())
+        .with_root_config("model_auto_compact_token_limit = 200000")
+        .write(home.path())?;
+    let mut client = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized_with_timeout(WAIT)
+        .await?;
+    let parent = client
+        .start_thread(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    let start = client
+        .send_turn_start_request(TurnStartParams {
+            thread_id: parent.id.clone(),
+            input: input("Initial turn"),
+            ..Default::default()
+        })
+        .await?;
+    let started: TurnStartResponse = timeout(WAIT, client.read_response(start)).await??;
+
+    // The third request is the parent's first model step after compaction.
+    // Its response is gated, so the turn is still running when the child samples it.
+    timeout(WAIT, server.wait_for_request_count(/*count*/ 3)).await?;
+    let path = parent.path.as_ref().expect("persistent source path");
+    let before = std::fs::read(path)?;
+    let response = sample(
+        &mut client,
+        ThreadSampleParams {
+            thread_id: parent.id,
+            expected_turn_id: started.turn.id.clone(),
+            allow_in_progress_turn: true,
+            prompt: "Predict".to_string(),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(
+        std::fs::read(path)?,
+        before,
+        "sampling changed the parent rollout"
+    );
+    assert_eq!(response.source_turn_id, started.turn.id);
+    release_parent.send(()).expect("parent response waiting");
+    let completed: TurnCompletedNotification =
+        timeout(WAIT, client.read_notification("turn/completed")).await??;
+    assert_eq!(completed.turn.id, started.turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 4);
+    let child: Value = serde_json::from_slice(&requests[3])?;
+    let input = child["input"].as_array().expect("sample input");
+    assert!(
+        input.iter().any(|item| {
+            item["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Mid-turn compaction summary"))
+        }),
+        "expected the inherited compaction summary"
+    );
+    assert!(
+        input.iter().all(|item| item.get("call_id").is_none()),
+        "unexpected tool call or output"
+    );
+    assert_open_sample_input(input);
     Ok(())
 }
 
