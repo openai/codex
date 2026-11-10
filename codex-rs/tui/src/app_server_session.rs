@@ -180,7 +180,7 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-const JSONRPC_INVALID_REQUEST: i64 = -32600;
+pub(crate) const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSONRPC_INVALID_PARAMS: i64 = -32602;
 pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str = "A previous external agent import is still running. Wait for it to finish before importing again.";
@@ -249,6 +249,18 @@ pub(crate) enum ThreadHistorySupport {
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     let message = format!("{context}: {err}");
     color_eyre::Report::new(err).wrap_err(message)
+}
+
+pub(crate) fn is_method_not_found(error: &TypedRequestError) -> bool {
+    let TypedRequestError::Server { method, source } = error else {
+        return false;
+    };
+    // Older servers report an unknown method as an invalid request during deserialization.
+    source.code == JSONRPC_METHOD_NOT_FOUND
+        || (source.code == JSONRPC_INVALID_REQUEST
+            && source.message.contains(method.as_str())
+            && (source.message.contains("unknown variant")
+                || source.message.contains("unknown method")))
 }
 
 pub(crate) fn is_history_pagination_unsupported(source: &JSONRPCErrorError) -> bool {

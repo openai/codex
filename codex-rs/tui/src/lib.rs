@@ -135,6 +135,7 @@ mod config_update;
 mod copy_input_guard;
 pub(crate) mod custom_terminal;
 mod daybreak;
+mod device_login;
 mod experimental_features;
 mod image_decode;
 mod markdown_copy;
@@ -2221,6 +2222,35 @@ async fn run_ratatui_app(
         && (config.model_provider.is_amazon_bedrock()
             || !matches!(app_server_target, AppServerTarget::Embedded));
     let guidance_request_handle = app_server.request_handle();
+    let gateway_sign_in = async {
+        if !uses_remote_workspace
+            && let Some(prompt) = startup_draft
+                .run_until(
+                    &mut tui,
+                    device_login::start_if_needed(
+                        &mut app_server,
+                        &session_selection,
+                        &config,
+                        device_login::prefer_device_login(),
+                    ),
+                )
+                .await??
+        {
+            startup_draft.flush_pending_events(&mut tui).await?;
+            onboarding::onboarding_screen::run_gateway_device_login(
+                &mut tui,
+                &mut app_server,
+                prompt,
+            )
+            .await?;
+        }
+        Ok::<_, color_eyre::Report>(())
+    }
+    .await;
+    if let Err(err) = gateway_sign_in {
+        shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
+        return Err(err);
+    }
     let startup_prefetch_started_at = Instant::now();
     // Fetch the catalog alongside hooks/list. Fresh starts choose the model after config/read.
     app_server.prefetch_model_list();

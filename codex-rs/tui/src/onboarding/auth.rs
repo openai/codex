@@ -78,6 +78,7 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
 use super::onboarding_screen::StepState;
 
 mod headless_chatgpt_login;
+pub(super) use headless_chatgpt_login::render_device_code_prompt;
 
 #[derive(Clone)]
 pub(crate) enum SignInState {
@@ -1262,9 +1263,12 @@ impl WidgetRef for AuthModeWidget {
                 state.render(area, buf, self.error_message());
             }
             SignInState::GatewayOAuth { url, .. } => {
-                let mut lines = vec![Line::from(
-                    "Finish signing in to your gateway in the browser.".bold(),
-                )];
+                let title = if url.is_some() {
+                    "Finish signing in to your gateway in the browser."
+                } else {
+                    "Starting gateway sign-in…"
+                };
+                let mut lines = vec![Line::from(title.bold())];
                 if let Some(url) = url {
                     lines.push(Line::from(url.clone().cyan().underlined()));
                 }

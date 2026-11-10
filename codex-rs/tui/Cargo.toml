@@ -165,6 +165,7 @@ windows-sys = { workspace = true, features = [
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 winsplit = "0.1"

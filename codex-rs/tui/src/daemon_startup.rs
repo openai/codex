@@ -7,7 +7,7 @@
 //! configuration; removed features are inert, and unreported features are assumed disabled.
 
 use super::*;
-use codex_app_server_client::TypedRequestError;
+use crate::app_server_session::is_method_not_found;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ExperimentalFeatureStage;
@@ -196,12 +196,7 @@ pub(super) async fn compatibility_warning(
                     requested.retain(|name, _| !required.contains_key(name));
                 }
             }
-            Err(TypedRequestError::Server { source, .. })
-                if source.code == -32601
-                    || source.code == -32600
-                        && source.message.contains("configRequirements/read")
-                        && (source.message.contains("unknown variant")
-                            || source.message.contains("unknown method")) => {}
+            Err(err) if is_method_not_found(&err) => {}
             Err(_) => return Err("could not check daemon configuration requirements".to_string()),
         }
         if requested.is_empty() {

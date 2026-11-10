@@ -185,6 +185,11 @@ async fn gateway_oauth_displays_the_browser_link_and_retry_action() {
     let (widget, _home) = super::tests::widget_forced_chatgpt().await;
     *widget.sign_in_state.write().unwrap() = SignInState::GatewayOAuth {
         provider_id: "office".into(),
+        url: None,
+    };
+    insta::assert_snapshot!(screen(&widget, /*height*/ 1), @"Starting gateway sign-in…");
+    *widget.sign_in_state.write().unwrap() = SignInState::GatewayOAuth {
+        provider_id: "office".into(),
         url: Some("https://office.example.test/authorize".into()),
     };
     insta::assert_snapshot!("gateway_oauth_browser", screen(&widget, /*height*/ 4));

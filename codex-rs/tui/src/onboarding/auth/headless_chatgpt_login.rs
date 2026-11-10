@@ -104,26 +104,42 @@ pub(super) fn render_device_code_login(
         spans.push(banner.into());
     }
 
-    let mut lines = vec![spans.into(), "".into()];
+    render_device_code_prompt(
+        area,
+        buf,
+        spans.into(),
+        state
+            .verification_url
+            .as_deref()
+            .zip(state.user_code.as_deref()),
+        [
+            "  1. Open this link in your browser and sign in",
+            "  2. Enter this one-time code after you are signed in (expires in 15 minutes)",
+        ],
+        widget.cancel_binding(),
+    );
+}
 
-    let verification_url = if let (Some(verification_url), Some(user_code)) =
-        (&state.verification_url, &state.user_code)
-    {
-        lines.push("  1. Open this link in your browser and sign in".into());
+pub(crate) fn render_device_code_prompt<'a>(
+    area: Rect,
+    buf: &mut Buffer,
+    heading: Line<'a>,
+    prompt: Option<(&'a str, &'a str)>,
+    [open_link, enter_code]: [&str; 2],
+    cancel: crate::key_hint::KeyBinding,
+) {
+    let mut lines = vec![heading, "".into()];
+    let verification_url = if let Some((verification_url, user_code)) = prompt {
+        lines.push(open_link.into());
         lines.push("".into());
         lines.push(Line::from(vec![
             "  ".into(),
-            verification_url.as_str().cyan().underlined(),
+            verification_url.cyan().underlined(),
         ]));
         lines.push("".into());
-        lines.push(
-            "  2. Enter this one-time code after you are signed in (expires in 15 minutes)".into(),
-        );
+        lines.push(enter_code.into());
         lines.push("".into());
-        lines.push(Line::from(vec![
-            "  ".into(),
-            user_code.as_str().cyan().bold(),
-        ]));
+        lines.push(Line::from(vec!["  ".into(), user_code.cyan().bold()]));
         lines.push("".into());
         lines.push(
             "  Continue only if you started this login in Codex. If a website or another person gave you this code, cancel."
@@ -131,7 +147,7 @@ pub(super) fn render_device_code_login(
                 .into(),
         );
         lines.push("".into());
-        Some(verification_url.clone())
+        Some(verification_url)
     } else {
         lines.push("  Requesting a one-time code...".dim().into());
         lines.push("".into());
@@ -140,14 +156,14 @@ pub(super) fn render_device_code_login(
 
     lines.push(Line::from(vec![
         "  Press ".dim(),
-        widget.cancel_binding().into(),
+        cancel.into(),
         " to cancel".dim(),
     ]));
     Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .render(area, buf);
 
-    if let Some(url) = &verification_url {
+    if let Some(url) = verification_url {
         mark_url_hyperlink(buf, area, url);
     }
 }

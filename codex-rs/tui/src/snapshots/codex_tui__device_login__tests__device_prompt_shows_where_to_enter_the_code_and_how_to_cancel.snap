@@ -1,0 +1,18 @@
+---
+source: tui/src/device_login_tests.rs
+expression: terminal.backend().to_string()
+---
+  Sign in to your gateway
+
+  1. Open this link in a browser
+
+  https://login.example.com/device
+
+  2. Enter this one-time code when prompted
+
+  ABCD-EFGH
+
+  Continue only if you started this login in Codex. If a website or another
+person gave you this code, cancel.
+
+  Press esc to cancel

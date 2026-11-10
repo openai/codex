@@ -16,7 +16,9 @@ use crate::tui::Tui;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::GatewayOAuthCancelResponse;
 use codex_app_server_protocol::GatewayOAuthChangedNotification;
+use codex_app_server_protocol::GatewayOAuthLoginParams;
 use codex_app_server_protocol::GatewayOAuthLoginResponse;
+use codex_app_server_protocol::GatewayOAuthReadParams;
 use codex_app_server_protocol::GatewayOAuthReadResponse;
 use codex_app_server_protocol::GatewayOAuthStatus;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -113,19 +115,32 @@ impl AuthModeWidget {
                 let status = handle
                     .request_typed::<GatewayOAuthReadResponse>(ClientRequest::GatewayOAuthRead {
                         request_id: onboarding_request_id(),
-                        params: None,
+                        params: Some(GatewayOAuthReadParams {
+                            model_provider: Some(provider_id.clone()),
+                        }),
                     })
                     .await?;
                 color_eyre::eyre::ensure!(
                     status.provider_id == provider_id,
                     "The selected gateway changed during sign-in."
                 );
-                if status.required && status.status != Some(GatewayOAuthStatus::Succeeded) {
+                // Startup shows the device code for the selected chat before it requests models.
+                if status.required
+                    && status.status != Some(GatewayOAuthStatus::Succeeded)
+                    && !crate::device_login::needs_device_login(
+                        &status,
+                        crate::device_login::prefer_device_login(),
+                    )
+                    .await
+                {
                     handle
                         .request_typed::<GatewayOAuthLoginResponse>(
                             ClientRequest::GatewayOAuthLogin {
                                 request_id: onboarding_request_id(),
-                                params: None,
+                                params: Some(GatewayOAuthLoginParams {
+                                    model_provider: Some(status.provider_id),
+                                    ..Default::default()
+                                }),
                             },
                         )
                         .await?;
