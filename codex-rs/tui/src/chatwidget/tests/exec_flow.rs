@@ -443,14 +443,15 @@ async fn replayed_commands_preserve_individual_output_and_failure_status() {
 
     let cells = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|event| match event {
-            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            AppEvent::InsertHistoryCell(cell) => Some(cell.transcript_lines(/*width*/ 80)),
             _ => None,
         })
+        .filter(|lines| !lines.is_empty())
         .collect::<Vec<_>>();
     assert_eq!(cells.len(), 4);
     let transcript = cells
         .iter()
-        .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 80)))
+        .map(|lines| lines_to_single_string(lines))
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(transcript, @r"$ printf first

@@ -166,6 +166,13 @@ impl TranscriptView {
                     .bold()
                     .remove_modifier(Modifier::DIM),
             );
+        } else if layout.is_turn_disclosure() {
+            buf.set_style(
+                area,
+                Style::default()
+                    .fg(crate::style::user_message_accent_color())
+                    .bold(),
+            );
         } else if row == usize::from(layout.separated) {
             buf.set_style(area, Style::default().underlined());
         }
@@ -334,11 +341,18 @@ impl TranscriptView {
         let Some(layout) = self.layout(cells, index) else {
             return false;
         };
-        if !layout.disclosure {
+        let Some(control) = layout.disclosure_row() else {
             return false;
-        }
+        };
         let ids = self.activity_ids(cells, index);
-        let row = usize::from(layout.separated);
+        let row = if matches!(
+            self.turn_row(cells, index),
+            Some(turn_details::TurnRow::Prompt { .. })
+        ) {
+            control
+        } else {
+            usize::from(layout.separated)
+        };
         let visible = self.visible.iter().any(|visible| {
             visible.row == row && visible.activity_ids.iter().any(|id| ids.contains(id))
         });
@@ -381,6 +395,12 @@ impl TranscriptView {
         if self.search.has_active_query() && !matched {
             if let Some(snapshot) = &mut self.held_reading {
                 snapshot.pinned.remove(&key);
+                if let Some(details) = &self.turn_details {
+                    for child in details.child_keys(index) {
+                        snapshot.pinned.remove(&child);
+                        snapshot.activities.remove(&child);
+                    }
+                }
             }
         } else {
             self.release_live_reading();
@@ -391,7 +411,11 @@ impl TranscriptView {
             .and_then(|(key, top_ids, offset, row_bias)| {
                 let unchanged = cells.iter().position(|cell| EntryKey::cell(cell) == key);
                 let top = unchanged.or_else(|| self.canonical_activity_index(cells, &top_ids))?;
-                let preserve_offset = unchanged.is_some() && top != index;
+                let prompt = matches!(
+                    self.turn_row(cells, top),
+                    Some(turn_details::TurnRow::Prompt { .. })
+                );
+                let preserve_offset = unchanged.is_some() && (top != index || prompt);
                 Some(Anchor {
                     key: cells.get(top).map_or(EntryKey::Live, EntryKey::cell),
                     index: top,

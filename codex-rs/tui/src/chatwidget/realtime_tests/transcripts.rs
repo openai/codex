@@ -498,7 +498,7 @@ async fn transcript_completion_waits_for_normal_agent_stream_consolidation() {
         }
     }
 
-    chat.finalize_completed_assistant_message(Some("normal typed output"));
+    chat.finalize_completed_assistant_message("normal typed output", /*phase*/ None);
     chat.note_stream_consolidation_completed();
     chat.flush_realtime_transcript_history();
 
@@ -542,7 +542,7 @@ async fn transcript_handoff_moves_deferred_repeats_and_partial_once() {
     assert_eq!(cells.len(), super::super::MAX_PENDING_TRANSCRIPT_CELLS + 1);
     assert!(chat.take_realtime_transcript_cells_for_replay().is_empty());
     chat.restore_realtime_transcript_cells(cells);
-    chat.finalize_completed_assistant_message(Some("ordinary stream"));
+    chat.finalize_completed_assistant_message("ordinary stream", /*phase*/ None);
     chat.note_stream_consolidation_completed();
     chat.flush_realtime_transcript_history();
 
@@ -849,7 +849,7 @@ async fn completed_user_caption_stays_visible_until_history_commit() {
     chat.on_agent_message_delta("An earlier answer".into());
     assert!(chat.take_realtime_transcript_history().is_empty());
     assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Keep these words visible."));
-    chat.finalize_completed_assistant_message(Some("An earlier answer"));
+    chat.finalize_completed_assistant_message("An earlier answer", /*phase*/ None);
     chat.note_stream_consolidation_completed();
     commit_realtime_history_events(&mut chat, &mut events);
     let history = std::iter::from_fn(|| events.try_recv().ok())

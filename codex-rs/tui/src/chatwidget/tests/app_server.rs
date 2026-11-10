@@ -1803,6 +1803,7 @@ async fn live_app_server_turn_completion_repairs_dropped_message_deltas() {
         .filter_map(|event| match event {
             AppEvent::ConsolidateAgentMessage {
                 source,
+                phase: Some(MessagePhase::FinalAnswer),
                 scrollback_reflow,
                 ..
             } => {

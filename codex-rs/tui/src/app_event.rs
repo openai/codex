@@ -313,7 +313,7 @@ pub(crate) enum CapturedSideStream {
 /// Presentation retained alongside the transcript while its composer is inactive.
 #[derive(Debug)]
 pub(crate) struct CapturedSideDisplay {
-    pub(crate) rendered_completion_turn_ids: std::collections::HashSet<String>,
+    pub(crate) rendered_completion_turn_ids: std::collections::HashMap<String, bool>,
     pub(crate) active: Option<Box<dyn HistoryCell>>,
     pub(crate) auxiliary: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     pub(crate) draft: Box<crate::bottom_pane::TextArea>,
@@ -1359,6 +1359,7 @@ pub(crate) enum AppEvent {
     /// `deferred_history_cell` lets callers add the final stream tail to the
     /// transcript without first writing its provisional render to scrollback.
     ConsolidateAgentMessage {
+        phase: Option<codex_protocol::models::MessagePhase>,
         interrupted_item: Option<(String, String)>,
         source: String,
         copy_source: Option<String>,

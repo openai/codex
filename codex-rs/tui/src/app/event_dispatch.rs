@@ -1097,6 +1097,7 @@ impl App {
                 self.finish_initial_history_replay_buffer(tui);
             }
             AppEvent::ConsolidateAgentMessage {
+                phase,
                 interrupted_item,
                 source,
                 copy_source,
@@ -1107,6 +1108,7 @@ impl App {
             } => {
                 let mut cell = history_cell::AgentMarkdownCell::new_with_inline_visualizations(source, &cwd, inline_visualization_context).with_copy_source(copy_source);
                 cell.interrupted_item = interrupted_item;
+                cell.phase = phase;
                 self.handle_consolidate_agent_message(
                     tui,
                     cell,

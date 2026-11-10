@@ -17,8 +17,10 @@ impl TranscriptView {
             cells
                 .last()
                 .filter(|cell| {
-                    cell.as_any()
-                        .is::<crate::history_cell::FinalMessageSeparator>()
+                    self.turn_row(cells, cells.len() - 1).is_none()
+                        && cell
+                            .as_any()
+                            .is::<crate::history_cell::FinalMessageSeparator>()
                         && !cell.display_lines(area.width).is_empty()
                 })
                 .map(EntryKey::cell)

@@ -708,12 +708,11 @@ async fn replay_reconciles_only_matching_voice_captions_one_for_one() {
             AppEvent::InsertHistoryCell(cell) => Some(
                 cell.transcript_lines(/*width*/ 80)
                     .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+                    .map(|line| line.to_string()),
             ),
             _ => None,
         })
+        .flatten()
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(rendered.matches("show <code> & tests").count(), 2);
@@ -1086,12 +1085,11 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
                 AppEvent::InsertHistoryCell(cell) => Some(
                     cell.transcript_lines(/*width*/ 80)
                         .into_iter()
-                        .map(|line| line.to_string())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+                        .map(|line| line.to_string()),
                 ),
                 _ => None,
             })
+            .flatten()
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(rendered.matches("spoken complete").count(), 1);

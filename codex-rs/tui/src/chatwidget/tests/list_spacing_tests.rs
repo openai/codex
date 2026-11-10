@@ -69,7 +69,7 @@ async fn list_spacing_streams_compact_then_reflows_on_completion_or_interruption
                 } else if plan {
                     chat.on_plan_item_completed(source.into());
                 } else {
-                    chat.finalize_completed_assistant_message(Some(source));
+                    chat.finalize_completed_assistant_message(source, /*phase*/ None);
                 }
                 let mut completed = None;
                 while let Ok(event) = rx.try_recv() {

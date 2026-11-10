@@ -16,5 +16,6 @@ impl ChatWidget {
             self.bottom_pane.status_elapsed().filter(|_| live),
             live.then(Local::now),
         )
+        .filter(|cell| self.local_settings.transcript_mode.is_owned() || cell.has_timing())
     }
 }

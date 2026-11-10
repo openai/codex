@@ -2,12 +2,18 @@
 //! and scrollback retain their original cells, including command output.
 
 use super::*;
+use crate::history_cell::AgentMarkdownCell;
+use crate::history_cell::AgentMessageCell;
 use crate::history_cell::DynamicToolCallCell;
+use crate::history_cell::FinalMessageSeparator;
+use crate::history_cell::ReasoningSummaryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::WebSearchCell;
+use codex_protocol::models::MessagePhase;
 
 #[derive(Clone)]
 pub(crate) enum TurnRow {
+    Prompt { id: String, label: String },
     Tools(Arc<ToolGroup>),
     Hidden,
 }
@@ -15,6 +21,7 @@ pub(crate) enum TurnRow {
 impl TurnRow {
     pub(crate) fn ids(&self) -> &[String] {
         match self {
+            Self::Prompt { id, .. } => std::slice::from_ref(id),
             Self::Tools(group) => &group.ids,
             Self::Hidden => &[],
         }
@@ -70,6 +77,7 @@ pub(super) struct TurnDetails {
 
 struct Entry {
     key: EntryKey,
+    parent: Option<usize>,
     row: Option<TurnRow>,
 }
 
@@ -151,6 +159,13 @@ impl ToolGroup {
 }
 
 impl TurnDetails {
+    pub(super) fn child_keys(&self, parent: usize) -> impl Iterator<Item = EntryKey> + '_ {
+        self.rows
+            .iter()
+            .filter(move |entry| entry.parent == Some(parent))
+            .map(|entry| entry.key)
+    }
+
     fn index_turn(
         &mut self,
         cells: &[Arc<dyn HistoryCell>],
@@ -159,16 +174,27 @@ impl TurnDetails {
     ) {
         let rows = &mut self.rows;
         let start = rows.len();
+        let has_prompt = cells
+            .first()
+            .is_some_and(|cell| cell.as_any().is::<UserHistoryCell>());
         let keys = cells
             .iter()
             .map(EntryKey::cell)
             .chain(latest.then_some(EntryKey::Live));
-        rows.extend(keys.map(|key| Entry { key, row: None }));
+        rows.extend(keys.map(|key| Entry {
+            key,
+            parent: None,
+            row: None,
+        }));
         let rows = &mut rows[start..];
         let mut group = ToolGroup::default();
         if latest && !self.live.0.is_empty() {
             group.push(rows, cells.len(), self.live.1.clone(), self.live.0.clone());
         }
+        let mut completion = None;
+        let mut separator = None;
+        let mut fold = false;
+        let mut hidden_count = 0;
         let mut searches = std::collections::HashSet::new();
         for (index, cell) in cells.iter().enumerate().rev() {
             // Keep older calls outside the group whose disclosure is pinned on screen.
@@ -187,7 +213,43 @@ impl TurnDetails {
                 rows[index].row = Some(TurnRow::Hidden);
                 continue;
             }
+            let markdown = any.downcast_ref::<AgentMarkdownCell>();
+            let phase = markdown.and_then(|message| message.phase.as_ref());
             let calls = cell.tool_call_labels();
+            if let Some(done) = any.downcast_ref::<FinalMessageSeparator>() {
+                // /review can complete another turn under the same prompt.
+                // A live timestamp can arrive immediately after an untimed replay marker.
+                if separator.is_none_or(|(next, _)| next != index + 1)
+                    || done.display_label().is_some()
+                {
+                    separator = Some((index, done));
+                }
+                fold = false;
+            } else if phase == Some(&MessagePhase::FinalAnswer)
+                || (!fold
+                    && separator.is_some()
+                    && ((markdown.is_some() && phase.is_none())
+                        || any.is::<crate::history_cell::ProposedPlanCell>()))
+            {
+                // An answer item can finish before its turn succeeds.
+                fold |= separator.is_some();
+            } else if fold
+                && phase != Some(&MessagePhase::PartialAnswer)
+                && has_prompt
+                && (!calls.is_empty()
+                    || markdown.is_some()
+                    || any.is::<AgentMessageCell>()
+                    || any
+                        .downcast_ref::<ReasoningSummaryCell>()
+                        .is_some_and(|reasoning| !reasoning.is_transcript_only()))
+            {
+                rows[index].parent = Some(start);
+                hidden_count += calls.len().max(1);
+                if let Some((at, done)) = separator.take() {
+                    rows[at].row = Some(TurnRow::Hidden);
+                    completion.get_or_insert(done);
+                }
+            }
             if let Some(tool) = any.downcast_ref::<DynamicToolCallCell>()
                 && tool.is_active()
             {
@@ -213,6 +275,18 @@ impl TurnDetails {
             }
         }
         group.finish(rows, cells);
+        if hidden_count > 0 {
+            let label = completion
+                .and_then(FinalMessageSeparator::display_label)
+                .unwrap_or_else(|| match hidden_count {
+                    1 => "1 previous message".into(),
+                    count => format!("{count} previous messages"),
+                });
+            rows[0].row = Some(TurnRow::Prompt {
+                id: format!("turn:{:?}", rows[0].key),
+                label,
+            });
+        }
     }
 }
 
@@ -322,6 +396,12 @@ impl TranscriptView {
         let details = self.turn_details.as_ref()?;
         let key = cells.get(index).map_or(EntryKey::Live, EntryKey::cell);
         let entry = details.rows.get(index).filter(|entry| entry.key == key)?;
+        if let Some(parent) = entry.parent
+            && let Some(TurnRow::Prompt { id, .. }) = &details.rows[parent].row
+            && !self.disclosure.expanded.contains(id)
+        {
+            return Some(TurnRow::Hidden);
+        }
         entry.row.clone()
     }
 }

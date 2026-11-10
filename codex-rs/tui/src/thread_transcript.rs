@@ -275,7 +275,10 @@ fn item_to_cells(
             cells.push(Arc::new(cell.with_async_replies(replies, cwd.as_path())));
         }
         ThreadItemPayload::AgentMessage {
-            text, questions, ..
+            text,
+            questions,
+            phase,
+            ..
         } => {
             let parsed = parse_assistant_markdown(&text, cwd.as_path());
             if !parsed.visible_markdown.trim().is_empty() {
@@ -285,6 +288,7 @@ fn item_to_cells(
                         cwd.as_path(),
                         inline_visualization_context,
                     )
+                    .with_phase(phase)
                     .with_questions(questions.as_deref().unwrap_or_default()),
                 ));
             }

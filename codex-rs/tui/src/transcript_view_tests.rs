@@ -1408,8 +1408,130 @@ fn tool_disclosure_hides_output() {
     ");
 }
 
+fn assistant_message(
+    text: &str,
+    phase: Option<codex_protocol::models::MessagePhase>,
+) -> Arc<dyn HistoryCell> {
+    Arc::new(
+        crate::history_cell::AgentMarkdownCell::new(
+            text.into(),
+            &crate::test_support::test_path_buf("/repo"),
+        )
+        .with_phase(phase),
+    )
+}
+
 #[test]
-fn web_search_summary_follows_the_completed_call() {
+fn tool_groups_expand_independently_inside_a_completed_turn() {
+    use crate::exec_cell::CommandOutput;
+    use crate::exec_cell::new_active_exec_command;
+    use codex_app_server_protocol::CommandExecutionSource;
+    use codex_protocol::models::MessagePhase::Commentary;
+    use codex_protocol::models::MessagePhase::FinalAnswer;
+    let mut cells = vec![
+        prompt("Check why the service writes a diagnostic to stderr each time it starts."),
+        assistant_message("Checking stderr.", Some(Commentary)),
+    ];
+    for id in ["hello", "world"] {
+        let mut command = new_active_exec_command(
+            id.into(),
+            vec!["echo".into(), id.into()],
+            Vec::new(),
+            CommandExecutionSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        );
+        command.complete_call(
+            id,
+            CommandOutput::new(/*exit_code*/ 0, "output sentinel".into()),
+            std::time::Duration::ZERO,
+        );
+        cells.push(Arc::new(command));
+    }
+    cells.push(assistant_message(
+        "The path is valid.",
+        Some(codex_protocol::models::MessagePhase::PartialAnswer),
+    ));
+    cells.push(assistant_message(
+        "The fixture is missing.",
+        Some(FinalAnswer),
+    ));
+    let mut view = TranscriptView::default();
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    assert!(turn_screen(&mut view, &cells).contains("Checking stderr."));
+    cells.push(Arc::new(crate::history_cell::FinalMessageSeparator::new(
+        /*elapsed_seconds*/ None, /*runtime_metrics*/ None,
+    )));
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    insta::assert_snapshot!(turn_screen(&mut view, &cells).trim(), @r"
+    › Check why the service writes a diagnostic to
+      stderr each time it starts.
+
+
+    ▸ 3 previous messages
+
+    • The path is valid.
+
+    • The fixture is missing.
+    ");
+
+    // The wrapped prompt is taller than this viewport. Keyboard expansion keeps its control visible.
+    let narrow = |view: &mut TranscriptView| {
+        text(&render(view, &cells, /*width*/ 25, /*height*/ 3))
+    };
+    narrow(&mut view);
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    narrow(&mut view);
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    assert!(narrow(&mut view).contains("▾ 3 previous messages"));
+    let expanded = turn_screen(&mut view, &cells);
+    assert!(expanded.contains("Checking stderr.") && expanded.contains("▸ Ran 2 commands"));
+    assert!(!expanded.contains("Ran echo hello"));
+    view.handle_key(KeyCode::Down.into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    let expanded = turn_screen(&mut view, &cells);
+    assert!(expanded.contains("▾ Ran 2 commands"));
+    assert!(expanded.contains("Ran echo hello") && expanded.contains("Ran echo world"));
+    assert!(!expanded.contains("output sentinel"));
+    view.begin_search();
+    view.paste_search("fixture is missing");
+    while view.advance_search(&cells) {}
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    let matched = view.search.match_anchor().expect("final answer match");
+    view.scroll(&cells, /*rows*/ -20);
+    let frame = turn_screen(&mut view, &cells);
+    let row = |needle: &str| {
+        frame
+            .lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle} in {frame}")) as u16
+    };
+    view.begin_selection(
+        &cells,
+        /*column*/ 5,
+        row("Checking stderr."),
+        /*clicks*/ 2,
+    );
+    assert!(view.toggle_disclosure_at(&cells, /*column*/ 0, row("previous messages")));
+    let collapsed = turn_screen(&mut view, &cells);
+    assert!(!collapsed.contains("Checking stderr.") && !collapsed.contains("Ran 2 commands"));
+    assert!(collapsed.contains("The fixture is missing."));
+    assert_eq!(view.search.match_anchor(), Some(matched));
+    view.handle_key(KeyCode::Esc.into(), &cells);
+    view.set_presentation(/*detailed*/ true, HistoryRenderMode::Rich);
+    assert!(turn_screen(&mut view, &cells).contains("output sentinel"));
+    view.set_presentation(/*detailed*/ false, HistoryRenderMode::Rich);
+
+    view.sync_turn_details(&cells, /*enabled*/ false, /*active*/ None);
+    view.jump_to_latest();
+    let disabled = turn_screen(&mut view, &cells);
+    assert!(disabled.contains("Checking stderr."));
+    assert!(disabled.contains("output sentinel"));
+}
+
+#[test]
+fn legacy_progress_stays_visible_until_a_final_answer() {
+    use codex_protocol::models::MessagePhase::FinalAnswer;
     let completed = |id: &str, query: &str| {
         Arc::new(crate::history_cell::new_web_search_call(
             id.into(),
@@ -1419,10 +1541,7 @@ fn web_search_summary_follows_the_completed_call() {
     };
     let mut cells = vec![
         prompt("Check the fixture"),
-        Arc::new(crate::history_cell::AgentMarkdownCell::new(
-            "Intermediate progress".into(),
-            &crate::test_support::test_path_buf("/repo"),
-        )),
+        assistant_message("Intermediate progress", /*phase*/ None),
     ];
     let search = crate::history_cell::new_active_web_search_call(
         "search".into(),
@@ -1484,6 +1603,23 @@ fn web_search_summary_follows_the_completed_call() {
     let joined = turn_screen(&mut view, &cells);
     assert!(joined.contains("▾ 3 tool calls"));
     assert!(joined.contains("      Image generation failed\n      Searched the web for fixture\n      Searched the web for docs"));
+    cells.extend([
+        assistant_message("Fixture verified", /*phase*/ None),
+        Arc::new(crate::history_cell::FinalMessageSeparator::new(
+            /*elapsed_seconds*/ None, /*runtime_metrics*/ None,
+        )),
+        Arc::new(crate::history_cell::FinalMessageSeparator::new(
+            Some(2),
+            /*runtime_metrics*/ None,
+        )),
+        cell("Code review started"),
+        assistant_message("Review complete", Some(FinalAnswer)),
+    ]);
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    let screen = turn_screen(&mut view, &cells);
+    assert!(screen.contains("▸ Worked for 2s"), "{screen}");
+    assert!(screen.contains("Fixture verified") && screen.contains("Review complete"));
+    assert!(!screen.contains("Intermediate progress"));
 }
 
 #[test]

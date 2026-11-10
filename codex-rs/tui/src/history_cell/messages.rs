@@ -588,6 +588,7 @@ impl HistoryCell for AgentMessageCell {
 pub(crate) struct AgentMarkdownCell {
     /// Identifies an interrupted reply that can still receive its authoritative completion.
     pub(crate) interrupted_item: Option<(String, String)>,
+    pub(crate) phase: Option<codex_protocol::models::MessagePhase>,
     markdown_source: String,
     copy_source: Option<String>,
     cwd: PathBuf,
@@ -643,12 +644,21 @@ impl AgentMarkdownCell {
             interrupted_item: None,
             markdown_source,
             copy_source: None,
+            phase: None,
             cwd: cwd.to_path_buf(),
             inline_visualization_context,
             rendered_lines,
             spoken_artifacts: false,
             question_titles: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_phase(
+        mut self,
+        phase: Option<codex_protocol::models::MessagePhase>,
+    ) -> Self {
+        self.phase = phase;
+        self
     }
 
     pub(crate) fn with_questions(

@@ -53,9 +53,15 @@ pub(crate) struct TextLayout {
     disclosure_control: Option<DisclosureControl>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum DisclosureAnchor {
+    Activity(usize),
+    Turn,
+}
+
 struct DisclosureControl {
+    anchor: DisclosureAnchor,
     label: String,
-    source_offset: usize,
     row: usize,
 }
 
@@ -160,8 +166,7 @@ impl TextLayout {
     pub(super) fn rewrap(&self, width: u16) -> Self {
         let mut layout = Self::from_logical(self.logical.clone(), width);
         if let Some(control) = &self.disclosure_control {
-            layout =
-                layout.with_disclosure_control_at(control.label.clone(), control.source_offset);
+            layout = layout.with_control(control.label.clone(), control.anchor);
         }
         layout.image = self.image.clone();
         if self.leading_blank_hidden {
@@ -181,46 +186,63 @@ impl TextLayout {
     }
 
     /// Place a control after an activity, before any following auxiliary source text.
-    pub(super) fn with_disclosure_control_at(
-        mut self,
-        label: String,
-        source_offset: usize,
-    ) -> Self {
+    pub(super) fn with_disclosure_control_at(self, label: String, source_offset: usize) -> Self {
+        self.with_control(label, DisclosureAnchor::Activity(source_offset))
+    }
+
+    pub(super) fn with_turn_disclosure(self, label: String) -> Self {
+        self.with_control(label, DisclosureAnchor::Turn)
+    }
+
+    pub(super) fn is_turn_disclosure(&self) -> bool {
+        self.disclosure_control
+            .as_ref()
+            .is_some_and(|control| control.anchor == DisclosureAnchor::Turn)
+    }
+
+    fn with_control(mut self, label: String, anchor: DisclosureAnchor) -> Self {
         if label.is_empty() {
             return self;
         }
         if let Some(control) = self.disclosure_control.take() {
             self.rows.remove(control.row);
+            if control.anchor == DisclosureAnchor::Turn {
+                self.rows.remove(control.row - 1);
+            }
         }
-        let source_offset = self
-            .text
-            .floor_char_boundary(source_offset.min(self.text.len()));
-        let control_row = self
+        let source_offset = match anchor {
+            DisclosureAnchor::Activity(offset) => {
+                self.text.floor_char_boundary(offset.min(self.text.len()))
+            }
+            DisclosureAnchor::Turn => self.text.len(),
+        };
+        let mut control_row = self
             .rows
             .iter()
             .rposition(|row| row.source.end <= source_offset)
             .map_or(/*default*/ 0, |row| row + 1);
-        let indent = usize::from(self.width / 4).min(/*other*/ 4);
+        let indent = match anchor {
+            DisclosureAnchor::Activity(_) => usize::from(self.width / 4).min(/*other*/ 4),
+            DisclosureAnchor::Turn => {
+                self.insert_presentation_row(
+                    control_row,
+                    source_offset,
+                    /*indent*/ 0,
+                    Line::default(),
+                );
+                control_row += 1;
+                0
+            }
+        };
         let line = truncate_line_to_width(
             Line::from(format!("{}{label}", " ".repeat(indent))).dim(),
             usize::from(self.width),
         );
-        self.rows.insert(
-            control_row,
-            TextRow {
-                line: HyperlinkLine::from(line),
-                source: source_offset..source_offset,
-                line_end: None,
-                content_width: self.width,
-                first_column: indent,
-                prefix_columns: indent,
-                tabs: tabs::TabStops::default(),
-            },
-        );
+        self.insert_presentation_row(control_row, source_offset, indent, line);
         self.disclosure = true;
         self.disclosure_control = Some(DisclosureControl {
+            anchor,
             label,
-            source_offset,
             row: control_row,
         });
         self
@@ -254,23 +276,38 @@ impl TextLayout {
     /// Reserve one presentation-only row before existing spacing and source text.
     pub(super) fn with_leading_spacer(mut self) -> Self {
         if !self.rows.is_empty() {
-            self.rows.insert(
+            self.insert_presentation_row(
                 /*index*/ 0,
-                TextRow {
-                    line: HyperlinkLine::from(""),
-                    source: 0..0,
-                    line_end: None,
-                    content_width: self.width,
-                    first_column: 0,
-                    prefix_columns: 0,
-                    tabs: tabs::TabStops::default(),
-                },
+                /*offset*/ 0,
+                /*indent*/ 0,
+                Line::default(),
             );
             if let Some(control) = &mut self.disclosure_control {
                 control.row += 1;
             }
         }
         self
+    }
+
+    fn insert_presentation_row(
+        &mut self,
+        index: usize,
+        offset: usize,
+        indent: usize,
+        line: Line<'static>,
+    ) {
+        self.rows.insert(
+            index,
+            TextRow {
+                line: HyperlinkLine::from(line),
+                source: offset..offset,
+                line_end: None,
+                content_width: self.width,
+                first_column: indent,
+                prefix_columns: indent,
+                tabs: tabs::TabStops::default(),
+            },
+        );
     }
 
     /// Source text between adjacent retained fragments; distinct logical lines have a hard break.

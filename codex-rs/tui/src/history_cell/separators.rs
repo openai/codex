@@ -7,7 +7,7 @@ use chrono::Datelike;
 use chrono::Local;
 use chrono::NaiveDate;
 use codex_app_server_protocol::Turn;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// Completion metadata shown after the assistant's final response.
 ///
@@ -26,9 +26,10 @@ pub struct FinalMessageSeparator {
     clock_format: ClockFormat,
 }
 impl FinalMessageSeparator {
+    /// Full-screen transcripts also use untimed separators to identify completed turns.
     pub(crate) fn from_turn_once(
         turn: &Turn,
-        rendered_turn_ids: &mut HashSet<String>,
+        rendered_completion_turn_ids: &mut HashMap<String, bool>,
         fallback_elapsed: Option<std::time::Duration>,
         fallback_completed_at: Option<DateTime<Local>>,
     ) -> Option<Self> {
@@ -42,12 +43,14 @@ impl FinalMessageSeparator {
             .and_then(|timestamp| DateTime::from_timestamp(timestamp, /*nsecs*/ 0))
             .map(|timestamp| timestamp.with_timezone(&Local))
             .or(fallback_completed_at);
-        if completed_at.is_none() && elapsed_seconds.is_none() {
+        let has_label = completed_at.is_some() || elapsed_seconds.is_some();
+        if rendered_completion_turn_ids
+            .get(&turn.id)
+            .is_some_and(|labeled| *labeled || !has_label)
+        {
             return None;
         }
-        if !rendered_turn_ids.insert(turn.id.clone()) {
-            return None;
-        }
+        rendered_completion_turn_ids.insert(turn.id.clone(), has_label);
         let cell = Self::new(elapsed_seconds, /*runtime_metrics*/ None);
         Some(match completed_at {
             Some(completed_at) => cell.with_completed_at(completed_at, ClockFormat::system()),
@@ -85,6 +88,14 @@ impl FinalMessageSeparator {
     ) -> Self {
         self.runtime_metrics = runtime_metrics;
         self
+    }
+
+    pub(crate) fn has_timing(&self) -> bool {
+        self.completed_at.is_some() || self.elapsed_seconds.is_some()
+    }
+
+    pub(crate) fn display_label(&self) -> Option<String> {
+        self.label(self.display_date)
     }
 
     fn label(&self, today: NaiveDate) -> Option<String> {
@@ -129,7 +140,7 @@ impl HistoryCell for FinalMessageSeparator {
         if width == 0 {
             return Vec::new();
         }
-        self.label(self.display_date)
+        self.display_label()
             .map(|label| {
                 let indent = if width > 2 { "  " } else { "" };
                 let options = textwrap::Options::new(usize::from(width))
@@ -144,7 +155,7 @@ impl HistoryCell for FinalMessageSeparator {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        self.label(self.display_date)
+        self.display_label()
             .map(|label| vec![Line::from(label)])
             .unwrap_or_default()
     }
