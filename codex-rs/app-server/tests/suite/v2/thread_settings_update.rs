@@ -12,6 +12,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
+use codex_app_server_protocol::ThreadEnvironment;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
@@ -48,6 +49,127 @@ use test_case::test_case;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Selection-only changes are observable after acknowledgment, including attaching and clearing.
+#[tokio::test]
+async fn environments_attach_replace_preserve_and_clear_without_inference() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        r#"
+[[environments]]
+id = "remote-a"
+url = "ws://127.0.0.1:1"
+[[environments]]
+id = "remote-b"
+url = "ws://127.0.0.1:2"
+"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("requirements.toml"),
+        "allowed_approval_policies = [\"never\"]\n",
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        // This test owns environments.toml and starts with no selected executor.
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(codex_home.path().to_string_lossy().into_owned()),
+            environments: Some(Vec::new()),
+            ..Default::default()
+        })
+        .await?;
+    let started: ThreadStartResponse = mcp.read_response(request_id).await?;
+    let environment_a = ThreadEnvironment {
+        environment_id: "remote-a".to_string(),
+        cwd: started.cwd.clone().into(),
+        runtime_workspace_roots: vec![started.cwd.clone().into()],
+    };
+    let environment_b = ThreadEnvironment {
+        environment_id: "remote-b".to_string(),
+        ..environment_a.clone()
+    };
+    let rejected_id = mcp
+        .send_raw_request(
+            "thread/settings/update",
+            Some(json!({
+                "threadId": started.thread.id,
+                "environments": [environment_a],
+                "approvalPolicy": "on-request",
+            })),
+        )
+        .await?;
+    let rejected = mcp
+        .read_stream_until_error_message(RequestId::Integer(rejected_id))
+        .await?;
+    assert_eq!(rejected.error.code, -32600);
+    assert!(rejected.error.message.contains("approval_policy"));
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: started.thread.id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read: ThreadReadResponse = mcp.read_response(read_id).await?;
+    assert_eq!(read.thread.environments, Some(Vec::new()));
+
+    for (mut params, expected, changed) in [
+        (
+            json!({"environments": [environment_a]}),
+            vec![environment_a],
+            true,
+        ),
+        (
+            json!({"environments": [environment_b]}),
+            vec![environment_b.clone()],
+            true,
+        ),
+        (
+            json!({"environments": [environment_b]}),
+            vec![environment_b.clone()],
+            false,
+        ),
+        (json!({}), vec![environment_b.clone()], false),
+        (json!({"environments": null}), vec![environment_b], false),
+        (json!({"environments": []}), vec![], true),
+    ] {
+        params["threadId"] = json!(started.thread.id);
+        let request_id = mcp
+            .send_raw_request("thread/settings/update", Some(params))
+            .await?;
+        let _: ThreadSettingsUpdateResponse = mcp.read_response(request_id).await?;
+        let read_id = mcp
+            .send_thread_read_request(ThreadReadParams {
+                thread_id: started.thread.id.clone(),
+                include_turns: false,
+            })
+            .await?;
+        let read: ThreadReadResponse = mcp.read_response(read_id).await?;
+        assert_eq!(read.thread.environments, Some(expected.clone()));
+        if changed {
+            let updated = read_thread_settings_updated(&mut mcp).await?;
+            assert_eq!(
+                (
+                    updated.thread_id,
+                    updated.thread_settings.cwd,
+                    updated.thread_settings.environments,
+                ),
+                (
+                    started.thread.id.clone(),
+                    started.cwd.clone(),
+                    Some(expected.clone()),
+                )
+            );
+        }
+    }
+    assert!(received_response_bodies(&server).await?.is_empty());
+    Ok(())
+}
 
 #[tokio::test]
 async fn disabled_plugin_ids_replace_preserve_and_clear_without_inference() -> Result<()> {

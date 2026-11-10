@@ -516,6 +516,12 @@ Read the selection from `threadSettings.disabledPluginIds` in
 across resume. Forks restore the selection from the history retained at the
 requested fork boundary.
 
+# Environment settings
+
+`turn/settings/update` can replace the environments used by later steps of the running turn; an already-started step and future turns are unchanged. `thread/settings/update` changes the selection for future turns without affecting the running turn. Both accept the same `environments` list as `turn/start`: omission or `null` keeps the selection, and `[]` clears it. A thread settings request that provides `cwd` without an explicit environment list selects the default environments for that directory. Selected environments inherit the thread's configuration.
+
+`thread/settings/update` returns success after Core accepts the update, including an unchanged selection. Rejections are returned as request errors. `thread/settings/updated` reports effective changes, including the ordered `environments` selection, and is not a per-request acknowledgment. Updating both scopes requires two separate requests; they are not atomic.
+
 # Deprecated thread personality setting
 
 `thread/start`, `thread/resume`, `thread/settings/update`, and `turn/start` still

@@ -4,6 +4,7 @@ use super::AskForApproval;
 use super::SandboxMode;
 use super::SandboxPolicy;
 use super::Thread;
+use super::ThreadEnvironment;
 use super::ThreadHistoryMode;
 use super::ThreadItem;
 use super::ThreadRealtimeItem;
@@ -242,6 +243,12 @@ pub struct ThreadSettingsUpdateParams {
     /// Override the working directory for subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
+    /// Replace the environments for future turns without changing the running turn.
+    /// Omitted/null preserves the selection unless `cwd` is also provided, which selects
+    /// the default environments for that directory. [] clears the selection.
+    #[experimental("thread/settings/update.environments")]
+    #[ts(optional = nullable)]
+    pub environments: Option<Vec<TurnEnvironmentParams>>,
     /// Override the approval policy for subsequent turns.
     #[experimental(nested)]
     #[ts(optional = nullable)]
@@ -306,6 +313,11 @@ pub struct ThreadSettings {
     #[serde(default)]
     pub disabled_plugin_ids: Vec<String>,
     pub cwd: AbsolutePathBuf,
+    /// Environments configured for future turns, in priority order, primary first.
+    /// `null` means the server does not expose the selection; [] means none are selected.
+    #[experimental("thread/settings.environments")]
+    #[serde(default)]
+    pub environments: Option<Vec<ThreadEnvironment>>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,

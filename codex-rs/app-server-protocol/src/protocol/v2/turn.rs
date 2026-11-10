@@ -43,7 +43,9 @@ pub enum TurnStatus {
 /// Unsupported fields are rejected rather than silently ignored.
 /// Any live task kind may accept publication. Child sessions and consumers of
 /// frozen initial settings are unchanged.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export_to = "v2/")]
 pub struct TurnSettingsUpdateParams {
@@ -53,6 +55,11 @@ pub struct TurnSettingsUpdateParams {
     /// Already captured steps and pending approvals retain their original reviewer.
     #[ts(optional = nullable)]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Replace the environments for subsequent steps of this turn, not future turns.
+    /// Omitted/null preserves the selection; [] clears it. An already-started step is unchanged.
+    #[experimental("turn/settings/update.environments")]
+    #[ts(optional = nullable)]
+    pub environments: Option<Vec<TurnEnvironmentParams>>,
     /// Omission or `null` leaves the model unchanged.
     #[ts(optional = nullable)]
     pub model: Option<String>,

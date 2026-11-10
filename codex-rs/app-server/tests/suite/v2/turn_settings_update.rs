@@ -2,12 +2,15 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_request_user_input_sse_response;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
@@ -21,6 +24,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::ReasoningSummary;
@@ -46,6 +50,118 @@ enum UpdateScenario {
     Future,
     Current,
     Rejected,
+}
+
+/// Environment updates take effect at their requested scope without enabling model switching.
+#[test_case("turn/settings/update", [false, true, false]; "later steps only")]
+#[test_case("thread/settings/update", [false, false, true]; "future turns only")]
+#[tokio::test]
+async fn environment_settings_updates_use_the_requested_scope(
+    method: &str,
+    expected_new_cwd: [bool; 3],
+) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let requests = responses::mount_sse_sequence(
+        &server,
+        vec![
+            create_request_user_input_sse_response("pause")?,
+            responses::sse_completed("after-update"),
+            responses::sse_completed("next-turn"),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    mock_config(codex_home.path(), &server.uri())?.write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let original_cwd = app.auto_env()?.selection().cwd.clone();
+    let new_cwd = original_cwd.join("settings-environment")?;
+    app.auto_env()?
+        .environment()
+        .get_filesystem()
+        .create_directory(
+            &new_cwd,
+            CreateDirectoryOptions {
+                recursive: false,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    let mut environment = app.auto_env_params()?;
+    environment.cwd = new_cwd.clone().into();
+    let thread_request = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.read_response(thread_request).await?;
+    let turn_id = start_turn(&mut app, &thread.id).await?;
+    let request = timeout(DEFAULT_TIMEOUT, app.read_stream_until_request_message()).await??;
+    let ServerRequest::ToolRequestUserInput { request_id, .. } = request else {
+        anyhow::bail!("expected paused turn, received {request:?}");
+    };
+
+    let mut update = json!({"threadId": thread.id, "environments": [environment]});
+    if method == "turn/settings/update" {
+        update["turnId"] = json!(turn_id);
+    }
+    let mut invalid_update = update.clone();
+    invalid_update["environments"][0]["environmentId"] = json!("missing");
+    let invalid_id = app.send_request(method, Some(invalid_update)).await?;
+    let rejected = app
+        .read_stream_until_error_message(RequestId::Integer(invalid_id))
+        .await?;
+    assert_eq!(
+        rejected.error,
+        JSONRPCErrorError {
+            code: -32600,
+            message: "unknown turn environment id `missing`".to_string(),
+            data: None,
+        }
+    );
+    let update_id = app.send_request(method, Some(update)).await?;
+    let result: Value = app.read_response(update_id).await?;
+    if method == "turn/settings/update" {
+        assert_eq!(result, json!({"status": "applied"}));
+    } else {
+        assert_eq!(result, json!({}));
+        let updated: ThreadSettingsUpdatedNotification =
+            app.read_notification("thread/settings/updated").await?;
+        assert_eq!(
+            serde_json::to_value(updated.thread_settings.environments)?,
+            json!([{
+                "environmentId": environment.environment_id,
+                "cwd": environment.cwd,
+                "runtimeWorkspaceRoots": [new_cwd.inferred_native_path_string()],
+            }])
+        );
+    }
+    app.send_response(
+        request_id,
+        json!({"answers": {"confirm_path": {"answers": ["Yes (Recommended)"]}}}),
+    )
+    .await?;
+    let _: TurnCompletedNotification = app.read_notification("turn/completed").await?;
+    start_turn(&mut app, &thread.id).await?;
+    let _: TurnCompletedNotification = app.read_notification("turn/completed").await?;
+
+    let original_cwd = format!("<cwd>{}</cwd>", original_cwd.inferred_native_path_string());
+    let new_cwd = format!("<cwd>{}</cwd>", new_cwd.inferred_native_path_string());
+    let visible_cwds = requests
+        .requests()
+        .iter()
+        .map(|request| {
+            request
+                .message_input_texts("user")
+                .into_iter()
+                .rfind(|text| text.contains(&new_cwd) || text.contains(&original_cwd))
+                .expect("model request should include a working directory")
+                .contains(&new_cwd)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(visible_cwds, expected_new_cwd);
+    Ok(())
 }
 
 #[test_case(UpdateScenario::Future; "future-only A A B")]
@@ -311,6 +427,7 @@ async fn turn_settings_update_reports_unavailable_without_starting_or_changing_a
     let update = TurnSettingsUpdateParams {
         thread_id: thread.id.clone(),
         turn_id: "never-started".to_string(),
+        environments: Some(Vec::new()),
         model: Some(MODEL_B.to_string()),
         ..Default::default()
     };
@@ -353,6 +470,14 @@ async fn turn_settings_update_reports_unavailable_without_starting_or_changing_a
         requests.single_request().body_json()["model"],
         Value::String(MODEL_A.to_string())
     );
+    let read_id = app
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id,
+            include_turns: false,
+        })
+        .await?;
+    let read: ThreadReadResponse = app.read_response(read_id).await?;
+    assert_eq!(read.thread.environments, thread.environments);
     Ok(())
 }
 
