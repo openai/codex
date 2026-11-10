@@ -18,6 +18,7 @@ use crate::safety_buffering::treatment_from_headers;
 use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
+use bytes::Bytes;
 use codex_client::TransportError;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::RetryAfter;
@@ -44,6 +45,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::Fragment;
+use tokio_tungstenite::tungstenite::protocol::frame::Frame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::Data;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::debug;
@@ -69,6 +73,36 @@ enum WsCommand {
     },
 }
 
+/// Send large Responses turns as one text message with backpressure between frames.
+async fn send_message(
+    socket: &mut (impl futures::Sink<Message, Error = WsError> + Unpin),
+    message: Message,
+) -> Result<(), WsError> {
+    const FRAGMENT_SIZE: usize = 1024 * 1024;
+
+    let Message::Text(text) = message else {
+        return socket.send(message).await;
+    };
+    if text.len() <= FRAGMENT_SIZE {
+        return socket.send(Message::Text(text)).await;
+    }
+
+    let mut data = Bytes::from(text);
+    let mut opcode = Data::Text;
+    while !data.is_empty() {
+        let payload = data.split_to(data.len().min(FRAGMENT_SIZE));
+        let fragment = if data.is_empty() {
+            Fragment::Final
+        } else {
+            Fragment::More
+        };
+        let frame = Frame::message_fragment(payload, opcode, fragment);
+        socket.send(Message::Frame(frame)).await?;
+        opcode = Data::Continue;
+    }
+    Ok(())
+}
+
 impl WsStream {
     fn new(inner: WebSocketConnection) -> Self {
         let routing_affinity = inner.routing_affinity().cloned();
@@ -85,7 +119,7 @@ impl WsStream {
                         };
                         match command {
                             WsCommand::Send { message, tx_result } => {
-                                let result = inner.send(message).await;
+                                let result = send_message(&mut inner, message).await;
                                 let should_break = result.is_err();
                                 let _ = tx_result.send(result);
                                 if should_break {
@@ -1171,6 +1205,38 @@ mod tests {
             serde_json::from_str::<Value>(&request_text).expect("parse websocket request");
 
         assert_eq!(wire_payload, expected_payload);
+    }
+
+    #[tokio::test]
+    async fn large_turn_is_one_text_message_in_bounded_frames() {
+        const MIB: usize = 1024 * 1024;
+        let (tx, mut frames) = futures::channel::mpsc::unbounded();
+        let mut socket = tx.sink_map_err(|_| WsError::ConnectionClosed);
+
+        let at_limit = Message::text("a".repeat(MIB));
+        send_message(&mut socket, at_limit.clone()).await.unwrap();
+        assert_eq!(frames.next().await, Some(at_limit));
+
+        let mut text = "a".repeat(MIB - 1);
+        text.push('🌱');
+        text.push_str(&"b".repeat(MIB));
+        send_message(&mut socket, Message::text(text.clone()))
+            .await
+            .unwrap();
+        drop(socket);
+        for (i, expected) in text.as_bytes().chunks(MIB).enumerate() {
+            let Some(Message::Frame(frame)) = frames.next().await else {
+                panic!("expected a data frame");
+            };
+            let opcode = if i == 0 { Data::Text } else { Data::Continue };
+            assert_eq!(
+                frame.header().opcode,
+                tokio_tungstenite::tungstenite::protocol::frame::coding::OpCode::Data(opcode)
+            );
+            assert_eq!(frame.header().is_final, (i + 1) * MIB >= text.len());
+            assert_eq!(frame.payload(), expected);
+        }
+        assert!(frames.next().await.is_none());
     }
 
     #[test]

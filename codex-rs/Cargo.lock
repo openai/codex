@@ -16043,7 +16043,7 @@ dependencies = [
 [[package]]
 name = "tokio-tungstenite"
 version = "0.28.0"
-source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=02cb49fa827411e9279e3688d19ab9e82661b0e8#02cb49fa827411e9279e3688d19ab9e82661b0e8"
+source = "git+https://github.com/openai-oss-forks/tokio-tungstenite?rev=7447c427513cfe685f236e1ac0513c4ea3dd9c0b#7447c427513cfe685f236e1ac0513c4ea3dd9c0b"
 dependencies = [
  "futures-util",
  "log",
@@ -16531,7 +16531,7 @@ dependencies = [
 [[package]]
 name = "tungstenite"
 version = "0.27.0"
-source = "git+https://github.com/openai-oss-forks/tungstenite-rs?rev=db4be399bc1b8b5de2edb46c7187834edabf7e30#db4be399bc1b8b5de2edb46c7187834edabf7e30"
+source = "git+https://github.com/openai-oss-forks/tungstenite-rs?rev=bc589d684755a8c02da0fc7e58d0861cbfc306f1#bc589d684755a8c02da0fc7e58d0861cbfc306f1"
 dependencies = [
  "bytes",
  "data-encoding",
