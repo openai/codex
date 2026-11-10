@@ -23,7 +23,7 @@ pub fn allow_network_for_proxy(enforce_managed_network: bool) -> bool {
 /// after parsing these arguments. The profile JSON flag is emitted before
 /// helper feature flags so the argv order matches the helper's CLI shape. See
 /// `docs/linux_sandbox.md` for the Linux semantics.
-pub fn create_linux_sandbox_command_args_for_permission_profile(
+pub(crate) fn create_linux_sandbox_command_args_for_permission_profile(
     command: Vec<String>,
     command_cwd: &Path,
     permission_profile: &PermissionProfile,

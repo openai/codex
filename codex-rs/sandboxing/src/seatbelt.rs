@@ -34,6 +34,7 @@ mod scratch;
 pub(crate) enum MacosSeatbeltProfile {
     #[default]
     Process,
+    ProcessWithInheritedTerminal,
     FileSystemHelper,
 }
 
@@ -790,7 +791,7 @@ fn seatbelt_regex_for_glob(pattern: &str, glob_match: GlobMatch) -> Option<Strin
 }
 
 #[derive(Debug)]
-pub struct CreateSeatbeltCommandArgsParams<'a> {
+pub(crate) struct CreateSeatbeltCommandArgsParams<'a> {
     pub command: Vec<String>,
     pub file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
@@ -802,7 +803,8 @@ pub struct CreateSeatbeltCommandArgsParams<'a> {
     pub extra_allow_unix_sockets: &'a [AbsolutePathBuf],
 }
 
-pub fn create_seatbelt_command_args(
+#[cfg(test)]
+fn create_seatbelt_command_args(
     args: CreateSeatbeltCommandArgsParams<'_>,
 ) -> Result<Vec<String>, String> {
     create_seatbelt_command_args_with_profile(
@@ -837,7 +839,10 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
         )
         .map_err(|err| SeatbeltPreparationError::FileSystem(err.to_string()))?;
     let include_process_defaults = resolved_filesystem_permissions.include_platform_defaults
-        && profile == MacosSeatbeltProfile::Process;
+        && matches!(
+            profile,
+            MacosSeatbeltProfile::Process | MacosSeatbeltProfile::ProcessWithInheritedTerminal
+        );
     let scratch_reads = if include_process_defaults {
         let (reads, writes) = scratch::scratch_access_roots(
             file_system_sandbox_policy,
@@ -1023,6 +1028,13 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
         policy_sections.push("(deny system-fcntl (fcntl-command 80 110))".to_string());
     }
 
+    // Deny injecting input into the shell that resumes after this child. Keep the deny last.
+    if profile == MacosSeatbeltProfile::ProcessWithInheritedTerminal {
+        policy_sections.push(format!(
+            "(deny file-ioctl (ioctl-command {}))",
+            libc::TIOCSTI
+        ));
+    }
     let full_policy = policy_sections.join("\n");
 
     let dir_params = [

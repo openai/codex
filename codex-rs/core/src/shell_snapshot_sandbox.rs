@@ -174,7 +174,8 @@ impl ShellSnapshotSandbox {
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
             })
-            .context("failed to prepare shell snapshot sandbox")?;
+            .context("failed to prepare shell snapshot sandbox")?
+            .into_command_request();
         let workspace_roots = self
             .workspace_roots
             .iter()

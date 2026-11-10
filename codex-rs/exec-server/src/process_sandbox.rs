@@ -19,7 +19,6 @@ use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
-use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
@@ -267,10 +266,8 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     } else {
         program
     };
-    let transform_request = SandboxDirectSpawnTransformRequest {
-        workspace_roots,
-        windows_sandbox_proxy_settings_mode,
-        transform: SandboxTransformRequest {
+    let mut request = sandbox_manager
+        .transform(SandboxTransformRequest {
             command: SandboxCommand {
                 program,
                 args,
@@ -293,15 +290,9 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
             },
             use_legacy_landlock: sandbox_context.use_legacy_landlock,
             windows_sandbox_level: windows_sandbox_level.unwrap_or(WindowsSandboxLevel::Disabled),
-        },
-    };
-    let mut request = if sandbox == SandboxType::WindowsRestrictedToken {
-        // The shared launcher invokes the native Windows session spawner directly.
-        sandbox_manager.transform(transform_request.transform)
-    } else {
-        sandbox_manager.transform_for_direct_spawn(transform_request)
-    }
-    .map_err(|err| invalid_params(format!("failed to prepare process sandbox: {err}")))?;
+        })
+        .map_err(|err| invalid_params(format!("failed to prepare process sandbox: {err}")))?
+        .into_command_request();
     request.sandbox_override = sandbox_context.sandbox_override;
     crate::run_integrity_checks(&request).await;
     let windows_sandbox = if sandbox == SandboxType::WindowsRestrictedToken {

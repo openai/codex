@@ -125,7 +125,8 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })
-        .expect("transform");
+        .expect("transform")
+        .into_command_request();
 
     assert_eq!(exec_request.cwd, cwd_uri);
     assert_eq!(exec_request.sandbox_policy_cwd, cwd_uri);
@@ -186,7 +187,8 @@ fn symlinked_workspace_reports_seatbelt_preparation_error() {
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })
-        .expect_err("symlinked workspace should be rejected");
+        .err()
+        .expect("symlinked workspace should be rejected");
 
     assert!(matches!(
         &error,
@@ -241,7 +243,8 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })
-        .expect("transform");
+        .expect("transform")
+        .into_command_request();
 
     assert_eq!(
         exec_request.permission_profile,
@@ -329,7 +332,10 @@ fn transform_additional_permissions_preserves_denied_entries() {
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
         };
-        let exec_request = manager.transform(request).expect("transform");
+        let exec_request = manager
+            .transform(request)
+            .expect("transform")
+            .into_command_request();
         assert_eq!(
             exec_request.permission_profile,
             PermissionProfile::from_runtime_permissions(
@@ -383,12 +389,11 @@ fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn transform_linux_seccomp_request(
     codex_linux_sandbox_exe: &std::path::Path,
-    mode: crate::LinuxSandboxPidNamespace,
-) -> super::SandboxExecRequest {
-    let manager = SandboxManager::new().with_linux_sandbox_pid_namespace(mode);
+    manager: SandboxManager,
+) -> super::WrappedSandboxCommand {
     let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     let cwd_uri = PathUri::from_abs_path(&cwd);
     let permissions = PermissionProfile::Disabled;
@@ -491,10 +496,8 @@ fn wsl1_allows_non_bubblewrap_linux_paths() {
 #[test]
 fn transform_linux_seccomp_preserves_helper_path_in_arg0_when_available() {
     let codex_linux_sandbox_exe = std::path::PathBuf::from("/tmp/codex-linux-sandbox");
-    let exec_request = transform_linux_seccomp_request(
-        &codex_linux_sandbox_exe,
-        crate::LinuxSandboxPidNamespace::default(),
-    );
+    let exec_request =
+        transform_linux_seccomp_request(&codex_linux_sandbox_exe, SandboxManager::new()).request;
 
     assert_eq!(
         exec_request.arg0,
@@ -516,10 +519,49 @@ fn transform_linux_seccomp_uses_helper_alias_when_launcher_is_not_helper_path() 
             "--inherit-pid-namespace",
         ),
     ] {
-        let exec_request = transform_linux_seccomp_request(&codex_linux_sandbox_exe, mode);
+        let exec_request = transform_linux_seccomp_request(
+            &codex_linux_sandbox_exe,
+            SandboxManager::new().with_linux_sandbox_pid_namespace(mode),
+        )
+        .request;
         assert_eq!(exec_request.arg0, Some("codex-linux-sandbox".to_string()));
         assert_eq!(exec_request.command[1], first_helper_arg);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn inherited_terminal_preserves_native_linux_helper_and_uses_its_dispatch_name()
+-> anyhow::Result<()> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir()?;
+    let alias = OsStr::new(crate::landlock::CODEX_LINUX_SANDBOX_ARG0);
+    let alias_path = dir.path().join(alias);
+    for (helper, expected_arg0) in [
+        (alias_path.clone(), alias_path.as_os_str()),
+        (dir.path().join("codex"), alias),
+        #[cfg(target_os = "linux")]
+        (
+            dir.path().join(OsStr::from_bytes(b"cli-\xff")).join(alias),
+            alias,
+        ),
+    ] {
+        std::fs::create_dir_all(helper.parent().expect("helper directory"))?;
+        symlink("/bin/sh", &helper)?;
+        let mut wrapped =
+            transform_linux_seccomp_request(&helper, SandboxManager::for_inherited_terminal(&[]));
+        // Run a shell probe with the executable and argv[0] produced by the Linux backend.
+        wrapped.request.command.truncate(1);
+        let mut child = wrapped.into_direct_command()?;
+        assert_eq!(child.get_program(), helper.as_os_str());
+        let output = child.args(["-c", r#"printf '%s' "$0""#]).output()?;
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, expected_arg0.as_bytes());
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -617,7 +659,7 @@ async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Resu
         ),
         ("no managed network", Some(allow_all), true, false, None),
     ] {
-        let request = manager.transform(SandboxTransformRequest {
+        let prepared = manager.transform(SandboxTransformRequest {
             command: SandboxCommand {
                 program: "true".into(),
                 args: Vec::new(),
@@ -637,7 +679,8 @@ async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Resu
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
         })?;
-        let transported_context = request
+        let transported_context = prepared
+            .into_command_request()
             .command
             .windows(2)
             .find(|args| args[0] == "--managed-network")

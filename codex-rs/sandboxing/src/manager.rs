@@ -1,4 +1,5 @@
 use self::launch::PreparedLaunchPolicy;
+use self::launch::WrappedSandboxCommand;
 use crate::LinuxSandboxPidNamespace;
 #[cfg(windows)]
 use crate::WindowsSandboxFilesystemOverrides;
@@ -277,6 +278,8 @@ pub struct SandboxManager {
     #[cfg(target_os = "macos")]
     seatbelt_profile: MacosSeatbeltProfile,
     #[cfg(target_os = "macos")]
+    extra_allow_unix_sockets: Vec<AbsolutePathBuf>,
+    #[cfg(target_os = "macos")]
     allowed_symlinked_codex_home: Option<AbsolutePathBuf>,
 }
 
@@ -288,11 +291,23 @@ impl SandboxManager {
     /// Creates a manager that applies the narrower runtime profile required by filesystem helpers.
     pub fn for_file_system_helpers() -> Self {
         Self {
-            linux_sandbox_pid_namespace: LinuxSandboxPidNamespace::default(),
             #[cfg(target_os = "macos")]
             seatbelt_profile: MacosSeatbeltProfile::FileSystemHelper,
+            ..Self::default()
+        }
+    }
+
+    /// Prepare commands that inherit the controlling terminal. On macOS this also
+    /// grants access to the named Unix sockets and denies terminal input injection.
+    pub fn for_inherited_terminal(allow_unix_sockets: &[AbsolutePathBuf]) -> Self {
+        #[cfg(not(target_os = "macos"))]
+        let _ = allow_unix_sockets;
+        Self {
             #[cfg(target_os = "macos")]
-            allowed_symlinked_codex_home: None,
+            seatbelt_profile: MacosSeatbeltProfile::ProcessWithInheritedTerminal,
+            #[cfg(target_os = "macos")]
+            extra_allow_unix_sockets: allow_unix_sockets.to_vec(),
+            ..Self::default()
         }
     }
 
@@ -359,7 +374,7 @@ impl SandboxManager {
     pub fn transform(
         &self,
         request: SandboxTransformRequest<'_>,
-    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+    ) -> Result<WrappedSandboxCommand, SandboxTransformError> {
         #[cfg(windows)]
         if request.sandbox == SandboxType::WindowsRestrictedToken
             && request.enforce_managed_network
@@ -371,6 +386,19 @@ impl SandboxManager {
         }
         let backend = request.sandbox;
         let command = request.command;
+        let native_program = match backend {
+            SandboxType::None => Some(command.program.as_os_str()),
+            SandboxType::LinuxSeccomp | SandboxType::WindowsMxc => {
+                request.sandbox_exe.map(Path::as_os_str)
+            }
+            SandboxType::MacosSeatbelt | SandboxType::WindowsRestrictedToken => None,
+        }
+        .filter(|path| path.to_str().is_none())
+        .map(OsStr::to_owned);
+        let wrapped = |request| WrappedSandboxCommand {
+            request,
+            native_program,
+        };
         let managed_network = command
             .managed_network
             .filter(|_| request.enforce_managed_network || backend == SandboxType::MacosSeatbelt);
@@ -404,7 +432,7 @@ impl SandboxManager {
             arg0: None,
         };
         if backend == SandboxType::None {
-            return Ok(exec);
+            return Ok(wrapped(exec));
         }
         let pending = PendingSandboxedExecRequest::new(
             &exec.cwd,
@@ -469,6 +497,18 @@ impl SandboxManager {
                 exec.permission_profile = pending.effective_permission_profile;
                 let (file_system_sandbox_policy, network_sandbox_policy) =
                     exec.permission_profile.to_runtime_permissions();
+                let managed_network = match (managed_network, request.network) {
+                    (None, Some(proxy)) => {
+                        let prepared = proxy
+                            .prepare_for_optional_environment(exec.env, request.environment_id)
+                            .map_err(|err| {
+                                SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
+                            })?;
+                        exec.env = prepared.env;
+                        Some(prepared.sandbox_context)
+                    }
+                    (context, _) => context,
+                };
                 let args = create_seatbelt_command_args_with_profile(
                     CreateSeatbeltCommandArgsParams {
                         command: std::mem::take(&mut exec.command),
@@ -479,7 +519,7 @@ impl SandboxManager {
                         managed_network: managed_network.as_ref(),
                         environment_id: request.environment_id,
                         network: request.network,
-                        extra_allow_unix_sockets: &[],
+                        extra_allow_unix_sockets: &self.extra_allow_unix_sockets,
                     },
                     self.seatbelt_profile,
                     self.allowed_symlinked_codex_home.as_ref(),
@@ -536,7 +576,7 @@ impl SandboxManager {
                 exec.permission_profile = pending?.effective_permission_profile;
             }
         }
-        Ok(exec)
+        Ok(wrapped(exec))
     }
 
     fn wrap_linux(
@@ -567,9 +607,12 @@ impl SandboxManager {
         if self.linux_sandbox_pid_namespace == LinuxSandboxPidNamespace::Inherit {
             args.insert(0, "--inherit-pid-namespace".to_owned());
         }
-        exec.command = std::iter::once(program.clone()).chain(args).collect();
-        let arg0 = if exe.file_name() == Some(OsStr::new(CODEX_LINUX_SANDBOX_ARG0)) {
-            &program
+        exec.command = std::iter::once(program).chain(args).collect();
+        // Without bwrap --argv0, the Linux helper uses its own argv[0] as the inner executable.
+        let arg0 = if let Some(path) = exe.to_str()
+            && exe.file_name() == Some(OsStr::new(CODEX_LINUX_SANDBOX_ARG0))
+        {
+            path
         } else {
             CODEX_LINUX_SANDBOX_ARG0
         };
@@ -588,6 +631,7 @@ impl SandboxManager {
         #[cfg(not(windows))]
         {
             self.transform(request.transform)
+                .map(WrappedSandboxCommand::into_command_request)
         }
     }
 
@@ -601,7 +645,7 @@ impl SandboxManager {
         let fallback_roots = request.workspace_roots;
         let proxy_settings_mode = request.windows_sandbox_proxy_settings_mode;
         let sandbox_exe = request.transform.sandbox_exe;
-        let mut request = self.transform(request.transform)?;
+        let mut request = self.transform(request.transform)?.into_command_request();
         if request.sandbox != SandboxType::WindowsRestrictedToken {
             return Ok(request);
         }

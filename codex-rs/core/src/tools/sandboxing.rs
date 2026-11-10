@@ -513,8 +513,8 @@ impl<'a> SandboxAttempt<'a> {
                 sandbox_exe: self.sandbox_exe.map(std::path::PathBuf::as_path),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
-            })
-            .map_err(CodexErr::from)?;
+            })?
+            .into_command_request();
         request.sandbox_override = self.sandbox_override;
         let workspace_roots = self
             .workspace_roots
@@ -550,8 +550,8 @@ impl<'a> SandboxAttempt<'a> {
                 sandbox_exe: None,
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
-            })
-            .map_err(CodexErr::from)?;
+            })?
+            .into_command_request();
         request.sandbox_override = self.sandbox_override;
         let mut exec_request =
             crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options, Vec::new())
