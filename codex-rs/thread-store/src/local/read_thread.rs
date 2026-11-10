@@ -455,6 +455,7 @@ pub(super) fn stored_thread_from_state_metadata(
         thread_id: metadata.id,
         extra_config: None,
         rollout_path: Some(rollout_path),
+        attached_to_thread_id: metadata.attached_thread_parent_id,
         forked_from_id: None,
         parent_thread_id,
         preview,
@@ -560,6 +561,10 @@ fn stored_thread_from_meta_line(
         thread_id: meta_line.meta.id,
         extra_config: None,
         rollout_path: Some(rollout_path),
+        attached_to_thread_id: meta_line
+            .meta
+            .forked_from_id
+            .filter(|_| meta_line.meta.attached_thread),
         forked_from_id: meta_line.meta.forked_from_id,
         parent_thread_id: meta_line.meta.parent_thread_id,
         preview: String::new(),
@@ -864,6 +869,7 @@ mod tests {
             "Forked user message",
             Some("test-provider"),
             Some(parent_uuid),
+            /*attached_thread*/ false,
             ThreadHistoryMode::Legacy,
         )
         .expect("forked session file");

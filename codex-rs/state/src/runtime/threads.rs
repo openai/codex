@@ -1370,7 +1370,7 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         Some(crate::ThreadRelationFilter::DescendantsOf(_)) => builder.push(
             ", subtree.parent_thread_id AS parent_thread_id\nFROM subtree\nCROSS JOIN threads ON threads.id = subtree.child_thread_id",
         ),
-        Some(crate::ThreadRelationFilter::AttachedThreadsOf(_)) => {
+        Some(crate::ThreadRelationFilter::AttachedThreadsOf(_) | crate::ThreadRelationFilter::IncludeAttached) => {
             builder.push(", NULL AS parent_thread_id\nFROM threads")
         }
         None => builder.push(" FROM threads"),
@@ -1379,11 +1379,14 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
         builder,
         filters,
         /*include_thread_id_tiebreaker*/ true,
-        /*include_empty_preview*/ relation_filter.is_some(),
+        relation_filter,
     );
     if !matches!(
         relation_filter,
-        Some(crate::ThreadRelationFilter::AttachedThreadsOf(_))
+        Some(
+            crate::ThreadRelationFilter::AttachedThreadsOf(_)
+                | crate::ThreadRelationFilter::IncludeAttached
+        )
     ) {
         builder.push(EXCLUDE_ATTACHED_THREADS);
     }
@@ -1400,17 +1403,19 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
             builder.push(" AND threads.attached_thread_parent_id = ");
             builder.push_bind(parent.to_string());
         }
-        None => {}
+        Some(crate::ThreadRelationFilter::IncludeAttached) | None => {}
     }
     let order_by_index = match (relation_filter, filters.cwd_filters) {
         // Relationship listings are expected to be much smaller than the global thread table.
         // Prefer the relationship index and sort the matches instead of scanning the
         // timestamp index until enough related threads happen to be found.
-        (Some(_), _) => OrderByIndex::Disabled,
+        (Some(relation), _) if relation != crate::ThreadRelationFilter::IncludeAttached => {
+            OrderByIndex::Disabled
+        }
         // Multi-cwd listing is supported but at the time of writing has no current use in production.
         // Preserve its query plan so the global timestamp index does not regress cwd filtering into a scan.
-        (None, Some(cwd_filters)) if cwd_filters.len() > 1 => OrderByIndex::Disabled,
-        (None, Some(_) | None) => OrderByIndex::Enabled,
+        (_, Some(cwd_filters)) if cwd_filters.len() > 1 => OrderByIndex::Disabled,
+        (_, Some(_) | None) => OrderByIndex::Enabled,
     };
     push_thread_order_and_limit(
         builder,
@@ -1523,7 +1528,7 @@ pub(super) fn push_thread_filters<'a>(
         builder,
         options,
         include_thread_id_tiebreaker,
-        /*include_empty_preview*/ false,
+        /*relation_filter*/ None,
     );
 }
 
@@ -1531,7 +1536,7 @@ fn push_thread_filters_with_preview<'a>(
     builder: &mut QueryBuilder<Sqlite>,
     options: ThreadFilterOptions<'a>,
     include_thread_id_tiebreaker: bool,
-    include_empty_preview: bool,
+    relation_filter: Option<crate::ThreadRelationFilter>,
 ) {
     let ThreadFilterOptions {
         archived_only,
@@ -1551,8 +1556,18 @@ fn push_thread_filters_with_preview<'a>(
     } else {
         builder.push(" AND threads.archived = 0");
     }
-    if !archived_only && !include_empty_preview && !matches!(section, Some(Some(_))) {
-        builder.push(" AND threads.preview <> ''");
+    if !archived_only && !matches!(section, Some(Some(_))) {
+        match relation_filter {
+            None => {
+                builder.push(" AND threads.preview <> ''");
+            }
+            Some(crate::ThreadRelationFilter::IncludeAttached) => {
+                builder.push(
+                    " AND (threads.preview <> '' OR threads.attached_thread_parent_id IS NOT NULL)",
+                );
+            }
+            Some(_) => {}
+        }
     }
     match section {
         Some(Some(section)) => {

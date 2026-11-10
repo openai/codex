@@ -670,6 +670,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         extra: None,
         session_id: format!("session-{thread_id}"),
         forked_from_id: None,
+        attached_to_thread_id: None,
         parent_thread_id: None,
         preview: "first prompt".to_string(),
         ephemeral: false,

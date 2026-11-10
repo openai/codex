@@ -88,6 +88,7 @@ async fn thread_section_move_pins_and_archives_before_first_turn() -> Result<()>
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(move_id)).await??;
 
     let list_params = ThreadListParams {
+        include_attached_threads: false,
         current_account_only: false,
         excluded_thread_ids: None,
         attached_to_thread_id: None,
@@ -295,6 +296,7 @@ async fn thread_section_move_pins_and_unpins_with_filtered_recency_pagination() 
     }
 
     let list_params = ThreadListParams {
+        include_attached_threads: false,
         current_account_only: false,
         excluded_thread_ids: None,
         attached_to_thread_id: None,
@@ -490,6 +492,7 @@ async fn thread_sections_preserve_server_owned_manual_order_across_moves_and_res
     }
 
     let list_params = ThreadListParams {
+        include_attached_threads: false,
         current_account_only: false,
         excluded_thread_ids: None,
         attached_to_thread_id: None,

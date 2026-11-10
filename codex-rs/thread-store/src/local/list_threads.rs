@@ -241,7 +241,13 @@ pub(super) async fn list_rollout_threads(
     sort_key: codex_rollout::ThreadSortKey,
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
-    if params.relation_filter.is_some() || params.section.is_some() || params.project_id.is_some() {
+    if params.use_state_db_only
+        || params
+            .relation_filter
+            .is_some_and(ThreadRelationFilter::is_parent_scoped)
+        || params.section.is_some()
+        || params.project_id.is_some()
+    {
         let page = codex_rollout::state_db::list_threads_db(
             state_db.as_deref(),
             &config.sqlite,
@@ -265,37 +271,9 @@ pub(super) async fn list_rollout_threads(
         return Ok(page.into());
     }
 
-    let page = if params.use_state_db_only && params.archived {
-        RolloutRecorder::list_archived_threads_from_state_db(
-            state_db,
-            config,
-            params.page_size,
-            cursor,
-            sort_key,
-            sort_direction,
-            params.allowed_sources.as_slice(),
-            params.model_providers.as_deref(),
-            params.cwd_filters.as_deref(),
-            default_model_provider_id,
-            params.search_term.as_deref(),
-        )
-        .await
-    } else if params.use_state_db_only {
-        RolloutRecorder::list_threads_from_state_db(
-            state_db,
-            config,
-            params.page_size,
-            cursor,
-            sort_key,
-            sort_direction,
-            params.allowed_sources.as_slice(),
-            params.model_providers.as_deref(),
-            params.cwd_filters.as_deref(),
-            default_model_provider_id,
-            params.search_term.as_deref(),
-        )
-        .await
-    } else if params.archived {
+    let include_attached_threads =
+        params.relation_filter == Some(ThreadRelationFilter::IncludeAttached);
+    let page = if params.archived {
         RolloutRecorder::list_archived_threads(
             state_db,
             config,
@@ -308,6 +286,7 @@ pub(super) async fn list_rollout_threads(
             params.cwd_filters.as_deref(),
             default_model_provider_id,
             params.search_term.as_deref(),
+            include_attached_threads,
         )
         .await
     } else {
@@ -323,6 +302,7 @@ pub(super) async fn list_rollout_threads(
             params.cwd_filters.as_deref(),
             default_model_provider_id,
             params.search_term.as_deref(),
+            include_attached_threads,
         )
         .await
     };
@@ -333,6 +313,7 @@ pub(super) async fn list_rollout_threads(
 
 fn state_relation_filter(filter: ThreadRelationFilter) -> codex_state::ThreadRelationFilter {
     match filter {
+        ThreadRelationFilter::IncludeAttached => codex_state::ThreadRelationFilter::IncludeAttached,
         ThreadRelationFilter::DirectChildrenOf(id) => {
             codex_state::ThreadRelationFilter::DirectChildrenOf(id)
         }

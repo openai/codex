@@ -106,7 +106,9 @@ pub(super) async fn search_threads(
         project_id: None,
         archived: params.archived,
         search_term: None,
-        relation_filter: None,
+        relation_filter: params
+            .include_attached_threads
+            .then_some(crate::ThreadRelationFilter::IncludeAttached),
         use_state_db_only: state_db.is_some(),
     };
     let mut remaining_rollouts = matching_rollouts

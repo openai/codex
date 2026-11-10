@@ -72,6 +72,7 @@ pub(super) fn write_session_file_with(
         first_user_message,
         model_provider,
         /*forked_from_id*/ None,
+        /*attached_thread*/ false,
         history_mode,
     )
 }
@@ -85,6 +86,7 @@ pub(super) fn write_session_file_with_fork(
     first_user_message: &str,
     model_provider: Option<&str>,
     forked_from_id: Option<Uuid>,
+    attached_thread: bool,
     history_mode: ThreadHistoryMode,
 ) -> std::io::Result<PathBuf> {
     fs::create_dir_all(&day_dir)?;
@@ -97,6 +99,7 @@ pub(super) fn write_session_file_with_fork(
             "session_id": uuid,
             "id": uuid,
             "forked_from_id": forked_from_id,
+            "attached_thread": attached_thread,
             "timestamp": ts,
             "cwd": root,
             "originator": "test_originator",

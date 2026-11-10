@@ -416,6 +416,7 @@ impl RolloutRecorder {
         cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         search_term: Option<&str>,
+        include_attached_threads: bool,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
             state_db_ctx,
@@ -431,6 +432,7 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Active,
             ThreadListRepairMode::ScanAndRepair,
             search_term,
+            include_attached_threads,
         )
         .await
     }
@@ -463,6 +465,7 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Active,
             ThreadListRepairMode::StateDbOnly,
             search_term,
+            /*include_attached_threads*/ false,
         )
         .await
     }
@@ -481,6 +484,7 @@ impl RolloutRecorder {
         cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         search_term: Option<&str>,
+        include_attached_threads: bool,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
             state_db_ctx,
@@ -496,6 +500,7 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Archived,
             ThreadListRepairMode::ScanAndRepair,
             search_term,
+            include_attached_threads,
         )
         .await
     }
@@ -528,6 +533,7 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Archived,
             ThreadListRepairMode::StateDbOnly,
             search_term,
+            /*include_attached_threads*/ false,
         )
         .await
     }
@@ -547,6 +553,7 @@ impl RolloutRecorder {
         archive_filter: ThreadListArchiveFilter,
         repair_mode: ThreadListRepairMode,
         search_term: Option<&str>,
+        include_attached_threads: bool,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
         let sqlite = config.sqlite_config();
@@ -554,6 +561,8 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Active => false,
             ThreadListArchiveFilter::Archived => true,
         };
+        let relation_filter =
+            include_attached_threads.then_some(codex_state::ThreadRelationFilter::IncludeAttached);
         if matches!(repair_mode, ThreadListRepairMode::StateDbOnly) {
             return state_db::list_threads_db(
                 state_db_ctx.as_deref(),
@@ -565,7 +574,7 @@ impl RolloutRecorder {
                 allowed_sources,
                 model_providers,
                 cwd_filters,
-                /*relation_filter*/ None,
+                relation_filter,
                 archived,
                 /*section*/ None,
                 /*project_id*/ None,
@@ -586,6 +595,18 @@ impl RolloutRecorder {
         // Filesystem-first listing intentionally overfetches so we can repair stale/missing
         // SQLite rows before returning the scan page for filtered listings or the DB page for
         // unfiltered listings.
+        let file_config = ThreadListConfig {
+            allowed_sources,
+            model_providers,
+            cwd_filters,
+            default_provider,
+            layout: if archived {
+                ThreadListLayout::Flat
+            } else {
+                ThreadListLayout::NestedByDate
+            },
+            include_attached_threads,
+        };
         let fs_page = match sort_direction {
             SortDirection::Asc => {
                 list_threads_from_files_asc(
@@ -593,11 +614,7 @@ impl RolloutRecorder {
                     page_size,
                     cursor,
                     sort_key,
-                    allowed_sources,
-                    model_providers,
-                    cwd_filters,
-                    default_provider,
-                    archived,
+                    file_config,
                     search_term,
                 )
                 .await?
@@ -608,18 +625,14 @@ impl RolloutRecorder {
                     page_size.saturating_mul(2),
                     cursor,
                     sort_key,
-                    allowed_sources,
-                    model_providers,
-                    cwd_filters,
-                    default_provider,
-                    archived,
+                    file_config,
                     search_term,
                 )
                 .await?
             }
         };
 
-        if state_db_ctx.is_none() {
+        let Some(state_db) = state_db_ctx.as_deref() else {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
             codex_state::record_fallback(
@@ -633,7 +646,7 @@ impl RolloutRecorder {
                 page_size,
                 sort_key,
             ));
-        }
+        };
 
         // For metadata-filtered listings the filesystem page is the page we return. Track those
         // IDs so the later DB page only triggers full reconciliation for DB-only hits.
@@ -648,14 +661,12 @@ impl RolloutRecorder {
         // enough there. Search can depend on full title metadata, so keep full reconciliation.
         for item in &fs_page.items {
             if search_term.is_some() {
-                state_db::reconcile_rollout(
-                    state_db_ctx.as_deref(),
+                state_db::reconcile_rollout_from_disk(
+                    state_db,
                     item.path.as_path(),
                     default_provider,
-                    /*builder*/ None,
-                    &[],
                     Some(archived),
-                    /*new_thread_memory_mode*/ None,
+                    Some(codex_home),
                 )
                 .await;
             } else {
@@ -679,7 +690,7 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             cwd_filters,
-            /*relation_filter*/ None,
+            relation_filter,
             archived,
             /*section*/ None,
             /*project_id*/ None,
@@ -710,7 +721,7 @@ impl RolloutRecorder {
                     allowed_sources,
                     model_providers,
                     cwd_filters,
-                    /*relation_filter*/ None,
+                    relation_filter,
                     archived,
                     /*section*/ None,
                     /*project_id*/ None,
@@ -752,7 +763,7 @@ impl RolloutRecorder {
                         allowed_sources,
                         model_providers,
                         cwd_filters,
-                        /*relation_filter*/ None,
+                        relation_filter,
                         archived,
                         /*section*/ None,
                         /*project_id*/ None,
@@ -1415,6 +1426,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         git_origin_url,
         source,
         history_mode: _,
+        attached_to_thread_id,
         parent_thread_id,
         agent_nickname,
         agent_role,
@@ -1465,6 +1477,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     if item.source.is_none() {
         item.source = source;
     }
+    item.attached_to_thread_id = item.attached_to_thread_id.or(attached_to_thread_id);
     if item.parent_thread_id.is_none() {
         item.parent_thread_id = parent_thread_id;
     }
@@ -1491,17 +1504,12 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn list_threads_from_files_desc(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
     sort_key: ThreadSortKey,
-    allowed_sources: &[SessionSource],
-    model_providers: Option<&[String]>,
-    cwd_filters: Option<&[PathBuf]>,
-    default_provider: &str,
-    archived: bool,
+    config: ThreadListConfig<'_>,
     search_term: Option<&str>,
 ) -> std::io::Result<ThreadsPage> {
     if let Some(search_term) = search_term {
@@ -1517,11 +1525,7 @@ async fn list_threads_from_files_desc(
                 scan_page_size,
                 page_cursor.as_ref(),
                 sort_key,
-                allowed_sources,
-                model_providers,
-                cwd_filters,
-                default_provider,
-                archived,
+                config,
             )
             .await?;
             scanned_files = scanned_files.saturating_add(page.num_scanned_files);
@@ -1554,74 +1558,29 @@ async fn list_threads_from_files_desc(
         });
     }
 
-    list_threads_from_files_desc_unfiltered(
-        codex_home,
-        page_size,
-        cursor,
-        sort_key,
-        allowed_sources,
-        model_providers,
-        cwd_filters,
-        default_provider,
-        archived,
-    )
-    .await
+    list_threads_from_files_desc_unfiltered(codex_home, page_size, cursor, sort_key, config).await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn list_threads_from_files_desc_unfiltered(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
     sort_key: ThreadSortKey,
-    allowed_sources: &[SessionSource],
-    model_providers: Option<&[String]>,
-    cwd_filters: Option<&[PathBuf]>,
-    default_provider: &str,
-    archived: bool,
+    config: ThreadListConfig<'_>,
 ) -> std::io::Result<ThreadsPage> {
-    if archived {
-        let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
-        get_threads_in_root(
-            root,
-            page_size,
-            cursor,
-            sort_key,
-            ThreadListConfig {
-                allowed_sources,
-                model_providers,
-                cwd_filters,
-                default_provider,
-                layout: ThreadListLayout::Flat,
-            },
-        )
-        .await
-    } else {
-        get_threads(
-            codex_home,
-            page_size,
-            cursor,
-            sort_key,
-            allowed_sources,
-            model_providers,
-            cwd_filters,
-            default_provider,
-        )
-        .await
-    }
+    let root = codex_home.join(match config.layout {
+        ThreadListLayout::Flat => ARCHIVED_SESSIONS_SUBDIR,
+        ThreadListLayout::NestedByDate => SESSIONS_SUBDIR,
+    });
+    get_threads_in_root(root, page_size, cursor, sort_key, config).await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn list_threads_from_files_asc(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
     sort_key: ThreadSortKey,
-    allowed_sources: &[SessionSource],
-    model_providers: Option<&[String]>,
-    cwd_filters: Option<&[PathBuf]>,
-    default_provider: &str,
-    archived: bool,
+    config: ThreadListConfig<'_>,
     search_term: Option<&str>,
 ) -> std::io::Result<ThreadsPage> {
     let mut all_items = Vec::new();
@@ -1635,11 +1594,7 @@ async fn list_threads_from_files_asc(
             scan_page_size,
             page_cursor.as_ref(),
             sort_key,
-            allowed_sources,
-            model_providers,
-            cwd_filters,
-            default_provider,
-            archived,
+            config,
             /*search_term*/ None,
         )
         .await?;
@@ -2165,6 +2120,7 @@ fn thread_item_from_state_metadata(
                 .unwrap_or(SessionSource::Unknown),
         ),
         history_mode: item.history_mode,
+        attached_to_thread_id: item.attached_thread_parent_id,
         parent_thread_id,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,

@@ -40,6 +40,7 @@ impl App {
                             .request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
                                 request_id: RequestId::String(Uuid::new_v4().to_string()),
                                 params: ThreadListParams {
+                                    include_attached_threads: false,
                                     current_account_only: false,
                                     excluded_thread_ids: None,
                                     attached_to_thread_id: None,

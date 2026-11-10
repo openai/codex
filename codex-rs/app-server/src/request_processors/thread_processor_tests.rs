@@ -509,6 +509,7 @@ mod thread_processor_behavior_tests {
             extra_config: None,
             rollout_path: Some(PathBuf::from("/tmp/thread.jsonl")),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: "preview".to_string(),
             name: None,

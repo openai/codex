@@ -112,6 +112,7 @@ pub(super) fn sample_thread_with_metadata(
         extra: None,
         session_id: format!("session-{thread_id}"),
         forked_from_id: None,
+        attached_to_thread_id: None,
         parent_thread_id,
         preview: "first prompt".to_string(),
         ephemeral,

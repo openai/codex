@@ -15,6 +15,7 @@ use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadSearchResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
@@ -75,6 +76,7 @@ async fn saved_attached_thread_upgrade_restart_and_delete(recovery: Recovery) ->
         let fork: ThreadForkResponse = mcp.read_response(id).await?;
         assert!(!fork.thread.ephemeral);
         assert_eq!(fork.thread.forked_from_id, Some(parent.clone()));
+        assert_eq!(fork.thread.attached_to_thread_id.as_ref(), Some(&parent));
         children.push(fork.thread.id);
     }
     // Newer attached threads fill the raw scan page. Listing must refill across hidden
@@ -163,6 +165,11 @@ async fn saved_attached_thread_upgrade_restart_and_delete(recovery: Recovery) ->
     children.sort();
     assert_eq!(found, children);
     let id = mcp
+        .send_raw_request("thread/read", Some(json!({"threadId": children[0]})))
+        .await?;
+    let cold: ThreadReadResponse = mcp.read_response(id).await?;
+    assert_eq!(cold.thread.attached_to_thread_id.as_ref(), Some(&parent));
+    let id = mcp
         .send_raw_request("thread/list", Some(json!({"attachedToThreadId": other})))
         .await?;
     let other_list: ThreadListResponse = mcp.read_response(id).await?;
@@ -187,6 +194,7 @@ async fn saved_attached_thread_upgrade_restart_and_delete(recovery: Recovery) ->
         })
         .await?;
     let independent: ThreadForkResponse = mcp.read_response(id).await?;
+    assert_eq!(independent.thread.attached_to_thread_id, None);
     let id = mcp
         .send_raw_request(
             "thread/list",
@@ -205,7 +213,7 @@ async fn saved_attached_thread_upgrade_restart_and_delete(recovery: Recovery) ->
         .send_turn_start_request(TurnStartParams {
             thread_id: children[0].clone(),
             input: vec![UserInput::Text {
-                text: "continue".into(),
+                text: "continue the chartreuse calculation".into(),
                 text_elements: vec![],
             }],
             ..Default::default()
@@ -236,6 +244,42 @@ async fn saved_attached_thread_upgrade_restart_and_delete(recovery: Recovery) ->
         )
         .await?;
     let read: ThreadReadResponse = mcp.read_response(id).await?;
+    let id = mcp
+        .send_raw_request(
+            "thread/name/set",
+            Some(json!({
+                "threadId": children[0], "name": "chartreuse calculation"
+            })),
+        )
+        .await?;
+    let _: serde_json::Value = mcp.read_response(id).await?;
+    for include in [false, true] {
+        let params =
+            json!({"searchTerm": "chartreuse calculation", "includeAttachedThreads": include});
+        let id = mcp
+            .send_raw_request("thread/list", Some(params.clone()))
+            .await?;
+        let by_title: ThreadListResponse = mcp.read_response(id).await?;
+        let id = mcp.send_raw_request("thread/search", Some(params)).await?;
+        let by_content: ThreadSearchResponse = mcp.read_response(id).await?;
+        for results in [
+            by_title.data,
+            by_content.data.into_iter().map(|hit| hit.thread).collect(),
+        ] {
+            let destinations = results
+                .into_iter()
+                .map(|thread| (thread.id, thread.attached_to_thread_id))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                destinations,
+                if include {
+                    vec![(children[0].clone(), Some(parent.clone()))]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
     assert_eq!(read.thread.turns.len(), 1);
     assert_eq!(read.thread.turns[0].id, started.turn.id);
     let id = mcp

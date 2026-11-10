@@ -146,6 +146,7 @@ pub(super) fn stored_thread_from_rollout_item(
         extra_config: None,
         rollout_path: Some(rollout_path),
         forked_from_id: None,
+        attached_to_thread_id: item.attached_to_thread_id,
         parent_thread_id: item.parent_thread_id,
         preview,
         name: codex_state::is_guardian_review_source(&source)

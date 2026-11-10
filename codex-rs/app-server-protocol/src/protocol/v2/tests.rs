@@ -304,6 +304,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             extra: None,
             session_id: "thr_123".to_string(),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,

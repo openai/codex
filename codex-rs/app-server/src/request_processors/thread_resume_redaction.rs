@@ -220,6 +220,7 @@ mod tests {
             extra: None,
             session_id: "session-1".to_string(),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: "preview".to_string(),
             ephemeral: false,

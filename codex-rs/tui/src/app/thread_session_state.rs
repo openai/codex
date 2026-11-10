@@ -418,6 +418,7 @@ mod tests {
             extra: None,
             session_id: read_thread_id.to_string(),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: "read thread".to_string(),
             ephemeral: false,

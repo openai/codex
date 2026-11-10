@@ -939,6 +939,7 @@ fn latest_session_lookup_params(
     lookup_mode: LatestSessionLookupMode,
 ) -> ThreadListParams {
     ThreadListParams {
+        include_attached_threads: false,
         current_account_only: true,
         excluded_thread_ids: None,
         attached_to_thread_id: None,

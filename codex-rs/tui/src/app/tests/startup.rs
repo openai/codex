@@ -1304,6 +1304,7 @@ async fn known_thread_started_preserves_session_without_reading_unmaterialized_r
             extra: None,
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,

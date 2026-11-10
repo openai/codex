@@ -474,6 +474,7 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
                 .request_typed(ClientRequest::ThreadList {
                     request_id: RequestId::Integer(4),
                     params: ThreadListParams {
+                        include_attached_threads: false,
                         current_account_only: false,
                         excluded_thread_ids: None,
                         attached_to_thread_id: None,

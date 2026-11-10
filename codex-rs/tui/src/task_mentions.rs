@@ -73,6 +73,7 @@ pub(crate) fn spawn_search(
                 handle.request_typed::<ThreadSearchResponse>(ClientRequest::ThreadSearch {
                     request_id: RequestId::String(format!("task-search-{request_generation}")),
                     params: ThreadSearchParams {
+                        include_attached_threads: false,
                         current_account_only: true,
                         cursor: None,
                         limit: Some(MAX_SEARCH_RESULTS),
@@ -91,6 +92,7 @@ pub(crate) fn spawn_search(
                         "task-title-search-{request_generation}"
                     )),
                     params: ThreadListParams {
+                        include_attached_threads: false,
                         current_account_only: true,
                         excluded_thread_ids: None,
                         attached_to_thread_id: None,

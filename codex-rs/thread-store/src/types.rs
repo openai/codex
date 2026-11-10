@@ -337,12 +337,24 @@ pub enum SortDirection {
 /// Parent relationship used to filter thread listings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThreadRelationFilter {
+    /// Include attached threads alongside ordinary threads for search.
+    IncludeAttached,
     /// Return only threads whose immediate parent is the given thread.
     DirectChildrenOf(ThreadId),
     /// Return every thread transitively descended from the given thread.
     DescendantsOf(ThreadId),
     /// Saved attached threads, independent of the spawned-agent graph.
     AttachedThreadsOf(ThreadId),
+}
+
+impl ThreadRelationFilter {
+    /// Whether the caller requested relatives of one particular thread.
+    pub fn is_parent_scoped(self) -> bool {
+        match self {
+            Self::IncludeAttached => false,
+            Self::DirectChildrenOf(_) | Self::DescendantsOf(_) | Self::AttachedThreadsOf(_) => true,
+        }
+    }
 }
 
 /// Parameters for listing threads.
@@ -383,6 +395,8 @@ pub struct ListThreadsParams {
 /// Parameters for searching thread content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchThreadsParams {
+    #[serde(default)]
+    pub include_attached_threads: bool,
     /// The current login when searching account-scoped local history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<crate::LocalHistoryAccount>,
@@ -660,6 +674,9 @@ pub struct StoredThread {
     pub rollout_path: Option<PathBuf>,
     /// Source thread id when this thread was forked from another thread.
     pub forked_from_id: Option<ThreadId>,
+    /// Parent that owns this persisted attached thread, independent of fork or spawn lineage.
+    #[serde(default)]
+    pub attached_to_thread_id: Option<ThreadId>,
     /// The ID of the parent thread. This will only be set if this thread is a subagent.
     pub parent_thread_id: Option<ThreadId>,
     /// Best available user-facing preview, usually the first user message.

@@ -4912,6 +4912,7 @@ mod tests {
                 extra: None,
                 session_id: ThreadId::new().to_string(),
                 forked_from_id: Some(forked_from_id.to_string()),
+                attached_to_thread_id: None,
                 parent_thread_id: None,
                 preview: "hello".to_string(),
                 ephemeral: false,

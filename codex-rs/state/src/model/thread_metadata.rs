@@ -36,6 +36,8 @@ pub enum SortDirection {
 /// Thread relationship used to filter thread listings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadRelationFilter {
+    /// Include attached threads alongside ordinary threads for search.
+    IncludeAttached,
     /// Return only threads whose immediate parent is the given thread.
     DirectChildrenOf(ThreadId),
     /// Return every thread transitively descended from the given thread.

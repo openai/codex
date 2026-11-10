@@ -401,31 +401,6 @@ pub async fn list_threads_db(
         SortDirection::Desc => codex_state::SortDirection::Desc,
     };
 
-    if let Some(relation_filter) = relation_filter {
-        let filters = codex_state::ThreadFilterOptions {
-            archived_only: archived,
-            section,
-            allowed_sources: allowed_sources.as_slice(),
-            model_providers: model_providers.as_deref(),
-            cwd_filters: normalized_cwd_filters.as_deref(),
-            project_id,
-            anchor: anchor.as_ref(),
-            sort_key: state_sort_key,
-            sort_direction: state_sort_direction,
-            search_term,
-        };
-        return match ctx
-            .list_threads_by_relation(page_size, relation_filter, filters)
-            .await
-        {
-            Ok(page) => Some(page),
-            Err(err) => {
-                warn!("state db list_threads failed: {err}");
-                None
-            }
-        };
-    }
-
     let mut items = Vec::with_capacity(page_size);
     let mut next_anchor = None;
     let mut num_scanned_rows = 0usize;
@@ -442,13 +417,21 @@ pub async fn list_threads_db(
             sort_direction: state_sort_direction,
             search_term,
         };
-        let page = match ctx.list_threads(page_size - items.len(), filters).await {
-            Ok(page) => page,
-            Err(err) => {
-                warn!("state db list_threads failed: {err}");
-                return None;
+        let page = match relation_filter {
+            Some(relation) => {
+                ctx.list_threads_by_relation(page_size - items.len(), relation, filters)
+                    .await
             }
-        };
+            None => ctx.list_threads(page_size - items.len(), filters).await,
+        }
+        .inspect_err(|err| warn!("state db list_threads failed: {err}"))
+        .ok()?;
+        // Parent-scoped listings include empty threads whose rollout may still be pending.
+        if relation_filter
+            .is_some_and(|relation| relation != codex_state::ThreadRelationFilter::IncludeAttached)
+        {
+            return Some(page);
+        }
         num_scanned_rows = num_scanned_rows.saturating_add(page.num_scanned_rows);
         next_anchor = page.next_anchor;
 
@@ -542,6 +525,23 @@ pub async fn reconcile_rollout(
         .await;
         return;
     }
+    reconcile_rollout_from_disk(
+        ctx,
+        rollout_path,
+        default_provider,
+        archived_only,
+        /*name_index_home*/ None,
+    )
+    .await;
+}
+
+pub(super) async fn reconcile_rollout_from_disk(
+    ctx: &codex_state::StateRuntime,
+    rollout_path: &Path,
+    default_provider: &str,
+    archived_only: Option<bool>,
+    name_index_home: Option<&Path>,
+) {
     let outcome =
         match metadata::extract_metadata_from_rollout(rollout_path, default_provider).await {
             Ok(outcome) => outcome,
@@ -573,6 +573,14 @@ pub async fn reconcile_rollout(
     if let Some(existing_metadata) = existing_metadata.as_ref() {
         metadata.prefer_existing_git_info(existing_metadata);
         metadata.prefer_existing_explicit_title(existing_metadata);
+    } else if let Some(home) = name_index_home {
+        // The saved name is outside the rollout. Seed it when title search repairs a missing row.
+        // The upsert preserves the database name if another writer creates the row first.
+        metadata.name = crate::find_thread_name_by_id(home, &metadata.id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|name| !name.is_empty());
     }
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
