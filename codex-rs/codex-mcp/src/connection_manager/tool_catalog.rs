@@ -660,16 +660,19 @@ impl McpConnectionSet {
     }
 
     /// Refreshes one exact Apps catalog, preserving the raw inventory for app policy.
-    pub(crate) async fn refresh_codex_apps_client_catalog(
+    pub(crate) async fn refresh_codex_apps_client_catalog<G>(
         &self,
         config: &crate::McpConfig,
-    ) -> Result<CodexAppsToolSnapshot> {
+        validate: impl FnOnce() -> Option<G>,
+    ) -> Result<Option<CodexAppsToolSnapshot>> {
         let refresh_start = Instant::now();
         let view = self
             .servers
             .get(CODEX_APPS_MCP_SERVER_NAME)
             .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
-        let (tools, _) = self.refresh_codex_apps_tool_catalog().await?;
+        let Some((tools, _)) = self.refresh_codex_apps_tool_catalog(validate).await? else {
+            return Ok(None);
+        };
         let server_has_permission = config
             .permission_profile_for_server(CODEX_APPS_MCP_SERVER_NAME)
             .is_some();
@@ -690,10 +693,10 @@ impl McpConnectionSet {
             refresh_start.elapsed(),
             &[("path", "legacy"), ("trigger", "explicit")],
         );
-        Ok(CodexAppsToolSnapshot {
+        Ok(Some(CodexAppsToolSnapshot {
             tools,
             model_visible_tool_names,
-        })
+        }))
     }
 
     /// Refreshes Apps tools and returns the prepared shared-cache winner for discovery.
@@ -703,7 +706,10 @@ impl McpConnectionSet {
             .servers
             .get(CODEX_APPS_MCP_SERVER_NAME)
             .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?;
-        let (_, tools) = self.refresh_codex_apps_tool_catalog().await?;
+        let (_, tools) = self
+            .refresh_codex_apps_tool_catalog(|| Some(()))
+            .await?
+            .context("Apps discovery refresh skipped publication")?;
         let tools = prepare_codex_apps_tools_for_model(
             filter_tools(tools, &view.tool_filter),
             &self.tool_plugin_context,
@@ -744,7 +750,10 @@ impl McpConnectionSet {
     }
 
     /// Publishes the exact client catalog and returns both raw inventories.
-    async fn refresh_codex_apps_tool_catalog(&self) -> Result<(Vec<ToolInfo>, Vec<ToolInfo>)> {
+    async fn refresh_codex_apps_tool_catalog<G>(
+        &self,
+        validate: impl FnOnce() -> Option<G>,
+    ) -> Result<Option<(Vec<ToolInfo>, Vec<ToolInfo>)>> {
         let view = self
             .servers
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -754,7 +763,7 @@ impl McpConnectionSet {
             .client()
             .await
             .context("failed to get client")?;
-        let (tools, list_start) = managed_client
+        let Some((tools, list_start)) = managed_client
             .tool_catalog
             .refresh(
                 || async {
@@ -781,6 +790,7 @@ impl McpConnectionSet {
                     })?;
                     Ok((client_tools, meta, (fetch_ticket, list_start)))
                 },
+                validate,
                 |client_tools, meta, (fetch_ticket, list_start)| {
                     // Discovery can accept another scope's winner; executable catalogs
                     // receive only the latest successful fetch from their own scope.
@@ -803,7 +813,10 @@ impl McpConnectionSet {
                     (tools, list_start)
                 },
             )
-            .await?;
+            .await?
+        else {
+            return Ok(None);
+        };
         let client_tools = managed_client
             .tool_catalog
             .read(|catalog| catalog.tools.to_vec())
@@ -813,7 +826,7 @@ impl McpConnectionSet {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        Ok((client_tools, tools))
+        Ok(Some((client_tools, tools)))
     }
 
     fn with_server_metadata(mut tool: ToolInfo, metadata: &McpServerMetadata) -> ToolInfo {

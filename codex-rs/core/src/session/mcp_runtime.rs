@@ -62,6 +62,11 @@ impl Session {
         advertised_tool: &ToolInfo,
     ) -> anyhow::Result<PreparedMcpCall> {
         self.refresh_mcp_if_dirty().await;
+        // Apps refreshes fetch tools outside the MCP runtime lock. Wait for any
+        // in-flight refresh before capturing the catalog for this call.
+        if advertised_tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+            self.wait_for_apps_tool_refresh().await;
+        }
         self.services
             .mcp_runtime
             .prepare_call(advertised_tool)

@@ -767,6 +767,7 @@ async fn new_chat_relists_tools_without_invalidating_or_waiting_for_existing_cal
             Duration::from_secs(1),
             second.tool_catalog.refresh(
                 || async { Ok((vec![create_test_tool("test_server", "refreshed")], None, ())) },
+                || Some(()),
                 |_, _, ()| {},
             ),
         )

@@ -358,8 +358,9 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     {
         let _refresh = sess.mcp_refresh.acquire().await;
         sess.mcp_refresh.close();
-        sess.services.mcp_runtime.shutdown().await;
     }
+    sess.wait_for_apps_tool_refresh().await;
+    sess.services.mcp_runtime.shutdown().await;
 
     sess.drain_code_mode_messages().await;
 

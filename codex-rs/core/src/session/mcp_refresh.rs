@@ -5,18 +5,24 @@ use std::sync::Mutex;
 use tokio::sync::AcquireError;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
+use tokio_util::task::TaskTracker;
 
 /// Owns MCP invalidation and the single gate used to publish runtime updates.
 pub(super) struct McpRefresh {
     pending: Mutex<BTreeSet<McpRefreshReason>>,
     gate: Semaphore,
+    pub(super) apps_refreshes: TaskTracker,
 }
 
 impl McpRefresh {
     pub(super) fn new() -> Self {
+        let apps_refreshes = TaskTracker::new();
+        // Closed trackers still accept tokens and wake waiters when empty.
+        apps_refreshes.close();
         Self {
             pending: Mutex::default(),
             gate: Semaphore::new(/*permits*/ 1),
+            apps_refreshes,
         }
     }
 
@@ -27,7 +33,6 @@ impl McpRefresh {
             .insert(reason);
     }
 
-    #[cfg(test)]
     pub(super) fn is_pending(&self) -> bool {
         !self
             .pending

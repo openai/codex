@@ -3,6 +3,7 @@ use crate::McpRefreshReason;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::combine_selected_capability_roots;
 use crate::mcp_tool_call::McpToolApprovalContext;
+use anyhow::Context;
 use codex_exec_server::DiscoverV2CapabilitiesRequest;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
@@ -38,6 +39,7 @@ use codex_protocol::openai_models::GuardianScope;
 use codex_rmcp_client::Elicitation;
 use rmcp::model::ElicitationAction;
 use serde_json::Map;
+use tokio::sync::SemaphorePermit;
 
 const TOOL_SUGGESTION_ACTION_INSTALL: &str = "install";
 const TOOL_SUGGESTION_ACTION_KEY: &str = "suggest_type";
@@ -194,6 +196,11 @@ impl Session {
             error!("MCP runtime refresh semaphore closed");
             return;
         };
+        self.reconcile_mcp_runtime().await;
+    }
+
+    /// Reconcile pending state under the session permit.
+    async fn reconcile_mcp_runtime(self: &Arc<Self>) {
         loop {
             // Compare and rebuild from current environments, not choices saved for a future turn.
             let environments = self.services.turn_environments.snapshot().await;
@@ -280,15 +287,47 @@ impl Session {
     pub(crate) async fn refresh_codex_apps_tools(
         self: &Arc<Self>,
     ) -> anyhow::Result<codex_mcp::CodexAppsToolSnapshot> {
-        // Reconcile unchanged config so failed or closed clients can be replaced.
-        self.mark_mcp_runtime_dirty(McpRefreshReason::CodexAppsToolRefresh);
-        self.refresh_mcp_if_dirty().await;
-        let _refresh = self
+        let permit = self
             .mcp_refresh
             .acquire()
             .await
-            .map_err(|_| anyhow::anyhow!("MCP runtime refresh semaphore closed"))?;
-        self.services.mcp_runtime.refresh_codex_apps_tools().await
+            .context("MCP runtime refresh semaphore closed")?;
+        let _in_flight = self.mcp_refresh.apps_refreshes.token();
+        // Reconcile once per batch so a failed or closed client can be replaced.
+        if self.mcp_refresh.apps_refreshes.len() == 1 {
+            self.mark_mcp_runtime_dirty(McpRefreshReason::CodexAppsToolRefresh);
+        }
+        if let Some(snapshot) = self.fetch_apps_catalog(permit).await? {
+            return Ok(snapshot);
+        }
+        let permit = self
+            .mcp_refresh
+            .acquire()
+            .await
+            .context("MCP runtime refresh semaphore closed")?;
+        self.fetch_apps_catalog(permit)
+            .await?
+            .context("MCP runtime changed during both Apps tool refresh attempts")
+    }
+
+    async fn fetch_apps_catalog(
+        self: &Arc<Self>,
+        permit: SemaphorePermit<'_>,
+    ) -> anyhow::Result<Option<codex_mcp::CodexAppsToolSnapshot>> {
+        self.reconcile_mcp_runtime().await;
+        let refresh = self.services.mcp_runtime.capture_apps_tool_refresh();
+        // An invalidation may arrive after reconciliation but before capture.
+        if self.mcp_refresh.is_pending() {
+            return Ok(None);
+        }
+        drop(permit);
+        refresh.await
+    }
+
+    /// Wait outside the session permit so a superseded refresh can retry.
+    #[tracing::instrument(name = "mcp.runtime.apps_catalog_wait", skip_all)]
+    pub(crate) async fn wait_for_apps_tool_refresh(&self) {
+        self.mcp_refresh.apps_refreshes.wait().await;
     }
 
     /// Reconnects the runtime so refreshed Apps tools belong to their new exact client.
@@ -379,6 +418,7 @@ impl Session {
 
     pub(super) fn mark_mcp_runtime_dirty(&self, reason: McpRefreshReason) {
         self.mcp_refresh.invalidate(reason);
+        self.services.mcp_runtime.invalidate_apps_tool_refresh();
     }
 
     #[tracing::instrument(
@@ -457,6 +497,7 @@ impl Session {
             .chain(&recovered_oauth_servers)
             .cloned()
             .collect::<Vec<_>>();
+        self.wait_for_apps_tool_refresh().await;
         if let Some(binding) = self
             .services
             .mcp_runtime

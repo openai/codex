@@ -2701,13 +2701,13 @@ async fn hard_refresh_keeps_client_catalog_local_when_shared_cache_loses_race() 
     let config_for_refresh = config.clone();
     let refresh_a = tokio::spawn(async move {
         manager_a_for_refresh
-            .refresh_codex_apps_client_catalog(&config_for_refresh)
+            .refresh_codex_apps_client_catalog(&config_for_refresh, || Some(()))
             .await
     });
     list_started.notified().await;
     manager_b.refresh_codex_apps_tools_for_discovery().await?;
     release_list.notify_one();
-    let snapshot_a = refresh_a.await??;
+    let snapshot_a = refresh_a.await??.expect("Apps catalog was published");
     assert_eq!(
         snapshot_a
             .tools
@@ -2737,7 +2737,10 @@ async fn hard_refresh_keeps_client_catalog_local_when_shared_cache_loses_race() 
         .tool_filter
         .disabled
         .insert("b_only".to_string());
-    let snapshot_b = manager_b.refresh_codex_apps_client_catalog(&config).await?;
+    let snapshot_b = manager_b
+        .refresh_codex_apps_client_catalog(&config, || Some(()))
+        .await?
+        .expect("Apps catalog was published");
     assert_eq!(
         (
             snapshot_b
@@ -5743,6 +5746,7 @@ async fn apps_catalog_broadcast_restores_equivalent_calls() -> anyhow::Result<()
     catalog
         .refresh(
             || async { Ok((snapshot.tools.to_vec(), None, ())) },
+            || Some(()),
             |tools, _, ()| store_current_tools(&context, tools.to_vec()),
         )
         .await?;
@@ -5801,6 +5805,7 @@ async fn apps_catalog_broadcast_survives_an_older_local_refresh() -> anyhow::Res
     catalog
         .refresh(
             || async { Ok((Vec::new(), None, older_ticket)) },
+            || Some(()),
             |tools, _, ticket| {
                 context
                     .publish_runtime_if_newest_accepted(
@@ -5859,7 +5864,11 @@ async fn refreshed_catalog_follows_reused_client_without_mutating_old_bindings()
     let startup_tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "startup")];
     client
         .tool_catalog
-        .refresh(|| async { Ok((startup_tools, None, ())) }, |_, _, ()| {})
+        .refresh(
+            || async { Ok((startup_tools, None, ())) },
+            || Some(()),
+            |_, _, ()| {},
+        )
         .await?;
     let old_binding = capture_binding(&previous).await;
     let old_tools = serde_json::to_value(old_binding.tools())?;

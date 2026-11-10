@@ -3,12 +3,14 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpSnapshotDetail;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -28,10 +30,12 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
+use core_test_support::wait_for_successful_turn;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use test_case::test_case;
+use tokio::sync::Notify;
 
 #[derive(Clone, Copy)]
 enum HostedProtocolSetting {
@@ -195,5 +199,118 @@ async fn apps_call_survives_catalog_restoration_while_awaiting_approval() -> any
             .is_some()
     );
     peer.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn next_model_step_uses_the_in_flight_apps_refresh() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let model = responses::start_mock_server().await;
+    let apps_server = responses::start_mock_server().await;
+    let apps = AppsTestServer::mount(&apps_server).await?;
+    let fixture = apps_enabled_builder(apps.chatgpt_base_url)
+        .with_config(|config| config.update_plan_enabled = true)
+        .with_model_info_override("gpt-5.5", |model| model.supports_search_tool = false)
+        .build_with_auto_env(&model)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+
+    let first_requested = Arc::new(Notify::new());
+    let requested = Arc::clone(&first_requested);
+    let (release_first, first_gate) = std::sync::mpsc::channel();
+    let first_gate = std::sync::Mutex::new(Some(first_gate));
+    let first = responses::sse_response(responses::sse(vec![
+        responses::ev_response_created("first"),
+        responses::ev_function_call("plan", "update_plan", r#"{"plan":[]}"#),
+        responses::ev_completed("first"),
+    ]));
+    let response = responses::mount_response_handler(&model, move |_| {
+        if let Some(gate) = first_gate.lock().unwrap().take() {
+            requested.notify_one();
+            let _ = gate.recv();
+            first.clone()
+        } else {
+            responses::sse_response(responses::sse_completed("second"))
+        }
+    })
+    .await;
+
+    // Wait for the first model request to capture the original tools before overriding tools/list.
+    fixture
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Plan the next steps.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), first_requested.notified()).await?;
+    let listed = Arc::new(Notify::new());
+    let listing = Arc::clone(&listed);
+    let (release_list, list_gate) = std::sync::mpsc::channel();
+    let list_gate = std::sync::Mutex::new(Some(list_gate));
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::body_partial_json(
+            json!({"method":"tools/list"}),
+        ))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            if let Some(gate) = list_gate.lock().unwrap().take() {
+                listing.notify_one();
+                let _ = gate.recv();
+            }
+            wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0", "id":body["id"], "result":{"tools":[]}
+            }))
+        })
+        .with_priority(1)
+        .mount(&apps_server)
+        .await;
+
+    let refresh = fixture.codex.refresh_codex_apps_tools();
+    tokio::pin!(refresh);
+    tokio::select! {
+        _ = listed.notified() => {}
+        result = &mut refresh => {
+            result?;
+            panic!("refresh ended before tools/list");
+        }
+    }
+    release_first.send(())?;
+    wait_for_event(&fixture.codex, |event| {
+        matches!(event, EventMsg::PlanUpdate(_))
+    })
+    .await;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture.codex.mcp_server_status_snapshot(
+            CODEX_APPS_MCP_SERVER_NAME,
+            McpSnapshotDetail::ToolsAndAuthOnly,
+            /*expected_registration*/ None,
+        ),
+    )
+    .await??;
+    assert_eq!(
+        response.requests().len(),
+        1,
+        "the next model step must wait for Apps"
+    );
+    release_list.send(())?;
+    refresh.await?;
+    wait_for_successful_turn(&fixture.codex).await;
+
+    let calendar_advertised = response
+        .requests()
+        .iter()
+        .map(|request| {
+            responses::namespace_child_tool(
+                &request.body_json(),
+                SEARCH_CALENDAR_NAMESPACE,
+                SEARCH_CALENDAR_CREATE_TOOL,
+            )
+            .is_some()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(calendar_advertised, [true, false]);
     Ok(())
 }

@@ -83,14 +83,20 @@ impl SessionTask for RegularTask {
                         == TurnStartPhase::RegularTaskStart
                         && contributor.requires_mcp_runtime(&sess.services.thread_extension_data)
                 });
-            let preparation = sess
-                .emit_turn_start_lifecycle(
+            let preparation = async {
+                sess.emit_turn_start_lifecycle(
                     &ctx,
                     /*token_usage_at_turn_start*/ None,
                     TurnStartPhase::RegularTaskStart,
                 )
-                .or_cancel(&cancellation_token)
                 .await;
+                if prepares_mcp {
+                    // Resource discovery can overlap the fetch. Wait before reprojection.
+                    sess.wait_for_apps_tool_refresh().await;
+                }
+            }
+            .or_cancel(&cancellation_token)
+            .await;
             // Even cancelled discovery may have cleared the previous account's catalog.
             if prepares_mcp {
                 sess.request_mcp_runtime_reprojection(

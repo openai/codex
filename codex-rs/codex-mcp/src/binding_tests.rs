@@ -356,6 +356,7 @@ async fn prepared_call_is_rejected_after_catalog_refresh() {
     step.tool_catalog
         .refresh(
             || async { Ok((step.step.tools().to_vec(), None, ())) },
+            || Some(()),
             |_, _, ()| {},
         )
         .await
@@ -390,6 +391,7 @@ async fn stale_prepared_call_does_not_run_preparation() {
     step.tool_catalog
         .refresh(
             || async { Ok((step.step.tools().to_vec(), None, ())) },
+            || Some(()),
             |_, _, ()| {},
         )
         .await
@@ -435,14 +437,23 @@ async fn preparation_holds_catalog_authority_until_it_finishes() {
     });
 
     preparation_started.notified().await;
+    let validation_reached = AtomicBool::new(false);
     let refresh = step.tool_catalog.refresh(
         || async { Ok((step.step.tools().to_vec(), None, ())) },
+        || {
+            validation_reached.store(true, Ordering::SeqCst);
+            Some(())
+        },
         |_, _, ()| {},
     );
     tokio::pin!(refresh);
     assert!(
         futures::poll!(&mut refresh).is_pending(),
         "catalog replacement must wait for irreversible call preparation"
+    );
+    assert!(
+        !validation_reached.load(Ordering::SeqCst),
+        "publication validation must not hold its guard while calls drain"
     );
     finish_preparation.notify_one();
     call.await
@@ -451,6 +462,7 @@ async fn preparation_holds_catalog_authority_until_it_finishes() {
     refresh
         .await
         .expect("catalog refresh should finish after preparation");
+    assert!(validation_reached.load(Ordering::SeqCst));
 }
 
 #[tokio::test]

@@ -6,6 +6,9 @@
 //! [`crate::connection_manager`]. Registry removal revokes EMA authority before
 //! the thread becomes untracked.
 
+#[cfg(test)]
+#[path = "runtime/apps_tool_refresh_tests.rs"]
+mod apps_tool_refresh_tests;
 mod status;
 
 #[cfg(test)]
@@ -124,6 +127,8 @@ pub struct McpRuntimeInput {
 /// their exact connections and configuration for as long as they are needed.
 pub struct McpRuntime {
     current: ArcSwap<PublishedMcpRuntime>,
+    // This mutex is held only through synchronous publication, never network I/O or call drain.
+    catalog_publication: Mutex<u64>,
     // Old bindings keep leases alive after publication; cancellation alone does not release them.
     superseded_connections: Mutex<Vec<Weak<McpConnectionSet>>>,
     event_stream_cancellation: Mutex<EventStreamCancellation>,
@@ -263,6 +268,15 @@ impl McpPublicationGate {
 }
 
 impl McpRuntime {
+    /// Supersede pending fetches as soon as Core requests a configuration change.
+    pub fn invalidate_apps_tool_refresh(&self) {
+        let mut generation = self
+            .catalog_publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *generation = generation.wrapping_add(1);
+    }
+
     /// Creates a runtime with no configured servers.
     ///
     /// This is useful while constructing a thread that must publish a stable
@@ -283,6 +297,7 @@ impl McpRuntime {
                 ready_environments: HashMap::new(),
                 cached_binding: Mutex::new(None),
             }),
+            catalog_publication: Mutex::new(0),
             superseded_connections: Mutex::default(),
             event_stream_cancellation: Mutex::new(EventStreamCancellation {
                 event_server_available: false,
@@ -389,6 +404,8 @@ impl McpRuntime {
     }
 
     async fn publish(&self, input: McpRuntimeInput, reuse_previous: bool) {
+        // Also cover callers which replace the runtime without Core's dirty-state machinery.
+        self.invalidate_apps_tool_refresh();
         let current = self.current.load_full();
         let retain_ema = current.config.is_some();
         let ema_auth = (input.config.xaa_enabled
@@ -475,6 +492,10 @@ impl McpRuntime {
             superseded.retain(|connections| connections.strong_count() > 0);
             superseded.push(Arc::downgrade(&current.connections));
         }
+        let publication = self
+            .catalog_publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.current.store(Arc::new(PublishedMcpRuntime {
             connections,
             config: Some(config),
@@ -489,6 +510,7 @@ impl McpRuntime {
             ready_environments,
             cached_binding: Mutex::new(None),
         }));
+        drop(publication);
         let _ = publish.send(true);
         cancellation.event_server_available = hosted_event_server_retained;
         if !hosted_event_server_retained {
@@ -732,17 +754,51 @@ impl McpRuntime {
             .await
     }
 
-    /// Refreshes the published Apps client and returns its exact inventory and MCP eligibility.
-    pub async fn refresh_codex_apps_tools(&self) -> anyhow::Result<CodexAppsToolSnapshot> {
-        let current = self.current.load_full();
-        let config = current
-            .config
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("MCP runtime is not configured"))?;
-        current
-            .connections
-            .refresh_codex_apps_client_catalog(config)
-            .await
+    /// Captures the current Apps client under Core's session permit.
+    /// Await the returned fetch after releasing the permit. A stale result is skipped.
+    pub fn capture_apps_tool_refresh(
+        &self,
+    ) -> impl Future<Output = anyhow::Result<Option<CodexAppsToolSnapshot>>> + Send {
+        let (generation, current) = {
+            let generation = self
+                .catalog_publication
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (*generation, self.current.load_full())
+        };
+        let auth_changes = current.auth_manager.as_ref().map(|manager| {
+            let mut changes = manager.auth_change_state_receiver();
+            // Subscribe before reading auth to catch changes during capture.
+            if !current.auth_matches(manager.auth_cached().as_ref()) {
+                changes.mark_changed();
+            }
+            changes
+        });
+        async move {
+            let validate = || {
+                let publication = self
+                    .catalog_publication
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // Hold the watch read guard through publication. Auth writers take cache then watch.
+                let auth = auth_changes.as_ref().map(watch::Receiver::borrow);
+                (*publication == generation
+                    && Arc::ptr_eq(&self.current.load(), &current)
+                    && auth_changes
+                        .as_ref()
+                        .is_none_or(|changes| matches!(changes.has_changed(), Ok(false))))
+                .then_some((publication, auth))
+            };
+            let config = current
+                .config
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("MCP runtime is not configured"))?;
+            let snapshot = current
+                .connections
+                .refresh_codex_apps_client_catalog(config, validate)
+                .await?;
+            Ok(snapshot.filter(|_| validate().is_some()))
+        }
     }
 
     /// Returns tools from this thread’s ready, unshared Apps MCP client.

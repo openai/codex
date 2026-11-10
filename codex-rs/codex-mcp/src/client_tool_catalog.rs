@@ -232,22 +232,28 @@ impl ClientToolCatalog {
         result
     }
 
-    /// Serialize fetching and publication, leaving the current catalog usable during the fetch.
-    /// The publication callback runs alongside the exact-client update under the write lock.
+    /// Validate under the caller's publication guard after fetching and draining calls.
+    /// The guard covers both shared-provider publication and this client's revision update.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "refreshes must remain serialized through fetching and catalog publication"
     )]
-    pub(crate) async fn refresh<C, R, F, Fut, P>(&self, fetch: F, publish: P) -> Result<R>
+    pub(crate) async fn refresh<C, R, Fut, G>(
+        &self,
+        fetch: impl FnOnce() -> Fut,
+        validate: impl FnOnce() -> Option<G>,
+        publish: impl FnOnce(&[ToolInfo], Option<Arc<serde_json::Value>>, C) -> R,
+    ) -> Result<Option<R>>
     where
-        F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(Vec<ToolInfo>, Option<Arc<serde_json::Value>>, C)>>,
-        P: FnOnce(&[ToolInfo], Option<Arc<serde_json::Value>>, C) -> R,
     {
         let _refresh = self.refresh_lock.lock().await;
         let (tools, meta, context) = fetch().await?;
         let _calls = self.calls.write().await;
         let mut current = self.current.write().await;
+        let Some(_validity) = validate() else {
+            return Ok(None);
+        };
         let result = publish(&tools, meta.clone(), context);
         match &mut current.source {
             CatalogSource::Local {
@@ -269,7 +275,7 @@ impl ClientToolCatalog {
         }
         current.revision += 1;
         current.last_refresh_revision = current.revision;
-        Ok(result)
+        Ok(Some(result))
     }
 
     /// Reject stale calls before preparation. Explicit refreshes wait for execution;
