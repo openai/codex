@@ -63,7 +63,7 @@ pub(super) fn token_usage_from_value(value: &Value) -> Option<TokenUsage> {
     })
 }
 
-fn normalize_model_item(
+pub(super) fn normalize_model_item(
     item: &Value,
     raw_payload: &RawPayloadRef,
 ) -> Result<NormalizedConversationItem> {

@@ -223,6 +223,7 @@ fn response_outputs_require_harness_acceptance() -> anyhow::Result<()> {
         trace_context("turn-1"),
         RawTraceEventPayload::HistoryItemAccepted {
             item_id: "msg-accepted".into(),
+            agent_message_payload: None,
         },
     )?;
 

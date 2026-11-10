@@ -31,6 +31,7 @@ fn cancelled_inference_retains_accepted_partial_output() -> anyhow::Result<()> {
         trace_context("turn-1"),
         RawTraceEventPayload::HistoryItemAccepted {
             item_id: "msg-partial".into(),
+            agent_message_payload: None,
         },
     )?;
     let partial_response = writer.write_json_payload(

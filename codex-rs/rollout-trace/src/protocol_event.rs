@@ -11,6 +11,7 @@
 //! variants a compile-time prompt to decide whether the trace should capture
 //! them.
 
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
@@ -41,6 +42,7 @@ pub(crate) fn codex_turn_trace_event(
     thread_id: AgentThreadId,
     default_turn_id: &str,
     event: &EventMsg,
+    store_agent_message: impl FnOnce(&ResponseItem) -> Option<crate::RawPayloadRef>,
 ) -> Option<CodexTurnTraceEvent> {
     match event {
         EventMsg::TurnStarted(event) => {
@@ -84,6 +86,10 @@ pub(crate) fn codex_turn_trace_event(
             context_turn_id: default_turn_id.to_string(),
             payload: RawTraceEventPayload::HistoryItemAccepted {
                 item_id: event.item.id()?.to_string(),
+                agent_message_payload: match &event.item {
+                    item @ ResponseItem::AgentMessage { .. } => Some(store_agent_message(item)?),
+                    _ => None,
+                },
             },
         }),
         _ => None,

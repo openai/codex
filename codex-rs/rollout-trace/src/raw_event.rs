@@ -102,6 +102,9 @@ pub enum RawTraceEventPayload {
     /// evidence of its rendered content, which may be truncated before sampling.
     HistoryItemAccepted {
         item_id: String,
+        /// A delivery may never appear in a subsequent inference or compaction snapshot.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_message_payload: Option<RawPayloadRef>,
     },
     InferenceStarted {
         inference_call_id: InferenceCallId,
@@ -260,7 +263,6 @@ impl RawTraceEventPayload {
             | RawTraceEventPayload::ThreadResumed { .. }
             | RawTraceEventPayload::CodexTurnStarted { .. }
             | RawTraceEventPayload::CodexTurnEnded { .. }
-            | RawTraceEventPayload::HistoryItemAccepted { .. }
             | RawTraceEventPayload::CompactionRequestFailed { .. }
             | RawTraceEventPayload::CodeCellStarted { .. }
             | RawTraceEventPayload::McpToolCallCorrelationAssigned { .. }
@@ -269,6 +271,10 @@ impl RawTraceEventPayload {
                 carried_payload: None,
                 ..
             } => Vec::new(),
+            RawTraceEventPayload::HistoryItemAccepted {
+                agent_message_payload,
+                ..
+            } => agent_message_payload.iter().collect(),
             RawTraceEventPayload::ThreadStarted {
                 metadata_payload, ..
             } => metadata_payload.iter().collect(),

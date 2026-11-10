@@ -83,6 +83,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         pending_code_cell_lifecycle_events: BTreeMap::new(),
         pending_agent_interaction_edges: Vec::new(),
         first_acceptances: BTreeMap::new(),
+        receipt_only_items: BTreeMap::new(),
     };
 
     let event_log_path = bundle_dir.join(RAW_EVENT_LOG_FILE_NAME);
@@ -212,6 +213,8 @@ struct TraceReducer {
     bundle_dir: PathBuf,
     /// First (wall time, sequence) by receiving thread and Responses item ID.
     first_acceptances: BTreeMap<String, BTreeMap<String, (i64, crate::RawEventSeq)>>,
+    /// Delivered items awaiting their first model-visible sighting, keyed by thread and wire ID.
+    receipt_only_items: BTreeMap<(String, String), String>,
     next_conversation_item_ordinal: u64,
     next_terminal_operation_ordinal: u64,
     /// Latest session for each thread-local runtime handle; each exec replaces it.
@@ -334,11 +337,23 @@ impl TraceReducer {
                     status,
                 )?;
             }
-            RawTraceEventPayload::HistoryItemAccepted { item_id } => {
+            RawTraceEventPayload::HistoryItemAccepted {
+                item_id,
+                agent_message_payload,
+            } => {
                 let thread_id = event
                     .thread_id
                     .context("history acceptance has no thread")?;
                 self.thread_mut(&thread_id)?;
+                if let Some(payload) = agent_message_payload {
+                    self.record_agent_receipt(
+                        &thread_id,
+                        event.codex_turn_id,
+                        event.wall_time_unix_ms,
+                        &item_id,
+                        &payload,
+                    )?;
+                }
                 self.first_acceptances
                     .entry(thread_id)
                     .or_default()

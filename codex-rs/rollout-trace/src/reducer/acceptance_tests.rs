@@ -41,6 +41,7 @@ fn identical_text_from_a_discarded_attempt_does_not_gain_acceptance() -> anyhow:
         trace_context("turn-1"),
         RawTraceEventPayload::HistoryItemAccepted {
             item_id: "accepted".into(),
+            agent_message_payload: None,
         },
     )?;
     let response = writer.write_json_payload(
@@ -220,6 +221,7 @@ fn inherited_output_is_child_prefill_without_copying_parent_sampling_provenance(
     );
     let accepted = RawTraceEventPayload::HistoryItemAccepted {
         item_id: "msg-parent".into(),
+        agent_message_payload: None,
     };
     let context = trace_context("turn-parent");
     let first = writer.append_with_context(context.clone(), accepted.clone())?;

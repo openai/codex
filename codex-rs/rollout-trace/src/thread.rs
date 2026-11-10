@@ -226,7 +226,9 @@ impl ThreadTraceContext {
             return;
         };
         let Some(trace_event) =
-            codex_turn_trace_event(context.thread_id.clone(), default_turn_id, event)
+            codex_turn_trace_event(context.thread_id.clone(), default_turn_id, event, |item| {
+                context.write_json_payload_best_effort(RawPayloadKind::ProtocolEvent, item)
+            })
         else {
             return;
         };

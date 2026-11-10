@@ -246,27 +246,68 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
     )?;
     start_thread(&writer, child_thread_id, "/root/reviewer")?;
     start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
+    let mut delivery = json!({
+        "type": "agent_message",
+        "id": "amsg-delivery",
+        "author": "/root",
+        "recipient": "/root/reviewer",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Message Type: NEW_TASK\nTask name: /root/reviewer\nSender: /root\nPayload:\n"
+            },
+            {"type": "encrypted_content", "encrypted_content": "review this"}
+        ]
+    });
+    let receipt = RawTraceEventPayload::HistoryItemAccepted {
+        item_id: "amsg-delivery".into(),
+        agent_message_payload: Some(
+            writer.write_json_payload(RawPayloadKind::ProtocolEvent, &delivery)?,
+        ),
+    };
+    let context = trace_context_for_thread(child_thread_id, "turn-child-1");
+    writer.append_with_context(context.clone(), receipt.clone())?;
+
+    // Interrupt or reset here: the receipt already has its delivery edge without any child request.
+    let received = replay_bundle(temp.path())?;
+    let edge_id = format!("edge:spawn:019d0000-0000-7000-8000-000000000001:{child_thread_id}");
+    let receipt_id = target_conversation_item_id(&received.interaction_edges[&edge_id].target);
+    let delivered_item_ids = std::slice::from_ref(receipt_id);
+    assert_eq!(
+        received.threads[child_thread_id].conversation_item_ids,
+        delivered_item_ids
+    );
+    assert!(
+        received.conversation_items[receipt_id]
+            .accepted_seq
+            .is_some()
+    );
+    assert!(received.inference_calls.is_empty());
+
+    // The request trims the encrypted part. A repeated receipt must retain the model's view.
+    delivery["content"] = json!([delivery["content"][0]]);
     append_inference_request(
         &writer,
         child_thread_id,
         "turn-child-1",
         "inference-child-1",
-        vec![json!({
-            "type": "agent_message",
-            "author": "/root",
-            "recipient": "/root/reviewer",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "Message Type: NEW_TASK\nTask name: /root/reviewer\nSender: /root\nPayload:\n"
-                },
-                {"type": "encrypted_content", "encrypted_content": "review this"}
-            ]
-        })],
+        vec![delivery],
     )?;
+    writer.append_with_context(context, receipt)?;
 
     let replayed = replay_bundle(temp.path())?;
-    let edge_id = format!("edge:spawn:019d0000-0000-7000-8000-000000000001:{child_thread_id}");
+    assert_eq!(
+        replayed.inference_calls["inference-child-1"].request_item_ids,
+        delivered_item_ids
+    );
+    assert_eq!(
+        replayed.threads[child_thread_id].conversation_item_ids,
+        delivered_item_ids
+    );
+    assert_eq!(
+        replayed.conversation_items[receipt_id].body.parts,
+        received.conversation_items[receipt_id].body.parts[..1]
+    );
     let edge = &replayed.interaction_edges[&edge_id];
     assert_eq!(edge.kind, InteractionEdgeKind::SpawnAgent);
     let target_item_id = target_conversation_item_id(&edge.target);
