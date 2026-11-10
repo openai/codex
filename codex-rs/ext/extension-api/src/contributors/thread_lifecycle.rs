@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use crate::ExtensionData;
 use crate::ExtensionMetrics;
+use codex_history::HistoryInitialization;
 use codex_mcp::McpResourceClient;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 
 /// Trusted, host-resolved billing attribution for a thread.
@@ -40,6 +42,10 @@ pub struct ThreadReadyInput<'a, C> {
     pub config: &'a C,
     /// Source that created the session for this thread.
     pub session_source: &'a SessionSource,
+    /// How the host initialized the history for this runtime.
+    pub history_initialization: HistoryInitialization,
+    /// The effective history mode, including the persisted mode on resume.
+    pub history_mode: ThreadHistoryMode,
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,
     /// Store scoped to this thread runtime.

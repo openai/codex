@@ -3,6 +3,7 @@
 
 use anyhow::ensure;
 use codex_history::CodexHarnessMetadata;
+use codex_history::HistoryInitialization;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContextEvent;
 use codex_history::RolloutItem;
@@ -11,6 +12,7 @@ use codex_protocol::models::ContentItemProvenance;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::OriginalHistoryRequest;
 use codex_thread_store::ThreadStore;
 use codex_utils_string::to_json_string_bounded;
@@ -81,7 +83,7 @@ impl EvidenceSnapshot {
 
 /// Live progress for one board. Never serialized or reconstructed after restart.
 /// Create it at board activation, before accepting new input. Hosts flush pending
-/// history before activation/capture and coordinate lifetime with thread deletion.
+/// history before each capture and coordinate lifetime with thread deletion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EvidenceCursor {
     thread_id: ThreadId,
@@ -89,6 +91,33 @@ pub struct EvidenceCursor {
 }
 
 impl EvidenceCursor {
+    /// Fresh roots have no prior evidence. Resumed roots start at their durable tail.
+    pub async fn at_thread_ready(
+        store: &dyn ThreadStore,
+        thread_id: ThreadId,
+        history_mode: ThreadHistoryMode,
+        initialization: HistoryInitialization,
+    ) -> anyhow::Result<Self> {
+        ensure!(
+            history_mode == ThreadHistoryMode::Paginated,
+            "Guardian evidence requires paginated root history"
+        );
+        match initialization {
+            HistoryInitialization::New | HistoryInitialization::Cleared => Ok(Self {
+                thread_id,
+                position: HistoryPosition {
+                    thread_id,
+                    end_ordinal_exclusive: 0,
+                    end_byte_offset: 0,
+                },
+            }),
+            HistoryInitialization::ColdResume
+            | HistoryInitialization::SuppliedHistory
+            | HistoryInitialization::WarmFork
+            | HistoryInitialization::ColdFork => Self::from_now(store, thread_id).await,
+        }
+    }
+
     /// Start at the current complete tail. Existing records are not backfilled.
     pub async fn from_now(store: &dyn ThreadStore, thread_id: ThreadId) -> anyhow::Result<Self> {
         let tail = store
@@ -112,6 +141,12 @@ impl EvidenceCursor {
         let end = history.end;
         let mut records = Vec::new();
         for record in history.items {
+            // The first capture of a previously empty rollout includes its validated header.
+            if record.end.end_ordinal_exclusive == 1
+                && matches!(record.item, RolloutItem::SessionMeta(_))
+            {
+                continue;
+            }
             if let Some(original) = review_original(record.item)? {
                 records.push(OriginalEvidence {
                     id: EvidenceId {

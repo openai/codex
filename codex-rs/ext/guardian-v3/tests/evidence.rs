@@ -8,6 +8,7 @@ use codex_guardian_v3::EvidenceCursor;
 use codex_guardian_v3::OriginalEvidence;
 use codex_history::AcceptedFileAudio;
 use codex_history::CodexHarnessMetadata;
+use codex_history::HistoryInitialization;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContextEvent;
 use codex_history::RetainedUserMessage;
@@ -175,20 +176,57 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         RolloutItem::ResponseItem(approval),
         delivered,
     ];
+    let fresh = EvidenceCursor::at_thread_ready(
+        &store,
+        owner,
+        ThreadHistoryMode::Paginated,
+        HistoryInitialization::New,
+    )
+    .await?;
+    assert!(!store.live_rollout_path(owner).await?.exists());
+    // A resume must establish its tail even if the rollout is missing.
+    assert!(
+        EvidenceCursor::at_thread_ready(
+            &store,
+            owner,
+            ThreadHistoryMode::Paginated,
+            HistoryInitialization::ColdResume,
+        )
+        .await
+        .is_err()
+    );
     let mut old = user.clone();
     old.item = serde_json::from_value(json!({"type":"message","id":"old","role":"user",
         "content":[{"type":"input_text","text":"Before board activation"}]}))?;
+    let old = RolloutItem::ResponseItem(old);
+    let first_original = serde_json::to_value(&old)?;
     store
         .append_items(AppendThreadItemsParams {
             thread_id: owner,
-            items: vec![RolloutItem::ResponseItem(old)],
+            items: vec![old],
         })
         .await?;
     store
         .persist_thread(owner, PersistContext::Standard)
         .await?;
     store.flush_thread(owner).await?;
-    let mut cursor = EvidenceCursor::from_now(&store, owner).await?;
+    let board_originals = |records: &[OriginalEvidence]| -> serde_json::Result<Vec<_>> {
+        records
+            .iter()
+            .map(|record| Ok(serde_json::to_value(record)?["original"].take()))
+            .collect()
+    };
+    assert_eq!(
+        board_originals(fresh.capture(&store).await?.records())?,
+        [first_original]
+    );
+    let mut cursor = EvidenceCursor::at_thread_ready(
+        &store,
+        owner,
+        ThreadHistoryMode::Paginated,
+        HistoryInitialization::ColdResume,
+    )
+    .await?;
     assert!(cursor.capture(&store).await?.records().is_empty());
 
     for item in &mut items {
@@ -224,12 +262,6 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
     store.flush_thread(owner).await?;
     let captured = cursor.capture(&store).await?;
     // Check the serialized board post, independently of the rollout serializer.
-    let board_originals = |records: &[OriginalEvidence]| -> serde_json::Result<Vec<_>> {
-        records
-            .iter()
-            .map(|record| Ok(serde_json::to_value(record)?["original"].take()))
-            .collect()
-    };
     assert_eq!(board_originals(captured.records())?, expected);
 
     let mut later = user.clone();

@@ -26,6 +26,7 @@ pub use capabilities::ResponseItemInjector;
 pub use capabilities::record_catalog_entries;
 pub use catalog_refresh::CatalogRefreshBackoff;
 pub use codex_context_fragments::ContextualUserFragment;
+pub use codex_history::HistoryInitialization;
 pub use codex_mcp::McpProtocolMode;
 pub use codex_mcp::ToolInfo as McpToolInfo;
 pub use codex_protocol::models::ContentItem;

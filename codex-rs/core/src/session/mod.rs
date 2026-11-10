@@ -2473,6 +2473,18 @@ impl Session {
         )
     }
 
+    pub(crate) async fn thread_ready_config(
+        &self,
+    ) -> (Arc<Config>, HistoryInitialization, ThreadHistoryMode) {
+        let state = self.state.lock().await;
+        let config = &state.session_configuration;
+        (
+            Arc::clone(&config.original_config_do_not_use),
+            self.history_initialization,
+            config.history_mode,
+        )
+    }
+
     pub(crate) async fn get_config(&self) -> std::sync::Arc<Config> {
         let state = self.state.lock().await;
         state
