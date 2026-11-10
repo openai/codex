@@ -501,7 +501,6 @@ async fn temporary_recap_threads_disable_memories_and_remote_mcp_servers() -> Re
             .permissions
             .active_permission_profile()
             .map(|profile| profile.id),
-        mcp_server_names: Vec::new(),
     };
     let response = crate::temporary_structured_request::start_temporary_thread(
         &app_server.request_handle(),

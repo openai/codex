@@ -802,7 +802,6 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
 async fn guardian_cleanup_drops_stale_reviews_and_restores_mcp_status() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.set_mcp_startup_expected_servers(["alpha".to_string()]);
     handle_turn_started(&mut chat, "turn-1");
     chat.on_mcp_server_status_updated(McpServerStatusUpdatedNotification {
         thread_id: None,

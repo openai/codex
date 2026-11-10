@@ -18,9 +18,6 @@ use codex_app_server_protocol::DynamicToolNamespaceTool;
 use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
-use codex_config::McpServerConfig;
-use codex_config::McpServerRequirement;
-use codex_config::RawMcpServerConfig;
 use codex_features::Features;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
@@ -58,19 +55,21 @@ pub(crate) enum ThreadToolTransport {
 }
 
 impl ThreadToolTransport {
-    pub(crate) fn validate_config(
+    /// Never shadow an existing server when adding the client-owned task tools.
+    pub(crate) async fn check_namespace(
         &self,
-        config: &crate::legacy_core::config::Config,
+        handle: &AppServerRequestHandle,
+        cwd: &std::path::Path,
     ) -> std::io::Result<()> {
         if matches!(self, Self::Mcp(_))
-            && config
-                .mcp_servers
-                .get()
+            && crate::config_update::read_mcp_servers(handle, cwd.display().to_string())
+                .await
+                .map_err(std::io::Error::other)?
                 .contains_key(dynamic_tools::NAMESPACE)
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
-                "A configured MCP server owns the TUI tools namespace; keep the current task and rename that server before changing projects",
+                "a configured MCP server already owns the TUI tools namespace",
             ));
         }
         Ok(())
@@ -127,7 +126,6 @@ impl DynamicToolMcpServer {
         features: Features,
         app_event_tx: AppEventSender,
         status_updates: broadcast::Sender<ThreadStatusChangedNotification>,
-        managed_requirement: Option<&McpServerRequirement>,
         worktrees: Option<crate::managed_worktree_tools::ManagedWorktreeTools>,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -144,20 +142,6 @@ impl DynamicToolMcpServer {
                 "create_worktree": {"approval_mode": "approve"}
             }
         });
-        if let Some(requirement) = managed_requirement {
-            let raw_config = serde_json::from_value::<RawMcpServerConfig>(server_config.clone())
-                .map_err(|error| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-                })?;
-            let configured_server = McpServerConfig::try_from(raw_config)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-            if !configured_server.matches_requirement(requirement) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "managed MCP requirements do not permit the TUI task-tools server",
-                ));
-            }
-        }
         if let Some(overrides) = thread_start_params.config.as_mut() {
             overrides.remove("web_search");
         }

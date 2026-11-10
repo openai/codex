@@ -187,17 +187,22 @@ async fn startup_warnings_preserve_stream_repair_and_backtrack_selection() -> Re
 async fn mcp_startup_summary_counts_servers_and_sign_in_subset() -> Result<()> {
     let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    app.chat_widget
-        .set_mcp_startup_expected_servers(["alpha", "beta", "gamma"].map(str::to_owned));
+    use McpServerStartupState::Failed;
+    use McpServerStartupState::Starting;
     insert_splash(&mut app, &mut tui);
     let sign_in = Some(McpServerStartupFailureReason::ReauthenticationRequired);
-    for (name, failure_reason) in [("alpha", sign_in), ("beta", sign_in), ("gamma", None)] {
+    for (name, status, failure_reason) in [
+        ("gamma", Starting, None),
+        ("alpha", Failed, sign_in),
+        ("beta", Failed, sign_in),
+        ("gamma", Failed, None),
+    ] {
         app.chat_widget.handle_server_notification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
                 thread_id: None,
                 name: name.into(),
-                status: McpServerStartupState::Failed,
-                error: Some(format!("MCP {name}: connection unavailable")),
+                status,
+                error: (status == Failed).then(|| format!("MCP {name}: connection unavailable")),
                 failure_reason,
             }),
             /*replay_kind*/ None,

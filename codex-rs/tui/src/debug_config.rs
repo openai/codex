@@ -328,18 +328,6 @@ fn render_debug_config_lines(
         ));
     }
 
-    if let Some(servers) = requirements_toml.mcp_servers.as_ref() {
-        let value = join_or_empty(servers.keys().cloned().collect::<Vec<_>>());
-        requirement_lines.push(requirement_line(
-            "mcp_servers",
-            value,
-            requirements
-                .mcp_servers
-                .as_ref()
-                .map(|sourced| &sourced.source),
-        ));
-    }
-
     // TODO(gt): Expand this debug output with detailed skills and rules display.
     if requirements_toml.rules.is_some() {
         requirement_lines.push(requirement_line(
@@ -691,8 +679,6 @@ mod tests {
     use codex_config::LoaderOverrides;
     use codex_config::ManagedHooksRequirementsToml;
     use codex_config::MatcherGroup;
-    use codex_config::McpServerIdentity;
-    use codex_config::McpServerRequirement;
     use codex_config::NetworkConstraints;
     use codex_config::NetworkDomainPermissionToml;
     use codex_config::NetworkDomainPermissionsToml;
@@ -886,17 +872,6 @@ interrupt_message = false
                     file: requirements_file.clone(),
                 }),
             ),
-            mcp_servers: Some(Sourced::new(
-                BTreeMap::from([(
-                    "docs".to_string(),
-                    McpServerRequirement::Identity {
-                        identity: McpServerIdentity::Command {
-                            command: "codex-mcp".to_string(),
-                        },
-                    },
-                )]),
-                RequirementSource::LegacyManagedConfigTomlFromMdm,
-            )),
             enforce_residency: ConstrainedWithSource::new(
                 Constrained::allow_any(Some(ResidencyRequirement::Us)),
                 Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
@@ -1004,14 +979,7 @@ interrupt_message = false
                 ..Default::default()
             }),
             hooks: None,
-            mcp_servers: Some(BTreeMap::from([(
-                "docs".to_string(),
-                McpServerRequirement::Identity {
-                    identity: McpServerIdentity::Command {
-                        command: "codex-mcp".to_string(),
-                    },
-                },
-            )])),
+            mcp_servers: None,
             plugins: None,
             marketplaces: None,
             otel: None,
@@ -1080,7 +1048,6 @@ interrupt_message = false
         assert!(rendered.contains(&format!(
             "features: guardian_approval=true (source: {requirements_source})"
         )));
-        assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains(&format!(
             "enforce_residency: us (source: {requirements_source})"
         )));

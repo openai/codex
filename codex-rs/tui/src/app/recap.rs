@@ -245,7 +245,6 @@ impl App {
                 .permissions
                 .active_permission_profile()
                 .map(|profile| profile.id),
-            mcp_server_names: config.mcp_servers.get().keys().cloned().collect(),
         };
         let event_sender = self.app_event_tx.clone();
         let task = tokio::spawn(async move {

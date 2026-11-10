@@ -195,6 +195,17 @@ pub(crate) async fn read_effective_config(
         .wrap_err("config/read failed in TUI")
 }
 
+pub(crate) async fn read_mcp_servers(
+    handle: &AppServerRequestHandle,
+    cwd: String,
+) -> Result<serde_json::Map<String, JsonValue>> {
+    let mut response = read_effective_config(handle.clone(), cwd).await?;
+    Ok(match response.config.additional.remove("mcp_servers") {
+        Some(JsonValue::Object(servers)) => servers,
+        _ => serde_json::Map::new(),
+    })
+}
+
 pub(crate) async fn read_remote_project_trust(
     request_handle: AppServerRequestHandle,
     cwd: &Path,

@@ -1845,7 +1845,6 @@ impl App {
                 )
             })
             .collect::<Vec<_>>();
-        self.refresh_mcp_startup_expected_servers_from_config();
         let should_buffer_replay = !snapshot.turns.is_empty() || !snapshot.events.is_empty();
         if should_buffer_replay {
             self.app_event_tx

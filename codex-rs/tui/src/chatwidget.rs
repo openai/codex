@@ -638,16 +638,8 @@ pub(crate) struct ChatWidget {
     /// Latest status per server in the active startup round. Its presence keeps
     /// the composer busy, and its terminal outcomes determine the round's summary.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
-    /// Whether round membership comes from configuration or the notifications we receive.
-    mcp_startup_expected_servers: Option<mcp_startup::ExpectedMcpServers>,
-    /// After startup settles, ignore stale updates until enough notifications confirm a new round.
-    mcp_startup_ignore_updates_until_next_start: bool,
-    /// A lag signal for the next round means terminal-only updates are enough to settle it.
-    mcp_startup_allow_terminal_only_next_round: bool,
-    /// Buffers post-settle MCP startup updates until they cover a full fresh round.
-    mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
-    /// Tracks whether the buffered next round has seen any `Starting` update yet.
-    mcp_startup_pending_next_round_saw_starting: bool,
+    /// Last diagnostic per server, so replayed terminal updates are only reported once.
+    mcp_startup_last_diagnostics: HashMap<String, McpStartupStatus>,
     connectors: ConnectorsState,
     ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,

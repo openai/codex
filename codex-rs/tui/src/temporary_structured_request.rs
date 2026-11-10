@@ -3,8 +3,6 @@
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::ConfigReadParams;
-use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
@@ -40,7 +38,6 @@ pub(crate) struct TemporaryStructuredThreadOptions {
     pub(crate) model_provider: String,
     pub(crate) cwd: String,
     pub(crate) active_permission_profile: Option<String>,
-    pub(crate) mcp_server_names: Vec<String>,
 }
 
 /// Start an ephemeral thread without widening permissions or exposing tools and environment access.
@@ -58,7 +55,6 @@ pub(crate) async fn start_temporary_thread(
         model_provider,
         cwd,
         active_permission_profile,
-        mcp_server_names,
     } = options;
     let custom_permission_profile =
         active_permission_profile.filter(|profile| !profile.starts_with(':'));
@@ -106,35 +102,12 @@ pub(crate) async fn start_temporary_thread(
     }
     let response: ThreadStartResponse = tokio::time::timeout(STRUCTURED_TURN_TIMEOUT, async {
         // Fail closed if the remote-effective MCP configuration cannot be read.
-        let effective_config: ConfigReadResponse = request_handle
-            .request_typed(ClientRequest::ConfigRead {
-                request_id: RequestId::String(format!("temporary-config-{}", Uuid::new_v4())),
-                params: ConfigReadParams {
-                    include_layers: false,
-                    cwd: Some(cwd.clone()),
-                },
-            })
-            .await?;
-        let mut mcp_server_names = mcp_server_names
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>();
-        if let Some(effective_mcp_servers) = effective_config
-            .config
-            .additional
-            .get("mcp_servers")
-            .and_then(Value::as_object)
-        {
-            mcp_server_names.extend(effective_mcp_servers.keys().cloned());
+        let mut servers =
+            crate::config_update::read_mcp_servers(request_handle, cwd.clone()).await?;
+        for server in servers.values_mut() {
+            *server = serde_json::json!({ "enabled": false });
         }
-        config.insert(
-            "mcp_servers".to_string(),
-            Value::Object(
-                mcp_server_names
-                    .into_iter()
-                    .map(|name| (name, serde_json::json!({ "enabled": false })))
-                    .collect(),
-            ),
-        );
+        config.insert("mcp_servers".to_string(), Value::Object(servers));
 
         request_handle
             .request_typed(ClientRequest::ThreadStart {
@@ -158,6 +131,7 @@ pub(crate) async fn start_temporary_thread(
                 },
             })
             .await
+            .map_err(color_eyre::Report::from)
     })
     .await
     .map_err(|_| eyre!("temporary structured thread start timed out"))??;

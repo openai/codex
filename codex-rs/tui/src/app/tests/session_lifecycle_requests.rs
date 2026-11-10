@@ -2611,54 +2611,26 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths_sc
 
 #[tokio::test]
 async fn local_mcp_respects_configured_servers_and_managed_requirements() -> Result<()> {
-    for scenario in ["conflicting", "blocked", "mismatched", "allowed"] {
-        let (mut app, _codex_home) = make_history_test_app().await?;
-        if scenario == "conflicting" {
-            let raw = serde_json::from_value::<codex_config::RawMcpServerConfig>(
-                serde_json::json!({"url": "http://127.0.0.1:1/mcp", "enabled": false}),
-            )?;
-            let mut servers = app.config.mcp_servers.get().clone();
-            servers.insert(
-                crate::dynamic_tools::NAMESPACE.to_string(),
-                codex_config::McpServerConfig::try_from(raw)
-                    .map_err(color_eyre::eyre::Report::msg)?,
-            );
-            app.config.mcp_servers.set(servers)?;
-        } else {
-            let mut allowed_servers = std::collections::BTreeMap::new();
-            if matches!(scenario, "mismatched" | "allowed") {
-                let requirement = if scenario == "allowed" {
-                    codex_config::McpServerRequirement::Url(
-                        codex_protocol::mcp_policy::McpServerValueMatcher::Prefix {
-                            value: "http://127.0.0.1:".to_string(),
-                        },
-                    )
-                } else {
-                    codex_config::McpServerRequirement::Identity {
-                        identity: codex_config::McpServerIdentity::Url {
-                            url: "http://127.0.0.1:1/mcp".to_string(),
-                        },
-                    }
-                };
-                allowed_servers.insert(crate::dynamic_tools::NAMESPACE.to_string(), requirement);
-            }
-            let requirements = codex_config::ConfigRequirements {
-                mcp_servers: Some(codex_config::Sourced::new(
-                    allowed_servers,
-                    codex_config::RequirementSource::Unknown,
-                )),
-                ..Default::default()
-            };
-            app.config.config_layer_stack = codex_config::ConfigLayerStack::new(
-                Vec::new(),
-                requirements,
-                codex_config::ConfigRequirementsToml::default(),
+    for name_taken in [false, true] {
+        let (app, codex_home) = make_history_test_app().await?;
+        if name_taken {
+            std::fs::write(
+                codex_home.path().join("config.toml"),
+                "[mcp_servers.codex_tui]\ncommand = 'user-helper'\nenabled = false",
             )?;
         }
-        let (mut app_server, requests, proxy) = start_recording_app_server(
+        let requirements_path = codex_home.path().join("requirements.toml");
+        std::fs::write(&requirements_path, "[mcp_servers]")?;
+        let (mut app_server, requests, proxy) = start_recording_app_server_with_history(
             &app.config,
+            HistoryCapabilities::Current,
             /*blocked_thread_list*/ None,
             /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides {
+                system_requirements_path: Some(requirements_path),
+                ..LoaderOverrides::without_managed_config_for_tests()
+            },
         )
         .await?;
         let result = app_server
@@ -2668,24 +2640,15 @@ async fn local_mcp_respects_configured_servers_and_managed_requirements() -> Res
                 app.dynamic_tool_status_updates.clone(),
             )
             .await;
-        if scenario == "allowed" {
-            result?;
-        } else {
-            let error = result.expect_err("unavailable internal MCP must fail closed");
-            assert_eq!(
-                error.kind(),
-                if scenario == "conflicting" {
-                    std::io::ErrorKind::AlreadyExists
-                } else {
-                    std::io::ErrorKind::PermissionDenied
-                }
-            );
-        }
-        app_server.start_thread(&app.config).await?;
+        assert_eq!(
+            result.err().map(|err| err.kind()),
+            name_taken.then_some(std::io::ErrorKind::AlreadyExists)
+        );
+        let started = app_server.start_thread(&app.config).await?;
         let start = recorded_params(&requests, "thread/start")
             .pop()
-            .expect("fallback task start");
-        if scenario == "allowed" {
+            .expect("task start");
+        if !name_taken {
             assert!(start["dynamicTools"].is_null());
             assert!(start["config"]["mcp_servers.codex_tui"].is_object());
         } else {
@@ -2695,6 +2658,17 @@ async fn local_mcp_respects_configured_servers_and_managed_requirements() -> Res
             );
             assert!(start["config"]["mcp_servers.codex_tui"].is_null());
         }
+        let inventory = crate::app::background_requests::fetch_all_mcp_server_statuses(
+            app_server.request_handle(),
+            codex_app_server_protocol::McpServerStatusDetail::ToolsAndAuthOnly,
+            Some(started.session.thread_id),
+        )
+        .await?;
+        assert!(
+            !inventory
+                .iter()
+                .any(|server| server.name == "codex_tui" && !server.tools.is_empty())
+        );
         app_server.shutdown().await?;
         proxy.await??;
     }

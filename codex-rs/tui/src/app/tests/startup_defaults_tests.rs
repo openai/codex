@@ -124,6 +124,13 @@ async fn agents_overview_startup_restores_saved_grouping() -> Result<()> {
     Ok(())
 }
 
+fn layered_config_read_count(requests: &RecordedRequests) -> usize {
+    recorded_params(requests, "config/read")
+        .iter()
+        .filter(|params| params["includeLayers"] == true)
+        .count()
+}
+
 #[tokio::test]
 async fn cli_fork_omits_implicit_model_and_effort() -> Result<()> {
     let home = tempdir()?;
@@ -220,7 +227,7 @@ async fn cli_fork_omits_implicit_model_and_effort() -> Result<()> {
     assert_eq!(fork[0]["model"], serde_json::Value::Null);
     assert!(fork[0]["config"].get("model_reasoning_effort").is_none());
     assert_eq!(fork[0]["serviceTier"], serde_json::Value::Null);
-    assert!(recorded_params(&requests, "config/read").is_empty());
+    assert_eq!(layered_config_read_count(&requests), 0);
     drop(run);
     proxy.abort();
     Ok(())
@@ -786,7 +793,7 @@ async fn fresh_startup_observes_config_edits_after_directory_trust() -> Result<(
     )
     .await?;
     let bootstrap = server.bootstrap(&config).await?;
-    let reads_before = recorded_params(&requests, "config/read").len();
+    let reads_before = layered_config_read_count(&requests);
     let trust = crate::config_update::read_remote_project_trust(
         server.request_handle(),
         config.cwd.as_path(),
@@ -802,7 +809,7 @@ async fn fresh_startup_observes_config_edits_after_directory_trust() -> Result<(
         (
             starts.len(),
             &starts[0]["serviceTier"],
-            recorded_params(&requests, "config/read").len() - reads_before,
+            layered_config_read_count(&requests) - reads_before,
         ),
         (1, &serde_json::json!("flex"), 2),
     );

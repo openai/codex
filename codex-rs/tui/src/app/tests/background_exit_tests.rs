@@ -740,8 +740,6 @@ async fn daemon_ctrl_c_during_paste_burst_does_not_show_exit_menu() -> Result<()
 async fn daemon_ctrl_c_during_mcp_startup_does_not_show_background_exit_menu() -> Result<()> {
     let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let thread_id = prepare_local_daemon_thread(&mut app)?;
-    app.chat_widget
-        .set_mcp_startup_expected_servers(["slow".to_string()]);
     app.chat_widget.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             thread_id: Some(thread_id.to_string()),

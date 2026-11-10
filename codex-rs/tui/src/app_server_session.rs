@@ -747,33 +747,6 @@ impl AppServerSession {
         } else {
             None
         };
-        if config
-            .mcp_servers
-            .get()
-            .contains_key(crate::dynamic_tools::NAMESPACE)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "a user-configured MCP server already owns the TUI tools namespace",
-            ));
-        }
-        let managed_requirement = config
-            .config_layer_stack
-            .requirements()
-            .mcp_servers
-            .as_ref()
-            .map(|requirements| {
-                requirements
-                    .value
-                    .get(crate::dynamic_tools::NAMESPACE)
-                    .ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            "managed MCP requirements do not permit the TUI task-tools server",
-                        )
-                    })
-            })
-            .transpose()?;
         let mut thread_start_params = thread_start_params_from_config(
             &config,
             self.thread_params_mode(),
@@ -796,18 +769,21 @@ impl AppServerSession {
             });
         thread_start_params.daybreak_enabled =
             daybreak_launch_override.then_some(config.daybreak_enabled);
-        self.dynamic_tool_mcp = Some(Arc::new(
+        let server = Arc::new(
             DynamicToolMcpServer::start(
                 self.request_handle(),
                 thread_start_params,
                 config.features.get().clone(),
                 app_event_tx,
                 status_updates,
-                managed_requirement,
                 worktrees,
             )
             .await?,
-        ));
+        );
+        ThreadToolTransport::Mcp(Arc::clone(&server))
+            .check_namespace(&self.request_handle, &config.cwd)
+            .await?;
+        self.dynamic_tool_mcp = Some(server);
         Ok(())
     }
 
@@ -1155,7 +1131,9 @@ impl AppServerSession {
             params.history_mode = None;
         }
         if self.thread_params_mode.settings_owner() == ThreadSettingsOwner::Client {
-            self.thread_tool_transport().validate_config(config)?;
+            self.thread_tool_transport()
+                .check_namespace(&self.request_handle, &config.cwd)
+                .await?;
             self.thread_tool_transport().configure(&mut params);
         }
         let request_handle = self.request_handle();
@@ -1427,7 +1405,9 @@ impl AppServerSession {
         if self.thread_params_mode == ThreadParamsMode::Cloud {
             color_eyre::eyre::bail!("Cloud conversations cannot be forked in the TUI yet.");
         }
-        self.thread_tool_transport().validate_config(&config)?;
+        self.thread_tool_transport()
+            .check_namespace(&self.request_handle, &config.cwd)
+            .await?;
         let fork_parent = match presentation {
             ForkPresentation::Regular => self
                 .thread_read(thread_id, /*include_turns*/ false)
@@ -2305,7 +2285,9 @@ pub(crate) async fn start_thread_with_request_handle(
         &launch_choices.approval_policy,
     );
     if thread_params_mode.settings_owner() == ThreadSettingsOwner::Client {
-        thread_tool_transport.validate_config(&config)?;
+        thread_tool_transport
+            .check_namespace(&request_handle, &config.cwd)
+            .await?;
         launch_choices.configure(&mut params);
         params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
         thread_tool_transport.configure(&mut params);

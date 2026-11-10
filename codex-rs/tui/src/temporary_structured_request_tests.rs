@@ -92,7 +92,6 @@ async fn managed_workspace_default_respects_read_only_availability() -> color_ey
                 .permissions
                 .active_permission_profile()
                 .map(|profile| profile.id),
-            mcp_server_names: Vec::new(),
         };
         let client = crate::start_embedded_app_server(
             Default::default(),
@@ -193,7 +192,6 @@ async fn preserves_custom_permissions_and_disables_required_mcp_servers() -> col
             model_provider: config.model_provider_id.clone(),
             cwd: config.cwd.display().to_string(),
             active_permission_profile: Some("title-restricted".to_string()),
-            mcp_server_names: vec!["forbidden".to_string()],
         },
     )
     .await?;

@@ -8283,8 +8283,8 @@ async fn active_side_thread_renders_live_mcp_startup_notifications() {
         [first]
         command = "first"
         required = true
-        [second]
-        command = "second"
+        [client_only]
+        command = "client-only"
         required = true
     "#,
             )
@@ -8320,8 +8320,8 @@ async fn active_side_thread_renders_live_mcp_startup_notifications() {
     // The plugin contributes sentry, so it is absent from the explicit server list.
     for (name, status, busy) in [
         ("first", McpServerStartupState::Starting, true),
-        ("first", McpServerStartupState::Ready, true),
         ("second", McpServerStartupState::Starting, true),
+        ("first", McpServerStartupState::Ready, true),
         ("second", McpServerStartupState::Ready, false),
         ("sentry", McpServerStartupState::Starting, true),
         ("sentry", McpServerStartupState::Failed, false),
