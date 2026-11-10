@@ -2744,11 +2744,6 @@ fn project_mcp_tool_approval_config_folder(
 }
 
 fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
-    let destructive_hint = annotations.and_then(|annotations| annotations.destructive_hint);
-    if destructive_hint == Some(true) {
-        return true;
-    }
-
     let read_only_hint = annotations
         .and_then(|annotations| annotations.read_only_hint)
         .unwrap_or(false);
@@ -2756,6 +2751,7 @@ fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
         return false;
     }
 
+    let destructive_hint = annotations.and_then(|annotations| annotations.destructive_hint);
     destructive_hint.unwrap_or(true)
         || annotations
             .and_then(|annotations| annotations.open_world_hint)

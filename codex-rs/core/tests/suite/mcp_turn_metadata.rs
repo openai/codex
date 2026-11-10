@@ -1383,11 +1383,35 @@ async fn apps_missing_link_respects_advertised_selector(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
+#[test_case(AppToolApproval::Auto; "automatic approval")]
+#[test_case(AppToolApproval::Writes; "writes approval")]
+async fn apps_default_approval_prompts_for_writes_but_not_reads(
+    approval_mode: AppToolApproval,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+    let tools = Arc::new(Mutex::new(vec![
+        json!({
+            "name": "calendar_list_events",
+            "description": "List calendar events.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "annotations": {"readOnlyHint": true, "destructiveHint": true, "openWorldHint": true},
+            "_meta": {"connector_id": "calendar", "link_id": LINK_ID, "connector_name": "Calendar"}
+        }),
+        json!({
+            "name": "calendar_create_event",
+            "description": "Create a calendar event.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"title": {"type": "string"}, "starts_at": {"type": "string"}},
+                "required": ["title", "starts_at"]
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true},
+            "_meta": {"connector_id": "calendar", "link_id": LINK_ID, "connector_name": "Calendar"}
+        }),
+    ]));
+    let apps_server = AppsTestServer::mount_with_tools(&server, tools).await?;
     let read_call_id = "calendar-read";
     let write_call_id = "calendar-write";
     let list_args = serde_json::to_string(&json!({}))?;
@@ -1428,14 +1452,14 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
     .await;
 
     let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
                 .enable(Feature::ToolCallMcpElicitation)
                 .expect("test config should allow feature update");
             set_default_app_approval_mode_and_reviewer(
                 config,
-                AppToolApproval::Writes,
+                approval_mode,
                 ApprovalsReviewer::User,
             );
         });
@@ -1480,7 +1504,7 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
     })
     .await;
     let EventMsg::McpToolCallBegin(write_begin) = next_route else {
-        panic!("read-only app action should not prompt in writes mode");
+        panic!("read-only app action should not prompt in {approval_mode:?} mode");
     };
     assert_eq!(write_begin.call_id, write_call_id);
     assert_eq!(write_begin.read_only_hint, Some(false));

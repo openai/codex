@@ -402,9 +402,9 @@ fn approval_required_when_read_only_false_and_open_world() {
 }
 
 #[test]
-fn approval_required_when_destructive_even_if_read_only_true() {
+fn approval_not_required_when_read_only_even_if_destructive() {
     let annotations = annotations(Some(true), Some(true), Some(true));
-    assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
+    assert_eq!(requires_mcp_tool_approval(Some(&annotations)), false);
 }
 
 #[test]
@@ -3259,8 +3259,13 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
     );
 }
 
+#[test_case::test_case(false, AppToolApproval::Approve; "approved tool")]
+#[test_case::test_case(true, AppToolApproval::Auto; "read only tool")]
 #[tokio::test]
-async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
+async fn strict_auto_review_forces_guardian_for_mcp_policy_skip(
+    read_only: bool,
+    approval_mode: AppToolApproval,
+) {
     let server = start_mock_server().await;
     let guardian_request_log = mount_sse_once(
         &server,
@@ -3311,7 +3316,7 @@ async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
         arguments: Some(serde_json::json!({ "calendar_id": "primary" })),
     };
     let metadata = McpToolApprovalMetadata {
-        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        annotations: Some(annotations(Some(read_only), Some(true), Some(true))),
         connector_id: None,
         link_id: None,
         connector_name: None,
@@ -3352,7 +3357,7 @@ async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
             host_cwd: &captured_mcp_config.host_cwd,
         },
         test_environment_id(&turn_context),
-        McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
+        McpToolApprovalPolicy::for_server(approval_mode),
     )
     .await;
 
@@ -3494,11 +3499,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         arguments: None,
     };
     let metadata = McpToolApprovalMetadata {
-        annotations: Some(annotations(
-            Some(true),
-            /*destructive*/ None,
-            /*open_world*/ None,
-        )),
+        annotations: Some(annotations(Some(true), Some(true), Some(true))),
         connector_id: None,
         link_id: None,
         connector_name: None,
