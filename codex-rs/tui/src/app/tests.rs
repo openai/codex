@@ -4554,6 +4554,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
 
     keys!(toggle);
     assert_eq!(app.current_displayed_thread_id(), Some(side_thread_id));
+    assert!(!tui.has_deferred_thread_switch_clear());
     let wide = side_frame(&mut app, &mut tui, size)?;
     assert!(
         wide.contains(parent_row) && wide.contains(child_row),
@@ -4616,6 +4617,7 @@ async fn handle_start_side_seeds_navigation_before_thread_started() -> Result<()
         };
         // Park an interaction on the parent so both hide shortcuts must clear it on return.
         keys!(prefix, main);
+        assert!(!tui.has_deferred_thread_switch_clear());
         app.transcript_view.begin_search();
         app.select_agent_thread(&mut tui, &mut app_server, side_thread_id)
             .await?;

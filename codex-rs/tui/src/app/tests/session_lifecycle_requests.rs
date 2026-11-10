@@ -1105,6 +1105,54 @@ async fn complete_managed_worktree_creation(
 }
 
 #[tokio::test]
+async fn returning_from_side_chat_reads_parent_only_when_reattaching() -> Result<()> {
+    let (mut app, _home) = make_history_test_app().await?;
+    enable_side_retention(&mut app)?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let (mut server, requests, proxy) = start_recording_app_server(
+        &app.config,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+    )
+    .await?;
+    let started = server.start_thread(&app.config).await?;
+    let parent = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    let side = server.start_thread(&app.config).await?;
+    let child = side.session.thread_id;
+    app.side_threads.insert(child, SideThreadState::new(parent));
+    app.ensure_thread_channel(child)
+        .store
+        .lock()
+        .await
+        .set_session(side.session, side.turns);
+
+    for needs_reattach in [false, true] {
+        app.select_agent_thread(&mut tui, &mut server, child)
+            .await?;
+        assert_eq!(app.current_displayed_thread_id(), Some(child));
+        if needs_reattach {
+            app.ensure_thread_channel(parent).mark_replay_only();
+        }
+        app.select_agent_thread(&mut tui, &mut server, parent)
+            .await?;
+        assert_eq!(app.current_displayed_thread_id(), Some(parent));
+        let reads = recorded_params(&requests, "thread/read");
+        assert_eq!(
+            reads
+                .iter()
+                .any(|params| params["threadId"] == parent.to_string()),
+            needs_reattach
+        );
+    }
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn same_thread_retry_keeps_subscription_and_restores_draft() -> Result<()> {
     let (mut app, codex_home) = make_history_test_app().await?;
     let thread_id = ThreadId::from_string(

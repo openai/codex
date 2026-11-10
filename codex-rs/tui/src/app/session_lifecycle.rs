@@ -638,10 +638,16 @@ impl App {
             self.store_active_thread_receiver().await;
         }
 
-        // A tracked side thread stays loaded until it is explicitly discarded and already has a
-        // replay channel, so another liveness read cannot add anything before selection.
-        if !(self.side_threads.contains_key(&thread_id)
-            && self.thread_event_channels.contains_key(&thread_id)
+        let known_side = self.side_threads.contains_key(&thread_id)
+            && self.thread_event_channels.contains_key(&thread_id);
+        // The live parent already receives lifecycle notifications while its child has focus.
+        let live_parent = self.side_retention_enabled(tui)
+            && !self.reconnect.offline
+            && self.primary_thread_id == Some(thread_id)
+            && self.active_side_parent_thread_id() == Some(thread_id)
+            && !self.should_attach_live_thread_for_selection(thread_id);
+        if !(known_side
+            || live_parent
             || self
                 .refresh_agent_picker_thread_liveness(app_server, thread_id)
                 .await)

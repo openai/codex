@@ -1059,17 +1059,6 @@ impl App {
             AppEvent::ResetTranscriptForThreadSwitchPreservingScreen => {
                 self.reset_transcript_state_after_clear();
                 tui.clear_pending_history_lines();
-                let switched_tab = self.conversation_frame.chat_strip.is_some()
-                    && self.active_side_parent_thread_id().is_some()
-                    && self.conversation_frame.sidebar_input.is_some_and(|painted| {
-                        painted.selected_chat != self.current_displayed_thread_id()
-                    });
-                if self.conversation_frame.chooser_area().is_none()
-                    && self.chooser_focus().is_none()
-                    && !switched_tab
-                {
-                    tui.defer_thread_switch_clear();
-                }
                 self.pending_thread_switch_resets -= 1;
             }
             AppEvent::CommitRealtimeTranscriptHistory => {
