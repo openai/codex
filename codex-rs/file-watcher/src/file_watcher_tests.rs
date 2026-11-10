@@ -296,6 +296,35 @@ fn recursive_registration_downgrades_to_non_recursive_after_drop() {
     drop(non_recursive);
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn native_watcher_reports_changes_after_unwatch_and_rewatch() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let watcher = Arc::new(FileWatcher::new().expect("watcher"));
+    let (subscriber, mut rx) = watcher.add_subscriber();
+
+    for directory in ["first", "second"] {
+        let root = temp_dir.path().join(directory);
+        std::fs::create_dir(&root).expect("create watched directory");
+        let registration = subscriber.register_path(root.clone(), /*recursive*/ false);
+        assert!(registration.registration_succeeded());
+
+        let changed_path = root.join("changed.txt");
+        std::fs::write(&changed_path, "new content").expect("write watched file");
+        let event = timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("native watch event timeout");
+        assert_eq!(
+            event,
+            Some(FileWatcherEvent {
+                paths: vec![changed_path]
+            })
+        );
+
+        drop(registration);
+    }
+}
+
 #[test]
 fn unregister_holds_state_lock_until_unwatch_finishes() {
     let temp_dir = tempfile::tempdir().expect("temp dir");

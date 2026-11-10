@@ -1,0 +1,107 @@
+--- a/src/windows.rs
++++ b/src/windows.rs
+@@ -14,6 +14,7 @@
+ use std::ffi::OsString;
+ use std::os::raw::c_void;
+ use std::os::windows::ffi::{OsStrExt, OsStringExt};
++use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+ use std::path::{Path, PathBuf};
+ use std::ptr;
+ use std::slice;
+@@ -86,7 +87,7 @@
+     meta_tx: Sender<MetaEvent>,
+     cmd_tx: Sender<Result<PathBuf>>,
+     watches: HashMap<PathBuf, WatchState>,
+-    wakeup_sem: HANDLE,
++    wakeup_sem: Arc<OwnedHandle>,
+ }
+ 
+ impl ReadDirectoryChangesServer {
+@@ -94,17 +95,14 @@
+         event_handler: Arc<Mutex<dyn EventHandler>>,
+         meta_tx: Sender<MetaEvent>,
+         cmd_tx: Sender<Result<PathBuf>>,
+-        wakeup_sem: HANDLE,
++        wakeup_sem: Arc<OwnedHandle>,
+     ) -> Sender<Action> {
+         let (action_tx, action_rx) = unbounded();
+-        // it is, in fact, ok to send the semaphore across threads
+-        let sem_temp = wakeup_sem as u64;
+         let _ = thread::Builder::new()
+             .name("notify-rs windows loop".to_string())
+             .spawn({
+                 let tx = action_tx.clone();
+                 move || {
+-                    let wakeup_sem = sem_temp as HANDLE;
+                     let server = ReadDirectoryChangesServer {
+                         tx,
+                         rx: action_rx,
+@@ -148,20 +146,14 @@
+             if stopped {
+                 break;
+             }
+-
+             unsafe {
+                 // wait with alertable flag so that the completion routine fires
+-                let waitres = WaitForSingleObjectEx(self.wakeup_sem, 100, 1);
++                let waitres = WaitForSingleObjectEx(self.wakeup_sem.as_raw_handle(), INFINITE, 1);
+                 if waitres == WAIT_OBJECT_0 {
+                     let _ = self.meta_tx.send(MetaEvent::WatcherAwakened);
+                 }
+             }
+         }
+-
+-        // we have to clean this up, since the watcher may be long gone
+-        unsafe {
+-            CloseHandle(self.wakeup_sem);
+-        }
+     }
+ 
+     fn add_watch(&mut self, path: PathBuf, is_recursive: bool) -> Result<PathBuf> {
+@@ -468,7 +460,7 @@
+ pub struct ReadDirectoryChangesWatcher {
+     tx: Sender<Action>,
+     cmd_rx: Receiver<Result<PathBuf>>,
+-    wakeup_sem: HANDLE,
++    wakeup_sem: Arc<OwnedHandle>,
+ }
+ 
+ impl ReadDirectoryChangesWatcher {
+@@ -483,8 +475,13 @@
+             return Err(Error::generic("Failed to create wakeup semaphore."));
+         }
+ 
+-        let action_tx =
+-            ReadDirectoryChangesServer::start(event_handler, meta_tx, cmd_tx, wakeup_sem);
++        let wakeup_sem = Arc::new(unsafe { OwnedHandle::from_raw_handle(wakeup_sem) });
++        let action_tx = ReadDirectoryChangesServer::start(
++            event_handler,
++            meta_tx,
++            cmd_tx,
++            Arc::clone(&wakeup_sem),
++        );
+ 
+         Ok(ReadDirectoryChangesWatcher {
+             tx: action_tx,
+@@ -494,11 +491,9 @@
+     }
+ 
+     fn wakeup_server(&mut self) {
+-        // breaks the server out of its wait state.  right now this is really just an optimization,
+-        // so that if you add a watch you don't block for 100ms in watch() while the
+-        // server sleeps.
++        // Signal after enqueueing the action so the server can sleep between changes.
+         unsafe {
+-            ReleaseSemaphore(self.wakeup_sem, 1, ptr::null_mut());
++            ReleaseSemaphore(self.wakeup_sem.as_raw_handle(), 1, ptr::null_mut());
+         }
+     }
+ 
+@@ -579,6 +574,7 @@
+     fn configure(&mut self, config: Config) -> Result<bool> {
+         let (tx, rx) = bounded(1);
+         self.tx.send(Action::Configure(config, tx))?;
++        self.wakeup_server();
+         rx.recv()?
+     }
+ 

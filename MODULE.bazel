@@ -408,6 +408,14 @@ crate.annotation_select(
     ],
 )
 
+# Backport notify-rs/notify@a9c51183: wake idle Windows watchers on events and control requests.
+crate.annotation(
+    crate = "notify",
+    patch_args = ["-p1"],
+    patches = ["//patches:notify_windows_idle.patch"],
+    version = "8.2.0",
+)
+
 # Match the CodeModeHost response-compression benchmark's zstd level.
 crate.annotation(
     crate = "tonic",
