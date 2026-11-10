@@ -67,11 +67,26 @@ impl TranscriptView {
         cells: &[Arc<dyn HistoryCell>],
         ids: Vec<String>,
     ) -> bool {
-        // Disclosure follows its activity into history instead of an unrelated next live tail.
+        let previous = std::mem::replace(&mut self.disclosure.live_ids, ids);
+        let ids = &self.disclosure.live_ids;
+        if previous != *ids {
+            self.live_key = None;
+        }
+        // A completed single search retains its reading position even after its control goes away.
         if self.snapshot().is_none()
             && let Position::Reading(anchor) = self.position
             && anchor.key == EntryKey::Live
-            && let Some(index) = self.canonical_activity_index(cells, &self.disclosure.live_ids)
+            && let Some(index) = self.canonical_activity_index(cells, &previous).or_else(|| {
+                let id = previous
+                    .iter()
+                    .find_map(|id| id.strip_prefix("summary:web:"))?;
+                (anchor.index..cells.len()).rfind(|&index| {
+                    cells[index]
+                        .as_any()
+                        .downcast_ref::<crate::history_cell::WebSearchCell>()
+                        .is_some_and(|search| search.is_completed() && search.call_id() == id)
+                })
+            })
             && let Some(cell) = cells.get(index)
         {
             self.position = Position::Reading(Anchor {
@@ -81,22 +96,25 @@ impl TranscriptView {
                 row_bias: 0,
             });
         }
-        if self.disclosure.live_ids != ids {
-            self.live_key = None;
+        if self.snapshot().is_none()
+            && let Some((_, focused)) = &self.disclosure.focused
+            && focused.iter().any(|id| id.starts_with("summary:web:"))
+            && self.canonical_activity_index(cells, focused).is_none()
+        {
+            self.disclosure.focused = None;
         }
-        let expanded = self.disclosure.is_expanded(&ids);
+        let expanded = self.disclosure.is_expanded(ids);
         if expanded {
             self.disclosure.expanded.extend(ids.iter().cloned());
         }
-        self.disclosure.live_ids = ids;
         expanded
     }
 
     pub(super) fn activity_ids(&self, cells: &[Arc<dyn HistoryCell>], index: usize) -> Vec<String> {
         cells.get(index).map_or_else(
             || self.disclosure.live_ids.clone(),
-            |cell| match self.tool_summary(cell.as_ref(), EntryKey::cell(cell)) {
-                Some(row) if !self.is_search_expanded(EntryKey::cell(cell)) => row.ids,
+            |cell| match self.turn_row(cells, index) {
+                Some(row) if !self.is_search_expanded(EntryKey::cell(cell)) => row.ids().to_vec(),
                 _ => cell.activity_ids(),
             },
         )
@@ -340,7 +358,7 @@ impl TranscriptView {
         if ids.is_empty() {
             return;
         }
-        let key = self.entry_key(cells, index);
+        let key = cells.get(index).map_or(EntryKey::Live, EntryKey::cell);
         let matched = self.is_search_expanded(key);
         self.disclosure.anchor_control = None;
         let previous_top = self.visible.first().map(|visible| {

@@ -125,7 +125,7 @@ pub(crate) struct TranscriptView {
     last_tail: Option<EntryKey>,
     last_click: Option<(std::time::Instant, u16, u16, u8)>,
     disclosure: disclosure::Disclosure,
-    collapse_turn_details: bool,
+    turn_details: Option<turn_details::TurnDetails>,
 }
 
 impl Default for TranscriptView {
@@ -166,7 +166,7 @@ impl Default for TranscriptView {
             last_tail: None,
             last_click: None,
             disclosure: disclosure::Disclosure::default(),
-            collapse_turn_details: false,
+            turn_details: None,
         }
     }
 }

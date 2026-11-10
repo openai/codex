@@ -76,6 +76,10 @@ impl WebSearchCell {
         self.completed = true;
     }
 
+    pub(crate) fn is_completed(&self) -> bool {
+        self.completed
+    }
+
     fn summary(&self) -> Line<'static> {
         let detail = web_search_detail(self.action.as_ref(), &self.query);
         let (header, separator) = match (&self.action, self.completed) {
@@ -121,6 +125,10 @@ impl WebSearchCell {
 }
 
 impl HistoryCell for WebSearchCell {
+    fn tool_call_labels(&self) -> Vec<String> {
+        vec![self.summary().to_string()]
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let bullet = if self.completed {
             "•".dim()

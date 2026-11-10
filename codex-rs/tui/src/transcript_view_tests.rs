@@ -1383,6 +1383,10 @@ fn parked_screen(
     text(&buf).trim_end().to_owned()
 }
 
+fn turn_screen(view: &mut TranscriptView, cells: &[Arc<dyn HistoryCell>]) -> String {
+    text(&render(view, cells, /*width*/ 52, /*height*/ 22))
+}
+
 #[test]
 fn tool_disclosure_hides_output() {
     let image = crate::history_cell::new_image_generation_call(
@@ -1402,6 +1406,84 @@ fn tool_disclosure_hides_output() {
         ▾ Image generation failed
           Image generation failed
     ");
+}
+
+#[test]
+fn web_search_summary_follows_the_completed_call() {
+    let completed = |id: &str, query: &str| {
+        Arc::new(crate::history_cell::new_web_search_call(
+            id.into(),
+            query.into(),
+            codex_app_server_protocol::WebSearchAction::Other,
+        ))
+    };
+    let mut cells = vec![
+        prompt("Check the fixture"),
+        Arc::new(crate::history_cell::AgentMarkdownCell::new(
+            "Intermediate progress".into(),
+            &crate::test_support::test_path_buf("/repo"),
+        )),
+    ];
+    let search = crate::history_cell::new_active_web_search_call(
+        "search".into(),
+        String::new(),
+        /*animations_enabled*/ false,
+    );
+    let mut view = TranscriptView::default();
+    parked_screen(&mut view, &cells, Some(&search));
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    assert!(view.is_activity_focused());
+    view.jump_to_entry(&cells, cells.len());
+    cells.push(Arc::new(search));
+    cells.push(completed("search", "fixture"));
+    parked_screen(&mut view, &cells, /*active*/ None);
+    assert!(!view.is_activity_focused());
+    assert!(
+        matches!(view.position, Position::Reading(anchor) if anchor.key == EntryKey::cell(cells.last().unwrap()))
+    );
+    view.jump_to_latest();
+    let active = turn_screen(&mut view, &cells);
+    insta::assert_snapshot!(active.trim(), @r"
+    › Check the fixture
+
+
+    • Intermediate progress
+
+    • Searched the web for fixture
+    ");
+    cells.push(completed("search-2", "docs"));
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    assert!(turn_screen(&mut view, &cells).contains("⌕ 2 tool calls · Searched the web for docs"));
+    view.handle_key(KeyCode::F(4).into(), &cells);
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    assert!(
+        turn_screen(&mut view, &cells)
+            .contains("      Searched the web for fixture\n      Searched the web for docs")
+    );
+    let last_row = view.area.y + view.visible.len() as u16 - 1;
+    view.begin_selection(&cells, /*column*/ 15, last_row, /*clicks*/ 2);
+    let older = crate::history_cell::new_image_generation_call(
+        "older".into(),
+        "failed",
+        /*revised_prompt*/ None,
+        /*saved_path*/ None,
+    );
+    cells.insert(/*index*/ 2, Arc::new(older));
+    view.history_loaded(&cells, 2..3);
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    view.scroll(&cells, /*rows*/ -20);
+    let held = turn_screen(&mut view, &cells);
+    assert!(held.contains("▸ Image generation failed"), "{held}");
+    assert_eq!(
+        held.matches("      Searched the web for fixture").count(),
+        1,
+        "{held}"
+    );
+    view.end_selection(&cells);
+    view.sync_turn_details(&cells, /*enabled*/ true, /*active*/ None);
+    let joined = turn_screen(&mut view, &cells);
+    assert!(joined.contains("▾ 3 tool calls"));
+    assert!(joined.contains("      Image generation failed\n      Searched the web for fixture\n      Searched the web for docs"));
 }
 
 #[test]
@@ -1441,14 +1523,25 @@ fn live_search_group_keeps_its_summary_in_the_parked_pane() {
     let grouped = parked_screen(&mut view, &[], Some(&command));
     assert!(view.toggle_disclosure_at(&[], /*column*/ 4, /*row*/ 0));
     let opened = parked_screen(&mut view, &[], Some(&command));
-    assert!(view.toggle_disclosure_at(&[], /*column*/ 4, /*row*/ 0));
-    assert_eq!(parked_screen(&mut view, &[], Some(&command)), grouped);
+    view.begin_selection(&[], /*column*/ 12, /*row*/ 1, /*clicks*/ 2);
+    for id in ["first", "second"] {
+        command.complete_call(
+            id,
+            crate::exec_cell::CommandOutput::new(/*exit_code*/ 0, String::new()),
+            std::time::Duration::ZERO,
+        );
+    }
     let cells: &[Arc<dyn HistoryCell>] = &[Arc::new(command)];
-    assert_eq!(parked_screen(&mut view, cells, /*active*/ None), grouped);
+    assert_eq!(parked_screen(&mut view, cells, /*active*/ None), opened);
+    assert!(view.toggle_disclosure_at(cells, /*column*/ 4, /*row*/ 0));
+    assert_eq!(
+        parked_screen(&mut view, cells, /*active*/ None).trim(),
+        "⌕ Explored files"
+    );
     view.jump_to_latest();
     view.handle_key(KeyCode::F(4).into(), cells);
     view.handle_key(KeyCode::Enter.into(), cells);
-    assert_eq!(parked_screen(&mut view, cells, /*active*/ None), opened);
+    assert!(parked_screen(&mut view, cells, /*active*/ None).contains("Searched for FIXME in src"));
     insta::assert_snapshot!(format!("{first}\n{grouped}\n{opened}"), @r"
         ⌕ Searching for TODO in src
         ⌕ 2 tool calls · Searching for FIXME
