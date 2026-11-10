@@ -38,7 +38,7 @@ impl LunaSamplingRequest {
             .snapshot()
             .map(|snapshot| snapshot.history().as_slice())
             .unwrap_or_default();
-        let (mut context, _) = evidence.clone().compose(cursor, history).ok()?;
+        let (mut context, _) = evidence.compose(cursor, history).ok()?;
         context.retain_new_instructions(history);
         context.retain_new_images(history.iter().map(|item| &item.item), |image, _| {
             Some(Cow::Borrowed(image))

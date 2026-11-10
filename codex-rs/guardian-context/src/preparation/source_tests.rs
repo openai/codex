@@ -137,8 +137,8 @@ fn elastic_repl_rendering_keeps_stored_text_images_and_omissions() {
         NodeReplReviewEvidenceMode::TextOnly,
         NodeReplReviewEvidenceMode::Multimodal,
     ] {
-        let context = prepare_sync_context(
-            CollectedContext {
+        let context = prepare_context(
+            std::borrow::Cow::Owned(CollectedContext {
                 sections: vec![ContextSection::NodeReplEvidence(
                     crate::RenderedNodeReplEvidence {
                         content: repl::NodeReplEvidenceContent::Collected {
@@ -148,13 +148,14 @@ fn elastic_repl_rendering_keeps_stored_text_images_and_omissions() {
                         },
                     },
                 )],
-            },
+            }),
             &ContextProfile::synchronous(),
             /*entry_number_offset*/ 0,
             ContextPresentation::SyncFull {
                 session_id: "review",
             },
             ContextBudgeting::Elastic,
+            &[],
         )
         .unwrap();
         let expected = context.clone().into_user_inputs().unwrap();
@@ -244,16 +245,17 @@ fn build_guardian_prompt_truncates_oversized_approval_reason() -> Result<(), Sec
         reason: Some(approval_reason),
         tool_descriptions: None,
     };
-    let context = prepare_sync_context(
-        CollectedContext {
+    let context = prepare_context(
+        std::borrow::Cow::Owned(CollectedContext {
             sections: vec![ContextSection::PlannedAction(action)],
-        },
+        }),
         &ContextProfile::synchronous(),
         /*entry_number_offset*/ 0,
         ContextPresentation::SyncFull {
             session_id: "11111111-1111-4111-8111-111111111111",
         },
         ContextBudgeting::Fixed,
+        &[],
     )?;
 
     let items = context.into_user_inputs()?;

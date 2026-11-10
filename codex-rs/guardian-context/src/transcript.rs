@@ -1,14 +1,13 @@
-//! Collects bounded conversation evidence before consumer-specific rendering.
+//! Collects original conversation evidence before consumer-specific preparation.
 //!
 //! Both Guardian consumers receive the same role and tool-source attribution,
 //! with generated compaction summaries attributed to the assistant, complete user
-//! messages and capped non-user entries, with sync entry caps deferred to request preparation. Resolved context profiles
+//! messages. Registry collection preserves originals for both consumers; resolved profiles
 //! apply aggregate retention after the host selects its full/delta slice. Tool outputs with a
 //! call ID retain their generic label when the call is unavailable. Outputs
 //! without a call ID require an explicit name.
 
 use codex_history::RetainedContextEntry;
-use codex_protocol::protocol::TruncationPolicy;
 use std::collections::HashMap;
 
 use codex_protocol::mcp::is_node_repl_backed_tool;
@@ -24,7 +23,6 @@ use codex_protocol::protocol::InterAgentCommunication;
 use crate::ContextSection;
 use crate::ConversationTranscriptEntry;
 use crate::ConversationTranscriptEntryKind;
-use crate::MAX_TEXT_PART_ESTIMATED_TOKENS;
 use crate::PlannedAction;
 use crate::PlannedActionKind;
 use crate::SectionContributor;
@@ -33,7 +31,6 @@ use crate::SectionHistory;
 use crate::SectionInput;
 use crate::SectionScope;
 use crate::TranscriptContent;
-use crate::truncate_text;
 
 pub(crate) const TRANSCRIPT_OMISSION_NOTICE: &str = "Some conversation entries were omitted.";
 
@@ -110,7 +107,7 @@ pub struct TranscriptRetentionConfig {
 pub struct ConversationTranscriptConfig {
     /// Evidence sources to include in this request.
     pub options: ConversationTranscriptOptions,
-    /// Per-entry limits applied before accumulating transcript text.
+    /// Request-time entry limits applied during preparation.
     pub entry_limits: TranscriptEntryLimits,
 }
 
@@ -135,52 +132,37 @@ impl SectionContributor for ConversationTranscriptSection {
             None
         };
         Ok(Some(ContextSection::ConversationTranscript {
-            items: collect_transcript_for_review(
-                input.history,
-                input.transcript,
-                input.target,
-                proposed_call_id,
-            ),
+            items: collect_transcript_for_review(input.history, input.transcript, proposed_call_id),
         }))
     }
 }
 
-/// Extracts bounded transcript entries without composing other context sections.
+/// Extracts original transcript entries without composing other context sections.
 ///
-/// Entries preserve conversation order and role/tool attribution. Non-user
-/// limits apply during collection; context profiles own aggregate retention.
+/// Entries preserve conversation order and role/tool attribution. Context
+/// preparation applies entry limits and aggregate retention.
 pub fn collect_transcript(
     history: &dyn SectionHistory,
     config: &ConversationTranscriptConfig,
 ) -> Vec<ConversationTranscriptEntry> {
-    collect_transcript_for_target(history, config, crate::ContextTarget::Async)
-}
-
-fn collect_transcript_for_target(
-    history: &dyn SectionHistory,
-    config: &ConversationTranscriptConfig,
-    target: crate::ContextTarget,
-) -> Vec<ConversationTranscriptEntry> {
-    collect_transcript_for_review(history, config, target, /*proposed_call_id*/ None)
+    collect_transcript_for_review(history, config, /*proposed_call_id*/ None)
 }
 
 fn collect_transcript_for_review(
     history: &dyn SectionHistory,
     config: &ConversationTranscriptConfig,
-    target: crate::ContextTarget,
     proposed_call_id: Option<&str>,
 ) -> Vec<ConversationTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
-    let mut heartbeat_references = crate::preparation::HeartbeatReferences::default();
     // Positional legacy labels cannot establish reusable delivery proof, including
     // through transcript copies. The separate retained section stays authoritative.
     let retained_context = history
         .retained_context()
         .filter(|context| !crate::retained_instructions::has_legacy_order(context));
 
-    for (item, mut source) in history.items_with_sources() {
-        let (kind, mut text) = match item {
+    for (item, source) in history.items_with_sources() {
+        let (kind, text) = match item {
             ResponseItem::Message {
                 role,
                 content,
@@ -240,26 +222,12 @@ fn collect_transcript_for_review(
                     .iter()
                     .any(|part| matches!(part, AgentMessageInputContent::EncryptedContent { .. }))
                 {
-                    // Ciphertext cannot be truncated. Keep the complete native item, or
-                    // an explicit omission at the same cursor position. Serialized bytes
-                    // conservatively charge the encrypted payload to the message budget.
+                    // Preserve ciphertext whole; preparation charges serialized bytes
+                    // and decides whether it fits the request's entry limits.
                     let bytes = crate::budget::ByteCount::item(item);
-                    let content = if target == crate::ContextTarget::Sync {
-                        TranscriptContent::NativeMessage(Box::new(item.clone()))
-                    } else {
-                        let limit = codex_protocol::protocol::TruncationPolicy::Tokens(
-                            config.entry_limits.message_tokens,
-                        )
-                        .byte_budget();
-                        if bytes <= limit {
-                            TranscriptContent::NativeMessage(Box::new(item.clone()))
-                        } else {
-                            TranscriptContent::Text(TRANSCRIPT_OMISSION_NOTICE.to_owned())
-                        }
-                    };
                     entries.push(ConversationTranscriptEntry {
                         kind: ConversationTranscriptEntryKind::Assistant,
-                        content,
+                        content: TranscriptContent::NativeMessage(Box::new(item.clone())),
                         original_bytes: bytes,
                         retained_source: None,
                     });
@@ -322,17 +290,7 @@ fn collect_transcript_for_review(
                 {
                     entries.push(ConversationTranscriptEntry {
                         kind,
-                        content: if target == crate::ContextTarget::Sync
-                            || crate::estimate_input_tokens(item)
-                                <= config
-                                    .entry_limits
-                                    .tool_tokens
-                                    .min(MAX_TEXT_PART_ESTIMATED_TOKENS)
-                        {
-                            TranscriptContent::NativeMessage(Box::new(item.clone()))
-                        } else {
-                            TranscriptContent::Text(TRANSCRIPT_OMISSION_NOTICE.to_owned())
-                        },
+                        content: TranscriptContent::NativeMessage(Box::new(item.clone())),
                         original_bytes: crate::budget::ByteCount::item(item),
                         retained_source: None,
                     });
@@ -459,47 +417,6 @@ fn collect_transcript_for_review(
         let scheduled = codex_history::UserInputOrigin::from_message(item)
             == codex_history::UserInputOrigin::Heartbeat;
         let heartbeat = codex_history::Heartbeat::from_message(item).map(Into::into);
-        if target == crate::ContextTarget::Async
-            && scheduled
-            && heartbeat_references.prepare(heartbeat.as_ref(), &mut text, entries.len() + 1)
-        {
-            source = None;
-        }
-        let text = match &kind {
-            ConversationTranscriptEntryKind::User | ConversationTranscriptEntryKind::Developer => {
-                text
-            }
-            ConversationTranscriptEntryKind::Assistant
-            | ConversationTranscriptEntryKind::ProtectedAssistant
-            | ConversationTranscriptEntryKind::Reasoning
-                if target == crate::ContextTarget::Sync =>
-            {
-                text
-            }
-            ConversationTranscriptEntryKind::Assistant
-            | ConversationTranscriptEntryKind::ProtectedAssistant
-            | ConversationTranscriptEntryKind::Reasoning => {
-                truncate_text(&text, config.entry_limits.message_tokens)
-            }
-            ConversationTranscriptEntryKind::ToolCall(_)
-            | ConversationTranscriptEntryKind::ToolOutput(_)
-                if target == crate::ContextTarget::Sync =>
-            {
-                text
-            }
-            ConversationTranscriptEntryKind::ToolCall(_)
-            | ConversationTranscriptEntryKind::ToolOutput(_) => {
-                truncate_text(&text, config.entry_limits.tool_tokens)
-            }
-            ConversationTranscriptEntryKind::NodeReplToolOutput(_)
-                if target == crate::ContextTarget::Sync =>
-            {
-                text
-            }
-            ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
-                truncate_text(&text, config.entry_limits.node_repl_output_tokens)
-            }
-        };
         entries.push(ConversationTranscriptEntry {
             retained_source: retained_context.and_then(|context| {
                 let source = source.filter(|source| {
@@ -522,13 +439,7 @@ fn collect_transcript_for_review(
                             "Retained source order: {order}\n{}",
                             crate::GuardianRootMessage::User(message.text.clone()).render()
                         );
-                        (target == crate::ContextTarget::Sync
-                            || rendered.len()
-                                <= TruncationPolicy::Tokens(
-                                    crate::retained_instructions::MAX_INSTRUCTION_TOKENS,
-                                )
-                                .byte_budget())
-                        .then(|| crate::RetainedTranscriptSource {
+                        Some(crate::RetainedTranscriptSource {
                             rendered_bytes: rendered.len(),
                             order,
                             source: source.clone(),
@@ -537,7 +448,7 @@ fn collect_transcript_for_review(
                 )
             }),
             kind,
-            content: if target == crate::ContextTarget::Sync && scheduled {
+            content: if scheduled {
                 TranscriptContent::ScheduledMessage(crate::entry::ScheduledTranscriptMessage {
                     text,
                     heartbeat,

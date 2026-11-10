@@ -141,7 +141,7 @@ fn sender_restrictions_survive_budget_trimming_for_both_reviewers() {
                 ContextSection::ConversationTranscript { items: Vec::new() },
             ],
         }
-        .compose(
+        .compose_prepared(
             presentation,
             PreparedTranscript {
                 items: vec![Budgeted::optional(

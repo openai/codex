@@ -360,9 +360,14 @@ fn planned_action_budget_omits_descriptions_without_changing_arguments() {
                 sections: vec![crate::ContextSection::PlannedAction(action.clone())],
             };
             let profile = &crate::ContextProfile::synchronous();
-            let transcript = profile
-                .prepare_transcript(context.transcript_entries(), /*entry_number_offset*/ 0);
-            context.compose(presentation, transcript)
+            crate::prepare_context(
+                std::borrow::Cow::Owned(context),
+                profile,
+                /*entry_number_offset*/ 0,
+                presentation,
+                crate::ContextBudgeting::Fixed,
+                &[],
+            )
         }
         .unwrap();
         let mut required_items = required.iter().map(|item| text(item)).collect::<Vec<_>>();

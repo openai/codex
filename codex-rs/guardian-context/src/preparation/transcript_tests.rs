@@ -8,6 +8,47 @@ use crate::composition::SectionDelivery;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn fixed_preparation_caps_text_and_omits_whole_native_entries() {
+    const PAYLOAD_REPETITIONS: usize = 80;
+    let text = "opaque-parent-reply".repeat(PAYLOAD_REPETITIONS);
+    let history = serde_json::from_value::<Vec<codex_protocol::models::ResponseItem>>(serde_json::json!([
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]},
+        {"type": "agent_message", "author": "/root", "recipient": "/root/worker", "content": [{"type": "encrypted_content", "encrypted_content": text}]},
+        {"type": "function_call", "call_id": "call", "namespace": "team", "name": "send_message", "arguments": text, "encrypted_function_args": ["message"]}
+    ])).unwrap();
+    for mut profile in [
+        ContextProfile::synchronous(),
+        ContextProfile::asynchronous(),
+    ] {
+        profile.transcript.options.native_multi_agent_namespace = Some("team".to_owned());
+        let originals = crate::collect_transcript(&history, &profile.transcript);
+        profile.transcript.entry_limits.message_tokens = 1;
+        profile.transcript.entry_limits.tool_tokens = 1;
+        let entries = crate::collect_transcript(&history, &profile.transcript);
+        assert_eq!(entries, originals);
+        let prepared = profile.prepare_transcript(&entries, /*entry_number_offset*/ 0);
+        let texts = prepared
+            .items
+            .into_iter()
+            .map(|item| {
+                let TranscriptContent::Record(record) = item.content else {
+                    panic!("expected omission or bounded text")
+                };
+                record.text().to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts,
+            vec![
+                crate::truncate_text(&text, /*max_tokens*/ 1),
+                crate::transcript::TRANSCRIPT_OMISSION_NOTICE.to_owned(),
+                crate::transcript::TRANSCRIPT_OMISSION_NOTICE.to_owned()
+            ]
+        );
+    }
+}
+
+#[test]
 fn profiles_preserve_distinct_retention_and_original_numbering() {
     let entries = [
         (ConversationTranscriptEntryKind::User, "inspect only"),
@@ -105,6 +146,11 @@ fn profiles_reserve_the_newest_five_tool_entries_for_aggregate_enforcement() {
             retained_source: None,
         })
         .collect::<Vec<_>>();
+    // Unchanged tool entries stay borrowed; an empty delta produces no owned views.
+    assert!(
+        prepare_heartbeats(&entries, /*offset*/ 0).all(|entry| matches!(entry, Cow::Borrowed(_)))
+    );
+    assert!(prepare_heartbeats(&entries, entries.len()).next().is_none());
     for profile in [
         ContextProfile::synchronous(),
         ContextProfile::asynchronous(),
@@ -127,24 +173,28 @@ fn profiles_reserve_the_newest_five_tool_entries_for_aggregate_enforcement() {
                 Retention::Required
             ]
         );
-        if profile.target == ContextTarget::Sync {
+        {
             let mut limited = profile.clone();
             limited.retention.max_recent_non_user_entries = 1;
             limited.retention.max_tool_transcript_tokens = 1;
             limited.transcript.entry_limits.tool_tokens = 1;
             limited.transcript_format = crate::TranscriptFormat::Json;
-            let elastic = crate::prepare_sync_context(
-                crate::CollectedContext {
+            let elastic = crate::prepare_context(
+                std::borrow::Cow::Owned(crate::CollectedContext {
                     sections: vec![crate::ContextSection::ConversationTranscript {
                         items: entries.clone(),
                     }],
-                },
+                }),
                 &limited,
                 /*entry_number_offset*/ 0,
-                crate::ContextPresentation::SyncFull {
-                    session_id: "worker",
+                match profile.target {
+                    ContextTarget::Sync => crate::ContextPresentation::SyncFull {
+                        session_id: "worker",
+                    },
+                    ContextTarget::Async => crate::ContextPresentation::Async,
                 },
                 ContextBudgeting::Elastic,
+                &[],
             )
             .unwrap();
             let actual = elastic

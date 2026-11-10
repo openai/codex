@@ -84,23 +84,21 @@ fn review_delivery_requires_complete_host_metadata_and_preserves_distinct_comple
         (vec![first_message.clone()], vec![second]),
         (vec![first_message, second_message], Vec::new()),
     ] {
-        let mut context = CollectedContext {
+        let context = CollectedContext {
             sections: vec![ContextSection::PreviousReviews(
                 PreviousReviews::try_from_fragments(both.clone()).unwrap(),
             )],
         };
-        context.retain_new_reviews(&history);
-        let delivered = context
-            .compose(
-                crate::ContextPresentation::Async,
-                crate::PreparedTranscript {
-                    items: Vec::new(),
-                    omission_note: None,
-                    truncations: Vec::new(),
-                },
-            )
-            .unwrap()
-            .into_annotated_messages();
+        let delivered = crate::prepare_context(
+            std::borrow::Cow::Borrowed(&context),
+            &crate::ContextProfile::asynchronous(),
+            /*entry_number_offset*/ 0,
+            crate::ContextPresentation::Async,
+            crate::ContextBudgeting::Fixed,
+            &history,
+        )
+        .unwrap()
+        .into_annotated_messages();
         let expected = if expected.is_empty() {
             Vec::new()
         } else {

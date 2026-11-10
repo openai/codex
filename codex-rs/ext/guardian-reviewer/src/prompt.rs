@@ -27,12 +27,13 @@ pub fn compose_guardian_prompt(
 ) -> anyhow::Result<GuardianPromptItems> {
     let (offset, presentation, transcript_cursor) =
         select_transcript(&sections, mode, history_version, session_id);
-    let context = codex_guardian_context::prepare_sync_context(
-        sections,
+    let context = codex_guardian_context::prepare_context(
+        std::borrow::Cow::Owned(sections),
         profile,
         offset,
         presentation,
         codex_guardian_context::ContextBudgeting::Fixed,
+        &[],
     )?;
     Ok(GuardianPromptItems {
         context,

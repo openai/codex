@@ -162,16 +162,17 @@ fn required_context(text: String) -> ComposedContext {
         /*node_repl*/ None,
     )
     .expect("collect required context");
-    let transcript = ContextProfile::synchronous()
-        .prepare_transcript(context.transcript_entries(), /*entry_number_offset*/ 0);
-    context
-        .compose(
-            ContextPresentation::SyncFull {
-                session_id: "test-parent",
-            },
-            transcript,
-        )
-        .expect("compose required context")
+    codex_guardian_context::prepare_context(
+        std::borrow::Cow::Owned(context),
+        &ContextProfile::synchronous(),
+        /*entry_number_offset*/ 0,
+        ContextPresentation::SyncFull {
+            session_id: "test-parent",
+        },
+        codex_guardian_context::ContextBudgeting::Fixed,
+        &[],
+    )
+    .expect("prepare required context")
 }
 
 #[tokio::test]
@@ -342,14 +343,15 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
     )
     .await
     .unwrap();
-    let context = codex_guardian_context::prepare_sync_context(
-        collected.sections,
+    let context = codex_guardian_context::prepare_context(
+        std::borrow::Cow::Owned(collected.sections),
         &collected.profile,
         /*entry_number_offset*/ 0,
         ContextPresentation::SyncFull {
             session_id: &collected.session_id,
         },
         budgeting,
+        &[],
     )
     .unwrap();
     let elastic = (budgeting == ContextBudgeting::Elastic).then(|| {

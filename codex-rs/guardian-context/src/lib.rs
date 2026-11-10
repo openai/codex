@@ -108,7 +108,7 @@ pub use preparation::ContextBudgeting;
 pub use preparation::ContextProfile;
 pub use preparation::SyncImagePreparer;
 pub use preparation::SyncPreparation;
-pub use preparation::prepare_sync_context;
+pub use preparation::prepare_context;
 pub use preparation::prepare_sync_context_with_facts;
 pub use preparation::prepare_sync_delivery;
 pub use preparation::prepare_sync_images;
@@ -187,7 +187,7 @@ pub struct SectionInput<'a> {
     pub target: ContextTarget,
     /// Parent conversation history available to this contribution.
     pub history: &'a dyn SectionHistory,
-    /// Evidence sources and per-entry limits for this collection.
+    /// Evidence sources and request-time entry limits.
     pub transcript: &'a ConversationTranscriptConfig,
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],

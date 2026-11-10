@@ -1,4 +1,4 @@
-//! Prepares synchronous request evidence before final aggregate admission.
+//! Prepares captured request evidence before final aggregate admission.
 //! Collection keeps captured sources intact. This owner applies text and image policy;
 //! delivery checks repeat against current reviewer history after compaction.
 
@@ -8,7 +8,6 @@ pub(crate) mod root;
 mod transcript;
 pub use transcript::ContextProfile;
 pub(crate) use transcript::HeartbeatInstruction;
-pub(crate) use transcript::HeartbeatReferences;
 
 use crate::CollectedContext;
 use crate::ComposedContext;
@@ -38,7 +37,7 @@ pub enum ContextBudgeting {
     /// Preserve existing per-section request selection.
     #[default]
     Fixed,
-    /// Store transcript entries by bytes only; defer request selection to configured allocation.
+    /// Defer transcript selection and entry caps to configured allocation.
     Elastic,
 }
 
@@ -46,49 +45,77 @@ pub enum ContextBudgeting {
 #[path = "source_tests.rs"]
 mod source_tests;
 
-/// Prepares the host-selected transcript suffix and all synchronous context sections.
+/// Prepares the host-selected transcript suffix and target-specific context sections.
 /// Cursor selection remains with the host; its offset addresses the collected entries.
+/// Owned contexts are consumed; borrowed contexts copy only non-transcript sections.
 /// No storage, reviewer history or cursor state is changed by this operation.
 /// Elastic callers apply entry caps, then deduplicate delivery and enforce
 /// the global request budget through `PreparedElasticContext`.
-pub fn prepare_sync_context(
-    mut context: CollectedContext,
+pub fn prepare_context(
+    context: Cow<'_, CollectedContext>,
     profile: &ContextProfile,
     entry_number_offset: usize,
     presentation: ContextPresentation<'_>,
     budgeting: ContextBudgeting,
+    reviewer_history: &[ResponseItemEnvelope],
 ) -> Result<ComposedContext, SectionError> {
-    if budgeting == ContextBudgeting::Elastic && profile.target != crate::ContextTarget::Sync {
-        return Err(SectionError::UnsupportedDelivery {
-            section: "sync_preparation",
-        });
-    }
-    let placeholder = match &presentation {
-        ContextPresentation::SyncFull { .. } => "<no retained transcript entries>",
-        ContextPresentation::SyncDelta { .. } => "<no retained transcript delta entries>",
+    let (target, placeholder) = match &presentation {
+        ContextPresentation::SyncFull { .. } => (
+            crate::ContextTarget::Sync,
+            Some("<no retained transcript entries>"),
+        ),
+        ContextPresentation::SyncDelta { .. } => (
+            crate::ContextTarget::Sync,
+            Some("<no retained transcript delta entries>"),
+        ),
         ContextPresentation::Async | ContextPresentation::AsyncDelta => {
-            return Err(SectionError::UnsupportedDelivery {
-                section: "sync_preparation",
-            });
+            (crate::ContextTarget::Async, None)
         }
     };
-    transcript::prepare_sync_heartbeats(&mut context);
-    let entries = context
-        .transcript_entries()
-        .get(entry_number_offset..)
-        .ok_or(SectionError::UnsupportedDelivery {
+    if profile.target != target {
+        return Err(SectionError::UnsupportedDelivery {
+            section: "context_preparation",
+        });
+    }
+    let entries = context.transcript_entries();
+    if entry_number_offset > entries.len() {
+        return Err(SectionError::UnsupportedDelivery {
             section: "conversation_transcript",
-        })?;
-    let mut transcript =
-        profile.prepare_transcript_for_budgeting(entries, entry_number_offset, budgeting);
-    if entries.is_empty() {
+        });
+    }
+    let mut transcript = profile.prepare_transcript_for_budgeting(
+        transcript::prepare_heartbeats(entries, entry_number_offset),
+        entry_number_offset,
+        budgeting,
+    );
+    if entries.len() == entry_number_offset
+        && let Some(placeholder) = placeholder
+    {
         transcript
             .items
             .push(crate::Budgeted::required(crate::TranscriptContent::Text(
                 placeholder.to_owned(),
             )));
     }
-    prepare_sync_sections(&mut context, budgeting)?;
+    let mut context = match context {
+        Cow::Owned(context) => context,
+        Cow::Borrowed(context) => CollectedContext {
+            sections: context
+                .sections
+                .iter()
+                .map(|section| match section {
+                    ContextSection::ConversationTranscript { .. } => {
+                        ContextSection::ConversationTranscript { items: Vec::new() }
+                    }
+                    _ => section.clone(),
+                })
+                .collect(),
+        },
+    };
+    context.retain_new_reviews(reviewer_history);
+    if target == crate::ContextTarget::Sync {
+        prepare_sync_sections(&mut context, budgeting)?;
+    }
     context.compose_prepared(presentation, transcript)
 }
 
@@ -350,12 +377,18 @@ pub async fn prepare_sync_context_with_facts(
     presentation: ContextPresentation<'_>,
     preparation: SyncPreparation<'_>,
 ) -> Result<ComposedContext, SectionError> {
-    let mut context = prepare_sync_context(
-        context,
+    if profile.target != crate::ContextTarget::Sync {
+        return Err(SectionError::UnsupportedDelivery {
+            section: "sync_preparation",
+        });
+    }
+    let mut context = prepare_context(
+        Cow::Owned(context),
         profile,
         entry_number_offset,
         presentation,
         preparation.budgeting,
+        preparation.reviewer_history,
     )?;
     if preparation.budgeting == ContextBudgeting::Elastic && !preparation.supports_images {
         context.retain_images(|_, _| false);

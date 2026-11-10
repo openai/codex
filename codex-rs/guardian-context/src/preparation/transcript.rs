@@ -1,5 +1,5 @@
 //! Resolved Guardian evidence profiles, transcript admission and retention.
-//! Fixed sync keeps recent entries; elastic sync defers selection and text caps.
+//! Fixed sync keeps recent entries; elastic preparation defers selection and text caps.
 //! Async protects approvals/final answers and evicts
 //! in cacheable chunks. Hosts still own history snapshots and delivery cursors.
 //! Fixed mode may shorten historical authorization entries during budget recovery.
@@ -7,6 +7,7 @@
 //! The host selects line or JSON rendering; JSON keeps embedded headers inside text.
 
 use codex_protocol::protocol::TruncationPolicy;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::ContextBudgeting;
@@ -124,22 +125,23 @@ impl ContextProfile {
         entry_number_offset: usize,
     ) -> PreparedTranscript {
         self.prepare_transcript_for_budgeting(
-            transcript_entries,
+            transcript_entries.iter().map(Cow::Borrowed),
             entry_number_offset,
             ContextBudgeting::Fixed,
         )
     }
 
-    pub(super) fn prepare_transcript_for_budgeting(
+    pub(super) fn prepare_transcript_for_budgeting<'a>(
         &self,
-        transcript_entries: &[ConversationTranscriptEntry],
+        transcript_entries: impl IntoIterator<Item = Cow<'a, ConversationTranscriptEntry>>,
         entry_number_offset: usize,
         budgeting: ContextBudgeting,
     ) -> PreparedTranscript {
         let entries = transcript_entries
-            .iter()
+            .into_iter()
             .enumerate()
             .map(|(index, entry)| {
+                let entry = entry.as_ref();
                 let kind = match &entry.kind {
                     ConversationTranscriptEntryKind::User => TranscriptEntryKind::User,
                     ConversationTranscriptEntryKind::Developer => {
@@ -164,7 +166,6 @@ impl ContextProfile {
                 let retained_source = entry.retained_source.as_ref().filter(|source| {
                     entry.kind == ConversationTranscriptEntryKind::User
                         && (budgeting == ContextBudgeting::Elastic
-                            || self.target == ContextTarget::Async
                             || source.rendered_bytes
                                 <= TruncationPolicy::Tokens(
                                     crate::retained_instructions::MAX_INSTRUCTION_TOKENS,
@@ -184,12 +185,11 @@ impl ContextProfile {
                         TruncationPolicy::Bytes(record.rendered().text_bytes).token_budget();
                     (TranscriptContent::Record(record), tokens, text.len())
                 };
-                let content =
-                    if self.target == ContextTarget::Sync && budgeting == ContextBudgeting::Fixed {
-                        prepare_sync_content(entry, &self.transcript.entry_limits)
-                    } else {
-                        std::borrow::Cow::Borrowed(&entry.content)
-                    };
+                let content = if budgeting == ContextBudgeting::Fixed {
+                    prepare_fixed_content(entry, &self.transcript.entry_limits, self.target)
+                } else {
+                    std::borrow::Cow::Borrowed(&entry.content)
+                };
                 let (content, tokens, retained_bytes) = match content.as_ref() {
                     TranscriptContent::Text(text) => prepare_text(text),
                     TranscriptContent::ScheduledMessage(message) => prepare_text(&message.text),
@@ -222,7 +222,7 @@ impl ContextProfile {
             }
         }
         match (self.target, budgeting) {
-            (ContextTarget::Sync, ContextBudgeting::Elastic) => {}
+            (ContextTarget::Sync | ContextTarget::Async, ContextBudgeting::Elastic) => {}
             (ContextTarget::Sync, ContextBudgeting::Fixed) => {
                 let mut message_tokens = authorization_tokens;
                 let mut tool_tokens = 0usize;
@@ -250,7 +250,7 @@ impl ContextProfile {
                     }
                 }
             }
-            (ContextTarget::Async, _) => {
+            (ContextTarget::Async, ContextBudgeting::Fixed) => {
                 let available = self
                     .retention
                     .max_message_transcript_tokens
@@ -341,10 +341,11 @@ impl ContextProfile {
     }
 }
 
-/// Bounds sync content before rendering or calculating retention costs.
-fn prepare_sync_content<'a>(
+/// Applies legacy entry caps before rendering or calculating fixed retention costs.
+fn prepare_fixed_content<'a>(
     entry: &'a crate::ConversationTranscriptEntry,
     limits: &crate::TranscriptEntryLimits,
+    target: ContextTarget,
 ) -> std::borrow::Cow<'a, TranscriptContent> {
     let text = match &entry.content {
         TranscriptContent::Text(text) => text.as_str(),
@@ -360,7 +361,10 @@ fn prepare_sync_content<'a>(
                         > limits
                             .tool_tokens
                             .min(crate::MAX_TEXT_PART_ESTIMATED_TOKENS);
-            return if entry.original_bytes > limit || tool_call_too_large {
+            let message_too_large = entry.original_bytes > limit
+                && (target == ContextTarget::Sync
+                    || !matches!(entry.kind, ConversationTranscriptEntryKind::ToolCall(_)));
+            return if message_too_large || tool_call_too_large {
                 std::borrow::Cow::Owned(TranscriptContent::Text(
                     crate::transcript::TRANSCRIPT_OMISSION_NOTICE.to_owned(),
                 ))
@@ -400,60 +404,56 @@ impl From<codex_history::Heartbeat<'_>> for HeartbeatInstruction {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct HeartbeatReferences {
-    versions: HashMap<String, (String, usize)>,
-}
-
-impl HeartbeatReferences {
-    /// Returns whether the representation no longer proves complete source delivery.
-    pub(crate) fn prepare(
-        &mut self,
-        heartbeat: Option<&HeartbeatInstruction>,
-        text: &mut String,
-        number: usize,
-    ) -> bool {
-        let Some(heartbeat) = heartbeat else {
-            self.versions.clear();
-            return false;
+/// Scans the complete snapshot for reference targets, borrowing unchanged suffix entries.
+pub(super) fn prepare_heartbeats(
+    entries: &[ConversationTranscriptEntry],
+    offset: usize,
+) -> impl Iterator<Item = Cow<'_, ConversationTranscriptEntry>> {
+    // An empty delta needs neither heartbeat state nor a copy of previous entries.
+    let entries = if offset == entries.len() {
+        &[]
+    } else {
+        entries
+    };
+    let mut versions = HashMap::new();
+    entries.iter().enumerate().filter_map(move |(index, entry)| {
+        let reference = match &entry.content {
+            TranscriptContent::ScheduledMessage(message) => match &message.heartbeat {
+                Some(heartbeat) => match versions.get(heartbeat.automation_id.as_str()) {
+                    Some((instructions, previous)) if *instructions == heartbeat.instructions => {
+                        Some((heartbeat, *previous))
+                    }
+                    _ => {
+                        versions.insert(heartbeat.automation_id.as_str(), (heartbeat.instructions.as_str(), index + 1));
+                        None
+                    }
+                },
+                None => {
+                    versions.clear();
+                    None
+                }
+            },
+            _ => None,
         };
-        match self.versions.get(&heartbeat.automation_id) {
-            Some((instructions, previous)) if *instructions == heartbeat.instructions => {
+        if index < offset {
+            return None;
+        }
+        Some(match reference {
+            Some((heartbeat, previous)) => {
                 let automation_id = &heartbeat.automation_id;
                 let timestamp = &heartbeat.timestamp;
-                *text = format!(
-                    "Scheduled automation {automation_id} ran at {timestamp}. Instructions unchanged from transcript entry [{previous}]; this is a replay of that earlier instruction, not a new human instruction. If the referenced instructions are unavailable, do not infer authorization from this reference."
-                );
-                true
+                Cow::Owned(ConversationTranscriptEntry {
+                    kind: entry.kind.clone(),
+                    content: TranscriptContent::Text(format!(
+                        "Scheduled automation {automation_id} ran at {timestamp}. Instructions unchanged from transcript entry [{previous}]; this is a replay of that earlier instruction, not a new human instruction. If the referenced instructions are unavailable, do not infer authorization from this reference."
+                    )),
+                    original_bytes: entry.original_bytes,
+                    retained_source: None,
+                })
             }
-            _ => {
-                self.versions.insert(
-                    heartbeat.automation_id.clone(),
-                    (heartbeat.instructions.clone(), number),
-                );
-                false
-            }
-        }
-    }
-}
-
-/// Runs over the complete collected transcript so delta references keep their old targets.
-pub(super) fn prepare_sync_heartbeats(context: &mut crate::CollectedContext) {
-    for section in &mut context.sections {
-        let crate::ContextSection::ConversationTranscript { items } = section else {
-            continue;
-        };
-        let mut references = HeartbeatReferences::default();
-        for (index, entry) in items.iter_mut().enumerate() {
-            let crate::TranscriptContent::ScheduledMessage(message) = &mut entry.content else {
-                continue;
-            };
-            if references.prepare(message.heartbeat.as_ref(), &mut message.text, index + 1) {
-                entry.retained_source = None;
-            }
-            entry.content = crate::TranscriptContent::Text(std::mem::take(&mut message.text));
-        }
-    }
+            None => Cow::Borrowed(entry),
+        })
+    })
 }
 
 #[cfg(test)]

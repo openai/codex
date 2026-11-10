@@ -51,7 +51,39 @@ fn heartbeat_references_preserve_positions_changes_and_human_messages() {
         make("03:00Z", "Monitor only.", "user.heartbeat"),
         make("03:10Z", "Monitor only.", "user.text"),
     ];
-    let entries = collect_transcript(&history, &transcript_config());
+    let raw = collect_transcript(&history, &transcript_config());
+    let collected = crate::CollectedContext {
+        sections: vec![ContextSection::ConversationTranscript { items: raw.clone() }],
+    };
+    let mut profile = crate::ContextProfile::asynchronous();
+    profile.transcript_format = crate::TranscriptFormat::Json;
+    let prepared = crate::prepare_context(
+        std::borrow::Cow::Borrowed(&collected),
+        &profile,
+        /*entry_number_offset*/ 0,
+        crate::ContextPresentation::Async,
+        crate::ContextBudgeting::Fixed,
+        &[],
+    )
+    .unwrap();
+    let entries = prepared
+        .sections
+        .into_iter()
+        .flat_map(|section| {
+            let crate::composition::SectionDelivery::UserContent(items) = section.delivery else {
+                panic!("expected transcript content");
+            };
+            items.into_iter().filter_map(|item| match item.content {
+                crate::composition::SectionContent::Transcript(record) => Some(record),
+                crate::composition::SectionContent::Other(_) => None,
+            })
+        })
+        .zip(&raw)
+        .map(|(record, entry)| ConversationTranscriptEntry {
+            content: crate::TranscriptContent::Text(record.text().to_owned()),
+            ..entry.clone()
+        })
+        .collect::<Vec<_>>();
     assert_eq!(entries.len(), history.len());
     for index in [0, 2, 4, 5, 6] {
         let ResponseItem::Message { content, .. } = &history[index] else {
@@ -72,32 +104,9 @@ fn heartbeat_references_preserve_positions_changes_and_human_messages() {
         assert!(text.contains("unchanged from transcript entry [1]"));
         assert!(!text.contains("Monitor only."));
     }
-    // Sync collection keeps originals. Preparation compresses before slicing, so
-    // full and delta requests retain exactly the existing reference text and numbering.
-    let raw = super::collect_transcript_for_target(
-        &history,
-        &transcript_config(),
-        crate::ContextTarget::Sync,
-    );
-    let collected = crate::CollectedContext {
-        sections: vec![ContextSection::ConversationTranscript { items: raw.clone() }],
-    };
-    let prepared = crate::ContextProfile::synchronous().prepare_transcript(
-        collected.transcript_entries(),
-        /*entry_number_offset*/ 0,
-    );
-    assert!(matches!(
-        collected.compose(
-            crate::ContextPresentation::SyncFull {
-                session_id: "heartbeat"
-            },
-            prepared,
-        ),
-        Err(crate::SectionError::UnsupportedDelivery {
-            section: "sync_preparation"
-        })
-    ));
-    for offset in [0, 1, 3] {
+    assert_eq!(collected.transcript_entries(), raw.as_slice());
+    const DELTA_AFTER_HUMAN_MESSAGE: usize = 3;
+    for offset in [0, 1, DELTA_AFTER_HUMAN_MESSAGE] {
         let [expected, actual] = [entries.clone(), raw.clone()].map(|items| {
             let presentation = if offset == 0 {
                 crate::ContextPresentation::SyncFull {
@@ -108,34 +117,53 @@ fn heartbeat_references_preserve_positions_changes_and_human_messages() {
                     session_id: "heartbeat",
                 }
             };
-            crate::prepare_sync_context(
-                crate::CollectedContext {
+            crate::prepare_context(
+                std::borrow::Cow::Borrowed(&crate::CollectedContext {
                     sections: vec![crate::ContextSection::ConversationTranscript { items }],
-                },
+                }),
                 &crate::ContextProfile::synchronous(),
                 offset,
                 presentation,
                 crate::ContextBudgeting::Fixed,
+                &[],
             )
             .unwrap()
             .into_messages()
         });
         assert_eq!(actual, expected);
     }
-    // A rebuilt window starts with a full body, never a dangling old reference.
-    let rebuilt = collect_transcript(&history[3..].to_vec(), &transcript_config());
-    assert!(
-        matches!(&rebuilt[0].content, crate::TranscriptContent::Text(text) if text.contains("Monitor only."))
-    );
-    let interrupted = vec![
-        history[0].clone(),
-        make("02:00Z", &"x".repeat(/*n*/ 3_600), "user.heartbeat"),
-        history[1].clone(),
-    ];
-    let interrupted = collect_transcript(&interrupted, &transcript_config());
-    assert!(
-        matches!(&interrupted[2].content, crate::TranscriptContent::Text(text) if text.contains("Monitor only."))
-    );
+    // Rebuilt and interrupted runs start with a full body, never an old reference.
+    const OVERSIZED_HEARTBEAT_CHARS: usize = 3_600;
+    for history in [
+        history[DELTA_AFTER_HUMAN_MESSAGE..].to_vec(),
+        vec![
+            history[0].clone(),
+            make(
+                "02:00Z",
+                &"x".repeat(OVERSIZED_HEARTBEAT_CHARS),
+                "user.heartbeat",
+            ),
+            history[1].clone(),
+        ],
+    ] {
+        let context = crate::CollectedContext {
+            sections: vec![ContextSection::ConversationTranscript {
+                items: collect_transcript(&history, &transcript_config()),
+            }],
+        };
+        let prepared = crate::prepare_context(
+            std::borrow::Cow::Owned(context),
+            &crate::ContextProfile::asynchronous(),
+            /*entry_number_offset*/ 0,
+            crate::ContextPresentation::Async,
+            crate::ContextBudgeting::Fixed,
+            &[],
+        )
+        .unwrap();
+        let text = serde_json::to_string(&prepared.into_messages()).unwrap();
+        assert!(text.contains("Monitor only."));
+        assert!(!text.contains("unchanged from transcript entry"));
+    }
 }
 
 fn entry(kind: ConversationTranscriptEntryKind, text: &str) -> ConversationTranscriptEntry {
@@ -496,7 +524,7 @@ fn outputs_with_call_ids_or_explicit_names_are_retained() {
 }
 
 #[test]
-fn reused_registry_applies_current_history_sources_and_entry_limits() {
+fn reused_registry_applies_current_history_sources_and_preserves_originals() {
     let text = "é🙂".repeat(/*n*/ 10_000);
     let mut history = vec![ResponseItem::Message {
         status: None,
@@ -552,6 +580,12 @@ fn reused_registry_applies_current_history_sources_and_entry_limits() {
     });
     config.entry_limits.message_tokens = 60;
     config.entry_limits.tool_tokens = 30;
+    let mut assistant = history[0].clone();
+    let ResponseItem::Message { role, .. } = &mut assistant else {
+        unreachable!();
+    };
+    *role = "assistant".to_owned();
+    history.push(assistant);
     for include_tool_calls in [true, false] {
         config.options.include_tool_calls = include_tool_calls;
         let sections = registry
@@ -582,13 +616,17 @@ fn reused_registry_applies_current_history_sources_and_entry_limits() {
                 kind: ConversationTranscriptEntryKind::ToolCall(
                     "tool exec_command call".to_string(),
                 ),
-                content: crate::TranscriptContent::Text(truncate_text(
-                    &text, /*max_tokens*/ 30,
-                )),
+                content: crate::TranscriptContent::Text(text.clone()),
                 original_bytes: text.len(),
                 retained_source: None,
             });
         }
+        expected.push(ConversationTranscriptEntry {
+            kind: ConversationTranscriptEntryKind::ProtectedAssistant,
+            content: crate::TranscriptContent::Text(text.clone()),
+            original_bytes: text.len(),
+            retained_source: None,
+        });
         assert_eq!(transcript_items(&sections[0]), expected);
     }
 }
@@ -642,11 +680,7 @@ fn encrypted_messages_preserve_order_and_budget_for_both_reviewers() {
         if native_calls {
             let mut limited = profile.clone();
             limited.transcript.entry_limits.tool_tokens = 1;
-            let deferred = super::collect_transcript_for_target(
-                &vec![call.clone()],
-                &limited.transcript,
-                crate::ContextTarget::Sync,
-            );
+            let deferred = collect_transcript(&vec![call.clone()], &limited.transcript);
             assert!(
                 matches!(&deferred[0].content, crate::TranscriptContent::NativeMessage(item)
                 if item.as_ref() == &call)
@@ -681,7 +715,7 @@ fn encrypted_messages_preserve_order_and_budget_for_both_reviewers() {
                 items: entries.clone(),
             }],
         }
-        .compose(
+        .compose_prepared(
             ContextPresentation::SyncFull {
                 session_id: "worker",
             },
@@ -730,49 +764,6 @@ fn encrypted_messages_preserve_order_and_budget_for_both_reviewers() {
                 .iter()
                 .all(|item| item["type"] != "function_call_output")
         );
-        let mut limited = profile.transcript.clone();
-        limited.entry_limits.message_tokens = 10;
-        limited.entry_limits.tool_tokens = 10;
-        let entries = collect_transcript(&history, &limited);
-        let native_end = if native_calls { 3 } else { 2 };
-        assert!(entries[1..native_end].iter().all(|entry| matches!(
-            &entry.content, crate::TranscriptContent::Text(text) if text.contains("omitted")
-        )));
-        if profile.target == ContextTarget::Sync {
-            let mut limited_profile = profile;
-            limited_profile.transcript = limited.clone();
-            let raw = super::collect_transcript_for_target(&history, &limited, ContextTarget::Sync);
-            let actual = {
-                let context = crate::CollectedContext {
-                    sections: vec![ContextSection::ConversationTranscript { items: raw }],
-                };
-                let profile = &limited_profile;
-                let transcript = profile.prepare_transcript(
-                    context.transcript_entries(),
-                    /*entry_number_offset*/ 0,
-                );
-                context.compose(
-                    ContextPresentation::SyncFull {
-                        session_id: "worker",
-                    },
-                    transcript,
-                )
-            }
-            .unwrap();
-            let expected = crate::CollectedContext {
-                sections: vec![ContextSection::ConversationTranscript {
-                    items: entries.clone(),
-                }],
-            }
-            .compose(
-                ContextPresentation::SyncFull {
-                    session_id: "worker",
-                },
-                limited_profile.prepare_transcript(&entries, /*entry_number_offset*/ 0),
-            )
-            .unwrap();
-            assert_eq!(actual.into_messages(), expected.into_messages());
-        }
     }
 }
 
@@ -827,8 +818,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         },
     ];
 
-    let entries =
-        super::collect_transcript_for_target(&items, &profile.transcript, ContextTarget::Sync);
+    let entries = collect_transcript(&items, &profile.transcript);
 
     assert_eq!(entries.len(), 4);
     assert_eq!(
@@ -853,8 +843,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         *namespace = Some("mcp__node_repl__".to_string());
     }
     assert!(matches!(
-        super::collect_transcript_for_target(&items, &profile.transcript, ContextTarget::Sync)[2]
-            .kind,
+        collect_transcript(&items, &profile.transcript)[2].kind,
         ConversationTranscriptEntryKind::NodeReplToolOutput(_)
     ));
 
@@ -865,8 +854,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
     }
     for token_cap in [profile.transcript.entry_limits.tool_tokens, 6_000] {
         profile.transcript.entry_limits.node_repl_output_tokens = token_cap;
-        let entries =
-            super::collect_transcript_for_target(&items, &profile.transcript, ContextTarget::Sync);
+        let entries = collect_transcript(&items, &profile.transcript);
         assert_eq!(
             entries[2],
             ConversationTranscriptEntry {

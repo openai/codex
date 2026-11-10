@@ -22,7 +22,7 @@ use codex_guardian_context::TrustedTool;
 use codex_guardian_context::TrustedToolSource;
 use codex_guardian_context::collect_verified_answer_candidates;
 use codex_guardian_context::default_registry;
-use codex_guardian_context::prepare_sync_context;
+use codex_guardian_context::prepare_context;
 use codex_guardian_context::render_original_verified_answer;
 use codex_history::RetainedContext;
 use codex_history::RetainedContextEvent;
@@ -153,13 +153,15 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
                     node_repl: None,
                 })
                 .unwrap();
-            let transcript = profile.prepare_transcript(
-                collected.transcript_entries(),
+            let context = prepare_context(
+                std::borrow::Cow::Owned(collected),
+                &profile,
                 /*entry_number_offset*/ 0,
-            );
-            let context = collected
-                .compose(ContextPresentation::Async, transcript)
-                .unwrap();
+                ContextPresentation::Async,
+                codex_guardian_context::ContextBudgeting::Fixed,
+                &[],
+            )
+            .unwrap();
             let retained_text = context
                 .retained_instructions()
                 .into_user_inputs()
@@ -290,14 +292,15 @@ fn elastic_verified_answers_preserve_question_answer_identity() {
             ]
             .into(),
         };
-        let messages = prepare_sync_context(
-            collected,
+        let messages = prepare_context(
+            std::borrow::Cow::Owned(collected),
             &profile,
             /*entry_number_offset*/ 0,
             ContextPresentation::SyncFull {
                 session_id: "worker",
             },
             ContextBudgeting::Elastic,
+            &[],
         )
         .unwrap()
         .prepare_elastic_entries(&config)

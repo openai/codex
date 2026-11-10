@@ -205,7 +205,7 @@ fn file_images_are_selected_from_history_sources() {
     let context = CollectedContext {
         sections: vec![ContextSection::TranscriptImages(selected)],
     }
-    .compose(
+    .compose_prepared(
         ContextPresentation::Async,
         PreparedTranscript {
             items: Vec::new(),

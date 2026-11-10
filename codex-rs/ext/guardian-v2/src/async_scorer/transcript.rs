@@ -3,6 +3,7 @@ use codex_extension_api::ResponseItem;
 pub(crate) use codex_features::GuardianV2TranscriptSource as TranscriptSource;
 use codex_guardian_context::CollectedContext;
 use codex_guardian_context::ComposedContext;
+use codex_guardian_context::ContextBudgeting;
 use codex_guardian_context::ContextPresentation;
 use codex_guardian_context::ContextProfile;
 use codex_guardian_context::ContextTarget;
@@ -25,6 +26,8 @@ use codex_guardian_context::TranscriptRetentionConfig;
 use codex_guardian_context::TranscriptSelection;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::default_registry;
+use codex_guardian_context::prepare_context;
+use std::borrow::Cow;
 
 const DEFAULT_PROFILE: &ContextProfile = &ContextProfile::asynchronous();
 pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize =
@@ -152,7 +155,6 @@ impl TranscriptConfig {
 }
 
 /// Captured evidence stays typed until the owning conversation selects its delta.
-#[derive(Clone)]
 pub(super) struct CollectedTranscript {
     context: CollectedContext,
     profile: ContextProfile,
@@ -171,20 +173,23 @@ impl CollectedTranscript {
     }
 
     pub(super) fn compose(
-        mut self,
+        &self,
         cursor: Option<TranscriptCursor>,
         reviewer_history: &[codex_history::ResponseItemEnvelope],
     ) -> Result<(ComposedContext, TranscriptCursor), SectionError> {
-        self.context.retain_new_reviews(reviewer_history);
         let (selection, next) = self.select(cursor);
-        let (entries, offset, presentation) = match selection {
-            TranscriptSelection::Full(entries) => (entries, 0, ContextPresentation::Async),
-            TranscriptSelection::Delta { entries, offset } => {
-                (entries, offset, ContextPresentation::AsyncDelta)
-            }
+        let (offset, presentation) = match selection {
+            TranscriptSelection::Full(_) => (0, ContextPresentation::Async),
+            TranscriptSelection::Delta { offset, .. } => (offset, ContextPresentation::AsyncDelta),
         };
-        let transcript = self.profile.prepare_transcript(entries, offset);
-        let mut context = self.context.compose(presentation, transcript)?;
+        let mut context = prepare_context(
+            Cow::Borrowed(&self.context),
+            &self.profile,
+            offset,
+            presentation,
+            ContextBudgeting::Fixed,
+            reviewer_history,
+        )?;
         context.retain_new_native_messages(reviewer_history)?;
         Ok((context, next))
     }
