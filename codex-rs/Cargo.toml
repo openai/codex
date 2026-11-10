@@ -594,8 +594,8 @@ zstd = "0.13"
 wiremock = "0.6"
 zeroize = "1.8.2"
 
-[workspace.lints]
-rust = {}
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(codex_bazel)'] }
 
 [workspace.lints.clippy]
 await_holding_invalid_type = "deny"

@@ -1,15 +1,17 @@
 load("@@//third_party/v8:artifact_profile.bzl", "v8_artifact_files")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
 load("@rules_rs//rs:rules_rust_bindgen.bzl", "rust_bindgen")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "abseil.BUILD.bazel",
+    "abseil_lifetime_capture.patch",
     "abseil_repository.bzl",
     "artifact_profile.bzl",
+    "binary.bzl",
     "dependencies.bzl",
     "dependency_config.bzl",
     "dragonbox.BUILD.bazel",
@@ -22,6 +24,8 @@ exports_files([
     "icu.BUILD.bazel",
     "libcxx_rules.bzl",
     "native_windows.bzl",
+    "windows_snapshot.bzl",
+    "v8_windows_snapshot_wine.patch",
     "push_registers_gnullvm.S",
     "simdutf.BUILD.bazel",
     "v8_defs.patch",
@@ -134,14 +138,14 @@ alias(
     actual = select({
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":v8_152_2_0_aarch64_apple_darwin_bazel",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":v8_152_2_0_aarch64_pc_windows_gnullvm",
-        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":v8_152_2_0_aarch64_pc_windows_msvc_bazel",
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":v8_152_2_0_aarch64_pc_windows_msvc_workspace",
         "@llvm//platforms/config:linux_aarch64_gnu": ":v8_152_2_0_aarch64_unknown_linux_gnu_bazel",
         # Rust's compiler-builtins archive does not supply V8's __clear_cache.
         # Use the merged archive containing the ARM64 compiler-rt builtins.
         "@llvm//platforms/config:linux_aarch64_musl": ":v8_152_2_0_aarch64_unknown_linux_musl_release",
         "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ":v8_152_2_0_x86_64_apple_darwin_bazel",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ":v8_152_2_0_x86_64_pc_windows_gnullvm",
-        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":v8_152_2_0_x86_64_pc_windows_msvc_bazel",
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":v8_152_2_0_x86_64_pc_windows_msvc_workspace",
         "@llvm//platforms/config:linux_x86_64_gnu": ":v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
         "@llvm//platforms/config:linux_x86_64_musl": ":v8_152_2_0_x86_64_unknown_linux_musl_release",
         "//conditions:default": ":v8_152_2_0_x86_64_unknown_linux_gnu_bazel",
@@ -173,12 +177,12 @@ alias(
     actual = select({
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":src_binding_aarch64_apple_darwin_152_2_0_bazel",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_aarch64_pc_windows_gnullvm_152_2_0_bazel",
-        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":src_binding_aarch64_pc_windows_msvc_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": ":src_binding_aarch64_pc_windows_msvc_152_2_0_workspace",
         "@llvm//platforms/config:linux_aarch64_gnu": ":src_binding_aarch64_unknown_linux_gnu_152_2_0_bazel",
         "@llvm//platforms/config:linux_aarch64_musl": ":src_binding_aarch64_unknown_linux_musl_152_2_0_bazel",
         "@rules_rs//rs/platforms/config:x86_64-apple-darwin": ":src_binding_x86_64_apple_darwin_152_2_0_bazel",
         "@rules_rs//rs/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_x86_64_pc_windows_gnullvm_152_2_0_bazel",
-        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":src_binding_x86_64_pc_windows_msvc_152_2_0_bazel",
+        "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": ":src_binding_x86_64_pc_windows_msvc_152_2_0_workspace",
         "@llvm//platforms/config:linux_x86_64_gnu": ":src_binding_x86_64_unknown_linux_gnu_152_2_0_bazel",
         "@llvm//platforms/config:linux_x86_64_musl": ":src_binding_x86_64_unknown_linux_musl_152_2_0_bazel",
         "//conditions:default": ":src_binding_x86_64_unknown_linux_gnu_152_2_0_bazel",
@@ -301,9 +305,9 @@ cc_library(
     }),
 )
 
-alias(
+cc_import(
     name = "native_windows_compiler_builtins",
-    actual = "@v8_native_windows_llvm//:builtins",
+    static_library = "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
     tags = ["manual"],
     target_compatible_with = select({
         ":platform_windows_msvc": [],
@@ -326,30 +330,33 @@ cc_static_library(
     ],
 )
 
-# cc_static_library only collects object files, not prebuilt libraries.
-# The Rust build script receives one .lib without Bazel's CcInfo/linkdeps, so
-# merge compiler-rt into the staged artifact explicitly.
+# cc_static_library does not collect objects from imported archives. Merge the
+# source-built compiler-rt archive with the declared exec-platform llvm-lib.
 genrule(
     name = "v8_152_2_0_native_windows_library",
     srcs = [
         ":v8_152_2_0_native_windows_objects",
-        "@v8_native_windows_llvm//:builtins_archive",
+        "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
     ],
     outs = ["rusty_v8_native_windows.lib"],
-    cmd_bat = '""$(location @v8_native_windows_llvm//:llvm-lib)" /NOLOGO /OUT:"$@" "$(location :v8_152_2_0_native_windows_objects)" "$(location @v8_native_windows_llvm//:builtins_archive)""',
+    cmd = '"$(execpath @llvm//tools:llvm-lib)" /NOLOGO /OUT:"$@" "$(location :v8_152_2_0_native_windows_objects)" "$(location @llvm//runtimes/compiler-rt:clang_rt.builtins.static)"',
+    cmd_bat = '""$(execpath @llvm//tools:llvm-lib)" /NOLOGO /OUT:"$@" "$(location :v8_152_2_0_native_windows_objects)" "$(location @llvm//runtimes/compiler-rt:clang_rt.builtins.static)""',
     tags = ["manual"],
     target_compatible_with = [
         "@platforms//os:windows",
         "@llvm//constraints/windows/abi:msvc",
     ],
-    tools = ["@v8_native_windows_llvm//:llvm-lib"],
+    tools = ["@llvm//tools:llvm-lib"],
 )
 
+# Workspace binaries use the hermetic toolchain's ISO stdio ABI. Distributed
+# archives must link with the stock MSVC CRT. Generate a matching binding for
+# each archive under the same profile.
 [
     v8_artifact_files(
-        name = "v8_152_2_0_%s_pc_windows_msvc_bazel" % arch,
-        srcs = [":v8_152_2_0_native_windows_library"],
-        profile = "sandbox_release",
+        name = label_pattern % (arch, suffix),
+        srcs = [source],
+        profile = profile,
         tags = ["manual"],
         target_compatible_with = [
             "@platforms//cpu:%s" % arch,
@@ -361,6 +368,14 @@ genrule(
     for arch, cpu in [
         ("x86_64", "x64"),
         ("aarch64", "arm64"),
+    ]
+    for label_pattern, source in [
+        ("v8_152_2_0_%s_pc_windows_msvc_%s", ":v8_152_2_0_native_windows_library"),
+        ("src_binding_%s_pc_windows_msvc_152_2_0_%s", ":binding_generated_152_2_0"),
+    ]
+    for suffix, profile in [
+        ("workspace", "source"),
+        ("bazel", "sandbox_release"),
     ]
 ]
 
@@ -419,8 +434,7 @@ rust_bindgen(
     clang_flags = [
         "-x",
         "c++",
-        "-std=c++20",
-    ] + V8_CUSTOM_LIBCXX_COPTS + select({
+    ] + V8_COPTS + V8_CUSTOM_LIBCXX_COPTS + select({
         # Match the C++ toolchain. Bindgen asks for C flags and otherwise
         # enables C++20 modules, for which the macOS SDK's types are cyclic.
         "@platforms//os:osx": [
@@ -442,32 +456,6 @@ rust_bindgen(
     }),
     header = "@v8_crate_152_2_0//:binding_hpp",
     tags = ["manual"],
-)
-
-v8_artifact_files(
-    name = "src_binding_aarch64_pc_windows_msvc_152_2_0_bazel",
-    srcs = [":binding_generated_152_2_0"],
-    profile = "sandbox_release",
-    tags = ["manual"],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:windows",
-        "@llvm//constraints/windows/abi:msvc",
-    ],
-    v8_cpu = "arm64",
-)
-
-v8_artifact_files(
-    name = "src_binding_x86_64_pc_windows_msvc_152_2_0_bazel",
-    srcs = [":binding_generated_152_2_0"],
-    profile = "sandbox_release",
-    tags = ["manual"],
-    target_compatible_with = [
-        "@platforms//cpu:x86_64",
-        "@platforms//os:windows",
-        "@llvm//constraints/windows/abi:msvc",
-    ],
-    v8_cpu = "x64",
 )
 
 v8_artifact_files(

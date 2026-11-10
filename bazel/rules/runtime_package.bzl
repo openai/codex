@@ -16,7 +16,6 @@ _PROFILE_INPUTS = [
     "//command_line_option:host_action_env",
     "//command_line_option:macos_minimum_os",
     "//command_line_option:host_platform",
-    "//command_line_option:extra_toolchains",
     _RUSTC_FLAGS,
     _EXEC_RUSTC_FLAGS,
 ]
@@ -61,12 +60,8 @@ def _release_profile_impl(settings, attr):
         # Compatibility with the Cargo musl release: aws-lc jitter can hang.
         profile["//command_line_option:copt"] += ["-DDISABLE_CPU_JITTER_ENTROPY"]
     elif attr.platform_os == "windows" and "@platforms//os:windows" in HOST_CONSTRAINTS:
-        # Native MSVC supplies the SDK and host tools for both architectures.
+        # Build tools run natively with the registered LLVM MSVC toolchain.
         profile["//command_line_option:host_platform"] = "//:local_windows_msvc"
-        profile["//command_line_option:extra_toolchains"] += [
-            "@local_config_cc//:cc-toolchain-x64_windows",
-            "@local_config_cc//:cc-toolchain-arm64_windows",
-        ]
     if attr.linux_x86_64_musl:
         # Match the Cargo release linker for x86-64 static PIEs.
         profile[_RUSTC_FLAGS] += [

@@ -1,0 +1,50 @@
+load("@package_metadata//rules:package_metadata.bzl", "package_metadata")
+load("@rules_rs//rs:cargo_build_script.bzl", "cargo_build_script")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+package_metadata(
+    name = "openssl-sys_package_metadata",
+    purl = "pkg:cargo/openssl-sys@0.9.118",
+)
+
+# Deliberately omit vendored/openssl-src: the native library belongs to @openssl.
+# Keep the upstream build script for header checks, cfgs, and link metadata.
+cargo_build_script(
+    name = "build_script",
+    srcs = glob(["build/*.rs"]),
+    build_script_env = {
+        "OPENSSL_DIR": "$(execpath @openssl//:gen_dir)",
+        "OPENSSL_NO_VENDOR": "1",
+        "OPENSSL_STATIC": "1",
+    },
+    crate_name = "build_script_build",
+    crate_root = "build/main.rs",
+    data = glob(["build/**"]) + ["@openssl//:gen_dir"],
+    edition = "2021",
+    links = "openssl",
+    pkg_name = "openssl-sys",
+    rustc_env = {"CARGO_PKG_VERSION": "0.9.118"},
+    version = "0.9.118",
+    deps = [
+        "@crates//:cc-1.2.55",
+        "@crates//:pkg-config-0.3.32",
+        "@crates//:vcpkg-0.2.15",
+    ],
+)
+
+rust_library(
+    name = "openssl-sys",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "openssl_sys",
+    crate_root = "src/lib.rs",
+    data = ["@openssl//:gen_dir"],
+    edition = "2021",
+    package_metadata = ["openssl-sys_package_metadata"],
+    version = "0.9.118",
+    deps = [
+        "build_script",
+        "@crates//:libc-0.2.186",
+    ],
+)

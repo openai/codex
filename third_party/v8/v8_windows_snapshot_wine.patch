@@ -1,0 +1,66 @@
+--- a/orig/v8-15.2.124.1/bazel/defs.bzl
++++ b/mod/v8-15.2.124.1/bazel/defs.bzl
+@@ -6,6 +6,7 @@
+ This module contains helper functions to compile V8.
+ """
+ 
++load("@@//third_party/v8:windows_snapshot.bzl", "windows_snapshot_rule")
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+ load("@@//third_party/v8:binary.bzl", cc_binary = "v8_cc_binary")
+ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+@@ -586,8 +587,45 @@
+     cfg = v8_target_cpu_transition,
+ )
+ 
++
++_v8_windows_mksnapshot = windows_snapshot_rule(v8_target_cpu_transition)
++
++def _platform_mksnapshot(name, args, tool, **kwargs):
++    _v8_mksnapshot(
++        name = name + "_native",
++        args = args,
++        tool = tool,
++        target_compatible_with = select({
++            "@@//third_party/v8:platform_windows_msvc": ["@platforms//:incompatible"],
++            "//conditions:default": [],
++        }),
++        **kwargs
++    )
++    _v8_windows_mksnapshot(
++        name = name + "_windows",
++        args = args,
++        tool = tool,
++        inline_asm_converter = kwargs["inline_asm_converter"],
++        platform_arch = select({
++            "@platforms//cpu:aarch64": "aarch64",
++            "@platforms//cpu:x86_64": "x86_64",
++        }),
++        target_arch = select({
++            "@v8//bazel/config:v8_target_arm64": "arm64",
++            "@v8//bazel/config:v8_target_x64": "x64",
++        }),
++        target_compatible_with = ["@platforms//os:windows", "@llvm//constraints/windows/abi:msvc"],
++    )
++    native.alias(
++        name = name,
++        actual = select({
++            "@@//third_party/v8:platform_windows_msvc": ":" + name + "_windows",
++            "//conditions:default": ":" + name + "_native",
++        }),
++    )
++
+ def v8_mksnapshot(name, args, suffix = ""):
+-    _v8_mksnapshot(
++    _platform_mksnapshot(
+         name = "noicu/" + name,
+         args = args,
+         prefix = "noicu",
+@@ -604,7 +642,7 @@
+             "//conditions:default": "",
+         }),
+     )
+-    _v8_mksnapshot(
++    _platform_mksnapshot(
+         name = "icu/" + name,
+         args = args,
+         prefix = "icu",

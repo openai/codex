@@ -322,6 +322,10 @@ def codex_rust_crate(
         "CARGO_PKG_NAME": package_data["package_name"],
     } | rustc_env
 
+    # Insta also reads this during macro expansion. Match the test launcher's
+    # workspace-relative root instead of embedding CARGO_MANIFEST_DIR.
+    test_rustc_env = rustc_env | {"INSTA_WORKSPACE_ROOT": "."}
+
     manifest_relpath = native.package_name()
     if manifest_relpath.startswith("codex-rs/"):
         manifest_relpath = manifest_relpath[len("codex-rs/"):]
@@ -389,7 +393,7 @@ def codex_rust_crate(
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
             ],
-            rustc_env = rustc_env,
+            rustc_env = test_rustc_env,
             data = test_data_extra + [binary for binary in extra_binaries if binary not in test_data_extra],
             tags = test_tags + ["manual"],
             version = crate_version,
@@ -475,7 +479,7 @@ def codex_rust_crate(
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
             ],
-            rustc_env = rustc_env,
+            rustc_env = test_rustc_env,
             data = test_data_extra,
             tags = test_tags + ["manual"],
             version = crate_version,
@@ -612,7 +616,7 @@ def codex_rust_crate(
                     "--remap-path-prefix=../codex-rs=",
                     "--remap-path-prefix=codex-rs=",
                 ],
-                rustc_env = rustc_env,
+                rustc_env = test_rustc_env,
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
                 tags = test_tags + ["manual"],
                 version = crate_version,
@@ -653,7 +657,7 @@ def codex_rust_crate(
                     "--remap-path-prefix=../codex-rs=",
                     "--remap-path-prefix=codex-rs=",
                 ],
-                rustc_env = rustc_env,
+                rustc_env = test_rustc_env,
                 env = integration_test_cargo_env,
                 target_compatible_with = WINDOWS_GNULLVM_INCOMPATIBLE,
                 tags = test_tags,
@@ -726,7 +730,7 @@ def codex_rust_crate(
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
             ],
-            rustc_env = rustc_env,
+            rustc_env = test_rustc_env,
             env = integration_test_cargo_env,
             target_compatible_with = WINDOWS_GNULLVM_ONLY,
             tags = test_tags + ["manual"],

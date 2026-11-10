@@ -30,6 +30,28 @@ v8_flag(name = "v8_enable_sandbox")
 
 v8_flag(name = "v8_use_rusty_v8_custom_libcxx")
 
+# Generator code executes on the exec platform but emits target-ABI snapshots.
+# Match V8 15.2.124.1 BUILD.gn's target_os (not current_os) definitions.
+v8_flag(name = "v8_windows_msvc_profile")
+
+v8_string(
+    name = "v8_target_os",
+    visibility = ["//visibility:public"],
+)
+
+[
+    config_setting(
+        name = "v8_target_os_" + os,
+        flag_values = {":v8_target_os": os},
+    )
+    for os in [
+        "android",
+        "linux",
+        "mac",
+        "win",
+    ]
+]
+
 # Maglev is supported on the two architectures shipped by Codex. Keep the
 # architecture tests separate from feature policy for host-tool transitions.
 selects.config_setting_group(
@@ -130,7 +152,7 @@ v8_config(
     ] + select({
         # The published MSVC artifacts used GN's CppGC queue and Wasm fuzzers.
         # Keep these choices in the owned policy, including snapshot generators.
-        "@@//third_party/v8:platform_windows_msvc": [
+        ":is_v8_windows_msvc_profile": [
             "V8_CPPGC_MICROTASK_QUEUE",
             "V8_WASM_RANDOM_FUZZERS",
             "V8_TYPED_ARRAY_MAX_SIZE_IN_HEAP=0",
@@ -193,26 +215,31 @@ v8_config(
         },
         no_match_error = "Please specify a target cpu supported by v8",
     ) + select({
-        "@v8//bazel/config:is_android": [
+        ":v8_target_os_android": [
             "V8_HAVE_TARGET_OS",
             "V8_TARGET_OS_ANDROID",
         ],
-        "@v8//bazel/config:is_linux": [
+        ":v8_target_os_linux": [
             "V8_HAVE_TARGET_OS",
             "V8_TARGET_OS_LINUX",
         ],
-        "@v8//bazel/config:is_macos": [
+        ":v8_target_os_mac": [
             "V8_HAVE_TARGET_OS",
             "V8_TARGET_OS_MACOS",
         ],
-        "@v8//bazel/config:is_windows": [
+        ":v8_target_os_win": [
             "V8_HAVE_TARGET_OS",
             "V8_TARGET_OS_WIN",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:is_windows": [
             "UNICODE",
             "_UNICODE",
             "_CRT_RAND_S",
             "_WIN32_WINNT=0x0A00",
         ],
+        "//conditions:default": [],
     }) + select({
         ":is_v8_enable_pointer_compression": [
             "V8_COMPRESS_POINTERS",
@@ -301,18 +328,17 @@ alias(
 
 alias(
     name = "is_v8_wasm_random_fuzzers",
-    actual = "@@//third_party/v8:platform_windows_msvc",
+    actual = ":is_v8_windows_msvc_profile",
 )
 
 # @CODEX_V8_UPSTREAM_FILEGROUPS@
 
 filegroup(
     name = "windows_x64_stack_assembly",
-    # The import preserves upstream MASM; only GNU builds use our GAS source.
-    srcs = select({
-        "@@//third_party/v8:platform_windows_msvc": ["src/heap/base/asm/x64/push_registers_masm.asm"],
-        "//conditions:default": ["@@//third_party/v8:push_registers_gnullvm.S"],
-    }),
+    # Windows x64 ABI and SEH metadata, assembled by @llvm's integrated assembler.
+    # The existing GAS translation matches the pinned MASM scanner instruction
+    # for instruction; its syntax is not a dependency on the GNU Windows ABI.
+    srcs = ["@@//third_party/v8:push_registers_gnullvm.S"],
 )
 
 alias(

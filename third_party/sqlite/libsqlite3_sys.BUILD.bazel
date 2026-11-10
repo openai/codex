@@ -1,0 +1,16 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+exports_files(
+    [
+        "sqlite3/bindgen_bundled_version.rs",
+        "sqlite3/sqlite3.c",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "sqlite3_headers",
+    hdrs = ["sqlite3/sqlite3.h"],
+    includes = ["sqlite3"],
+    visibility = ["//visibility:public"],
+)

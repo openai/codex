@@ -77,10 +77,9 @@ fn sandbox_cwd() -> PathBuf {
         return PathBuf::from(workspace_root);
     }
 
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf()
+    codex_utils_cargo_bin::repo_root()
+        .expect("resolve repository root")
+        .join("codex-rs")
 }
 
 fn sandbox_home(name: &str) -> TempDir {
@@ -776,6 +775,10 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
         .expect("write delete script");
 
         let env_map = HashMap::from([
+            (
+                "SystemRoot".to_string(),
+                std::env::var("SystemRoot").expect("Windows SystemRoot"),
+            ),
             ("TEMP".to_string(), temp_root.to_string_lossy().into_owned()),
             ("TMP".to_string(), tmp_root.to_string_lossy().into_owned()),
             (

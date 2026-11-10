@@ -123,16 +123,35 @@ revision must keep the native GNU link/runtime checks passing. The Bazel pair
 targets above point directly to source targets so a new release or canary never
 depends on an older published copy.
 
-Native Windows x64 and ARM64 hosts can build sandbox archives and matching
-Rust bindings with pinned clang-cl and the installed Microsoft SDK using
+Windows x64 and ARM64 sandbox archives and matching Rust bindings use the
+selected hermetic `@llvm` clang-cl toolchain and its declared Microsoft SDK:
 `//third_party/v8:v8_152_2_0_x86_64_pc_windows_msvc_bazel` and
 `//third_party/v8:v8_152_2_0_aarch64_pc_windows_msvc_bazel`.
 The producer selectors `//third_party/v8:rusty_v8_native_windows_archive_for_target`
 and `//third_party/v8:rusty_v8_native_windows_binding_for_target` select source
 outputs directly. Both use the same sandbox, pointer compression, target CPU,
 and Chromium libc++ profile. The bindings use V8's compiled headers and defines
-so their sizes follow the archive, including CppGC members. Bazel MSVC consumers
-use the newly built archive and bindings together.
+so their sizes follow the archive, including CppGC members.
+
+The Windows distribution archive uses the published MSVC wide-stdio mode
+(`_CRT_STDIO_ISO_WIDE_SPECIFIERS=0`) for V8, Chromium libc++ and their native
+dependencies. Native Windows CI checks the COFF directives and links and runs a
+stock MSVC C++ consumer that includes `<cstdio>` and calls
+`v8__V8__IsSandboxEnabled()` on both x64 and ARM64. Cargo runs the V8 runtime
+tests against that staged archive and its generated bindings.
+
+In-tree Bazel consumers link a separate source-built archive with the hermetic
+toolchain's ISO stdio mode (`1`) and matching bindings. Both pairs use the
+same V8 source, sandbox configuration and pinned Chromium libc++.
+
+Binding generation uses the published hermeticbuild bindgen v0.0.4
+executables through the standard rules_rs toolchain. Their embedded LLVM
+23.1.2 libclang matches the selected LLVM resource headers; Codex does not
+build bindgen or libclang from source.
+
+Binding generation reuses `V8_COPTS`, including native `/std:c++20` on MSVC.
+The clang-cl bindgen action passes toolchain and caller arguments through in CL
+driver mode instead of translating their header-search or warning semantics.
 
 The owned engine policy preserves the GN MSVC defaults for GC-managed microtask
 queues, random Wasm module generation, disabled imminent-deprecation warnings,
@@ -142,29 +161,39 @@ bindings use that same threshold; never pair a native 64-byte threshold with
 GN's size-zero binding constant. These are fixed platform choices, not additional
 developer build switches.
 
-Use a native Visual Studio Developer PowerShell with the C++ tools and Windows
-SDK available. The SDK supplies headers, libraries, `dumpbin.exe`, and the
-assembler. From the repo root, build the archive for that host:
+Private libc++ profiles set `@llvm//config:nostdincxx` and explicitly supply
+Chromium's pinned libc++ headers and archive. The Windows MSVC profile also
+sets `@llvm//config:nostdlibxx`. These settings are target-scoped: unrelated execution
+tools retain their default C++ runtime. V8's own generator binaries explicitly
+reapply the private-runtime policy after the execution transition. Neither flag
+suppresses C headers, the SDK, CRT, compiler-rt, or the independent unwinder.
 
-```powershell
-bazel build --config=ci-windows-msvc `
-  --host_platform=//:local_windows_msvc --platforms=//:local_windows_msvc `
-  //third_party/v8:rusty_v8_native_windows_archive_for_target `
+Build with Linux remote execution and the static CRT:
+
+```sh
+bazel build --config=buildbuddy-generic-rbe --host_platform=//:rbe \
+  --platforms=@llvm//platforms:windows_x86_64_msvc \
+  --extra_execution_platforms=//:rbe \
+  --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1 \
+  --repo_env=BAZEL_WINDOWS_SDK_EULA=1 \
+  --features=-dynamic_link_msvcrt --features=static_link_msvcrt \
+  --features=cargo-rebase-json-vfs-overlays \
+  //third_party/v8:rusty_v8_native_windows_archive_for_target \
   //third_party/v8:rusty_v8_native_windows_binding_for_target
 ```
 
-Bazel fetches and verifies LLVM 22.1.8 for the host, the same major and patch
-version as the libclang that generates bindings. The V8 artifact profile selects
-clang-cl, lld-link, llvm-lib and compiler-rt only for its Windows MSVC source
-archive and bindings, together with the installed SDK. Bazel consumers now
-cross this same boundary automatically. Other C++
-dependencies in the same `ci-windows-msvc` build keep the installed MSVC
-compiler; no whole-build V8 compiler flag is needed.
+Torque and other ordinary generators execute on Linux. The MSVC snapshot
+generator is a Windows payload compiled with the same `@llvm` toolchain.
+`rules_wine` selects direct execution on Windows or its pinned Wine runtime on
+Linux. Linux ARM64 workers use the runtime's bundled FEX to run the x64 generator;
+both x64 and ARM64 targets use the existing `//:rbe` platform. This keeps V8's
+Windows-host unwind writer enabled, including generated `.pdata`/`.xdata`.
+Select `@llvm//platforms:windows_aarch64_msvc` for an ARM64 build.
 
-This is a native Windows build, not an x64-to-ARM64 or remote Linux build:
-V8's snapshot generator must execute on the target architecture. The repository
-inputs pinned in #4009 are MSVC/SDK files, not a registered clang-cl toolchain;
-making them replace the installed SDK is the separate hermetic MSVC migration.
+Native Windows ARM64 uses an ARM64 generator for ARM64 snapshots. Other MSVC
+combinations use the x64 generator, including V8's x64-hosted ARM64 generator.
+The existing GNU snapshot action and its Windows-local CI execution remain
+unchanged. The existing MSVC assembly-to-C++ conversion is also retained.
 
 Release and CI Cargo builds for Darwin and Linux use `RUSTY_V8_ARCHIVE` plus a
 downloaded `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release

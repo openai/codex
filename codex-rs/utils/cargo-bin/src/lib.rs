@@ -125,6 +125,19 @@ fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinE
 ///
 /// This is expected to be used exclusively in test code because Codex CLI is a
 /// standalone binary with no packaged resources.
+#[cfg(codex_bazel)]
+#[macro_export]
+macro_rules! find_resource {
+    ($resource:expr) => {{
+        // Capture the caller's package, not the package of this helper crate.
+        $crate::resolve_bazel_runfile(
+            option_env!("BAZEL_PACKAGE"),
+            std::path::Path::new(&$resource),
+        )
+    }};
+}
+
+#[cfg(not(codex_bazel))]
 #[macro_export]
 macro_rules! find_resource {
     ($resource:expr) => {{
@@ -170,9 +183,18 @@ pub fn resolve_bazel_runfile(
     ))
 }
 
+#[cfg(not(codex_bazel))]
 pub fn resolve_cargo_runfile(resource: &Path) -> std::io::Result<PathBuf> {
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     Ok(manifest_dir.join(resource))
+}
+
+#[cfg(codex_bazel)]
+pub fn resolve_cargo_runfile(_resource: &Path) -> std::io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Cargo source-directory lookup is unavailable in Bazel builds; use runfiles",
+    ))
 }
 
 pub fn repo_root() -> io::Result<PathBuf> {

@@ -11,4 +11,10 @@ else()
   set(CMAKE_SYSTEM_NAME Linux)
 endif()
 string(REGEX REPLACE "-.*" "" CMAKE_SYSTEM_PROCESSOR "$ENV{TARGET}")
+if("$ENV{TARGET}" STREQUAL "aarch64-pc-windows-msvc")
+  # NEON is guaranteed on Windows ARM64. Opus's optional runtime probe emits
+  # ARM32 instructions through MSVC's __emit, which clang-cl does not support.
+  set(OPUS_PRESUME_NEON ON CACHE BOOL "" FORCE)
+  set(OPUS_MAY_HAVE_NEON OFF CACHE BOOL "" FORCE)
+endif()
 # Compiler, SDK and linker inputs remain supplied by Bazel's target toolchain.

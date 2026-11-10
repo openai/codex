@@ -157,6 +157,16 @@ toolchain(
     visibility = ["//visibility:public"],
 )
 
+# Like the pinned Windows CMake, this executable can run under x64 emulation
+# on Windows ARM64. Avoid foreign_cc's fallback bootstrap through ambient cl.exe.
+toolchain(
+    name = "windows_ninja_toolchain",
+    exec_compatible_with = ["@platforms//os:windows"],
+    toolchain = "@ninja_1.13.0_win//:ninja_tool",
+    toolchain_type = "@rules_foreign_cc//toolchains:ninja_toolchain",
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "archives",
     srcs = [

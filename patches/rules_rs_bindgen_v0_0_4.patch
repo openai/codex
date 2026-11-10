@@ -1,0 +1,62 @@
+# Adopt bindgen v0.0.4 with embedded LLVM 23.1.2 libclang.
+# https://github.com/hermeticbuild/bindgen/releases/tag/v0.0.4
+
+diff --git a/rs/rules_rust_bindgen.bzl b/rs/rules_rust_bindgen.bzl
+--- a/rs/rules_rust_bindgen.bzl
++++ b/rs/rules_rust_bindgen.bzl
+@@ -189,7 +189,7 @@
+             name = "rules_rust_bindgen_" + prebuilt.name,
+             build_file_content = 'exports_files(["%s"])\n' % bindgen_binary_name(prebuilt.os),
+             sha256 = prebuilt.sha256,
+-            url = "https://github.com/hermeticbuild/bindgen/releases/download/v0.0.2/bindgen_{}.tar.zst".format(prebuilt.name),
++            url = "https://github.com/hermeticbuild/bindgen/releases/download/v0.0.4/bindgen_{}.tar.zst".format(prebuilt.name),
+         )
+ 
+     toolchain_repositories = {"rules_rust_bindgen": True}
+diff --git a/rs/toolchains/declare_bindgen_toolchains.bzl b/rs/toolchains/declare_bindgen_toolchains.bzl
+--- a/rs/toolchains/declare_bindgen_toolchains.bzl
++++ b/rs/toolchains/declare_bindgen_toolchains.bzl
+@@ -5,37 +5,37 @@
+         name = "darwin_amd64",
+         cpu = "x86_64",
+         os = "macos",
+-        sha256 = "9effe0323d0441d6f541497e0590b970beb15b9104c7e034ac4557942202f869",
++        sha256 = "c541cffb54e6a4f683578147780f3fefaaba7a133da97f7d1a1a52dcf1cbaa6d",
+     ),
+     struct(
+         name = "darwin_arm64",
+         cpu = "aarch64",
+         os = "macos",
+-        sha256 = "456ab5235685c498455ddc2fafeba32eb1d93758346e585e8da5e09c19cc680c",
++        sha256 = "218d25da4d153dbc87daf64a029af3de17cee6a0f6291fdb0a5d9eff44243399",
+     ),
+     struct(
+         name = "linux_amd64",
+         cpu = "x86_64",
+         os = "linux",
+-        sha256 = "ec2b39a56443142a34dc76ec32a17cb099c6c09137c3fbac893310c623cb10ac",
++        sha256 = "146372dfdf4defd556ac9d7a6322cd49e397f663ef1a9f0144e108d4793b42fc",
+     ),
+     struct(
+         name = "linux_arm64",
+         cpu = "aarch64",
+         os = "linux",
+-        sha256 = "d4da684d021d1ebf40bb3819c1521c96c3ca51d22d911ee71731a358bd768594",
++        sha256 = "db19983cda00966857eace073e189b23304696cb6a7812c5a31c094cfda9ebac",
+     ),
+     struct(
+         name = "windows_amd64",
+         cpu = "x86_64",
+         os = "windows",
+-        sha256 = "beede8f802ab96a2cce0de84c560150dcbc89c96db94f7c17519dd164ac983fd",
++        sha256 = "20b895218d505efec3fb20d8cd457f8e9fbaabb643fa15d75d5eb25928b054a2",
+     ),
+     struct(
+         name = "windows_arm64",
+         cpu = "aarch64",
+         os = "windows",
+-        sha256 = "0885047b40b119e58fcca4491a2bd00331de131f41183de2a9b563ca407f9109",
++        sha256 = "8d61e41594d9e6ff29ce57a3177a8333a72c2c999e6fd030ab57324f7dab1a30",
+     ),
+ ]
+ 

@@ -260,8 +260,7 @@ jobs:
             -- \
             test --config=release \
             --platforms=//:local_windows_msvc \
-            --extra_toolchains=@local_config_cc//:cc-toolchain-x64_windows,@local_config_cc//:cc-toolchain-arm64_windows,//third_party/voice:windows_pkg_config_toolchain,//third_party/voice:windows_cmake_toolchain \
-            --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0 \
+            --extra_toolchains=//third_party/voice:windows_pkg_config_toolchain,//third_party/voice:windows_cmake_toolchain \
             --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1 \
             --inject_repository="voice_windows_tools=$VOICE_WINDOWS_BAZEL_REPOSITORY" \
             --//third_party/voice:windows_installed_tools=@voice_windows_tools//:tools \

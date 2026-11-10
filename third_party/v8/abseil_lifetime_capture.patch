@@ -1,0 +1,131 @@
+# Backport of abseil/abseil-cpp 0784689a65b4ea1329fbc5174b8a57c88ec796a9.
+# Adapted to 20250814.1: prefer Clang 23 lifetime_capture_by_this, retain older compiler fallback.
+diff --git a/absl/base/attributes.h b/absl/base/attributes.h
+--- a/absl/base/attributes.h
++++ b/absl/base/attributes.h
+@@ -911,6 +911,23 @@
+ #define ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(Owner)
+ #endif
+ 
++// Internal attribute; name and documentation TBD.
++//
++// See the upstream documentation:
++// https://clang.llvm.org/docs/AttributeReference.html#lifetime_capture_by_this
++//
++// Note: ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this) is deprecated. Use
++// ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS instead.
++#if ABSL_HAVE_CPP_ATTRIBUTE(clang::lifetime_capture_by_this)
++#define ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS \
++  [[clang::lifetime_capture_by_this]]
++#elif ABSL_HAVE_CPP_ATTRIBUTE(clang::lifetime_capture_by)
++#define ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS \
++  ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this)
++#else
++#define ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS
++#endif
++
+ // ABSL_ATTRIBUTE_VIEW indicates that a type is solely a "view" of data that it
+ // points to, similarly to a span, string_view, or other non-owning reference
+ // type.
+diff --git a/absl/base/internal/spinlock.h b/absl/base/internal/spinlock.h
+--- a/absl/base/internal/spinlock.h
++++ b/absl/base/internal/spinlock.h
+@@ -242,1 +242,1 @@
+-      SpinLock& l ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++      SpinLock& l ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+diff --git a/absl/container/internal/btree_container.h b/absl/container/internal/btree_container.h
+--- a/absl/container/internal/btree_container.h
++++ b/absl/container/internal/btree_container.h
+@@ -508,1 +508,1 @@
+-          ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this)),                        \
++          ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS),                        \
+@@ -510,1 +510,1 @@
+-          ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this)))                        \
++          ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS))                        \
+@@ -610,1 +610,1 @@
+-          ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this)),                          \
++          ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS),                          \
+@@ -637,1 +637,1 @@
+-      const key_arg<K> &k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++      const key_arg<K> &k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+@@ -646,2 +646,1 @@
+-  mapped_type &operator[](key_arg<K> &&k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(
+-      this)) ABSL_ATTRIBUTE_LIFETIME_BOUND {
++  mapped_type &operator[](key_arg<K> &&k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS) ABSL_ATTRIBUTE_LIFETIME_BOUND {
+diff --git a/absl/container/internal/raw_hash_map.h b/absl/container/internal/raw_hash_map.h
+--- a/absl/container/internal/raw_hash_map.h
++++ b/absl/container/internal/raw_hash_map.h
+@@ -117,1 +117,1 @@
+-          ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this)),                          \
++          ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS),                          \
+@@ -118,2 +118,1 @@
+-      V VQual v ABSL_INTERNAL_IF_##VValue(ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY( \
+-          this))) ABSL_ATTRIBUTE_LIFETIME_BOUND {                              \
++      V VQual v ABSL_INTERNAL_IF_##VValue(ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)) ABSL_ATTRIBUTE_LIFETIME_BOUND {                              \
+@@ -216,1 +215,1 @@
+-      key_arg<K> &&k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
++      key_arg<K> &&k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
+@@ -235,1 +234,1 @@
+-      const key_arg<K> &k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
++      const key_arg<K> &k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
+@@ -249,1 +248,1 @@
+-                       key_arg<K> &&k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
++                       key_arg<K> &&k ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
+@@ -265,1 +264,1 @@
+-                           ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
++                           ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
+@@ -305,1 +304,1 @@
+-      key_arg<K> &&key ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++      key_arg<K> &&key ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+@@ -322,1 +321,1 @@
+-      const key_arg<K> &key ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++      const key_arg<K> &key ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+diff --git a/absl/container/internal/raw_hash_set.h b/absl/container/internal/raw_hash_set.h
+--- a/absl/container/internal/raw_hash_set.h
++++ b/absl/container/internal/raw_hash_set.h
+@@ -2428,1 +2428,1 @@
+-      T&& value ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++      T&& value ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+@@ -2457,1 +2457,1 @@
+-      const T& value ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++      const T& value ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+@@ -2477,1 +2477,1 @@
+-      init_type&& value ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++      init_type&& value ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+@@ -2499,1 +2499,1 @@
+-                  T&& value ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++                  T&& value ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+diff --git a/absl/status/statusor.h b/absl/status/statusor.h
+--- a/absl/status/statusor.h
++++ b/absl/status/statusor.h
+@@ -408,1 +408,1 @@
+-  StatusOr& operator=(U&& v ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this)) {
++  StatusOr& operator=(U&& v ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS) {
+diff --git a/absl/synchronization/mutex.h b/absl/synchronization/mutex.h
+--- a/absl/synchronization/mutex.h
++++ b/absl/synchronization/mutex.h
+@@ -604,1 +604,1 @@
+-  explicit MutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++  explicit MutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+@@ -619,1 +619,1 @@
+-  explicit MutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
++  explicit MutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
+@@ -646,1 +646,1 @@
+-  explicit ReaderMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++  explicit ReaderMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+@@ -655,1 +655,1 @@
+-  explicit ReaderMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
++  explicit ReaderMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
+@@ -682,1 +682,1 @@
+-  explicit WriterMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this))
++  explicit WriterMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS)
+@@ -692,1 +692,1 @@
+-  explicit WriterMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
++  explicit WriterMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,
+@@ -1096,2 +1096,1 @@
+-  explicit ReleasableMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(
+-      this)) ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
++  explicit ReleasableMutexLock(Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS) ABSL_EXCLUSIVE_LOCK_FUNCTION(mu)
+@@ -1107,1 +1106,1 @@
+-      Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY(this),
++      Mutex& mu ABSL_INTERNAL_ATTRIBUTE_CAPTURED_BY_THIS,

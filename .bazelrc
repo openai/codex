@@ -18,8 +18,8 @@ common --experimental_platform_in_output_dir
 # Match Cargo's MSVC static CRT policy and V8's allocator linkage. Only the
 # MSVC C/C++ toolchain consumes this feature; other toolchains ignore it.
 # Include host dependencies so native build tools use the same runtime.
-build --features=static_link_msvcrt
-build --host_features=static_link_msvcrt
+build --features=-dynamic_link_msvcrt --features=static_link_msvcrt
+build --host_features=-dynamic_link_msvcrt --host_features=static_link_msvcrt
 
 build --workspace_status_command=./scripts/workspace-status.sh
 build:windows --workspace_status_command=./scripts/workspace-status.cmd
@@ -222,12 +222,11 @@ common:ci-v8 --config=ci
 common:ci-v8 --build_metadata=TAG_workflow=v8
 common:ci-v8 --build_metadata=TAG_os=linux
 
-# Native Windows MSVC builds inherit the runner's MSVC SDK environment.
+# Native Windows MSVC builds use the registered LLVM toolchain and its SDK.
+# Voice's separately declared native build tools still need the runner environment.
 # Client environment capture and repository discovery happen before target
 # transitions, so these runner settings cannot live in runtime_package.bzl.
-# Hermetic LLVM targets the GNU ABI on Windows even on an MSVC platform.
-build:ci-windows-msvc --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0
-build:ci-windows-msvc --extra_toolchains=@local_config_cc//:cc-toolchain-x64_windows,@local_config_cc//:cc-toolchain-arm64_windows
+build:ci-windows-msvc --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1
 build:ci-windows-msvc --action_env=PATH
 build:ci-windows-msvc --host_action_env=PATH
 build:ci-windows-msvc --action_env=INCLUDE

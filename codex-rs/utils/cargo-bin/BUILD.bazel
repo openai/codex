@@ -13,5 +13,6 @@ codex_rust_crate(
     rustc_env = {
         "CODEX_REPO_ROOT_MARKER": "$(rlocationpath :repo_root.marker)",
     },
+    rustc_flags_extra = ["--cfg=codex_bazel"],
     test_data_extra = ["repo_root.marker"],
 )

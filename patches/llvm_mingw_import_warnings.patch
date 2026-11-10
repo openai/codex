@@ -1,0 +1,12 @@
+diff --git a/runtimes/mingw/import_libs.bzl b/runtimes/mingw/import_libs.bzl
+--- a/runtimes/mingw/import_libs.bzl
++++ b/runtimes/mingw/import_libs.bzl
+@@ -30,6 +30,8 @@
+     # ucrtbase-common.def.in:1800:28: warning: missing terminating ' character [-Winvalid-pp-token]
+     # 1800 | F_LD64(_o_remainderl) ; Can't use long double functions from the CRT on x86
+     args.add("-Wno-invalid-pp-token")
++    # MinGW 14 func.def.in uses #ifndef F_X86_NATIVE(x).
++    args.add("-Wno-extra-tokens")
+ 
+     args.add("-o", ctx.outputs.out)
+     args.add(undecorated)

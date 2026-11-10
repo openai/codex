@@ -4,28 +4,29 @@
 diff --git a/rs/extensions.bzl b/rs/extensions.bzl
 --- a/rs/extensions.bzl
 +++ b/rs/extensions.bzl
-@@ -321,7 +321,7 @@ def _generate_hub_and_spokes(
+@@ -359,8 +359,8 @@ def _generate_hub_and_spokes(
          kwargs = dict(
              hub_name = hub_name,
+             crate_visibility = visibility_with_internal_access(annotation.visibility, internal_packages),
              gen_build_script = annotation.gen_build_script,
 -            build_script_deps = [],
 +            build_script_deps = annotation.build_script_deps,
              build_script_deps_select = _select(feature_resolutions.build_deps),
              build_script_data = annotation.build_script_data,
              build_script_data_select = annotation.build_script_data_select,
-@@ -881,9 +881,9 @@ _annotation = tag_class(
-         "build_script_data_select": _label_list_dict(
-             doc = "Labels to add to a crate's `cargo_build_script::data` attribute, keyed by platform triplet.",
-         ),
+@@ -1094,9 +1094,9 @@ _annotation = tag_class(
+         # "build_script_data_glob": attr.string_list(
+         #     doc = "A list of glob patterns to add to a crate's `cargo_build_script::data` attribute",
+         # ),
 -        # "build_script_deps": attr.label_list(
 -        #     doc = "A list of labels to add to a crate's `cargo_build_script::deps` attribute.",
 -        # ),
 +        "build_script_deps": attr.string_list(
 +            doc = "A list of labels to add to a crate's `cargo_build_script::deps` attribute.",
 +        ),
-         "build_script_env": attr.string_dict(
-             doc = "Additional environment variables to set on a crate's `cargo_build_script::env` attribute.",
-         ),
+         "build_script_env_files": attr.label_list(
+             doc = "Files containing additional environment variables for a crate's `cargo_build_script`.",
+             allow_files = True,
 diff --git a/rs/private/annotations.bzl b/rs/private/annotations.bzl
 --- a/rs/private/annotations.bzl
 +++ b/rs/private/annotations.bzl

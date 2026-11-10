@@ -1,0 +1,12 @@
+diff --git a/opus/CMakeLists.txt b/opus/CMakeLists.txt
+--- a/opus/CMakeLists.txt
++++ b/opus/CMakeLists.txt
+@@ -598,6 +598,8 @@
+     if(OPUS_PRESUME_NEON)
+       target_compile_definitions(opus
+                                  PRIVATE
++                                 OPUS_ARM_MAY_HAVE_NEON
++                                 OPUS_ARM_MAY_HAVE_NEON_INTR
+                                  OPUS_ARM_PRESUME_NEON
+                                  OPUS_ARM_PRESUME_NEON_INTR)
+     endif()

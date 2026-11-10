@@ -13,6 +13,7 @@ def _v8_abseil_repository_impl(repository_ctx):
         integrity = "sha256-FpL3fRc5us8/lDNxiLeFg88JurfkINLcbFYFpPhnhaE=",
         stripPrefix = "abseil-cpp-20250814.1",
     )
+    repository_ctx.patch(repository_ctx.attr.lifetime_capture_patch, strip = 1)
 
     # Our root BUILD must own all sources beneath absl/. Native Starlark
     # filesystem operations work on Windows as well; no shell or Python.
@@ -49,6 +50,10 @@ def _v8_abseil_repository_impl(repository_ctx):
 v8_abseil_repository = repository_rule(
     implementation = _v8_abseil_repository_impl,
     attrs = {
+        "lifetime_capture_patch": attr.label(
+            default = Label("//third_party/v8:abseil_lifetime_capture.patch"),
+            allow_single_file = True,
+        ),
         "build_file": attr.label(
             default = Label("//third_party/v8:abseil.BUILD.bazel"),
             allow_single_file = True,

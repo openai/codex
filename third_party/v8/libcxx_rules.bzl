@@ -1,4 +1,4 @@
-"""Select the installed SDK-capable toolchain for native Windows libc++."""
+"""Build Windows libc++ with the selected target toolchain and its declared SDK."""
 
 load("@llvm//toolchain/runtimes:cc_runtime_library.bzl", "cc_runtime_stage0_library")
 load("@rules_cc//cc:defs.bzl", "cc_library")

@@ -7,11 +7,11 @@
 +load("@platforms//host:constraints.bzl", "HOST_CONSTRAINTS")
  load("@rules_cc//cc:action_names.bzl", "ACTION_NAMES")
  load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
- load("//rust:defs.bzl", "rust_common")
-@@ -11,6 +12,7 @@
- # buildifier: disable=bzl-visibility
+ load("//cargo/private:cargo_toolchain.bzl", "cargo_version_mismatch", "find_cargo")
+@@ -12,6 +13,7 @@
  load(
      "//rust/private:rustc.bzl",
+     "collect_cfg_query_rustc_flags",
 +    "collect_extra_rustc_flags",
      "get_compilation_mode_opts",
      "get_linker_and_args",
@@ -66,8 +66,23 @@
 +    ]
 +    return [flag for flag in flags if flag not in profile_defaults]
 
- def get_cc_compile_args_and_env(cc_toolchain, feature_configuration):
+ def get_cc_compile_args_and_env(ctx, cc_toolchain, feature_configuration):
      """Gather cc environment variables from the given `cc_toolchain`
+@@ -94,12 +94,12 @@
+     c_compile_variables = cc_common.create_compile_variables(
+         feature_configuration = feature_configuration,
+         cc_toolchain = cc_toolchain,
+-        user_compile_flags = ctx.fragments.cpp.copts + ctx.fragments.cpp.conlyopts,
++        user_compile_flags = [] if _feature_enabled(ctx, "cargo-release-profile") else ctx.fragments.cpp.copts + ctx.fragments.cpp.conlyopts,
+     )
+     cxx_compile_variables = cc_common.create_compile_variables(
+         feature_configuration = feature_configuration,
+         cc_toolchain = cc_toolchain,
+-        user_compile_flags = ctx.fragments.cpp.copts + ctx.fragments.cpp.cxxopts,
++        user_compile_flags = [] if _feature_enabled(ctx, "cargo-release-profile") else ctx.fragments.cpp.copts + ctx.fragments.cpp.cxxopts,
+     )
+     cc_c_args = cc_common.get_memory_inefficient_command_line(
+         feature_configuration = feature_configuration,
 @@ -469,6 +509,22 @@
          env["CARGO_PKG_VERSION_PRE"] = patch[1] if len(patch) > 1 else ""
          env["CARGO_PKG_VERSION"] = ctx.attr.version
@@ -88,13 +103,13 @@
 +                debug_info = codegen.removeprefix("debuginfo=")
 +        env["DEBUG"] = "false" if debug_info in ["0", "none"] else "true"
 +
-     # Pull in env vars which may be required for the cc_toolchain to work (e.g. on OSX, the SDK version).
-     # We hope that the linker env is sufficient for the whole cc_toolchain.
-     cc_toolchain, feature_configuration = find_cc_toolchain(ctx)
+     use_cc_toolchain = _resolve_tristate(
+         ctx.attr.use_cc_toolchain,
+         ctx.attr._default_use_cc_toolchain,
 @@ -484,6 +540,13 @@
      if cc_toolchain:
          # MSVC requires INCLUDE to be set
-         cc_c_args, cc_cxx_args, cc_env = get_cc_compile_args_and_env(cc_toolchain, feature_configuration)
+         cc_c_args, cc_cxx_args, cc_env = get_cc_compile_args_and_env(ctx, cc_toolchain, feature_configuration)
 +        if cargo_release_profile:
 +            # Preserve SDK, ABI, CRT and security options. User copts and crate
 +            # build_script_env overrides retain precedence over these defaults.

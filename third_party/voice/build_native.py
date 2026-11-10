@@ -294,9 +294,19 @@ class NativeBuild:
                 for name, flags in self.flags.items()
             }
         )
+        languages = {"c": "CFLAGS", "cpp": "CXXFLAGS"}
         if self.args.target.endswith("apple-darwin"):
             self.environment["OBJC"] = str(self.toolchain["cc"])
             self.environment["OBJCFLAGS"] = self.environment["CFLAGS"]
+            languages["objc"] = "CFLAGS"
+        # Environment CFLAGS are also linked for Autotools compatibility. Use
+        # Meson's phase-specific options to preserve Bazel's toolchain contract.
+        meson_flags = []
+        for language, variable in languages.items():
+            meson_flags += [
+                f"-D{language}_args={json.dumps([*self.flags[variable], include])}",
+                f"-D{language}_link_args={json.dumps([*self.flags['LDFLAGS'], *link])}",
+            ]
         self.run(
             name + "-configure",
             [
@@ -311,6 +321,7 @@ class NativeBuild:
                 "-Dauto_features=disabled",
                 "-Ddefault_library=shared",
                 "-Dpkgconfig.relocatable=true",
+                *meson_flags,
                 *options,
             ],
         )

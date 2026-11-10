@@ -4,11 +4,12 @@
 diff --git a/rs/private/cargo_workspace_graph.bzl b/rs/private/cargo_workspace_graph.bzl
 --- a/rs/private/cargo_workspace_graph.bzl
 +++ b/rs/private/cargo_workspace_graph.bzl
-@@ -762,6 +762,8 @@ def workspace_dep_data(
+@@ -762,7 +762,9 @@ def workspace_dep_data(
              "deps": deps,
              "deps_by_platform": deps_by_platform,
              "dev_deps": dev_deps,
              "dev_deps_by_platform": dev_deps_by_platform,
+             "edition": package.get("edition", "2015"),
 +            "package_name": package["name"],
              "shared_libraries": shared_libraries,
 +            "version": package["version"],

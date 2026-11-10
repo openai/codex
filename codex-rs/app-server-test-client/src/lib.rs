@@ -1272,11 +1272,10 @@ fn live_elicitation_timeout_pause(
         (None, None) => "ws://127.0.0.1:4222".to_string(),
     };
 
-    let script_path = script.unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("scripts")
-            .join("live_elicitation_hold.sh")
-    });
+    let script_path = match script {
+        Some(script) => script,
+        None => codex_utils_cargo_bin::find_resource!("scripts/live_elicitation_hold.sh")?,
+    };
     if !script_path.is_file() {
         bail!("helper script not found: {}", script_path.display());
     }

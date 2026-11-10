@@ -10,6 +10,12 @@
 diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bzl
 --- a/orig/v8-15.2.124.1/bazel/defs.bzl
 +++ b/mod/v8-15.2.124.1/bazel/defs.bzl
+@@ -8,4 +8,4 @@
+
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+-load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
++load("@@//third_party/v8:binary.bzl", cc_binary = "v8_cc_binary")
+ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 @@ -19,7 +19,7 @@
 
  _create_option_flag = rule(

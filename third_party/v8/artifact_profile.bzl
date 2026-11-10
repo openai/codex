@@ -1,7 +1,8 @@
 """Complete V8 artifact profiles, enforced at the source archive boundary.
 
-The source profile is for local consumers and uses the workspace C++ runtime.
-Published profiles embed the pinned Chromium runtime. Generators inherit the
+Native Windows builds embed Chromium libc++ with the consumer's stdio ABI.
+Other source profiles use the workspace C++ runtime. Published profiles embed
+the pinned Chromium runtime. Generators inherit the
 V8 target CPU even when their executable is built for the exec platform.
 """
 
@@ -9,11 +10,16 @@ _POINTER_COMPRESSION = "@v8//:v8_enable_pointer_compression"
 _SANDBOX = "@v8//:v8_enable_sandbox"
 _LIBCXX = "@v8//:v8_use_rusty_v8_custom_libcxx"
 _TARGET_CPU = "@v8//bazel/config:v8_target_cpu"
-_TOOLCHAINS = "//command_line_option:extra_toolchains"
-_NATIVE_WINDOWS_TOOLCHAINS = [
-    str(Label("@v8_native_windows_cc//:cc-toolchain-x64_windows")),
-    str(Label("@v8_native_windows_cc//:cc-toolchain-arm64_windows")),
-]
+_TARGET_OS = "@v8//:v8_target_os"
+_MSVC_PROFILE = "@v8//:v8_windows_msvc_profile"
+
+# The published MSVC archives use the Windows SDK's native wide-stdio mode.
+# Apply this after clang-cl's default ISO define to the entire archive graph.
+_MSVC_NATIVE_STDIO_COPT = "-U_CRT_STDIO_ISO_WIDE_SPECIFIERS"
+
+_COPT = "//command_line_option:copt"
+_NOSTDINCXX = "@llvm//config:nostdincxx"
+_NOSTDLIBXX = "@llvm//config:nostdlibxx"
 _CPU_CONSTRAINTS = {
     "arm64": Label("@platforms//cpu:aarch64"),
     "x64": Label("@platforms//cpu:x86_64"),
@@ -21,20 +27,28 @@ _CPU_CONSTRAINTS = {
 
 def _artifact_profile_impl(settings, attr):
     sandbox = attr.profile != "release"
+    use_chromium_libcxx = attr.native_windows or attr.profile != "source"
+    copts = settings[_COPT]
+    if attr.native_windows and attr.profile != "source":
+        copts = copts + [_MSVC_NATIVE_STDIO_COPT]
     return {
+        _COPT: copts,
         _POINTER_COMPRESSION: "True" if sandbox else "False",
         _SANDBOX: sandbox,
-        _LIBCXX: attr.profile != "source",
+        _LIBCXX: use_chromium_libcxx,
         _TARGET_CPU: attr.v8_cpu,
-        # Select clang-cl only below the V8 archive/binding boundary. Keep the
-        # caller's toolchains (including the ordinary MSVC compiler) elsewhere.
-        _TOOLCHAINS: settings[_TOOLCHAINS] + (_NATIVE_WINDOWS_TOOLCHAINS if attr.native_windows else []),
+        # Like GN's target_os, these settings survive the exec transition.
+        # Windows snapshot generators run under Wine on Linux.
+        _TARGET_OS: attr.target_os,
+        _MSVC_PROFILE: attr.native_windows,
+        _NOSTDINCXX: True if use_chromium_libcxx else settings[_NOSTDINCXX],
+        _NOSTDLIBXX: True if attr.native_windows else settings[_NOSTDLIBXX],
     }
 
 _artifact_profile = transition(
     implementation = _artifact_profile_impl,
-    inputs = [_TOOLCHAINS],
-    outputs = [_POINTER_COMPRESSION, _SANDBOX, _LIBCXX, _TARGET_CPU, _TOOLCHAINS],
+    inputs = [_COPT, _NOSTDINCXX, _NOSTDLIBXX],
+    outputs = [_COPT, _POINTER_COMPRESSION, _SANDBOX, _LIBCXX, _TARGET_CPU, _TARGET_OS, _MSVC_PROFILE, _NOSTDINCXX, _NOSTDLIBXX],
 )
 
 def _profiled_files_impl(ctx):
@@ -57,6 +71,7 @@ _v8_artifact_files = rule(
     doc = "Build a source archive or release pair under its named V8 profile.",
     attrs = {
         "native_windows": attr.bool(mandatory = True),
+        "target_os": attr.string(mandatory = True),
         "profile": attr.string(
             mandatory = True,
             values = ["source", "release", "sandbox_release"],
@@ -89,6 +104,13 @@ def v8_artifact_files(name, v8_cpu, **kwargs):
             "@rules_rs//rs/platforms/config:aarch64-pc-windows-msvc": True,
             "@rules_rs//rs/platforms/config:x86_64-pc-windows-msvc": True,
             "//conditions:default": False,
+        }),
+        target_os = select({
+            "@platforms//os:windows": "win",
+            "@platforms//os:macos": "mac",
+            "@platforms//os:linux": "linux",
+            "@platforms//os:android": "android",
+            "//conditions:default": "",
         }),
         v8_cpu = v8_cpu,
         **kwargs

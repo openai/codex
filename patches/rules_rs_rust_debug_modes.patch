@@ -1,10 +1,9 @@
 diff --git a/rs/toolchains/declare_rustc_toolchains.bzl b/rs/toolchains/declare_rustc_toolchains.bzl
 --- a/rs/toolchains/declare_rustc_toolchains.bzl
 +++ b/rs/toolchains/declare_rustc_toolchains.bzl
-@@ -45,6 +45,14 @@
-             },
-         )
-         source_stdlib_building_select[config_setting] = "@rules_rs//rs/private:empty_stdlib"
+@@ -132,5 +132,13 @@
+             "//conditions:default": rust_std_label,
+         })
 +
 +    # Apple targets default to packed dSYMs and invoke dsymutil at link time.
 +    # The Linux remote Rust action has no dsymutil. Match Cargo release's
@@ -15,7 +14,7 @@ diff --git a/rs/toolchains/declare_rustc_toolchains.bzl b/rs/toolchains/declare_
 +    })
 -
 +
-     for triple in execs:
+     for triple in exec_triples:
          exec_triple = _parse_triple(triple)
 @@ -152,8 +160,20 @@
                  "//conditions:default": [],
