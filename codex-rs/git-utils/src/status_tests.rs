@@ -16,6 +16,107 @@ use super::git_status_runs;
 use super::share_git_status_run;
 
 #[tokio::test]
+async fn metadata_status_does_not_execute_submodule_clean_filter() {
+    use std::path::Path;
+    use std::process::Command;
+    use std::time::SystemTime;
+
+    fn git(cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Status Test",
+                "-c",
+                "user.email=status@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                if cfg!(windows) {
+                    "core.hooksPath=NUL"
+                } else {
+                    "core.hooksPath=/dev/null"
+                },
+            ])
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let fixture = TempDir::new().expect("create fixture");
+    let source = fixture.path().join("source");
+    let repository = fixture.path().join("repository");
+    gix::init(&source).expect("initialize submodule source");
+    std::fs::write(source.join("tracked.txt"), "BASELINE\n").expect("write baseline");
+    git(&source, &["add", "tracked.txt"]);
+    git(&source, &["commit", "-m", "baseline"]);
+    gix::init(&repository).expect("initialize parent repository");
+    git(
+        &repository,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "--",
+            source.to_str().expect("source path"),
+            "module",
+        ],
+    );
+    git(&repository, &["commit", "-m", "add submodule"]);
+
+    // Replace the submodule's .git pointer and configure an attacker-written filter.
+    let module = repository.join("module");
+    std::fs::remove_file(module.join(".git")).expect("remove git pointer");
+    gix::init(&module).expect("initialize task-controlled git directory");
+    git(&module, &["add", "tracked.txt"]);
+    git(&module, &["commit", "-m", "task-created repository"]);
+    let marker = fixture.path().join("filter-ran");
+    git(
+        &module,
+        &[
+            "config",
+            "filter.task.clean",
+            "printf ran > ../../filter-ran; cat",
+        ],
+    );
+    std::fs::write(module.join(".gitattributes"), "tracked.txt filter=task\n")
+        .expect("select task filter");
+    let tracked_file = module.join("tracked.txt");
+    std::fs::write(&tracked_file, "MODIFIED\n").expect("modify tracked file");
+    // Windows requires a writable handle to change the modification time.
+    std::fs::File::options()
+        .write(true)
+        .open(&tracked_file)
+        .expect("open tracked file")
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000))
+        .expect("invalidate cached file metadata");
+
+    assert_eq!(
+        get_has_changes_in_repo(&repository, &repository).await,
+        Some(true)
+    );
+    assert!(!marker.exists(), "executed submodule clean filter");
+
+    // Check that the same payload runs without the protective option.
+    let output = Command::new("git")
+        .args(["-c", "core.fsmonitor=false", "status", "--porcelain"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .current_dir(&repository)
+        .output()
+        .expect("run status without the fix");
+    assert!(output.status.success());
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "ran");
+}
+
+#[tokio::test]
 async fn status_requests_from_sibling_directories_use_the_known_worktree_root() {
     let repository = TempDir::new().expect("create repository");
     gix::init(repository.path()).expect("initialize repository");

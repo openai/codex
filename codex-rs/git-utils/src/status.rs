@@ -26,15 +26,22 @@ fn git_status_runs() -> &'static Mutex<HashMap<GitStatusKey, WeakShared<GitStatu
     RUNS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Reports repository changes without inspecting uncommitted submodule contents.
 pub async fn get_has_changes_in_repo(cwd: &Path, repo_root: &Path) -> Option<bool> {
     let git = PathBuf::from("git");
     let cwd = cwd.to_path_buf();
     let key = git_status_key(git.clone(), repo_root).await;
     share_git_status_run(key, move || async move {
         let fsmonitor = detect_local_fsmonitor_override(&git, &cwd).await;
-        let output =
-            run_git_command_with_timeout_from(&git, &["status", "--porcelain"], &cwd, fsmonitor)
-                .await?;
+        // Submodule worktree scans can execute filters selected by task-writable
+        // Git configuration. Skip those scans while retaining gitlink changes.
+        let output = run_git_command_with_timeout_from(
+            &git,
+            &["status", "--porcelain", "--ignore-submodules=dirty"],
+            &cwd,
+            fsmonitor,
+        )
+        .await?;
         output.status.success().then_some(!output.stdout.is_empty())
     })
     .await
