@@ -105,7 +105,7 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn on_collab_event(&mut self, cell: PlainHistoryCell) {
+    pub(super) fn on_collab_event(&mut self, cell: impl HistoryCell + 'static) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(cell);
         self.request_redraw();

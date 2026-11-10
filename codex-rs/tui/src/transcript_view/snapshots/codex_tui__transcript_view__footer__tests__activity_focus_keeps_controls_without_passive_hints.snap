@@ -1,6 +1,5 @@
 ---
 source: tui/src/transcript_view/footer_tests.rs
-assertion_line: 515
 expression: "hints.join(\"\\n\")"
 ---
 collapsed
@@ -37,8 +36,8 @@ Buffer {
     ]
 }
 focused, 20 columns: esc back
-focused, 32 columns: enter details · esc back
-focused, 80 columns: ↑ previous · ↓ next · enter details · esc back
+focused, 32 columns: ↓ next · enter expand · esc back
+focused, 80 columns: ↑ previous · ↓ next · enter expand · esc back
 expanded
 Buffer {
     area: Rect { x: 0, y: 0, width: 32, height: 3 },
@@ -55,6 +54,7 @@ Buffer {
         x: 18, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
     ]
 }
+expanded, 80 columns: ↑ previous · ↓ next · enter collapse · esc back
 "ctrl-x t": <composer hints>
 ["ctrl-x t","f4"]: <composer hints>
 []: <composer hints>

@@ -239,6 +239,10 @@ pub(crate) struct PlanUpdateCell {
 }
 
 impl HistoryCell for PlanUpdateCell {
+    fn tool_call_labels(&self) -> Vec<String> {
+        vec!["Updated plan".into()]
+    }
+
     fn activity_ids(&self) -> Vec<String> {
         vec![self.activity_id.clone()]
     }

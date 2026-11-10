@@ -24,6 +24,19 @@ impl UnifiedExecInteractionCell {
 }
 
 impl HistoryCell for UnifiedExecInteractionCell {
+    fn tool_call_labels(&self) -> Vec<String> {
+        let action = if self.stdin.is_empty() {
+            "Waited for terminal"
+        } else {
+            "Sent terminal input"
+        };
+        vec![
+            self.command_display
+                .as_ref()
+                .map_or_else(|| action.to_string(), |cmd| format!("{action} · {cmd}")),
+        ]
+    }
+
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         Vec::new()
     }

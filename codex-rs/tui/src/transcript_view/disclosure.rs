@@ -17,7 +17,7 @@ use super::*;
 
 pub(super) struct Disclosure {
     pub(super) expanded: HashSet<String>,
-    pub(super) focused: Option<Vec<String>>,
+    pub(super) focused: Option<(EntryKey, Vec<String>)>,
     pub(super) resume_after_approval: Option<(ThreadId, String)>,
     // Resolve against the next layout, once a toggled live row has also been rebuilt.
     pub(super) anchor_control: Option<EntryKey>,
@@ -95,7 +95,7 @@ impl TranscriptView {
     pub(super) fn activity_ids(&self, cells: &[Arc<dyn HistoryCell>], index: usize) -> Vec<String> {
         cells.get(index).map_or_else(
             || self.disclosure.live_ids.clone(),
-            |cell| match self.tool_summary(cell.as_ref()) {
+            |cell| match self.tool_summary(cell.as_ref(), EntryKey::cell(cell)) {
                 Some(row) if !self.is_search_expanded(EntryKey::cell(cell)) => row.ids,
                 _ => cell.activity_ids(),
             },
@@ -130,7 +130,7 @@ impl TranscriptView {
             .disclosure
             .focused
             .as_ref()
-            .is_some_and(|focused| ids.iter().any(|id| focused.contains(id)));
+            .is_some_and(|(_, focused)| ids.iter().any(|id| focused.contains(id)));
         if !focused || !layout.disclosure {
             return;
         }
@@ -214,7 +214,7 @@ impl TranscriptView {
             .disclosure
             .focused
             .as_ref()
-            .and_then(|ids| self.canonical_activity_index(cells, ids));
+            .and_then(|(_, ids)| self.canonical_activity_index(cells, ids));
         let Some(focused) = focused else {
             self.disclosure.focused = None;
             return None;
@@ -313,21 +313,24 @@ impl TranscriptView {
     }
 
     fn focus_activity(&mut self, cells: &[Arc<dyn HistoryCell>], index: usize) -> bool {
-        if self
-            .current_layout(cells, index)
-            .is_none_or(|layout| !layout.disclosure)
-        {
+        let Some(layout) = self.layout(cells, index) else {
+            return false;
+        };
+        if !layout.disclosure {
             return false;
         }
         let ids = self.activity_ids(cells, index);
-        let header_visible = self.visible.iter().any(|row| {
-            row.layout.disclosure
-                && row.activity_ids.iter().any(|id| ids.contains(id))
-                && row.row == usize::from(row.layout.separated)
+        let row = usize::from(layout.separated);
+        let visible = self.visible.iter().any(|visible| {
+            visible.row == row && visible.activity_ids.iter().any(|id| ids.contains(id))
         });
-        self.disclosure.focused = Some(ids);
-        if !header_visible {
+        self.disclosure.focused = Some((self.entry_key(cells, index), ids));
+        if !visible {
             self.jump_to_entry(cells, index);
+            if let Position::Reading(anchor) = &mut self.position {
+                anchor.offset = layout.position_at(row, /*column*/ 0);
+                anchor.row_bias = layout.row_for_offset(anchor.offset) as isize - row as isize;
+            }
         }
         true
     }
@@ -389,7 +392,7 @@ impl TranscriptView {
         } else {
             self.disclosure.expanded.extend(ids.iter().cloned());
         }
-        self.disclosure.focused = Some(ids);
+        self.disclosure.focused = Some((key, ids));
         self.position = Position::Reading(anchor);
         self.cache.clear();
         self.live_key = None;
@@ -400,14 +403,17 @@ impl TranscriptView {
     }
 
     pub(super) fn disclosure_footer(&self, width: u16) -> Option<TranscriptFooter> {
-        if !self.is_activity_focused() {
-            return None;
-        }
+        let (key, ids) = self.disclosure.focused.as_ref()?;
+        let toggle = if self.disclosure.is_expanded(ids) || self.is_search_expanded(*key) {
+            "collapse"
+        } else {
+            "expand"
+        };
         let keymap = &self.disclosure.keymap;
         let hints: Vec<_> = [
             (ListAction::MoveUp, "previous"),
             (ListAction::MoveDown, "next"),
-            (ListAction::Accept, "details"),
+            (ListAction::Accept, toggle),
             (ListAction::Cancel, "back"),
         ]
         .into_iter()

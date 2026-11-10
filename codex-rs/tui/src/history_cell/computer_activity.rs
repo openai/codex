@@ -119,6 +119,14 @@ fn error_preview(call: &McpToolCallCell) -> Option<&str> {
 }
 
 impl HistoryCell for ComputerActivityCell {
+    fn tool_call_labels(&self) -> Vec<String> {
+        self.group
+            .calls
+            .iter()
+            .flat_map(HistoryCell::tool_call_labels)
+            .collect()
+    }
+
     fn append_reasoning(&mut self, cell: Box<dyn HistoryCell>) -> Result<(), Box<dyn HistoryCell>> {
         if self.group.calls.is_empty() {
             Err(cell)

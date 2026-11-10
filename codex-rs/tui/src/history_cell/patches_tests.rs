@@ -21,6 +21,7 @@ fn compact_patches_retain_full_changes_and_failure_details() {
         ]),
         Path::new("."),
     );
+    assert_eq!(patch.tool_call_labels(), ["Edited files"]);
     let failure = new_patch_apply_failure("first\nsecond\nthird\nfourth diagnostic".into());
     let missing = new_patch_apply_failure(String::new());
     let mut snapshots = Vec::new();

@@ -522,6 +522,8 @@ fn activity_focus_keeps_controls_without_passive_hints() {
     assert!(view.disclosure.is_expanded(&["sample-activity".to_owned()]));
     let expanded = render_live(&mut view);
     hints.push(format!("expanded\n{expanded:?}"));
+    let footer = view.footer(/*width*/ 80, MotionMode::Reduced).unwrap();
+    hints.push(format!("expanded, 80 columns: {}", footer.text));
     let hidden = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 32, /*height*/ 0,
     );

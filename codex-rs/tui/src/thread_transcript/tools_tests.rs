@@ -229,6 +229,9 @@ fn historical_command_fallbacks_preserve_status_output_and_group_boundaries() {
             /*config*/ None,
         );
         assert_eq!(cells.len(), 3);
+        if label == "declined" {
+            assert_eq!(cells[1].tool_call_labels(), ["Declined · cargo check"]);
+        }
         for cell in [&cells[0], &cells[2]] {
             assert!(
                 cell.as_any()

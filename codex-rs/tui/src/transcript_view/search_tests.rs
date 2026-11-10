@@ -1149,7 +1149,7 @@ fn find_expands_only_the_match_and_preserves_manual_disclosures() {
     insta::assert_snapshot!(hints.join("\n"), @"
     ↑ Loading earlier messages… · esc latest
     Retry history: ⌥</⌃home.  esc latest
-    ↑ previous · ↓ next · enter details · esc back
+    ↑ previous · ↓ next · enter expand · esc back
     ");
     view.handle_key(KeyCode::Enter.into(), &cells);
     view.handle_key(KeyCode::Esc.into(), &cells);
@@ -1163,6 +1163,13 @@ fn find_expands_only_the_match_and_preserves_manual_disclosures() {
     view.handle_key(KeyCode::F(4).into(), &cells);
     view.handle_key(KeyCode::End.into(), &cells);
     view.handle_key(KeyCode::Up.into(), &cells);
+    assert!(
+        view.footer(/*width*/ 80, crate::motion::MotionMode::Reduced)
+            .unwrap()
+            .text
+            .to_string()
+            .contains("enter collapse")
+    );
     for (key, expanded) in [
         (KeyCode::Right, true),
         (KeyCode::Left, false),

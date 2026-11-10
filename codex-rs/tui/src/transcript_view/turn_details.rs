@@ -58,7 +58,11 @@ impl ToolSummary {
 }
 
 impl TranscriptView {
-    pub(super) fn tool_summary(&self, cell: &dyn HistoryCell) -> Option<ToolSummary> {
+    pub(super) fn tool_summary(
+        &self,
+        cell: &dyn HistoryCell,
+        key: EntryKey,
+    ) -> Option<ToolSummary> {
         if !self.collapse_turn_details || self.detailed || self.mode != HistoryRenderMode::Rich {
             return None;
         }
@@ -66,11 +70,14 @@ impl TranscriptView {
         if calls.is_empty() {
             return None;
         }
-        let ids = cell
+        let mut ids: Vec<_> = cell
             .activity_ids()
             .into_iter()
             .map(|id| format!("summary:{id}"))
             .collect();
+        if key != EntryKey::Live || ids.is_empty() {
+            ids.push(format!("work:{key:?}"));
+        }
         Some(ToolSummary { ids, calls })
     }
 
@@ -90,7 +97,7 @@ impl TranscriptView {
             self.cache.clear();
             self.release_live_reading();
         }
-        let summary = active.and_then(|cell| self.tool_summary(cell));
+        let summary = active.and_then(|cell| self.tool_summary(cell, EntryKey::Live));
         let ids = summary.as_ref().map_or_else(
             || active.map_or_else(Vec::new, HistoryCell::activity_ids),
             |summary| summary.ids.clone(),

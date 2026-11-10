@@ -238,7 +238,9 @@ impl TranscriptView {
         }
         let mode = self.mode;
         let mut presentation = self.content_presentation(cell.as_ref(), full_content, mode);
-        if !full_content && let Some(summary) = self.tool_summary(cell.as_ref()) {
+        if !full_content
+            && let Some(summary) = self.tool_summary(cell.as_ref(), EntryKey::cell(cell))
+        {
             let expanded = self.disclosure.is_expanded(&summary.ids);
             if expanded {
                 self.disclosure.expanded.extend(summary.ids.iter().cloned());
@@ -262,7 +264,7 @@ impl TranscriptView {
                     }) {
                         return layout.row_count() > 0;
                     }
-                    if !full_content && self.tool_summary(previous.as_ref()).is_some() {
+                    if !full_content && self.tool_summary(previous.as_ref(), key).is_some() {
                         return true;
                     }
                     let previous_presentation =

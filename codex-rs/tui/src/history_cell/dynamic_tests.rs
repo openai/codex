@@ -52,6 +52,9 @@ fn dynamic_status_and_output_match_persisted_presentations() {
         );
         assert_eq!(replayed.len(), 1);
         let cell = &replayed[0];
+        if label == "success" {
+            assert_eq!(cell.tool_call_labels(), ["Called example.inspect"]);
+        }
         for (mode, lines) in [
             ("compact", cell.display_lines(/*width*/ 80)),
             (

@@ -173,6 +173,19 @@ impl DynamicToolCallData {
 }
 
 impl HistoryCell for DynamicToolCallCell {
+    fn tool_call_labels(&self) -> Vec<String> {
+        let data = self
+            .data
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        vec![
+            data.header()
+                .to_string()
+                .trim_start_matches("• ")
+                .to_owned(),
+        ]
+    }
+
     fn has_stable_transcript_height(&self) -> bool {
         false
     }

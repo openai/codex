@@ -356,6 +356,15 @@ impl McpToolCallCell {
 }
 
 impl HistoryCell for McpToolCallCell {
+    fn tool_call_labels(&self) -> Vec<String> {
+        let verb = match self.success() {
+            Some(true) => "Called",
+            Some(false) => "Failed",
+            None => "Calling",
+        };
+        vec![format!("{verb} {}", self.compact_tool_name())]
+    }
+
     fn activity_ids(&self) -> Vec<String> {
         vec![format!("mcp:{}", self.call_id)]
     }

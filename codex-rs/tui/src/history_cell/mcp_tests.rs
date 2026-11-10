@@ -154,6 +154,7 @@ fn mcp_preview_shares_one_limit_across_blocks_and_preserves_transcript() {
             json!({"type": "text", "text": "third\nfourth\nfifth"}),
         ])),
     );
+    assert_eq!(cell.tool_call_labels(), ["Called search.lookup"]);
     let display = cell.display_lines(/*width*/ 80);
     let transcript = cell.transcript_lines(/*width*/ 80);
     insta::assert_snapshot!(format!(
@@ -541,6 +542,7 @@ fn titled_image_call_keeps_error_and_full_title_when_narrow() {
         },
         /*animations_enabled*/ false,
     );
+    assert_eq!(cell.tool_call_labels(), [format!("Calling {title}")]);
     assert_eq!(
         cell.display_lines(/*width*/ 80)[0].to_string(),
         format!("• {title}")
@@ -571,6 +573,8 @@ fn titled_image_call_keeps_error_and_full_title_when_narrow() {
             .to_string()
             .contains(title)
     );
+    cell.invocation.arguments = Some(json!({"title": "   "}));
+    assert_eq!(cell.tool_call_labels(), ["Failed node_repl.js"]);
 }
 
 /// Reconstruct only from explicit provenance, checking every displayed source slice on the way.

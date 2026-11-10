@@ -1384,6 +1384,27 @@ fn parked_screen(
 }
 
 #[test]
+fn tool_disclosure_hides_output() {
+    let image = crate::history_cell::new_image_generation_call(
+        "image".into(),
+        "failed",
+        Some("private prompt".into()),
+        /*saved_path*/ None,
+    );
+    let cells: &[Arc<dyn HistoryCell>] = &[Arc::new(image)];
+    let mut view = TranscriptView::default();
+    let collapsed = parked_screen(&mut view, cells, /*active*/ None);
+    view.handle_key(KeyCode::F(4).into(), cells);
+    view.handle_key(KeyCode::Enter.into(), cells);
+    let expanded = parked_screen(&mut view, cells, /*active*/ None);
+    insta::assert_snapshot!(format!("{collapsed}\n{expanded}"), @r"
+        ▸ Image generation failed
+        ▾ Image generation failed
+          Image generation failed
+    ");
+}
+
+#[test]
 fn live_search_group_keeps_its_summary_in_the_parked_pane() {
     use codex_app_server_protocol::CommandExecutionSource;
     use codex_shell_command::parse_command::parse_command;

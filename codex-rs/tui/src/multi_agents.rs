@@ -4,6 +4,7 @@
 //! picker entries, and the fast-switch keyboard shortcuts. Higher-level coordination, such as
 //! deciding which thread becomes active or when a thread closes, stays in [`crate::app::App`].
 
+use crate::history_cell::LabeledToolCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::render::line_utils::prefix_lines;
 use crate::style::accent_color;
@@ -205,7 +206,7 @@ pub(crate) fn tool_call_history_cell(
     item: &ThreadItemPayload,
     cached_spawn_request: Option<&SpawnRequestSummary>,
     mut agent_metadata: impl FnMut(ThreadId) -> AgentMetadata,
-) -> Option<PlainHistoryCell> {
+) -> Option<LabeledToolCell> {
     let ThreadItemPayload::CollabAgentToolCall {
         tool,
         status,
@@ -282,6 +283,12 @@ pub(crate) fn tool_call_history_cell(
                 .map(|receiver_thread_id| close_end(receiver_thread_id, &mut agent_metadata))
         }
     }
+    .map(|cell| match (tool, status) {
+        (CollabAgentTool::ResumeAgent, CollabAgentToolCallStatus::Failed) => {
+            cell.with_tool_label("Failed to resume agent".into())
+        }
+        _ => cell.with_tool_header(/*count*/ 1),
+    })
 }
 
 pub(crate) fn sub_agent_activity_display(
@@ -928,16 +935,28 @@ mod tests {
 
     #[test]
     fn collab_resume_interrupted_snapshot() {
+        use CollabAgentToolCallStatus::Completed;
+        use CollabAgentToolCallStatus::Failed;
+        let cell = resume_cell(Completed, CollabAgentStatus::Interrupted);
+        assert_snapshot!("collab_resume_interrupted", cell_to_text(&cell));
+        let missing = resume_cell(Failed, CollabAgentStatus::NotFound);
+        assert_eq!(missing.tool_call_labels(), ["Failed to resume agent"]);
+    }
+
+    fn resume_cell(
+        status: CollabAgentToolCallStatus,
+        agent_status: CollabAgentStatus,
+    ) -> LabeledToolCell {
         let sender_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")
             .expect("valid sender thread id");
         let robie_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
             .expect("valid robie thread id");
 
-        let cell = tool_call_history_cell(
+        tool_call_history_cell(
             &ThreadItemPayload::CollabAgentToolCall {
                 id: "call-resume".to_string(),
                 tool: CollabAgentTool::ResumeAgent,
-                status: CollabAgentToolCallStatus::Completed,
+                status,
                 sender_thread_id: sender_thread_id.to_string(),
                 receiver_thread_ids: vec![robie_id.to_string()],
                 prompt: None,
@@ -945,15 +964,13 @@ mod tests {
                 reasoning_effort: None,
                 agents_states: HashMap::from([(
                     robie_id.to_string(),
-                    agent_state(CollabAgentStatus::Interrupted, /*message*/ None),
+                    agent_state(agent_status, /*message*/ None),
                 )]),
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, ThreadId::new()),
         )
-        .expect("resume item renders");
-
-        assert_snapshot!("collab_resume_interrupted", cell_to_text(&cell));
+        .expect("resume item renders")
     }
 
     fn agent_state(status: CollabAgentStatus, message: Option<&str>) -> CollabAgentState {
@@ -979,7 +996,7 @@ mod tests {
         }
     }
 
-    fn cell_to_text(cell: &PlainHistoryCell) -> String {
+    fn cell_to_text(cell: &impl HistoryCell) -> String {
         cell.display_lines(/*width*/ 200)
             .iter()
             .map(line_to_text)
