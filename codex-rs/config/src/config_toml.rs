@@ -591,10 +591,6 @@ pub struct AutoReviewToml {
     pub circuit_break_action: Option<CircuitBreakAction>,
     /// Additional policy instructions inserted into the guardian prompt.
     pub policy: Option<String>,
-    /// Additional policy text inserted into the Guardian template's `{{ extra_policy }}` slot.
-    pub extra_policy: Option<String>,
-    /// Experimental full Guardian prompt template containing the tenant policy placeholder.
-    pub experimental_policy_template: Option<String>,
     /// Experimental replacement for the history-retrieval instructions when history tools
     /// and Apps are enabled. Omitted or blank values use the built-in prompt.
     pub experimental_conversation_history_prompt: Option<String>,

@@ -279,20 +279,30 @@ include_view_image_tool = false
     );
 }
 
-#[test]
-fn removed_private_desktop_setting_has_migration_hint() {
+#[test_case::test_case(
+    "[windows]\nsandbox_private_desktop = false",
+    "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `windows.sandbox_private_desktop` is ignored. Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop.";
+    "private_desktop"
+)]
+#[test_case::test_case(
+    "[auto_review]\nextra_policy = 'Additional rules.'\nexperimental_policy_template = 'Custom template.'",
+    concat!(
+        "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings.",
+        "\n  session-flags: `auto_review.experimental_policy_template` is ignored. Remove auto_review.experimental_policy_template from config.toml.",
+        "\n  session-flags: `auto_review.extra_policy` is ignored. To enforce additional Guardian rules, set guardian_extra_policy in managed requirements.toml.",
+    );
+    "guardian_policy"
+)]
+fn removed_settings_have_migration_hints(contents: &str, expected: &str) {
     let config = ConfigLayerStack::new(
-        vec![layer(
-            ConfigLayerSource::SessionFlags,
-            "[windows]\nsandbox_private_desktop = false",
-        )],
+        vec![layer(ConfigLayerSource::SessionFlags, contents)],
         ConfigRequirements::default(),
         ConfigRequirementsToml::default(),
     )
     .unwrap();
     assert_eq!(
-        ignored_config_warning(&config, &[]).unwrap(),
-        "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `windows.sandbox_private_desktop` is ignored. Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
+        ignored_config_warning(&config, &[]).as_deref(),
+        Some(expected)
     );
 }
 

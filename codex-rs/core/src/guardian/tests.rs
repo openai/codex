@@ -3622,22 +3622,32 @@ async fn guardian_review_session_config_keeps_bedrock_provider_for_bedrock_gpt_5
     );
 }
 
+#[test_case::test_case(Some("Managed tenant rules."), None, None; "managed_tenant")]
+#[test_case::test_case(None, Some("Managed additional rules."), None; "managed_extra")]
+#[test_case::test_case(
+    Some("Managed tenant rules."), Some("Managed additional rules."),
+    Some("Host template\n{{ tenant_policy_config }}\n{{ extra_policy }}"); "host_template"
+)]
 #[tokio::test]
-async fn guardian_review_session_config_uses_requirements_guardian_policy_config() {
+async fn guardian_review_session_config_uses_requirements_guardian_policy_config(
+    tenant: Option<&str>,
+    extra: Option<&str>,
+    host_template: Option<&str>,
+) {
+    const CATALOG_POLICY: &str = "Default tenant rules.";
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let workspace = tempfile::tempdir().expect("create temp dir");
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
         Default::default(),
         codex_config::ConfigRequirementsToml {
-            guardian_policy_config: Some(
-                "  Use the workspace-managed guardian policy.  ".to_string(),
-            ),
+            guardian_policy_config: tenant.map(|policy| format!("  {policy}  ")),
+            guardian_extra_policy: extra.map(str::to_owned),
             ..Default::default()
         },
     )
     .expect("config layer stack");
-    let parent_config = Config::load_config_with_layer_stack(
+    let mut parent_config = Config::load_config_with_layer_stack(
         LOCAL_FS.as_ref(),
         ConfigToml::default(),
         ConfigOverrides {
@@ -3649,7 +3659,17 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
     )
     .await
     .expect("load config");
-
+    parent_config.guardian_policy_template = host_template.map(str::to_owned);
+    let mut model = codex_models_manager::model_info::model_info_from_slug("active-model");
+    model.model_messages = Some(
+        serde_json::from_value(serde_json::json!({
+            "auto_review": {
+                "policy": CATALOG_POLICY,
+                "policy_template": "User-supplied catalog template without policy slots."
+            }
+        }))
+        .expect("catalog model messages"),
+    );
     let guardian_config = build_guardian_review_session_config_for_test(
         crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
         /*live_network_config*/ None,
@@ -3657,7 +3677,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        ResolvedModelMessages::bundled(),
+        ResolvedModelMessages::from_model(&model),
     )
     .expect("guardian config");
 
@@ -3667,11 +3687,13 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         Some(
             GuardianPolicyInstructions::new(
                 TranscriptFormat::Line,
-                "Use the workspace-managed guardian policy.",
-                "",
-                ResolvedModelMessages::bundled()
-                    .auto_review()
-                    .policy_template,
+                tenant.unwrap_or(CATALOG_POLICY),
+                extra.unwrap_or_default(),
+                host_template.unwrap_or(
+                    ResolvedModelMessages::bundled()
+                        .auto_review()
+                        .policy_template
+                ),
                 guardian_output_contract_prompt(),
             )
             .render()

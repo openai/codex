@@ -737,11 +737,11 @@ pub struct Config {
     /// Guardian publication observed before startup loading or last policy refresh.
     pub guardian_policy_revision: u64,
 
-    /// Additional Guardian policy from requirements.toml or config.toml.
+    /// Additional Guardian policy supplied by managed requirements or the host.
     /// Rendered into `{{ extra_policy }}` alongside the resolved tenant policy.
     pub guardian_extra_policy: Option<String>,
 
-    /// Guardian prompt template override from config.toml.
+    /// Guardian prompt template supplied by the host.
     /// The resolved policy config replaces its `{{ tenant_policy_config }}`
     /// placeholder when a review session is built.
     pub guardian_policy_template: Option<String>,
@@ -4366,14 +4366,6 @@ impl Config {
                 policy.validate().map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
                 Ok::<_, std::io::Error>(policy)
             }).transpose()?;
-        let guardian_policy_template = cfg
-            .auto_review
-            .as_ref()
-            .and_then(|auto_review| {
-                normalize_guardian_policy_config(
-                    auto_review.experimental_policy_template.as_deref(),
-                )
-            });
         let guardian_conversation_history_prompt = cfg.auto_review.as_ref().and_then(|auto_review| {
             normalize_guardian_policy_config(
                 auto_review.experimental_conversation_history_prompt.as_deref(),
@@ -4750,7 +4742,7 @@ impl Config {
             guardian_policy_config,
             guardian_policy_revision: 0,
             guardian_extra_policy,
-            guardian_policy_template,
+            guardian_policy_template: None,
             guardian_transcript_mode,
             guardian_sync_elastic_budget,
             guardian_conversation_history_prompt,

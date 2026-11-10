@@ -56,11 +56,27 @@ pub fn build_guardian_review_session_config(
         .into_text()
         .unwrap_or_default()
     });
+    // The model catalog can come from user configuration. Managed rules need a trusted
+    // template with policy slots unless the host explicitly supplies its own template.
+    let requirements = guardian_config.config_layer_stack.requirements_toml();
+    let needs_trusted_template = requirements
+        .guardian_policy_config
+        .iter()
+        .chain(&guardian_config.guardian_extra_policy)
+        .any(|policy| !policy.trim().is_empty());
+    let policy_template = match guardian_config.guardian_policy_template.as_deref() {
+        None if needs_trusted_template => Some(
+            ResolvedModelMessages::bundled()
+                .auto_review()
+                .policy_template,
+        ),
+        template => template,
+    };
     let instructions = reviewer_instructions(
         guardian_config.guardian_transcript_mode,
         guardian_config.resolve_guardian_policy(model_messages),
         guardian_config.guardian_extra_policy.as_deref(),
-        guardian_config.guardian_policy_template.as_deref(),
+        policy_template,
         model_messages,
         conversation_history.as_deref(),
     );

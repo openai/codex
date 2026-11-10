@@ -15,12 +15,7 @@ pub(crate) fn resolve_guardian_policy_text(
     let policy = guardian_policy_config_from_requirements(requirements).or_else(|| {
         normalize_guardian_policy_config(fallback.and_then(|fallback| fallback.policy.as_deref()))
     });
-    let extra = normalize_guardian_policy_config(requirements.guardian_extra_policy.as_deref())
-        .or_else(|| {
-            normalize_guardian_policy_config(
-                fallback.and_then(|fallback| fallback.extra_policy.as_deref()),
-            )
-        });
+    let extra = normalize_guardian_policy_config(requirements.guardian_extra_policy.as_deref());
     (policy, extra)
 }
 

@@ -947,7 +947,7 @@ async fn sample_configured_conversation_history_with_source(
     let (request, test, registry, _) = sample_configured_conversation_history_with_delivery(
         conversation_history,
         arguments,
-        guardian_policy,
+        (guardian_policy, /* extra_policy */ None),
         guardian_config,
         model_defaults,
         source,
@@ -965,7 +965,7 @@ enum MessagingSetup {
 async fn sample_configured_conversation_history_with_delivery(
     conversation_history: Vec<ResponseItem>,
     arguments: &str,
-    guardian_policy: Option<&str>,
+    (guardian_policy, extra_policy): (Option<&str>, Option<&str>),
     guardian_config: &str,
     model_defaults: Option<GuardianV2ModelConfig>,
     source: ToolCallSource,
@@ -1078,6 +1078,7 @@ async fn sample_configured_conversation_history_with_delivery(
     // Capture policy independently of the newer live thread configuration.
     let mut config = test.config.clone();
     config.guardian_policy_config = guardian_policy;
+    config.guardian_extra_policy = extra_policy.map(str::to_owned);
     config.guardian_policy_revision = 0;
     config.model_provider = provider_info;
     config.features.enable(Feature::GuardianV2)?;
@@ -1453,20 +1454,21 @@ async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()>
 async fn contributor_renders_policy_inside_a_configured_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let extra_policy =
+        "Allow proactive drafting. Keep {{ tenant_policy_config }} and {{ extra_policy }} literal.";
     let configuration = r#"
-[auto_review]
-extra_policy = "Allow proactive drafting. Keep {{ tenant_policy_config }} and {{ extra_policy }} literal."
-
 [features.guardianv2]
 enabled = true
 classifier_instructions = "Predict future violations.\n# Security Policy\n{{ tenant_policy_config }}\nReturn action_risk."
 "#;
-    let (request, test, registry) = sample_configured_conversation_history(
+    let (request, test, registry, _) = sample_configured_conversation_history_with_delivery(
         Vec::new(),
         r#"{"path":"README.md"}"#,
-        Some(TEST_GUARDIAN_POLICY),
+        (Some(TEST_GUARDIAN_POLICY), Some(extra_policy)),
         configuration,
         /*model_defaults*/ None,
+        ToolCallSource::Direct,
+        MessagingSetup::Disabled,
     )
     .await?;
 
@@ -1485,7 +1487,7 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
             "content": [{
                 "type": "input_text",
                 "text": format!(
-                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\n\nAllow proactive drafting. Keep {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}} literal.\nReturn action_risk.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\n\n{extra_policy}\nReturn action_risk.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
                 ),
             }],
         })

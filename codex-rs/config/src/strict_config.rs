@@ -315,6 +315,12 @@ pub(crate) fn ignored_config_warning(
             ["auto_review", "experimental_denial_reconsideration_prompt"] => {
                 " Remove auto_review.experimental_denial_reconsideration_prompt from config.toml; Guardian retries replay the original request without a reconsideration prompt."
             }
+            ["auto_review", "experimental_policy_template"] => {
+                " Remove auto_review.experimental_policy_template from config.toml."
+            }
+            ["auto_review", "extra_policy"] => {
+                " To enforce additional Guardian rules, set guardian_extra_policy in managed requirements.toml."
+            }
             ["windows", "sandbox_private_desktop"] => {
                 " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
             }
