@@ -300,15 +300,15 @@ mod tests {
             .mark_backfill_complete(/*last_watermark*/ None)
             .await
             .expect("backfill should be complete");
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             selected_archived_path,
             Utc::now(),
             SessionSource::Cli,
-        );
-        builder.model_provider = Some(config.default_model_provider_id.clone());
-        builder.cwd = home.path().to_path_buf();
-        builder.cli_version = Some("test_version".to_string());
+        )
+        .with_model_provider(Some(config.default_model_provider_id.clone()))
+        .with_cwd(home.path().to_path_buf())
+        .with_cli_version("test_version".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.archived_at = Some(metadata.updated_at);
         metadata.section = Some(codex_state::ThreadSection {

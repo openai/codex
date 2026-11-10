@@ -1448,15 +1448,15 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
         ),
     ] {
         let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             codex_home.path().join(format!("{thread_id}.jsonl")),
             created_at,
             source,
-        );
-        builder.model_provider = Some(model_provider.to_string());
-        builder.cwd = codex_home.path().to_path_buf();
-        builder.cli_version = Some("0.0.0".to_string());
+        )
+        .with_model_provider(Some(model_provider.to_string()))
+        .with_cwd(codex_home.path().to_path_buf())
+        .with_cli_version("0.0.0".to_string());
         let mut metadata = builder.build(model_provider);
         metadata.preview = Some("child thread".to_string());
         metadata.first_user_message = metadata.preview.clone();

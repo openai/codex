@@ -40,28 +40,32 @@ pub(crate) fn builder_from_session_meta(
     rollout_path: &Path,
 ) -> Option<ThreadMetadataBuilder> {
     let created_at = parse_timestamp_to_utc(session_meta.meta.timestamp.as_str())?;
-    let mut builder = ThreadMetadataBuilder::new(
+    let builder = ThreadMetadataBuilder::new(
         session_meta.meta.id,
         rollout_path.to_path_buf(),
         created_at,
         session_meta.meta.source.clone(),
-    );
-    builder.creator_user_id = session_meta.meta.creator_user_id.clone();
-    builder.creator_account_id = session_meta.meta.creator_account_id.clone();
-    builder.history_mode = session_meta.meta.history_mode;
-    builder.originator =
-        (!session_meta.meta.originator.is_empty()).then(|| session_meta.meta.originator.clone());
-    builder.model_provider = session_meta.meta.model_provider.clone();
-    builder.agent_nickname = session_meta.meta.agent_nickname.clone();
-    builder.agent_role = session_meta.meta.agent_role.clone();
-    builder.agent_path = session_meta.meta.agent_path.clone();
-    builder.cwd = session_meta.meta.cwd.clone();
-    builder.cli_version = Some(session_meta.meta.cli_version.clone());
-    if let Some(git) = session_meta.git.as_ref() {
-        builder.git_sha = git.commit_hash.as_ref().map(|sha| sha.0.clone());
-        builder.git_branch = git.branch.clone();
-        builder.git_origin_url = git.repository_url.clone();
-    }
+    )
+    .with_creator_user_id(session_meta.meta.creator_user_id.clone())
+    .with_creator_account_id(session_meta.meta.creator_account_id.clone())
+    .with_history_mode(session_meta.meta.history_mode)
+    .with_originator(
+        (!session_meta.meta.originator.is_empty()).then(|| session_meta.meta.originator.clone()),
+    )
+    .with_model_provider(session_meta.meta.model_provider.clone())
+    .with_agent_nickname(session_meta.meta.agent_nickname.clone())
+    .with_agent_role(session_meta.meta.agent_role.clone())
+    .with_agent_path(session_meta.meta.agent_path.clone())
+    .with_cwd(session_meta.meta.cwd.clone())
+    .with_cli_version(session_meta.meta.cli_version.clone());
+    let builder = if let Some(git) = session_meta.git.as_ref() {
+        builder
+            .with_git_sha(git.commit_hash.as_ref().map(|sha| sha.0.clone()))
+            .with_git_branch(git.branch.clone())
+            .with_git_origin_url(git.repository_url.clone())
+    } else {
+        builder
+    };
     Some(builder)
 }
 

@@ -279,17 +279,18 @@ async fn index_attached_thread(
         .map_err(thread_store_io_error)?;
     let memory_mode = meta.meta.memory_mode.clone();
     let items = [RolloutItem::SessionMeta(Box::new(meta))];
-    let mut builder = codex_rollout::builder_from_items(&items, path).ok_or_else(|| {
+    let builder = codex_rollout::builder_from_items(&items, path).ok_or_else(|| {
         ThreadStoreError::Internal {
             message: format!("invalid attached thread metadata at {}", path.display()),
         }
     })?;
+    let mut metadata = Box::new(state.build_thread_metadata(&builder));
     if super::helpers::rollout_path_is_archived(&store.config.codex_home, path) {
-        builder.archived_at = Some(builder.updated_at.unwrap_or(builder.created_at));
+        metadata.archived_at = Some(metadata.created_at);
     }
     state
         .apply_rollout_items(
-            &builder,
+            metadata,
             &items,
             memory_mode.as_deref(),
             /*updated_at_override*/ None,

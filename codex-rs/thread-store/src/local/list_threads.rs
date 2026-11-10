@@ -426,15 +426,15 @@ mod tests {
             .await
             .expect("backfill should be complete");
         let created_at = Utc::now();
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             rollout_path,
             created_at,
             SessionSource::Cli,
-        );
-        builder.model_provider = Some(config.default_model_provider_id.clone());
-        builder.cwd = home.path().to_path_buf();
-        builder.cli_version = Some("test_version".to_string());
+        )
+        .with_model_provider(Some(config.default_model_provider_id.clone()))
+        .with_cwd(home.path().to_path_buf())
+        .with_cli_version("test_version".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "needle title".to_string();
         metadata.first_user_message = Some("plain preview".to_string());
@@ -495,16 +495,16 @@ mod tests {
             .mark_backfill_complete(/*last_watermark*/ None)
             .await
             .expect("backfill should be complete");
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             rollout_path,
             Utc::now(),
             SessionSource::Cli,
-        );
-        builder.history_mode = ThreadHistoryMode::Paginated;
-        builder.model_provider = Some(config.default_model_provider_id.clone());
-        builder.cwd = home.path().to_path_buf();
-        builder.cli_version = Some("test_version".to_string());
+        )
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_model_provider(Some(config.default_model_provider_id.clone()))
+        .with_cwd(home.path().to_path_buf())
+        .with_cli_version("test_version".to_string());
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.name = Some("canonical paginated name".to_string());
         metadata.title = "stale title name".to_string();

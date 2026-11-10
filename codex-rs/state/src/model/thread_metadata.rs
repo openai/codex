@@ -3,10 +3,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::SanitizedGitUrl;
 use codex_protocol::ThreadId;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use serde::Deserialize;
@@ -199,156 +196,6 @@ pub struct ThreadMetadata {
     pub git_origin_url: Option<SanitizedGitUrl>,
 }
 
-/// Builder data required to construct [`ThreadMetadata`] without parsing filenames.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadMetadataBuilder {
-    /// Originator recorded at creation, if available.
-    pub originator: Option<String>,
-    /// ChatGPT user that created the thread, if known.
-    pub creator_user_id: Option<String>,
-    /// ChatGPT account at creation, if known.
-    pub creator_account_id: Option<String>,
-    /// The thread identifier.
-    pub id: ThreadId,
-    /// The absolute rollout path on disk.
-    pub rollout_path: PathBuf,
-    /// The creation timestamp.
-    pub created_at: DateTime<Utc>,
-    /// The last update timestamp, if known.
-    pub updated_at: Option<DateTime<Utc>>,
-    /// The product recency timestamp, if known.
-    pub recency_at: Option<DateTime<Utc>>,
-    /// The session source.
-    pub source: SessionSource,
-    /// Persisted thread history contract selected when this thread was created.
-    pub history_mode: ThreadHistoryMode,
-    /// Optional analytics source classification for this thread.
-    pub thread_source: Option<ThreadSource>,
-    /// Optional random unique nickname assigned to the session.
-    pub agent_nickname: Option<String>,
-    /// Optional role (agent_role) assigned to the session.
-    pub agent_role: Option<String>,
-    /// Optional canonical agent path assigned to the session.
-    pub agent_path: Option<String>,
-    /// The model provider identifier, if known.
-    pub model_provider: Option<String>,
-    /// The working directory for the thread.
-    pub cwd: PathBuf,
-    /// Version of the CLI that created the thread.
-    pub cli_version: Option<String>,
-    /// The approval mode.
-    pub approval_mode: AskForApproval,
-    /// The archive timestamp, if the thread is archived.
-    pub archived_at: Option<DateTime<Utc>>,
-    /// The git commit SHA, if known.
-    pub git_sha: Option<String>,
-    /// The git branch name, if known.
-    pub git_branch: Option<String>,
-    /// The git origin URL, if known.
-    pub git_origin_url: Option<SanitizedGitUrl>,
-}
-
-impl ThreadMetadataBuilder {
-    /// Create a new builder with required fields and sensible defaults.
-    pub fn new(
-        id: ThreadId,
-        rollout_path: PathBuf,
-        created_at: DateTime<Utc>,
-        source: SessionSource,
-    ) -> Self {
-        Self {
-            id,
-            rollout_path,
-            created_at,
-            updated_at: None,
-            recency_at: None,
-            originator: None,
-            creator_user_id: None,
-            creator_account_id: None,
-            source,
-            history_mode: ThreadHistoryMode::Legacy,
-            thread_source: None,
-            agent_nickname: None,
-            agent_role: None,
-            agent_path: None,
-            model_provider: None,
-            cwd: PathBuf::new(),
-            cli_version: None,
-            approval_mode: AskForApproval::OnRequest,
-            archived_at: None,
-            git_sha: None,
-            git_branch: None,
-            git_origin_url: None,
-        }
-    }
-
-    /// Build canonical thread metadata, filling missing values from defaults.
-    pub fn build(&self, default_provider: &str) -> ThreadMetadata {
-        let source = crate::extract::enum_to_string(&self.source);
-        let approval_mode = crate::extract::enum_to_string(&self.approval_mode);
-        let created_at = canonicalize_datetime(self.created_at);
-        let updated_at = self
-            .updated_at
-            .map(canonicalize_datetime)
-            .unwrap_or(created_at);
-        let recency_at = self
-            .recency_at
-            .map(canonicalize_datetime)
-            .unwrap_or(updated_at);
-        let guardian_review = crate::is_guardian_review_source(&self.source);
-        ThreadMetadata {
-            attached_thread_parent_id: None,
-            originator: self.originator.clone(),
-            creator_user_id: self.creator_user_id.clone(),
-            creator_account_id: self.creator_account_id.clone(),
-            id: self.id,
-            rollout_path: self.rollout_path.clone(),
-            created_at,
-            updated_at,
-            recency_at,
-            source,
-            history_mode: self.history_mode,
-            thread_source: self.thread_source.clone(),
-            agent_nickname: self.agent_nickname.clone(),
-            agent_role: self.agent_role.clone(),
-            agent_path: self
-                .agent_path
-                .clone()
-                .or_else(|| self.source.get_agent_path().map(Into::into)),
-            model_provider: self
-                .model_provider
-                .clone()
-                .unwrap_or_else(|| default_provider.to_string()),
-            model: None,
-            reasoning_effort: None,
-            cwd: self.cwd.clone(),
-            cli_version: self.cli_version.clone().unwrap_or_default(),
-            title: if guardian_review {
-                crate::GUARDIAN_THREAD_TITLE.to_string()
-            } else {
-                String::new()
-            },
-            name: (guardian_review && self.history_mode == ThreadHistoryMode::Paginated)
-                .then(|| crate::GUARDIAN_THREAD_TITLE.to_string()),
-            preview: guardian_review.then(|| crate::GUARDIAN_THREAD_PREVIEW.to_string()),
-            sandbox_policy: serde_json::to_string(&PermissionProfile::read_only())
-                .unwrap_or_default(),
-            approval_mode,
-            tokens_used: 0,
-            first_user_message: None,
-            archived_at: self.archived_at.map(canonicalize_datetime),
-            section: None,
-            section_position: None,
-            section_entered_at: None,
-            project_id: None,
-            daybreak_enabled: None,
-            git_sha: self.git_sha.clone(),
-            git_branch: self.git_branch.clone(),
-            git_origin_url: self.git_origin_url.clone(),
-        }
-    }
-}
-
 impl ThreadMetadata {
     /// Preserve SQLite-owned Git fields when rollout-derived metadata is reconciled.
     pub fn prefer_existing_git_info(&mut self, existing: &Self) {
@@ -497,7 +344,7 @@ impl ThreadMetadata {
     }
 }
 
-fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
+pub(super) fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
     epoch_millis_to_datetime(datetime_to_epoch_millis(dt)).unwrap_or(dt)
 }
 

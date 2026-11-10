@@ -1151,10 +1151,16 @@ ON CONFLICT(id) DO UPDATE SET
         Ok(())
     }
 
-    /// Apply rollout items incrementally using the underlying database.
+    /// Build metadata using the provider configured for this state runtime.
+    pub fn build_thread_metadata(&self, builder: &ThreadMetadataBuilder) -> crate::ThreadMetadata {
+        builder.build(&self.default_provider)
+    }
+
+    /// Apply rollout items incrementally, keeping existing fields except the seed rollout path.
+    /// The seed stays boxed to keep callers' async frames small.
     pub async fn apply_rollout_items(
         &self,
-        builder: &ThreadMetadataBuilder,
+        mut metadata: Box<crate::ThreadMetadata>,
         items: &[RolloutItem],
         new_thread_memory_mode: Option<&str>,
         updated_at_override: Option<DateTime<Utc>>,
@@ -1162,11 +1168,13 @@ ON CONFLICT(id) DO UPDATE SET
         if items.is_empty() {
             return Ok(());
         }
-        let existing_metadata = self.get_thread(builder.id).await?;
-        let mut metadata = existing_metadata
-            .clone()
-            .unwrap_or_else(|| builder.build(&self.default_provider));
-        metadata.rollout_path = builder.rollout_path.clone();
+        let thread_id = metadata.id;
+        let existing_metadata = self.get_thread(thread_id).await?;
+        if let Some(existing) = existing_metadata.as_ref() {
+            let rollout_path = std::mem::take(&mut metadata.rollout_path);
+            *metadata = existing.clone();
+            metadata.rollout_path = rollout_path;
+        }
         for item in items {
             apply_rollout_item(&mut metadata, item, &self.default_provider);
         }
@@ -1175,7 +1183,7 @@ ON CONFLICT(id) DO UPDATE SET
         }
         let updated_at = match updated_at_override {
             Some(updated_at) => Some(updated_at),
-            None => file_modified_time_utc(builder.rollout_path.as_path()).await,
+            None => file_modified_time_utc(metadata.rollout_path.as_path()).await,
         };
         if let Some(updated_at) = updated_at {
             metadata.updated_at = updated_at;
@@ -1189,7 +1197,7 @@ ON CONFLICT(id) DO UPDATE SET
         upsert_result?;
         if let Some(memory_mode) = extract_memory_mode(items)
             && let Err(err) = self
-                .set_thread_memory_mode(builder.id, memory_mode.as_str())
+                .set_thread_memory_mode(thread_id, memory_mode.as_str())
                 .await
         {
             return Err(err);
@@ -3019,7 +3027,9 @@ mod tests {
 
         runtime
             .apply_rollout_items(
-                &builder, &items, /*new_thread_memory_mode*/ None,
+                Box::new(runtime.build_thread_metadata(&builder)),
+                &items,
+                /*new_thread_memory_mode*/ None,
                 /*updated_at_override*/ None,
             )
             .await
@@ -3102,7 +3112,9 @@ mod tests {
 
         runtime
             .apply_rollout_items(
-                &builder, &items, /*new_thread_memory_mode*/ None,
+                Box::new(runtime.build_thread_metadata(&builder)),
+                &items,
+                /*new_thread_memory_mode*/ None,
                 /*updated_at_override*/ None,
             )
             .await
@@ -3880,7 +3892,7 @@ mod tests {
 
         runtime
             .apply_rollout_items(
-                &builder,
+                Box::new(runtime.build_thread_metadata(&builder)),
                 &items,
                 /*new_thread_memory_mode*/ None,
                 Some(override_updated_at),

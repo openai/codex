@@ -77,13 +77,13 @@ async fn upsert_thread_metadata(
         .mark_backfill_complete(/*last_watermark*/ None)
         .await
         .unwrap();
-    let mut builder = ThreadMetadataBuilder::new(
+    let builder = ThreadMetadataBuilder::new(
         thread_id,
         rollout_path,
         Utc::now(),
         SessionSource::default(),
-    );
-    builder.cwd = codex_home.to_path_buf();
+    )
+    .with_cwd(codex_home.to_path_buf());
     let metadata = builder.build("test-provider");
     runtime.upsert_thread(&metadata).await.unwrap();
     runtime

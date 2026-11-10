@@ -689,10 +689,10 @@ pub async fn apply_rollout_items(
     let Some(ctx) = context else {
         return;
     };
-    let mut builder = match builder {
-        Some(builder) => builder.clone(),
+    let mut metadata = Box::new(match builder {
+        Some(builder) => builder.build(default_provider),
         None => match metadata::builder_from_items(items, rollout_path) {
-            Some(builder) => builder,
+            Some(builder) => builder.build(default_provider),
             None => {
                 warn!(
                     "state db apply_rollout_items missing builder during {stage}: {}",
@@ -702,14 +702,11 @@ pub async fn apply_rollout_items(
                 return;
             }
         },
-    };
-    if builder.model_provider.is_none() {
-        builder.model_provider = Some(default_provider.to_string());
-    }
-    builder.rollout_path = rollout_path.to_path_buf();
-    builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
+    });
+    metadata.rollout_path = rollout_path.to_path_buf();
+    metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     if let Err(err) = ctx
-        .apply_rollout_items(&builder, items, new_thread_memory_mode, updated_at_override)
+        .apply_rollout_items(metadata, items, new_thread_memory_mode, updated_at_override)
         .await
     {
         warn!(

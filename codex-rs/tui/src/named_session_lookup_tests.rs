@@ -95,14 +95,14 @@ fn thread_metadata(
     let created_at = chrono::DateTime::parse_from_rfc3339("2025-02-01T10:00:00Z")
         .expect("timestamp should parse")
         .with_timezone(&chrono::Utc);
-    let mut builder = ThreadMetadataBuilder::new(
+    let builder = ThreadMetadataBuilder::new(
         thread_id,
         rollout_path,
         created_at,
         serde_json::from_value(serde_json::json!("cli"))
             .expect("cli session source should deserialize"),
-    );
-    builder.cwd = config.codex_home.join("project").to_path_buf();
+    )
+    .with_cwd(config.codex_home.join("project").to_path_buf());
     let mut metadata = builder.build(config.model_provider_id.as_str());
     metadata.title = title.to_string();
     metadata.first_user_message = Some("preview text".to_string());

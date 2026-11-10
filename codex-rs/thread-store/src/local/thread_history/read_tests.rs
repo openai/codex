@@ -1661,13 +1661,13 @@ async fn store_with_mode(history_mode: ThreadHistoryMode) -> (TempDir, LocalThre
     )
     .await
     .expect("state runtime");
-    let mut builder = codex_state::ThreadMetadataBuilder::new(
+    let builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
         rollout_path,
         Utc::now(),
         SessionSource::Cli,
-    );
-    builder.history_mode = history_mode;
+    )
+    .with_history_mode(history_mode);
     runtime
         .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
         .await

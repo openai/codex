@@ -314,13 +314,13 @@ async fn indexed_ancestor_must_be_managed_and_owned_by_the_indexed_thread() {
     let end = history_position(&active, root, /*end_ordinal_exclusive*/ 3);
     write_rollout(&home, child, Some(end), /*next_ordinal*/ 2);
     let assert_lookup = async |indexed: &Path, expected: &Path| {
-        let mut metadata = codex_state::ThreadMetadataBuilder::new(
+        let metadata = codex_state::ThreadMetadataBuilder::new(
             root,
             indexed.to_owned(),
             chrono::Utc::now(),
             codex_protocol::protocol::SessionSource::Cli,
-        );
-        metadata.history_mode = ThreadHistoryMode::Paginated;
+        )
+        .with_history_mode(ThreadHistoryMode::Paginated);
         state
             .upsert_thread(&metadata.build("test-provider"))
             .await

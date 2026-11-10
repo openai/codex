@@ -1072,14 +1072,14 @@ mod tests {
         tokio::fs::write(&stale_rollout_path, "malformed session metadata\n")
             .await
             .expect("write stale rollout");
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             stale_rollout_path,
             chrono::Utc::now(),
             SessionSource::Cli,
-        );
-        builder.history_mode = ThreadHistoryMode::Paginated;
-        builder.cwd = home.path().to_path_buf();
+        )
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_cwd(home.path().to_path_buf());
         let mut metadata = builder.build("test-provider");
         metadata.preview = Some("original user message".to_string());
         metadata.first_user_message = Some("original user message".to_string());
@@ -1784,14 +1784,14 @@ mod tests {
             .await
             .expect("shutdown initial writer");
 
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
+        let builder = codex_state::ThreadMetadataBuilder::new(
             thread_id,
             home.path().join("missing-rollout.jsonl"),
             chrono::Utc::now(),
             SessionSource::Exec,
-        );
-        builder.history_mode = ThreadHistoryMode::Legacy;
-        builder.cwd = home.path().to_path_buf();
+        )
+        .with_history_mode(ThreadHistoryMode::Legacy)
+        .with_cwd(home.path().to_path_buf());
         let metadata = builder.build("test-provider");
         runtime
             .upsert_thread(&metadata)

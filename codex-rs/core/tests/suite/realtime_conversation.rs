@@ -254,15 +254,15 @@ async fn seed_recent_thread(
     // rollout path no longer exists, so create the placeholder path that the test metadata points
     // at without exercising rollout writing in this realtime-context test.
     std::fs::write(&rollout_path, "")?;
-    let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
+    let metadata_builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
         rollout_path,
         updated_at,
         SessionSource::Cli,
-    );
-    metadata_builder.cwd = test.workspace_path(format!("workspace-{slug}"));
-    metadata_builder.model_provider = Some("test-provider".to_string());
-    metadata_builder.git_branch = Some(format!("branch-{slug}"));
+    )
+    .with_cwd(test.workspace_path(format!("workspace-{slug}")))
+    .with_model_provider(Some("test-provider".to_string()))
+    .with_git_branch(Some(format!("branch-{slug}")));
     let mut metadata = metadata_builder.build("test-provider");
     metadata.title = title.to_string();
     metadata.first_user_message = Some(first_user_message.to_string());

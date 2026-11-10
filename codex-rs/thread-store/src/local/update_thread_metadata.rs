@@ -671,22 +671,23 @@ async fn metadata_for_missing_sqlite_row(
         .created_at
         .or(patch.updated_at)
         .unwrap_or_else(Utc::now);
-    let mut builder = ThreadMetadataBuilder::new(
+    let builder = ThreadMetadataBuilder::new(
         thread_id,
         rollout_path.to_path_buf(),
         created_at,
         patch.source.clone().unwrap_or(SessionSource::Unknown),
-    );
-    builder.model_provider = patch.model_provider.clone();
+    )
+    .with_model_provider(patch.model_provider.clone());
     let (history_mode, attached_thread_parent_id) =
         canonical_history_mode_and_attachment(store, thread_id, rollout_path).await?;
-    builder.history_mode = history_mode;
-    builder.thread_source = patch.thread_source.clone().flatten();
-    builder.agent_nickname = patch.agent_nickname.clone().flatten();
-    builder.agent_role = patch.agent_role.clone().flatten();
-    builder.agent_path = patch.agent_path.clone().flatten();
-    builder.cwd = patch.cwd.clone().map(normalize_cwd).unwrap_or_default();
-    builder.cli_version = patch.cli_version.clone();
+    let builder = builder
+        .with_history_mode(history_mode)
+        .with_thread_source(patch.thread_source.clone().flatten())
+        .with_agent_nickname(patch.agent_nickname.clone().flatten())
+        .with_agent_role(patch.agent_role.clone().flatten())
+        .with_agent_path(patch.agent_path.clone().flatten())
+        .with_cwd(patch.cwd.clone().map(normalize_cwd).unwrap_or_default())
+        .with_cli_version(patch.cli_version.clone().unwrap_or_default());
     let mut metadata = builder.build(store.config.default_model_provider_id.as_str());
     metadata.attached_thread_parent_id = attached_thread_parent_id;
     if rollout_path_archived {

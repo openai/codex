@@ -1795,13 +1795,13 @@ async fn summary_items_use_final_answers_and_ignore_nonterminal_messages() {
     )
     .await
     .expect("state runtime");
-    let mut builder = codex_state::ThreadMetadataBuilder::new(
+    let builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
         home.path().join("missing-rollout.jsonl"),
         Utc::now(),
         SessionSource::Cli,
-    );
-    builder.history_mode = ThreadHistoryMode::Paginated;
+    )
+    .with_history_mode(ThreadHistoryMode::Paginated);
     runtime
         .upsert_thread(&builder.build(config.default_model_provider_id.as_str()))
         .await

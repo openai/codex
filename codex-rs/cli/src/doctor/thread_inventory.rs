@@ -572,8 +572,8 @@ async fn thread_id_from_rollout(path: &Path) -> RolloutThreadId {
     // Legacy rollouts can omit session metadata, so use the validated filename fallback after
     // the bounded prefix without retaining the first item or loading the full history.
     let logical_path = codex_rollout::plain_rollout_path(path);
-    codex_rollout::builder_from_items(&[], &logical_path)
-        .map(|builder| RolloutThreadId::Id(builder.id.to_string()))
+    codex_rollout::thread_id_from_rollout_path(&logical_path)
+        .map(|id| RolloutThreadId::Id(id.to_string()))
         .unwrap_or(RolloutThreadId::MalformedName)
 }
 

@@ -8,6 +8,7 @@ mod rollout_migration_state;
 mod thread_attachment;
 mod thread_goal;
 mod thread_metadata;
+mod thread_metadata_builder;
 
 pub use backfill_state::BackfillState;
 pub use backfill_state::BackfillStatus;
@@ -44,12 +45,12 @@ pub use thread_metadata::ExtractionOutcome;
 pub use thread_metadata::SortDirection;
 pub use thread_metadata::SortKey;
 pub use thread_metadata::ThreadMetadata;
-pub use thread_metadata::ThreadMetadataBuilder;
 pub use thread_metadata::ThreadRelationFilter;
 pub use thread_metadata::ThreadSection;
 pub use thread_metadata::ThreadSectionAppearance;
 pub use thread_metadata::ThreadSectionsPage;
 pub use thread_metadata::ThreadsPage;
+pub use thread_metadata_builder::ThreadMetadataBuilder;
 
 pub(crate) use thread_goal::ThreadGoalRow;
 pub(crate) use thread_metadata::ThreadRow;

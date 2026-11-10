@@ -779,13 +779,13 @@ mod thread_processor_behavior_tests {
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<ThreadMetadata> {
         let thread_id = ThreadId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
-        let mut builder = ThreadMetadataBuilder::new(
+        let builder = ThreadMetadataBuilder::new(
             thread_id,
             PathBuf::from("/tmp/rollout.jsonl"),
             Utc::now(),
             codex_protocol::protocol::SessionSource::default(),
-        );
-        builder.model_provider = Some("mock_provider".to_string());
+        )
+        .with_model_provider(Some("mock_provider".to_string()));
         let mut metadata = builder.build("mock_provider");
         metadata.model = model.map(ToString::to_string);
         metadata.reasoning_effort = reasoning_effort;
