@@ -26,6 +26,7 @@ codex-sandboxing = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 ignore = { workspace = true }
+indexmap = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
 rustix = { workspace = true }
@@ -33,12 +34,15 @@ seccompiler = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 url = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 codex-core = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+hickory-proto = "=0.26.3"
 pretty_assertions = { workspace = true }
+socks5-protocol = { version = "=0.3.5", features = ["sync"] }
 tempfile = { workspace = true }
 test-case = "3.3.1"
 tokio = { workspace = true, features = [

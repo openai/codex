@@ -32,6 +32,7 @@ mod socks5;
 mod state;
 #[cfg(target_os = "macos")]
 mod system_dns;
+mod tcp_upstream;
 mod upstream;
 #[cfg(target_os = "windows")]
 mod windows_proxy_ingress;
@@ -136,3 +137,4 @@ pub use state::NetworkProxyConstraints;
 pub use state::PartialNetworkProxyConfig;
 pub use state::build_config_state;
 pub use state::validate_policy_against_constraints;
+pub use tcp_upstream::TcpUpstreamProxy;

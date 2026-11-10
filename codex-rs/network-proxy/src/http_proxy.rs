@@ -1,5 +1,6 @@
 use crate::attribution::BindConnectionAttribution;
 use crate::config::NetworkMode;
+use crate::connect_policy::ResolvedTargetsDenied;
 use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::connection_lifecycle::CancelOnShutdown;
 use crate::mitm;
@@ -14,7 +15,7 @@ use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
 use crate::network_policy::emit_allow_decision_audit_event;
 use crate::network_policy::emit_block_decision_audit_event;
-use crate::network_policy::evaluate_host_policy;
+use crate::network_policy::evaluate_host_policy_for_dial;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_HOOK_DENIED;
@@ -252,7 +253,12 @@ async fn http_connect_accept(
     match disconnect
         .track_http_request(
             started_at,
-            evaluate_host_policy(&app_state, policy_decider.as_ref(), &request),
+            evaluate_host_policy_for_dial(
+                &app_state,
+                policy_decider.as_ref(),
+                &request,
+                Some((&authority, req.extensions_mut())),
+            ),
         )
         .await
     {
@@ -788,7 +794,12 @@ async fn http_plain_proxy(
     match disconnect
         .track_http_request(
             started_at,
-            evaluate_host_policy(&app_state, policy_decider.as_ref(), &request),
+            evaluate_host_policy_for_dial(
+                &app_state,
+                policy_decider.as_ref(),
+                &request,
+                Some((&authority, req.extensions_mut())),
+            ),
         )
         .await
     {
@@ -1019,6 +1030,21 @@ async fn http_plain_proxy(
     remove_hop_by_hop_request_headers(req.headers_mut());
     match client.serve(req).await {
         Ok(resp) => Ok(resp),
+        Err(err) if ResolvedTargetsDenied::caused(&err) => {
+            let reason = crate::reasons::REASON_POLICY_DENIED;
+            Ok(json_blocked(
+                &host,
+                reason,
+                Some(&PolicyDecisionDetails {
+                    decision: NetworkPolicyDecision::Deny,
+                    source: NetworkDecisionSource::BaselinePolicy,
+                    reason,
+                    protocol: NetworkProtocol::Http,
+                    host: &host,
+                    port,
+                }),
+            ))
+        }
         Err(err) => {
             warn!("upstream request failed: {err}");
             Ok(text_response(StatusCode::BAD_GATEWAY, "upstream failure"))
@@ -1337,6 +1363,47 @@ mod tests {
             response.headers().get("x-proxy-error").unwrap(),
             "blocked-by-mitm-required"
         );
+    }
+
+    #[tokio::test]
+    async fn all_resolved_addresses_blocked_reports_a_policy_denial() {
+        let mut config = NetworkProxyConfig {
+            allow_local_binding: Some(true),
+            allow_upstream_proxy: false,
+            ..Default::default()
+        };
+        config.set_allowed_domains(vec!["localhost".into()]);
+        config.set_denied_domains(vec!["127.0.0.1".into(), "::1".into()]);
+        let mut state = network_proxy_state_for_policy(config);
+        let (tx, audit) = std::sync::mpsc::channel();
+        state.set_policy_audit_observer(Arc::new(move |event| tx.send(event).unwrap()));
+        let state = Arc::new(state);
+        let mut req = Request::builder()
+            .uri("http://localhost:8080/")
+            .header("host", "localhost:8080")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state.clone());
+        let response = http_plain_proxy(
+            /*policy_decider*/ None, /*environment_id*/ None, req,
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let decisions: Vec<_> = audit
+            .try_iter()
+            .map(|event| (event.decision, event.host, event.port))
+            .collect();
+        assert_eq!(
+            decisions,
+            [
+                ("allow".to_string(), "localhost".to_string(), 8080),
+                ("deny".to_string(), "localhost".to_string(), 8080),
+            ]
+        );
+        let blocked = state.drain_blocked().await.unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].host, "localhost");
     }
 
     #[tokio::test]

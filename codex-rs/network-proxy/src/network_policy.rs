@@ -366,6 +366,18 @@ pub(crate) async fn evaluate_host_policy(
     decider: Option<&Arc<dyn NetworkPolicyDecider>>,
     request: &NetworkPolicyRequest,
 ) -> Result<NetworkDecision> {
+    evaluate_host_policy_for_dial(state, decider, request, /*dial*/ None).await
+}
+
+pub(crate) async fn evaluate_host_policy_for_dial(
+    state: &NetworkProxyState,
+    decider: Option<&Arc<dyn NetworkPolicyDecider>>,
+    request: &NetworkPolicyRequest,
+    dial: Option<(
+        &rama_net::address::HostWithPort,
+        &mut rama_core::extensions::Extensions,
+    )>,
+) -> Result<NetworkDecision> {
     let execution_id = state.execution_id();
     let host_decision = state.host_blocked(&request.host, request.port).await?;
     let (decision, policy_override) = match host_decision {
@@ -456,6 +468,20 @@ pub(crate) async fn evaluate_host_policy(
         },
     );
 
+    if let Some((target, extensions)) = dial
+        && matches!(decision, NetworkDecision::Allow)
+    {
+        let authorization = if policy_override {
+            HostAuthorization::Approved
+        } else {
+            HostAuthorization::RequireAllowlist
+        };
+        extensions.insert(crate::connect_policy::DialPolicy::new(
+            target,
+            authorization,
+            request,
+        ));
+    }
     Ok(decision)
 }
 

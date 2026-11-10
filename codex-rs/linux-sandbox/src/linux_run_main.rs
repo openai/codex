@@ -266,8 +266,11 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
-        let (proxy_route_spec, proxy_controls) = if allow_network_for_proxy {
-            let (proxy_route_spec, controls) = prepare_host_proxy_route_spec()
+        let (proxy_route_spec, proxy_controls) = if let Some(context) = managed_network.as_ref() {
+            // Older explicit-proxy callers may omit the port list.
+            let ports =
+                (!context.loopback_ports.is_empty()).then_some(context.loopback_ports.as_slice());
+            let (proxy_route_spec, controls) = prepare_host_proxy_route_spec(ports)
                 .unwrap_or_else(|err| panic!("failed to prepare host proxy routing bridge: {err}"));
             (Some(proxy_route_spec), controls)
         } else {

@@ -28,6 +28,26 @@ impl Host {
     }
 }
 
+/// Interpret numeric host spellings without consulting DNS. System resolvers
+/// also accept shortened, integer, octal and hexadecimal IPv4 forms.
+pub(crate) fn numeric_host_address(host: &str) -> Option<IpAddr> {
+    let host = unscoped_ip_literal(host).unwrap_or(host);
+    if let Ok(ip) = host.parse() {
+        return Some(ip);
+    }
+    if !host.as_bytes().first()?.is_ascii_digit()
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() || matches!(b, b'.' | b'x' | b'X'))
+    {
+        return None;
+    }
+    match UrlHost::parse(host).ok()? {
+        UrlHost::Ipv4(ip) => Some(IpAddr::V4(ip)),
+        _ => None,
+    }
+}
+
 /// Returns true if the host is a loopback hostname or IP literal.
 pub fn is_loopback_host(host: &Host) -> bool {
     let host = host.as_str();

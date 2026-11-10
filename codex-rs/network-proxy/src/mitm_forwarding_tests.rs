@@ -118,6 +118,7 @@ async fn tls_origin_with_hook(
         max_body_bytes: MITM_MAX_BODY_BYTES,
     });
     let context = MitmRequestContext {
+        dial_policy: None,
         policy: MitmPolicyContext {
             target_host: "localhost".to_string(),
             target_port: port,

@@ -1,5 +1,6 @@
 use crate::attribution::BindConnectionAttribution;
 use crate::config::NetworkMode;
+use crate::connect_policy::DialPolicy;
 use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::connection_lifecycle::CancelOnShutdown;
 use crate::mitm;
@@ -13,6 +14,7 @@ use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
 use crate::network_policy::emit_block_decision_audit_event;
 use crate::network_policy::evaluate_host_policy;
+use crate::network_policy::evaluate_host_policy_for_dial;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_MITM_REQUIRED;
@@ -33,6 +35,7 @@ use rama_core::extensions::ExtensionsRef;
 use rama_core::graceful::ShutdownGuard;
 use rama_core::service::BoxService;
 use rama_core::service::service_fn;
+use rama_core::stream::rewind::Rewind;
 use rama_net::address::HostWithPort;
 use rama_net::client::EstablishedClientConnection;
 use rama_net::proxy::ProxyRequest;
@@ -157,15 +160,13 @@ pub(crate) fn socks5_proxy_service(
     environment_id: Option<String>,
     enable_socks5_udp: bool,
 ) -> BoxService<TcpStream, (), BoxError> {
-    let tcp_connector = TargetCheckedTcpConnector::new(state.clone());
     let policy_tcp_connector = service_fn({
         let policy_decider = policy_decider.clone();
         let environment_id = environment_id.clone();
         move |req: TcpRequest| {
-            let tcp_connector = tcp_connector.clone();
             let policy_decider = policy_decider.clone();
             let environment_id = environment_id.clone();
-            async move { handle_socks5_tcp(req, tcp_connector, policy_decider, environment_id).await }
+            async move { handle_socks5_tcp(req, policy_decider, environment_id).await }
         }
     });
 
@@ -198,8 +199,7 @@ pub(crate) fn socks5_proxy_service(
 }
 
 async fn handle_socks5_tcp(
-    req: TcpRequest,
-    tcp_connector: TargetCheckedTcpConnector,
+    mut req: TcpRequest,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     environment_id: Option<String>,
 ) -> Result<EstablishedClientConnection<Socks5TcpConnection, TcpRequest>, BoxError> {
@@ -330,7 +330,14 @@ async fn handle_socks5_tcp(
         exec_policy_hint: None,
     });
 
-    match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
+    match evaluate_host_policy_for_dial(
+        &app_state,
+        policy_decider.as_ref(),
+        &request,
+        Some((&target, req.extensions_mut())),
+    )
+    .await
+    {
         Ok(NetworkDecision::Deny {
             reason,
             source,
@@ -431,21 +438,25 @@ async fn handle_socks5_tcp(
 
     if let Some(mitm_state) = mitm_state {
         let client = client.as_deref().unwrap_or_default();
+        let mut extensions = Extensions::new();
+        if let Some(policy) = req.extensions().get::<DialPolicy>() {
+            extensions.insert(policy.clone());
+        }
         let conn = match socks_mitm_mode {
             SocksMitmMode::Disabled => None,
             SocksMitmMode::Enabled => Some(Socks5TcpConnection::Mitm {
                 target,
                 mode,
                 mitm: mitm_state,
-                extensions: Extensions::new(),
+                extensions,
             }),
             SocksMitmMode::DetectProtocol(protocols) => Some(Socks5TcpConnection::DetectProtocol {
                 protocols,
                 target,
                 mode,
                 mitm: mitm_state,
-                state: app_state,
-                extensions: Extensions::new(),
+                state: app_state.clone(),
+                extensions,
             }),
         };
         if let Some(conn) = conn {
@@ -458,13 +469,7 @@ async fn handle_socks5_tcp(
 
     info!("SOCKS upstream dial started (host={host}, port={port})");
     let connect_started_at = Instant::now();
-    let result = tcp_connector.serve(req).await.map(|connection| {
-        let EstablishedClientConnection { input, conn } = connection;
-        EstablishedClientConnection {
-            input,
-            conn: Socks5TcpConnection::Direct(conn),
-        }
-    });
+    let result = connect_opaque_tcp(app_state, req).await;
     match &result {
         Ok(_) => info!(
             "SOCKS upstream dial established (host={host}, port={port}, elapsed_ms={})",
@@ -476,6 +481,31 @@ async fn handle_socks5_tcp(
         ),
     }
     result
+}
+
+async fn connect_opaque_tcp(
+    state: Arc<NetworkProxyState>,
+    req: TcpRequest,
+) -> Result<EstablishedClientConnection<Socks5TcpConnection, TcpRequest>, BoxError> {
+    if let Some(proxy) = &state.tcp_upstream_proxy {
+        let tunnel = proxy
+            .connect(
+                &state,
+                &req.authority,
+                DialPolicy::authorization(req.extensions(), &req.authority),
+            )
+            .await?;
+        return Ok(EstablishedClientConnection {
+            input: req,
+            conn: Socks5TcpConnection::Tunnel(tunnel),
+        });
+    }
+    let EstablishedClientConnection { input, conn } =
+        TargetCheckedTcpConnector::new(state).serve(req).await?;
+    Ok(EstablishedClientConnection {
+        input,
+        conn: Socks5TcpConnection::Direct(conn),
+    })
 }
 
 /// Internal connector output for SOCKS5 TCP. MITM requests do not dial upstream before the
@@ -490,6 +520,7 @@ enum SocksMitmMode {
 #[derive(Debug)]
 enum Socks5TcpConnection {
     Direct(TcpStream),
+    Tunnel(Rewind<TcpStream>),
     Mitm {
         target: HostWithPort,
         mode: NetworkMode,
@@ -514,6 +545,7 @@ impl AsyncRead for Socks5TcpConnection {
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Self::Direct(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Tunnel(stream) => Pin::new(stream).poll_read(cx, buf),
             Self::Mitm { .. } | Self::DetectProtocol { .. } => Poll::Ready(Ok(())),
         }
     }
@@ -527,6 +559,7 @@ impl AsyncWrite for Socks5TcpConnection {
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             Self::Direct(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Tunnel(stream) => Pin::new(stream).poll_write(cx, buf),
             Self::Mitm { .. } | Self::DetectProtocol { .. } => Poll::Ready(Ok(buf.len())),
         }
     }
@@ -534,6 +567,7 @@ impl AsyncWrite for Socks5TcpConnection {
     fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Self::Direct(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Tunnel(stream) => Pin::new(stream).poll_flush(cx),
             Self::Mitm { .. } | Self::DetectProtocol { .. } => Poll::Ready(Ok(())),
         }
     }
@@ -541,6 +575,7 @@ impl AsyncWrite for Socks5TcpConnection {
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Self::Direct(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Tunnel(stream) => Pin::new(stream).poll_shutdown(cx),
             Self::Mitm { .. } | Self::DetectProtocol { .. } => Poll::Ready(Ok(())),
         }
     }
@@ -550,7 +585,7 @@ impl Socket for Socks5TcpConnection {
     fn local_addr(&self) -> io::Result<SocketAddr> {
         match self {
             Self::Direct(stream) => stream.local_addr(),
-            Self::Mitm { .. } | Self::DetectProtocol { .. } => {
+            Self::Tunnel(_) | Self::Mitm { .. } | Self::DetectProtocol { .. } => {
                 Ok(SocketAddr::from(([0, 0, 0, 0], 0)))
             }
         }
@@ -559,7 +594,7 @@ impl Socket for Socks5TcpConnection {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         match self {
             Self::Direct(stream) => stream.peer_addr(),
-            Self::Mitm { .. } | Self::DetectProtocol { .. } => {
+            Self::Tunnel(_) | Self::Mitm { .. } | Self::DetectProtocol { .. } => {
                 Ok(SocketAddr::from(([0, 0, 0, 0], 0)))
             }
         }
@@ -570,6 +605,7 @@ impl ExtensionsRef for Socks5TcpConnection {
     fn extensions(&self) -> &Extensions {
         match self {
             Self::Direct(stream) => stream.extensions(),
+            Self::Tunnel(stream) => stream.extensions(),
             Self::Mitm { extensions, .. } | Self::DetectProtocol { extensions, .. } => extensions,
         }
     }
@@ -579,6 +615,7 @@ impl ExtensionsMut for Socks5TcpConnection {
     fn extensions_mut(&mut self) -> &mut Extensions {
         match self {
             Self::Direct(stream) => stream.extensions_mut(),
+            Self::Tunnel(stream) => stream.extensions_mut(),
             Self::Mitm { extensions, .. } | Self::DetectProtocol { extensions, .. } => extensions,
         }
     }
@@ -589,13 +626,21 @@ async fn proxy_socks5_tcp(
 ) -> Result<(), BoxError> {
     let ProxyRequest { mut source, target } = request;
     match target {
-        Socks5TcpConnection::Direct(target) => StreamForwardService::default()
-            .serve(ProxyRequest { source, target })
-            .await
-            .map_err(Into::into),
+        target @ (Socks5TcpConnection::Direct(_) | Socks5TcpConnection::Tunnel(_)) => {
+            StreamForwardService::default()
+                .serve(ProxyRequest { source, target })
+                .await
+                .map_err(Into::into)
+        }
         Socks5TcpConnection::Mitm {
-            target, mode, mitm, ..
+            target,
+            mode,
+            mitm,
+            extensions,
         } => {
+            if let Some(policy) = extensions.get::<DialPolicy>() {
+                source.extensions_mut().insert(policy.clone());
+            }
             source.extensions_mut().insert(ProxyTarget(target));
             source.extensions_mut().insert(mode);
             source.extensions_mut().insert(mitm);
@@ -609,8 +654,11 @@ async fn proxy_socks5_tcp(
             mode,
             mitm,
             state,
-            ..
+            extensions,
         } => {
+            if let Some(policy) = extensions.get::<DialPolicy>() {
+                source.extensions_mut().insert(policy.clone());
+            }
             source.extensions_mut().insert(ProxyTarget(target.clone()));
             source.extensions_mut().insert(mode);
             source.extensions_mut().insert(mitm);
@@ -638,10 +686,11 @@ async fn proxy_socks5_tcp(
                     }
                     info!("SOCKS opaque upstream dial started (target={target})");
                     let connect_started_at = Instant::now();
-                    let EstablishedClientConnection { conn: upstream, .. } =
-                        TargetCheckedTcpConnector::new(state)
-                            .serve(TcpRequest::new(target.clone()))
-                            .await?;
+                    let EstablishedClientConnection { conn: upstream, .. } = connect_opaque_tcp(
+                        state,
+                        TcpRequest::new_with_extensions(target.clone(), extensions),
+                    )
+                    .await?;
                     info!(
                         "SOCKS opaque upstream dial established (target={target}, elapsed_ms={})",
                         connect_started_at.elapsed().as_millis()
@@ -927,10 +976,7 @@ mod tests {
 
         let (result, events) = capture_events(|| async {
             handle_socks5_tcp(
-                request,
-                TargetCheckedTcpConnector::new(state.clone()),
-                /*policy_decider*/ None,
-                /*environment_id*/ None,
+                request, /*policy_decider*/ None, /*environment_id*/ None,
             )
             .await
         })
@@ -971,10 +1017,7 @@ mod tests {
         request.extensions_mut().insert(state.clone());
 
         let result = handle_socks5_tcp(
-            request,
-            TargetCheckedTcpConnector::new(state),
-            /*policy_decider*/ None,
-            /*environment_id*/ None,
+            request, /*policy_decider*/ None, /*environment_id*/ None,
         )
         .await
         .expect("limited-mode HTTPS should use MITM");
@@ -997,10 +1040,7 @@ mod tests {
 
         let (result, events) = capture_events(|| async {
             handle_socks5_tcp(
-                request,
-                TargetCheckedTcpConnector::new(state),
-                /*policy_decider*/ None,
-                /*environment_id*/ None,
+                request, /*policy_decider*/ None, /*environment_id*/ None,
             )
             .await
         })
@@ -1048,10 +1088,7 @@ mod tests {
         request.extensions_mut().insert(state.clone());
 
         let result = handle_socks5_tcp(
-            request,
-            TargetCheckedTcpConnector::new(state),
-            /*policy_decider*/ None,
-            /*environment_id*/ None,
+            request, /*policy_decider*/ None, /*environment_id*/ None,
         )
         .await
         .expect("brokered TLS should defer MITM until protocol detection");
@@ -1076,10 +1113,7 @@ mod tests {
         request.extensions_mut().insert(state.clone());
 
         let err = handle_socks5_tcp(
-            request,
-            TargetCheckedTcpConnector::new(state),
-            /*policy_decider*/ None,
-            /*environment_id*/ None,
+            request, /*policy_decider*/ None, /*environment_id*/ None,
         )
         .await
         .expect_err("limited-mode HTTPS requires MITM");
@@ -1114,10 +1148,7 @@ mod tests {
         request.extensions_mut().insert(state.clone());
 
         let result = handle_socks5_tcp(
-            request,
-            TargetCheckedTcpConnector::new(state),
-            /*policy_decider*/ None,
-            /*environment_id*/ None,
+            request, /*policy_decider*/ None, /*environment_id*/ None,
         )
         .await
         .expect("hooked HTTPS should use MITM");
@@ -1149,10 +1180,7 @@ mod tests {
         request.extensions_mut().insert(state.clone());
 
         let err = handle_socks5_tcp(
-            request,
-            TargetCheckedTcpConnector::new(state),
-            /*policy_decider*/ None,
-            /*environment_id*/ None,
+            request, /*policy_decider*/ None, /*environment_id*/ None,
         )
         .await
         .expect_err("hooked non-HTTPS SOCKS should require MITM");

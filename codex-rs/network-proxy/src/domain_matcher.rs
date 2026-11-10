@@ -20,11 +20,13 @@ pub(crate) enum GlobalWildcard {
 #[derive(Clone)]
 pub struct DomainPatternSet {
     patterns: Arc<[Vec<u8>]>,
+    restricted_ip_literals: Arc<HashSet<IpAddr>>,
 }
 
 impl DomainPatternSet {
     pub(crate) fn new(patterns: &[String], global_wildcard: GlobalWildcard) -> Result<Self> {
         let mut compiled = Vec::new();
+        let mut restricted_ip_literals = HashSet::new();
         let mut seen = HashSet::new();
         for pattern in patterns {
             if global_wildcard == GlobalWildcard::Reject
@@ -73,17 +75,56 @@ impl DomainPatternSet {
                     continue;
                 }
                 ensure!(!candidate.is_empty(), "domain pattern is empty");
+                // Keep exact address equivalence separate from ordinary allowlist
+                // matching. A scoped IP rule must never apply to other interfaces.
+                if !candidate.contains('%')
+                    && let Some(ip) = crate::policy::numeric_host_address(&candidate)
+                {
+                    restricted_ip_literals.insert(ip.to_canonical());
+                }
                 compiled.push(candidate.into_bytes());
             }
         }
         Ok(Self {
             patterns: compiled.into(),
+            restricted_ip_literals: Arc::new(restricted_ip_literals),
         })
     }
 
     pub fn is_match(&self, host: impl AsRef<str>) -> bool {
         let host = host.as_ref().as_bytes();
         self.patterns.iter().any(|pattern| matches(pattern, host))
+    }
+
+    /// Conservatively include wildcard patterns that could match a canonical IP spelling.
+    pub(crate) fn may_restrict_ip(&self) -> bool {
+        !self.restricted_ip_literals.is_empty()
+            || self.patterns.iter().any(|p| {
+                p.iter().any(|b| matches!(b, b'*' | b'?'))
+                    && p.iter()
+                        .all(|b| b.is_ascii_hexdigit() || matches!(b, b':' | b'.' | b'*' | b'?'))
+                    // Dots occur only in the decimal IPv4 tail, including mapped IPv6.
+                    && p.iter().skip_while(|b| **b != b'.')
+                        .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'*' | b'?'))
+            })
+    }
+
+    /// An IPv4 address and its IPv4-mapped IPv6 form can dial the same peer.
+    /// Check both spellings for restrictive rules, without expanding allowlists.
+    pub(crate) fn restricts_ip(&self, ip: IpAddr) -> bool {
+        if self.patterns.is_empty() {
+            return false;
+        }
+        let ip = ip.to_canonical();
+        if self.restricted_ip_literals.contains(&ip) {
+            return true;
+        }
+        match ip {
+            IpAddr::V4(ip) => {
+                self.is_match(ip.to_string()) || self.is_match(ip.to_ipv6_mapped().to_string())
+            }
+            IpAddr::V6(ip) => self.is_match(ip.to_string()),
+        }
     }
 }
 
