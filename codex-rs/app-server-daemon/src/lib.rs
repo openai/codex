@@ -72,7 +72,9 @@ const STATE_DIR_NAME: &str = "app-server-daemon";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LifecycleCommand {
-    Start,
+    Start {
+        feature_overrides: BTreeMap<String, bool>,
+    },
     Restart {
         feature_overrides: BTreeMap<String, bool>,
     },
@@ -243,7 +245,7 @@ pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
     #[cfg(windows)]
     if matches!(
         command,
-        LifecycleCommand::Start | LifecycleCommand::Restart { .. }
+        LifecycleCommand::Start { .. } | LifecycleCommand::Restart { .. }
     ) {
         backend::windows::ensure_not_elevated()?;
     }
@@ -423,8 +425,8 @@ impl Daemon {
         let _operation_lock = self.acquire_operation_lock().await?;
         let selected = self.current_installation()?;
         match command {
-            LifecycleCommand::Start => selected
-                .start(&BTreeMap::new())
+            LifecycleCommand::Start { feature_overrides } => selected
+                .start(&feature_overrides)
                 .await
                 .map_err(|err| err.error),
             LifecycleCommand::Restart { feature_overrides } => {
@@ -1503,7 +1505,9 @@ mod tests {
         )
         .expect("legacy saved threads");
         daemon
-            .run(super::LifecycleCommand::Start)
+            .run(super::LifecycleCommand::Start {
+                feature_overrides: Default::default(),
+            })
             .await
             .expect_err("missing backend binary");
         assert!(!daemon.recovery_file().expect("recovery path").exists());

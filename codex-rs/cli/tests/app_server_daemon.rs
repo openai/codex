@@ -123,6 +123,42 @@ fn bootstrap_reports_updater_bind_failure() -> Result<()> {
 }
 
 #[test]
+fn start_applies_feature_overrides_only_when_launching() -> Result<()> {
+    let daemon = TestDaemon::new()?;
+    let settings_path = daemon.home.path().join("app-server-daemon/settings.json");
+    std::fs::write(
+        &settings_path,
+        br#"{"updater":{"autoUpdateEnabled":false}}"#,
+    )?;
+    let mut previous_pid = None;
+    for (prefer_mxc, expected_status) in [(true, "started"), (false, "alreadyRunning")] {
+        let output = daemon
+            .command()
+            .args(["app-server", "daemon", "start", "-c"])
+            .arg(format!("features.prefer_mxc={prefer_mxc}"))
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(output["status"], expected_status);
+        let settings: Value = serde_json::from_slice(&std::fs::read(&settings_path)?)?;
+        assert_eq!(
+            settings["featureOverrides"],
+            serde_json::json!({"prefer_mxc": true})
+        );
+        let pid = daemon.pid("app-server.pid")?;
+        if let Some(previous_pid) = previous_pid {
+            assert_eq!(pid, previous_pid);
+        }
+        previous_pid = Some(pid);
+    }
+    Ok(())
+}
+
+#[test]
 fn explicit_restart_applies_feature_overrides_and_preserves_saved_settings() -> Result<()> {
     let daemon = TestDaemon::new()?;
     let settings_path = daemon.home.path().join("app-server-daemon/settings.json");
@@ -187,23 +223,24 @@ fn explicit_restart_applies_feature_overrides_and_preserves_saved_settings() -> 
     }
     // Non-toggle config keys must fail before stopping the daemon or saving settings.
     let saved_settings = std::fs::read(&settings_path)?;
-    let output = daemon
-        .command()
-        .args([
-            "app-server",
-            "daemon",
-            "restart",
-            "--enable",
-            "tool_registry",
-        ])
-        .output()?;
-    assert!(!output.status.success());
+    let mut errors = String::new();
+    for action in ["start", "restart"] {
+        let output = daemon
+            .command()
+            .args(["app-server", "daemon", action, "--enable", "tool_registry"])
+            .output()?;
+        assert!(!output.status.success());
+        errors.push_str(&String::from_utf8(output.stderr)?);
+        assert_eq!(std::fs::read(&settings_path)?, saved_settings);
+        assert_eq!(Some(u64::from(daemon.pid("app-server.pid")?)), previous_pid);
+    }
     insta::assert_snapshot!(
-        String::from_utf8(output.stderr)?,
-        @"Error: daemon restart requires a boolean feature toggle: tool_registry"
+        errors,
+        @"
+        Error: daemon start requires a boolean feature toggle: tool_registry
+        Error: daemon restart requires a boolean feature toggle: tool_registry
+        "
     );
-    assert_eq!(std::fs::read(&settings_path)?, saved_settings);
-    assert_eq!(Some(u64::from(daemon.pid("app-server.pid")?)), previous_pid);
     assert_eq!(daemon.lifecycle("version")?["status"], "running");
     Ok(())
 }

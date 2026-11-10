@@ -1329,9 +1329,6 @@ async fn dispatch_cli(
                     }
                 }
                 Some(AppServerSubcommand::Daemon(daemon_cli)) => match daemon_cli.subcommand {
-                    AppServerDaemonSubcommand::Start => {
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Start).await?;
-                    }
                     AppServerDaemonSubcommand::Bootstrap(bootstrap_cli) => {
                         let output =
                             codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
@@ -1340,7 +1337,10 @@ async fn dispatch_cli(
                             .await?;
                         println!("{}", serde_json::to_string(&output)?);
                     }
-                    AppServerDaemonSubcommand::Restart => {
+                    command @ (AppServerDaemonSubcommand::Start
+                    | AppServerDaemonSubcommand::Restart) => {
+                        let start = matches!(command, AppServerDaemonSubcommand::Start);
+                        let action = if start { "start" } else { "restart" };
                         let overrides = root_config_overrides
                             .parse_overrides()
                             .map_err(anyhow::Error::msg)?;
@@ -1369,18 +1369,20 @@ async fn dispatch_cli(
                             let feature =
                                 codex_features::feature_for_key(name).ok_or_else(|| {
                                     anyhow::anyhow!(
-                                        "daemon restart requires a boolean feature toggle: {name}"
+                                        "daemon {action} requires a boolean feature toggle: {name}"
                                     )
                                 })?;
                             let enabled = value.as_bool().ok_or_else(|| {
-                                anyhow::anyhow!("daemon restart requires a boolean enablement for features.{name}")
+                                anyhow::anyhow!("daemon {action} requires a boolean enablement for features.{name}")
                             })?;
                             feature_overrides.insert(feature.key().to_string(), enabled);
                         }
-                        print_app_server_daemon_output(AppServerLifecycleCommand::Restart {
-                            feature_overrides,
-                        })
-                        .await?;
+                        let command = if start {
+                            AppServerLifecycleCommand::Start { feature_overrides }
+                        } else {
+                            AppServerLifecycleCommand::Restart { feature_overrides }
+                        };
+                        print_app_server_daemon_output(command).await?;
                     }
                     AppServerDaemonSubcommand::Update {
                         from_cli: true,
