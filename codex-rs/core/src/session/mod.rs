@@ -1,5 +1,6 @@
 pub(crate) mod startup;
 
+use crate::McpRefreshReason;
 use crate::PromptCacheKey;
 use crate::WithTurnExtensionData;
 use crate::runtime_auth::RuntimeAuthSlot;
@@ -2207,7 +2208,7 @@ impl Session {
                     != updated.step_settings.service_tier;
             let mcp_inputs_changed = self.mcp_inputs_differ(&state.session_configuration, &updated);
             if mcp_inputs_changed {
-                self.mark_mcp_runtime_dirty();
+                self.mark_mcp_runtime_dirty(McpRefreshReason::SessionMcpInputsChanged);
             }
             // Save new environment defaults for future turns. The running turn keeps its own.
             windows_sandbox_changed =
@@ -4378,8 +4379,11 @@ impl Session {
                 )
                 .await
             };
-            if inventory_changed || discovery_recovered {
-                self.mark_mcp_runtime_dirty();
+            if inventory_changed {
+                self.mark_mcp_runtime_dirty(McpRefreshReason::ExecutorCapabilityInventoryChanged);
+            }
+            if discovery_recovered {
+                self.mark_mcp_runtime_dirty(McpRefreshReason::ExecutorCapabilityDiscoveryRecovered);
             }
             let extension_data =
                 codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());

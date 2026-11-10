@@ -3,6 +3,7 @@ use super::account_processor::EnterpriseLoginTarget;
 use super::thread_input::ensure_direct_input_allowed;
 use super::*;
 use codex_config::types::McpServerAuth;
+use codex_core::McpRefreshReason;
 use codex_mcp::McpServerSource;
 use codex_mcp::ReadResourceRequestParams;
 use codex_mcp::ema_auth_scope;
@@ -351,7 +352,9 @@ impl McpRequestProcessor {
                 Err(err) => (false, Some(err.to_string())),
             };
             if success && !enterprise {
-                thread_manager.invalidate_mcp_runtimes().await;
+                thread_manager
+                    .invalidate_mcp_runtimes_for(McpRefreshReason::McpOAuthLoginCompleted)
+                    .await;
             }
 
             let notification = ServerNotification::McpServerOauthLoginCompleted(

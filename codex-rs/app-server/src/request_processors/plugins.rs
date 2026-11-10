@@ -9,6 +9,7 @@ use codex_app_server_protocol::PluginSharePrincipalRole;
 use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginsConfigToml;
+use codex_core::McpRefreshReason;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::PluginListBackgroundTaskOptions;
 use codex_core_plugins::PluginMarketplaceContext;
@@ -533,9 +534,11 @@ impl PluginRequestProcessor {
         Arc::clone(&self.on_effective_plugins_changed)
     }
 
-    async fn on_effective_plugins_changed(&self) {
+    async fn on_effective_plugins_changed(&self, reason: McpRefreshReason) {
         self.clear_plugin_related_caches();
-        self.thread_manager.invalidate_mcp_runtimes().await;
+        self.thread_manager
+            .invalidate_mcp_runtimes_for(reason)
+            .await;
         self.thread_manager.refresh_hook_runtimes().await;
     }
 
@@ -596,7 +599,8 @@ impl PluginRequestProcessor {
                 .refresh_non_curated_plugin_cache_for_context(&context)
                 .await
         {
-            self.on_effective_plugins_changed().await;
+            self.on_effective_plugins_changed(McpRefreshReason::NonCuratedPluginCacheRefreshed)
+                .await;
         }
         let include_vertical = context.global_config.plugins_enabled
             && marketplace_kinds.contains(&PluginListMarketplaceKind::Vertical);
@@ -875,6 +879,7 @@ impl PluginRequestProcessor {
             &context.global_config,
             auth.clone(),
             Some(self.effective_plugins_changed_callback()),
+            codex_core_plugins::InstalledPluginSyncSource::PluginInstalled,
         );
 
         let (mut data, marketplace_load_errors) = self
@@ -1584,7 +1589,9 @@ impl PluginRequestProcessor {
 
         self.clear_plugin_related_caches();
         reload_user_config(&self.config_manager, &self.thread_manager).await;
-        self.thread_manager.invalidate_mcp_runtimes().await;
+        self.thread_manager
+            .invalidate_mcp_runtimes_for(McpRefreshReason::PluginInstalled)
+            .await;
         self.thread_manager.refresh_hook_runtimes().await;
 
         let plugin_mcp_servers = load_configured_plugin_mcp_servers(
@@ -2037,7 +2044,9 @@ impl PluginRequestProcessor {
                     Err(err) => (false, Some(err.to_string())),
                 };
                 if success {
-                    thread_manager.invalidate_mcp_runtimes().await;
+                    thread_manager
+                        .invalidate_mcp_runtimes_for(McpRefreshReason::PluginOAuthLoginCompleted)
+                        .await;
                 }
 
                 let notification = ServerNotification::McpServerOauthLoginCompleted(
@@ -2074,7 +2083,10 @@ impl PluginRequestProcessor {
             .await
             .map_err(Self::plugin_uninstall_error)?;
         match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(_) => self.on_effective_plugins_changed().await,
+            Ok(_) => {
+                self.on_effective_plugins_changed(McpRefreshReason::PluginUninstalled)
+                    .await
+            }
             Err(err) => {
                 warn!(
                     "failed to reload config after plugin uninstall, clearing plugin-related caches only: {err:?}"
@@ -2169,7 +2181,8 @@ impl PluginRequestProcessor {
         self.analytics_events_client
             .track_plugin_uninstalled(outcome.telemetry);
         if outcome.effective_plugins_changed {
-            self.on_effective_plugins_changed().await;
+            self.on_effective_plugins_changed(McpRefreshReason::RemotePluginUninstalled)
+                .await;
         }
         if let Some(err) = outcome.cache_removal_error {
             return Err(remote_plugin_catalog_error_to_jsonrpc(

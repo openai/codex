@@ -1,5 +1,6 @@
 //! Activates an admitted task's plugin selection without changing pending settings.
 
+use crate::McpRefreshReason;
 use std::sync::Arc;
 
 use super::Session;
@@ -11,7 +12,7 @@ impl Session {
             let mut state = self.state.lock().await;
             if state.active_disabled_plugin_ids != turn_context.disabled_plugin_ids {
                 state.active_disabled_plugin_ids = turn_context.disabled_plugin_ids.clone();
-                self.mark_mcp_runtime_dirty();
+                self.mark_mcp_runtime_dirty(McpRefreshReason::DisabledPluginSelectionChanged);
             }
             Arc::clone(&state.session_configuration.original_config_do_not_use)
         };

@@ -1,4 +1,5 @@
 use super::*;
+use crate::McpRefreshReason;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
 use crate::session::Submission;
@@ -612,7 +613,7 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         .acquire()
         .await
         .expect("MCP refresh lock");
-    session.mark_mcp_runtime_dirty();
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
     let capture_cancel = CancellationToken::new();
     let mut during = Box::pin(tokio::task::unconstrained(
         session.capture_step_context(Arc::clone(&turn), &capture_cancel),

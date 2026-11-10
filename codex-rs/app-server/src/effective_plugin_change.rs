@@ -1,3 +1,4 @@
+use codex_core::McpRefreshReason;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -32,8 +33,14 @@ pub(crate) fn effective_plugins_changed_callback(
         thread_manager.skills_service().clear_cache();
 
         let refresh_thread_manager = Arc::clone(&thread_manager);
+        let reason = change.metadata_change_id.map_or(
+            McpRefreshReason::EffectivePluginsChanged,
+            McpRefreshReason::InstalledPluginMetadata,
+        );
         tokio::spawn(async move {
-            refresh_thread_manager.invalidate_mcp_runtimes().await;
+            refresh_thread_manager
+                .invalidate_mcp_runtimes_for(reason)
+                .await;
             refresh_thread_manager.refresh_hook_runtimes().await;
         });
 

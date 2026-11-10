@@ -121,6 +121,13 @@ fn installed_ordering_remains_significant() {
     let mut current = previous.clone();
     current.reverse();
     assert!(!installed_plugin_metadata_eq(&previous, &current));
+    assert_eq!(
+        installed_plugin_metadata_changes(&previous, &current),
+        BTreeMap::from([
+            (previous[0].id.clone(), vec!["position"]),
+            (previous[1].id.clone(), vec!["position"]),
+        ])
+    );
 }
 
 #[test]
@@ -178,4 +185,34 @@ fn catalog_display_reordering_does_not_invalidate() {
         &previous_catalog,
         &catalog(&current)
     ));
+}
+
+#[test]
+fn diagnostics_attribute_fields_by_plugin_id_across_membership_changes() {
+    let previous = [
+        plugin("old"),
+        RemoteInstalledPlugin {
+            id: "removed".into(),
+            ..plugin("old")
+        },
+    ];
+    let mut updated = previous[0].clone();
+    updated.enabled = !updated.enabled;
+    updated.version = Some("2".into());
+    let id = updated.id.clone();
+    let current = [
+        RemoteInstalledPlugin {
+            id: "added".into(),
+            ..plugin("new")
+        },
+        updated,
+    ];
+    assert_eq!(
+        installed_plugin_metadata_changes(&previous, &current),
+        std::collections::BTreeMap::from([
+            ("added".into(), vec!["added"]),
+            ("removed".into(), vec!["removed"]),
+            (id, vec!["version", "enabled"]),
+        ])
+    );
 }

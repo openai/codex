@@ -8,6 +8,7 @@ use codex_app_server_protocol::AccountSessionsListParams;
 use codex_app_server_protocol::AccountSessionsResponse;
 use codex_app_server_protocol::AccountSessionsSwitchParams;
 use codex_app_server_protocol::AccountSessionsSwitchResponse;
+use codex_core::McpRefreshReason;
 
 impl AccountRequestProcessor {
     pub(crate) async fn list_account_sessions(
@@ -204,7 +205,9 @@ impl AccountRequestProcessor {
                 "Workspace validation failed: {error}"
             )));
         }
-        self.thread_manager.invalidate_mcp_runtimes().await;
+        self.thread_manager
+            .invalidate_mcp_runtimes_for(McpRefreshReason::AccountWorkspaceSwitched)
+            .await;
         self.model_catalog.invalidate().await;
         Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,

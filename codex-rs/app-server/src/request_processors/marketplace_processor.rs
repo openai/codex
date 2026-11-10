@@ -1,5 +1,6 @@
 use super::*;
 use crate::plugin_config_reload;
+use codex_core::McpRefreshReason;
 
 #[derive(Clone)]
 pub(crate) struct MarketplaceRequestProcessor {
@@ -89,7 +90,9 @@ impl MarketplaceRequestProcessor {
         if !outcome.upgraded_roots.is_empty() {
             self.thread_manager.plugins_manager().clear_cache();
             self.thread_manager.skills_service().clear_cache();
-            self.thread_manager.invalidate_mcp_runtimes().await;
+            self.thread_manager
+                .invalidate_mcp_runtimes_for(McpRefreshReason::MarketplaceUpgraded)
+                .await;
             self.thread_manager.refresh_hook_runtimes().await;
         }
 

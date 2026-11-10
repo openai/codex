@@ -254,9 +254,19 @@ impl PluginsConfigInput {
     }
 }
 
+/// Operation that requested a background sync of installed plugin bundles.
+#[derive(Clone, Copy, Debug)]
+pub enum InstalledPluginSyncSource {
+    PluginInstalled,
+    PluginList,
+    Startup,
+}
+
 /// Effective-plugin changes that downstream composition layers may act on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EffectivePluginsChange {
+    /// Joins this notification to its installed-plugin cache publication in diagnostics.
+    pub metadata_change_id: Option<uuid::Uuid>,
     /// Remote bundles installed or updated by background installed-plugin sync.
     pub materialized_remote_plugins: Vec<RemotePluginMaterialization>,
 }
@@ -318,6 +328,10 @@ struct RemoteInstalledPluginsCache {
     needs_effective_plugins_refresh: bool,
     plugins: Option<Vec<RemoteInstalledPlugin>>,
     display_assets: InstalledPluginDisplayAssets,
+}
+
+struct InstalledPluginCacheUpdate {
+    metadata_change_id: Option<uuid::Uuid>,
 }
 
 enum RemoteInstalledPluginsCachePublication {
@@ -1435,7 +1449,7 @@ impl PluginsManager {
             &plugins,
             visible_marketplaces,
         );
-        let Some(changed) = self.write_remote_installed_plugins_cache_snapshot(
+        let Some(update) = self.write_remote_installed_plugins_cache_snapshot(
             generation,
             plugins,
             auth,
@@ -1453,8 +1467,13 @@ impl PluginsManager {
                 )
                 .unwrap_or(marketplaces));
         };
-        if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
-            on_effective_plugins_changed(EffectivePluginsChange::default());
+        if update.metadata_change_id.is_some()
+            && let Some(on_effective_plugins_changed) = on_effective_plugins_changed
+        {
+            on_effective_plugins_changed(EffectivePluginsChange {
+                metadata_change_id: update.metadata_change_id,
+                ..Default::default()
+            });
         }
         Ok(self
             .build_remote_installed_plugin_marketplaces_from_cache_for_auth(
@@ -1545,7 +1564,7 @@ impl PluginsManager {
         plugins: Vec<RemoteInstalledPlugin>,
         auth: Option<&CodexAuth>,
         publication: RemoteInstalledPluginsCachePublication,
-    ) -> Option<bool> {
+    ) -> Option<InstalledPluginCacheUpdate> {
         let auth_identity = RemoteInstalledPluginsAuthIdentity::from_auth(auth);
         if !self.remote_installed_plugins_auth_is_current(&auth_identity) {
             return None;
@@ -1584,23 +1603,32 @@ impl PluginsManager {
                 InstalledPluginDisplayAssets::Include
             }
         };
-        if cache.plugins.as_ref() == Some(&plugins) {
-            drop(cache);
-            if needs_effective_plugins_refresh {
-                self.clear_loaded_plugins_cache();
-            }
-            return Some(needs_effective_plugins_refresh);
-        }
-        let metadata_changed = cache.plugins.as_ref().is_none_or(|previous| {
-            !crate::remote_metadata::installed_plugin_metadata_eq(previous, &plugins)
-        });
-        cache.plugins = Some(plugins);
-        drop(cache);
+        let previous = cache.plugins.as_deref();
+        let payload_changed = previous != Some(plugins.as_slice());
+        let metadata_changed = payload_changed
+            && previous.is_none_or(|old| {
+                !crate::remote_metadata::installed_plugin_metadata_eq(old, &plugins)
+            });
         let changed = needs_effective_plugins_refresh || metadata_changed;
-        if changed {
+        let metadata_change_id = changed.then(uuid::Uuid::new_v4);
+        let initial_snapshot = previous.is_none();
+        let changes = if metadata_changed && tracing::enabled!(tracing::Level::INFO) {
+            crate::remote_metadata::installed_plugin_metadata_changes(
+                previous.unwrap_or_default(),
+                &plugins,
+            )
+        } else {
+            Default::default()
+        };
+        if payload_changed {
+            cache.plugins = Some(plugins);
+        }
+        drop(cache);
+        if let Some(change_id) = metadata_change_id {
+            tracing::info!(%change_id, ?changes, initial_snapshot, reconciliation_retry = needs_effective_plugins_refresh, is_reconcile, "installed plugin runtime metadata invalidated");
             self.clear_loaded_plugins_cache();
         }
-        Some(changed)
+        Some(InstalledPluginCacheUpdate { metadata_change_id })
     }
 
     #[cfg(test)]
@@ -1616,6 +1644,8 @@ impl PluginsManager {
             RemoteInstalledPluginsCachePublication::Refresh(InstalledPluginDisplayAssets::Include),
         )
         .expect("test cache generation should remain current")
+        .metadata_change_id
+        .is_some()
     }
 
     pub fn clear_remote_installed_plugins_cache(&self) -> bool {
@@ -1727,6 +1757,7 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<EffectivePluginsChangedCallback>,
+        source: InstalledPluginSyncSource,
     ) {
         if !config.plugins_enabled {
             return;
@@ -1748,18 +1779,21 @@ impl PluginsManager {
                 .reconcile_remote_installed_plugins_after_acquiring_gate(&config, Some(&auth))
                 .await;
             match result {
-                Ok((outcome, effective_plugins_changed)) => {
+                Ok((outcome, update)) => {
                     tracing::info!(
                         materialized_remote_plugins = ?outcome.materialized_remote_plugins,
                         changed_plugins = ?outcome.changed_plugins,
                         failed_remote_plugin_ids = ?outcome.failed_remote_plugin_ids,
                         failed_materialization_remote_plugin_ids = ?outcome.failed_materialization_remote_plugin_ids,
+                        ?source,
+                        metadata_change_id = ?update.metadata_change_id,
                         "completed remote installed plugin bundle sync"
                     );
-                    if (effective_plugins_changed || !outcome.changed_plugins.is_empty())
+                    if (update.metadata_change_id.is_some() || !outcome.changed_plugins.is_empty())
                         && let Some(on_effective_plugins_changed) = on_effective_plugins_changed
                     {
                         on_effective_plugins_changed(EffectivePluginsChange {
+                            metadata_change_id: update.metadata_change_id,
                             materialized_remote_plugins: outcome.materialized_remote_plugins,
                         });
                     }
@@ -1817,8 +1851,13 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
         auth: Option<&CodexAuth>,
-    ) -> Result<(RemoteInstalledPluginBundleSyncOutcome, bool), RemoteInstalledPluginBundleSyncError>
-    {
+    ) -> Result<
+        (
+            RemoteInstalledPluginBundleSyncOutcome,
+            InstalledPluginCacheUpdate,
+        ),
+        RemoteInstalledPluginBundleSyncError,
+    > {
         let generation = self
             .begin_remote_installed_plugins_reconcile(auth)
             .ok_or(RemoteInstalledPluginBundleSyncError::Superseded)?;
@@ -1893,7 +1932,7 @@ impl PluginsManager {
         outcome
             .changed_plugins
             .sort_unstable_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-        let Some(effective_plugins_changed) = self.write_remote_installed_plugins_cache_snapshot(
+        let Some(update) = self.write_remote_installed_plugins_cache_snapshot(
             generation,
             result.installed_plugins,
             auth,
@@ -1902,10 +1941,10 @@ impl PluginsManager {
             return Err(RemoteInstalledPluginBundleSyncError::Superseded);
         };
         reconciliation.committed = true;
-        if !effective_plugins_changed && !outcome.changed_plugins.is_empty() {
+        if update.metadata_change_id.is_none() && !outcome.changed_plugins.is_empty() {
             self.clear_loaded_plugins_cache();
         }
-        Ok((outcome, effective_plugins_changed))
+        Ok((outcome, update))
     }
 
     fn maybe_start_remote_catalog_cache_refresh(
@@ -1947,6 +1986,7 @@ impl PluginsManager {
             &context.global_config,
             auth,
             on_effective_plugins_changed,
+            InstalledPluginSyncSource::PluginList,
         );
     }
 
@@ -3041,6 +3081,7 @@ impl PluginsManager {
                     &config_for_remote_sync,
                     auth,
                     on_effective_plugins_changed,
+                    InstalledPluginSyncSource::Startup,
                 );
             });
         }
@@ -3467,7 +3508,7 @@ impl PluginsManager {
             .await;
             match plugins {
                 Ok(plugins) => {
-                    let Some(changed) = self.write_remote_installed_plugins_cache_snapshot(
+                    let Some(update) = self.write_remote_installed_plugins_cache_snapshot(
                         request.generation,
                         plugins,
                         request.auth.as_ref(),
@@ -3477,7 +3518,7 @@ impl PluginsManager {
                     ) else {
                         continue;
                     };
-                    let should_notify = changed
+                    let should_notify = update.metadata_change_id.is_some()
                         || !request.change.materialized_remote_plugins.is_empty()
                         || matches!(
                             request.notify,
@@ -3487,7 +3528,9 @@ impl PluginsManager {
                         && let Some(on_effective_plugins_changed) =
                             request.on_effective_plugins_changed
                     {
-                        on_effective_plugins_changed(request.change);
+                        let mut change = request.change;
+                        change.metadata_change_id = update.metadata_change_id;
+                        on_effective_plugins_changed(change);
                     }
                 }
                 Err(

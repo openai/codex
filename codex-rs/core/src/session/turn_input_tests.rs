@@ -616,7 +616,7 @@ async fn automatic_admission_rechecks_plan_mode_without_committing_sparse_settin
         .acquire()
         .await
         .expect("acquire MCP refresh gate");
-    session.mcp_refresh.claim();
+    session.mcp_refresh.take_pending();
     assert!(!session.mcp_refresh.is_pending());
 
     for (submission_id, prepared) in [

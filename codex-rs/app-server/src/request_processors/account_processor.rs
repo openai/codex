@@ -10,6 +10,7 @@ use crate::outgoing_message::AccountNotification;
 use chrono::DateTime;
 use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_app_server_protocol::GetAccountRateLimitsParams;
+use codex_core::McpRefreshReason;
 use codex_login::LoginOnboardingEntrypoint;
 use codex_login::login_with_bedrock_access_keys;
 use codex_mcp::ema_auth_scope;
@@ -297,16 +298,21 @@ impl AccountRequestProcessor {
                 Self::spawn_effective_plugins_changed_task(
                     Arc::clone(thread_manager),
                     config_manager.clone(),
+                    McpRefreshReason::AccountPluginCacheChanged,
                 );
                 let plugins_config = config.plugins_config_input();
                 let refresh_thread_manager = Arc::clone(thread_manager);
                 let refresh_config_manager = config_manager.clone();
                 let on_effective_plugins_changed: Arc<
                     dyn Fn(codex_core_plugins::EffectivePluginsChange) + Send + Sync,
-                > = Arc::new(move |_change| {
+                > = Arc::new(move |change| {
                     Self::spawn_effective_plugins_changed_task(
                         Arc::clone(&refresh_thread_manager),
                         refresh_config_manager.clone(),
+                        change.metadata_change_id.map_or(
+                            McpRefreshReason::AccountPluginCacheChanged,
+                            McpRefreshReason::InstalledPluginMetadata,
+                        ),
                     );
                 });
                 thread_manager
@@ -338,13 +344,14 @@ impl AccountRequestProcessor {
     fn spawn_effective_plugins_changed_task(
         thread_manager: Arc<ThreadManager>,
         config_manager: ConfigManager,
+        reason: McpRefreshReason,
     ) {
         tokio::spawn(async move {
             thread_manager.plugins_manager().clear_cache();
             thread_manager.skills_service().clear_cache();
             crate::mcp_refresh::reload_mcp_config_best_effort(&thread_manager, &config_manager)
                 .await;
-            thread_manager.invalidate_mcp_runtimes().await;
+            thread_manager.invalidate_mcp_runtimes_for(reason).await;
         });
     }
 
@@ -954,7 +961,9 @@ impl AccountRequestProcessor {
     }
 
     async fn send_login_success_notifications(&self, login_id: Option<Uuid>) {
-        self.thread_manager.invalidate_mcp_runtimes().await;
+        self.thread_manager
+            .invalidate_mcp_runtimes_for(McpRefreshReason::AccountLoginCompleted)
+            .await;
         self.send_account_login_notifications(AccountLoginCompletedNotification {
             login_id: login_id.map(|id| id.to_string()),
             success: true,
@@ -1016,7 +1025,9 @@ impl AccountRequestProcessor {
             self.auth_manager.reload().await;
             let auth_changes = self.auth_manager.auth_change_state_receiver();
             let owner_generation = auth_changes.borrow().owner_generation;
-            self.thread_manager.invalidate_mcp_runtimes().await;
+            self.thread_manager
+                .invalidate_mcp_runtimes_for(McpRefreshReason::AccountAuthReloaded)
+                .await;
             self.config_manager
                 .update_managed_config_loader(self.auth_manager.clone(), &self.config);
             self.config_manager
@@ -1041,7 +1052,9 @@ impl AccountRequestProcessor {
         let config =
             logout_configured_account(&self.config_manager, &self.auth_manager, &self.config)
                 .await?;
-        self.thread_manager.invalidate_mcp_runtimes().await;
+        self.thread_manager
+            .invalidate_mcp_runtimes_for(McpRefreshReason::AccountLoggedOut)
+            .await;
         clear_account_configuration(&self.config_manager, &config).await?;
 
         self.model_catalog.invalidate().await;

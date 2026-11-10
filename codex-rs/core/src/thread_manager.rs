@@ -263,6 +263,51 @@ enum ShutdownOutcome {
     TimedOut,
 }
 
+type StartupMcpInvalidations = std::sync::Mutex<std::collections::BTreeSet<McpRefreshReason>>;
+
+/// Identifies the cause of an MCP runtime publication in CLI diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum McpRefreshReason {
+    AccountAuthReloaded,
+    AccountLoggedOut,
+    AccountLoginCompleted,
+    AccountPluginCacheChanged,
+    AccountWorkspaceSwitched,
+    AuthChangeNotification,
+    CodexAppsToolRefresh,
+    CurrentEnvironmentsChanged,
+    DisabledPluginSelectionChanged,
+    EffectivePluginsChanged,
+    EnterpriseAuthDisabled,
+    EnvironmentBindingsChanged,
+    ExecutorCapabilityDiscoveryRecovered,
+    ExecutorCapabilityInventoryChanged,
+    ExplicitInvalidation,
+    ExplicitServerReconnect,
+    ExtensionCatalogChanged,
+    HardRefreshCodexAppsTools,
+    MarketplaceUpgraded,
+    McpConfigReloaded,
+    McpOAuthLoginCompleted,
+    NonCuratedPluginCacheRefreshed,
+    OAuthCredentialsRecovered,
+    PluginInstalled,
+    PluginOAuthLoginCompleted,
+    PluginUninstalled,
+    PreviousRefreshUnpublished,
+    RemotePluginUninstalled,
+    RuntimeAuthChanged,
+    SelectedCapabilityRootsChanged,
+    SessionMcpInputsChanged,
+    SkillMcpDependenciesAdded,
+    TaskStartedExecutorDiscovery,
+    TurnStartContributorPreparedMcp,
+    UserConfigFilesReloaded,
+    UserConfigReloaded,
+    /// Links to the field-level diff logged when the installed plugin cache changed.
+    InstalledPluginMetadata(uuid::Uuid),
+}
+
 /// [`ThreadManager`] is responsible for creating threads and maintaining
 /// them in memory.
 pub struct ThreadManager {
@@ -545,7 +590,7 @@ pub(crate) struct ThreadManagerState {
     model_catalog: model_catalog::ThreadModelCatalog,
     git_root_discovery: Arc<GitRootDiscovery>,
     environment_manager: Arc<EnvironmentManager>,
-    starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
+    starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<StartupMcpInvalidations>>>,
     skills_service: Arc<HostSkillsService>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
@@ -990,7 +1035,12 @@ impl ThreadManager {
 
     /// Refreshes every loaded thread and marks threads that are still being created.
     pub async fn invalidate_mcp_runtimes(&self) {
-        self.invalidate_starting_mcp_runtimes();
+        self.invalidate_mcp_runtimes_for(McpRefreshReason::ExplicitInvalidation)
+            .await;
+    }
+
+    pub async fn invalidate_mcp_runtimes_for(&self, reason: McpRefreshReason) {
+        self.invalidate_starting_mcp_runtimes(reason);
         let threads = self
             .state
             .threads
@@ -1000,7 +1050,7 @@ impl ThreadManager {
             .cloned()
             .collect::<Vec<_>>();
         for thread in threads {
-            thread.session.request_mcp_runtime_refresh();
+            thread.session.request_mcp_runtime_refresh(reason);
         }
     }
 
@@ -1020,7 +1070,7 @@ impl ThreadManager {
         }
     }
 
-    fn invalidate_starting_mcp_runtimes(&self) {
+    fn invalidate_starting_mcp_runtimes(&self, reason: McpRefreshReason) {
         let mut starting = self
             .state
             .starting_mcp_runtimes
@@ -1030,7 +1080,10 @@ impl ThreadManager {
             let Some(runtime) = runtime.upgrade() else {
                 return false;
             };
-            runtime.store(true, Ordering::Release);
+            runtime
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(reason);
             true
         });
     }
@@ -2702,14 +2755,14 @@ impl ThreadManagerState {
             (Arc::clone(&self.extensions), Arc::clone(&self.mcp_manager))
         };
         let tracked_session_source = session_source.clone();
-        let source_changed_during_startup = Arc::new(AtomicBool::new(false));
+        let startup_invalidations = Arc::new(StartupMcpInvalidations::default());
         {
             let mut starting = self
                 .starting_mcp_runtimes
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             starting.retain(|runtime| runtime.strong_count() != 0);
-            starting.push(Arc::downgrade(&source_changed_during_startup));
+            starting.push(Arc::downgrade(&startup_invalidations));
         }
         let windows_sandbox_proxy_settings_mode = if matches!(
             &session_source,
@@ -2907,8 +2960,15 @@ impl ThreadManagerState {
         if matches!(ready_notification, ThreadReadyNotification::Emit) {
             new_thread.thread.emit_thread_ready_lifecycle().await;
         }
-        if source_changed_during_startup.load(Ordering::Acquire) {
-            new_thread.thread.session.request_mcp_runtime_refresh();
+        for reason in std::mem::take(
+            &mut *startup_invalidations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ) {
+            new_thread
+                .thread
+                .session
+                .request_mcp_runtime_refresh(reason);
         }
         if is_resumed_thread {
             new_thread.thread.emit_thread_resume_lifecycle().await;

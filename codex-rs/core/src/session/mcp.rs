@@ -1,5 +1,5 @@
-use super::mcp_refresh::McpRefreshInvalidationGuard;
 use super::*;
+use crate::McpRefreshReason;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::combine_selected_capability_roots;
 use crate::mcp_tool_call::McpToolApprovalContext;
@@ -119,8 +119,11 @@ impl Session {
                 /*skill_turn*/ None,
             )
             .await;
-        if inventory_changed || discovery_recovered {
-            self.mark_mcp_runtime_dirty();
+        if inventory_changed {
+            self.mark_mcp_runtime_dirty(McpRefreshReason::ExecutorCapabilityInventoryChanged);
+        }
+        if discovery_recovered {
+            self.mark_mcp_runtime_dirty(McpRefreshReason::ExecutorCapabilityDiscoveryRecovered);
         }
         let mcp_projection =
             self.services
@@ -199,7 +202,7 @@ impl Session {
                 &environment_selections,
                 &environments.ready_environment_handles(),
             ) {
-                self.mark_mcp_runtime_dirty();
+                self.mark_mcp_runtime_dirty(McpRefreshReason::EnvironmentBindingsChanged);
             }
             let auth = self.services.auth_manager.auth_cached();
             if !self
@@ -207,15 +210,11 @@ impl Session {
                 .mcp_runtime
                 .current_auth_matches(auth.as_ref())
             {
-                self.mark_mcp_runtime_dirty();
+                self.mark_mcp_runtime_dirty(McpRefreshReason::RuntimeAuthChanged);
             }
 
-            if !self.mcp_refresh.claim() {
+            let Some(mut refresh_invalidation) = self.mcp_refresh.claim(self.thread_id) else {
                 return;
-            }
-            let mut refresh_invalidation = McpRefreshInvalidationGuard {
-                refresh: &self.mcp_refresh,
-                published: false,
             };
             let auth = self.services.auth_manager.auth().await;
             // Capture after claiming the refresh so a new invalidation cannot be consumed
@@ -282,7 +281,7 @@ impl Session {
         self: &Arc<Self>,
     ) -> anyhow::Result<codex_mcp::CodexAppsToolSnapshot> {
         // Reconcile unchanged config so failed or closed clients can be replaced.
-        self.mark_mcp_runtime_dirty();
+        self.mark_mcp_runtime_dirty(McpRefreshReason::CodexAppsToolRefresh);
         self.refresh_mcp_if_dirty().await;
         let _refresh = self
             .mcp_refresh
@@ -302,11 +301,9 @@ impl Session {
             .await
             .map_err(|_| anyhow::anyhow!("MCP runtime refresh semaphore closed"))?;
         // This is forced work even when there was no pending invalidation.
-        self.mcp_refresh.claim();
-        let mut refresh_invalidation = McpRefreshInvalidationGuard {
-            refresh: &self.mcp_refresh,
-            published: false,
-        };
+        let mut refresh_invalidation = self
+            .mcp_refresh
+            .claim_forced(self.thread_id, McpRefreshReason::HardRefreshCodexAppsTools);
         let auth = self.services.auth_manager.auth().await;
         let environments = self.services.turn_environments.snapshot().await;
         let environment_selections = environments.all_selections();
@@ -380,8 +377,8 @@ impl Session {
         refreshed
     }
 
-    pub(super) fn mark_mcp_runtime_dirty(&self) {
-        self.mcp_refresh.invalidate();
+    pub(super) fn mark_mcp_runtime_dirty(&self, reason: McpRefreshReason) {
+        self.mcp_refresh.invalidate(reason);
     }
 
     #[tracing::instrument(
@@ -404,7 +401,7 @@ impl Session {
             .current_ready_selected_capability_roots()
             != ready_selected_capability_roots
         {
-            self.mark_mcp_runtime_dirty();
+            self.mark_mcp_runtime_dirty(McpRefreshReason::SelectedCapabilityRootsChanged);
         }
 
         let recovered_oauth_servers =
@@ -423,7 +420,7 @@ impl Session {
                 .has_authentication_failed_servers(&recovered_oauth_servers)
                 .await
         {
-            self.mark_mcp_runtime_dirty();
+            self.mark_mcp_runtime_dirty(McpRefreshReason::OAuthCredentialsRecovered);
         }
         self.refresh_mcp_if_dirty().await;
         // Prewarm and other context-only captures must not start cloud discovery.
@@ -450,7 +447,7 @@ impl Session {
                     .await
                 {
                     // Preserve MCP updates if a later refresh is cancelled.
-                    self.mark_mcp_runtime_dirty();
+                    self.mark_mcp_runtime_dirty(McpRefreshReason::ExtensionCatalogChanged);
                 }
             }
             self.refresh_mcp_if_dirty().await;
@@ -861,11 +858,9 @@ impl Session {
             state.session_configuration.original_config_do_not_use = Arc::new(config);
         }
         // Claim after config mutation, before capturing the state this forced refresh handles.
-        self.mcp_refresh.claim();
-        let mut refresh_invalidation = McpRefreshInvalidationGuard {
-            refresh: &self.mcp_refresh,
-            published: false,
-        };
+        let mut refresh_invalidation = self
+            .mcp_refresh
+            .claim_forced(self.thread_id, McpRefreshReason::SkillMcpDependenciesAdded);
         let auth = self.services.auth_manager.auth().await;
         let ready_selected_capability_roots = self
             .services

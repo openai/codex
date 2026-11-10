@@ -1,4 +1,5 @@
 use super::Submission;
+use crate::McpRefreshReason;
 use crate::WithTurnExtensionData;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
@@ -260,7 +261,7 @@ pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: Dy
 
 pub fn refresh_mcp_servers(sess: &Session) {
     sess.services.mcp_runtime.reconnect_on_next_refresh();
-    sess.request_mcp_runtime_refresh();
+    sess.request_mcp_runtime_refresh(McpRefreshReason::ExplicitServerReconnect);
 }
 
 pub async fn reload_user_config(sess: &Arc<Session>) {

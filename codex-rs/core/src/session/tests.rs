@@ -1,3 +1,4 @@
+use crate::McpRefreshReason;
 use crate::agent::LocalAgentControl;
 use codex_protocol::ContextWindowId;
 #[path = "compaction_replay_tests.rs"]
@@ -2329,7 +2330,7 @@ async fn refresh_config_rejects_stale_owner_without_effects(scope: RuntimeConfig
         crate::ConfigRefreshOutcome::Published
     );
     let current_owner = session.get_config().await;
-    assert!(session.mcp_refresh.claim());
+    assert!(!session.mcp_refresh.take_pending().is_empty());
 
     assert_eq!(
         session
@@ -7073,7 +7074,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_snapshot,
     );
-    session.mark_mcp_runtime_dirty();
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
     crate::guardian::test_host::install(&session, &turn_context.config);
     (session, turn_context)
 }
@@ -9417,7 +9418,7 @@ where
         "turn_id".to_string(),
         skills_snapshot,
     ));
-    session.mark_mcp_runtime_dirty();
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
     crate::guardian::test_host::install(&session, &turn_context.config);
     (session, turn_context, rx_event)
 }
@@ -9604,7 +9605,7 @@ async fn refresh_mcp_servers_uses_latest_state_for_existing_turns() {
             .expect("enable secret auth storage");
         state.session_configuration.original_config_do_not_use = Arc::new(config);
     }
-    session.mark_mcp_runtime_dirty();
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
 
     let next_turn = session.new_default_turn().await;
     let new_step = session
@@ -9774,7 +9775,7 @@ async fn mcp_elicitation_reviewer_uses_active_reviewer_and_latest_runtime_policy
         .spawn_task(Arc::clone(&old_turn), Vec::new(), task)
         .await;
 
-    session.mark_mcp_runtime_dirty();
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
     session.refresh_mcp_if_dirty().await;
     if live_update {
         assert_eq!(
@@ -9990,7 +9991,7 @@ async fn mcp_elicitation_reviewer_is_reused_across_runtime_refreshes() {
     let session = Arc::new(session);
     let previous = session.mcp_elicitation_reviewer();
 
-    session.mark_mcp_runtime_dirty();
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
     session.refresh_mcp_if_dirty().await;
 
     assert!(Arc::ptr_eq(&previous, &session.mcp_elicitation_reviewer()));
@@ -10336,7 +10337,7 @@ async fn step_context_keeps_its_mcp_runtime_for_tools() -> anyhow::Result<()> {
     );
     assert_ne!(step_context.mcp.config().plugins, current_config.plugins);
 
-    session.mark_mcp_runtime_dirty();
+    session.mark_mcp_runtime_dirty(McpRefreshReason::ExplicitInvalidation);
     session.refresh_mcp_if_dirty().await;
     let current = session
         .services

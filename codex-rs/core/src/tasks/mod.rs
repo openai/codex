@@ -5,6 +5,7 @@ mod regular;
 mod review;
 mod user_shell;
 
+use crate::McpRefreshReason;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -304,7 +305,7 @@ impl Session {
             .enabled(Feature::ExecutorCapabilityDiscoveryV2)
         {
             // MCP contributors must project the new inventory even if their other inputs match.
-            self.request_mcp_runtime_reprojection();
+            self.request_mcp_runtime_reprojection(McpRefreshReason::TaskStartedExecutorDiscovery);
         }
         self.activate_plugin_selection(&turn_context).await;
         // Inherited or recovered roots are applied before task start. Otherwise this
