@@ -248,6 +248,8 @@ async fn turn_tip_placements_and_completion_barrier() -> Result<()> {
             }
         }
         assert_eq!(saw_barrier, !working);
+        app.chat_widget
+            .set_status_line(Some("gpt-test default · /tmp/project".into()));
         let frames = tui.frame_requester();
         let mut painted = Default::default();
         tui.draw(height, |frame| {

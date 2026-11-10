@@ -6,9 +6,9 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::sync::Arc;
 
-use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::highlight::with_syntax_theme;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::ui_tree::PreparedUiTree;
 use crate::ui_tree::UiTree;
 
@@ -29,6 +29,14 @@ impl From<UiTree> for FooterContent {
 }
 
 impl FooterContent {
+    pub(crate) fn native_parts(&self) -> Option<(&Line<'static>, &[TerminalHyperlink])> {
+        match self {
+            Self::Line(line) => Some((line, &[])),
+            Self::HyperlinkLine(line) => Some((&line.line, &line.hyperlinks)),
+            Self::Extension { .. } => None,
+        }
+    }
+
     /// Natural display width in terminal cells.
     pub(crate) fn width(&self) -> u16 {
         let width = match self {
@@ -46,18 +54,17 @@ impl FooterContent {
                 with_syntax_theme(|theme| content.render(area, theme, buf));
             }
             native => {
-                let mut line = native.into_hyperlink_line();
+                let line = native.into_hyperlink_line();
                 let area = Rect {
                     height: area.height.min(1),
                     ..area
                 };
                 let width = usize::from(area.width);
                 if line.width() > width {
-                    line.line = truncate_line_with_ellipsis_if_overflow(line.line, width);
-                    // The ellipsis is never part of the link.
-                    line.clip_hyperlinks_to_width(line.width().saturating_sub(1));
+                    line.render_with_ellipsis(area, buf);
+                } else {
+                    line.render_fitted(area, buf);
                 }
-                line.render_fitted(area, buf);
             }
         }
     }

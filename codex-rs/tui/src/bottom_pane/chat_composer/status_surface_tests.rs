@@ -474,6 +474,129 @@ fn extension_status_keeps_its_rows_when_effort_changes() {
     }
 }
 
+#[test]
+fn native_status_wraps_links_within_the_host_budget() {
+    let mut composer = composer();
+    composer.set_collaboration_modes_enabled(/*enabled*/ true);
+    let url = "https://example.com/pr/42";
+    let mut status = HyperlinkLine::from("لا ");
+    status.push_span(
+        "PR #42 build green deploy ready all unit tests passed release queued".underlined(),
+        Some(url),
+    );
+    composer.set_status_line(Some(status.into()));
+    let mut frames = Vec::new();
+    composer.footer.toggle_shortcuts_key = None;
+    for (fullscreen, mode, status_height) in [
+        (true, None, 4),
+        (true, Some(CollaborationModeIndicator::Plan), 3),
+        (false, None, 2),
+        (false, Some(CollaborationModeIndicator::Plan), 1),
+    ] {
+        composer.set_collaboration_mode_indicator(mode);
+        let (_, rows) = render_status(
+            &composer,
+            Rect::new(0, 0, 18, 20),
+            ComposerRenderOptions {
+                separate_status_line: fullscreen,
+                ..Default::default()
+            },
+        );
+        assert_eq!(rows.len(), status_height);
+        for row in &rows {
+            let text = strip_osc8(row);
+            let (prefix, rest) = text
+                .strip_prefix("لا ")
+                .map_or(("", text.as_str()), |rest| ("لا ", rest));
+            let (link, end) = rest
+                .strip_suffix('…')
+                .map_or((rest, ""), |link| (link, "…"));
+            let visible_link: String = link
+                .chars()
+                .map(|ch| osc8_hyperlink(url, &ch.to_string()))
+                .collect();
+            assert_eq!(*row, format!("{prefix}{visible_link}{end}"));
+        }
+        frames.push(
+            rows.iter()
+                .map(|row| strip_osc8(row))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    insta::assert_snapshot!(frames.join("\n---\n"));
+}
+
+#[test]
+fn native_wrap_tracks_agent_label_and_content_changes_at_the_same_width() {
+    let mut composer = composer();
+    composer.set_status_line(Some(Line::from("build ready").into()));
+    let area = Rect::new(0, 0, 16, 14);
+    composer.footer.toggle_shortcuts_key = None;
+    for agent in ["frontend", "backend"] {
+        composer.set_active_agent_label(Some(agent.into()));
+        assert_eq!(
+            render_status(&composer, area, Default::default()).1,
+            ["build ready ·", agent]
+        );
+    }
+    composer.set_status_line(Some(Line::from("tests green").into()));
+    assert_eq!(
+        render_status(&composer, area, Default::default()).1,
+        ["tests green ·", "backend"]
+    );
+    let wide = Rect { width: 36, ..area };
+    assert_eq!(
+        render_status(&composer, wide, Default::default()).1,
+        ["tests green · backend"]
+    );
+    assert_eq!(
+        render_status(&composer, area, Default::default()).1,
+        ["tests green ·", "backend"]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn native_effort_transition_restores_wrapping_after_its_final_frame() {
+    let mut composer = composer();
+    composer.set_status_line(Some(
+        Line::from("build ready tests passed deploy queued").into(),
+    ));
+    composer.set_active_reasoning_effort_baseline(/*effort*/ None);
+    composer.set_active_reasoning_effort(
+        Some(&ReasoningEffort::Max),
+        /*animations_enabled*/ true,
+    );
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 14, /*height*/ 20,
+    );
+    for separate_status_line in [false, true] {
+        let options = ComposerRenderOptions {
+            separate_status_line,
+            ..Default::default()
+        };
+        assert_eq!(render_status(&composer, area, options).1.len(), 1);
+    }
+
+    let options = ComposerRenderOptions {
+        separate_status_line: true,
+        ..Default::default()
+    };
+    let status = composer.layout_with_options(area, options).status;
+    assert_eq!(status.height, 1);
+    let (requester, mut frames) = FrameRequester::test_channel();
+    composer.set_frame_requester(requester);
+    tokio::time::advance(Duration::from_secs(/*secs*/ 10)).await;
+    composer.render_status_surface(status, &mut Buffer::empty(area), options);
+    frames.try_recv().expect("final paint requests a redraw");
+    let wrapped = composer.layout_with_options(area, options).status;
+    let mut buf = Buffer::empty(area);
+    composer.render_status_surface(wrapped, &mut buf, options);
+    assert!(wrapped.height > 1);
+    assert!(frame(&buf).contains("tests"));
+    assert!(frames.try_recv().is_err());
+}
+
 fn render(
     composer: &ChatComposer,
     width: u16,

@@ -15,6 +15,7 @@ impl ChatComposer {
             self.effort_status_line_transition = None;
         }
         self.footer.measured_status_line.set(None);
+        self.footer.wrapped_native_status.take();
         self.footer.status_line_value = status_line;
         true
     }
@@ -66,6 +67,12 @@ impl ChatComposer {
                 cache.set(Some((bounds, height)));
                 height
             }
+            Some(native) if bounds.height > 1 && self.active_status_transition().is_none() => self
+                .wrapped_native_status(native, bounds.width)
+                .map_or_else(
+                    || u16::from(native.width() > 0),
+                    |rows| rows.height().min(bounds.height),
+                ),
             Some(line) => u16::from(line.width() > 0),
             None => 0,
         }
@@ -98,6 +105,12 @@ impl ChatComposer {
         passive_footer_status_line(&props).map(Cow::Owned)
     }
 
+    fn active_status_transition(&self) -> Option<&EffortStatusLineTransition> {
+        self.effort_status_line_transition
+            .as_ref()
+            .filter(|transition| !transition.is_finished())
+    }
+
     pub(super) fn render_status_surface(
         &self,
         area: Rect,
@@ -119,11 +132,7 @@ impl ChatComposer {
         }
         let area = inset_footer_hint_area(area);
         let line = self.status_surface_content();
-        if let Some(transition) = self
-            .effort_status_line_transition
-            .as_ref()
-            .filter(|transition| !transition.is_finished())
-        {
+        if let Some(transition) = self.active_status_transition() {
             if let Some(frame) = transition.render_line(
                 line.map(|line| line.into_owned().into_hyperlink_line()),
                 area.width,
@@ -134,7 +143,13 @@ impl ChatComposer {
                 requester.schedule_frame_in(EFFORT_STATUS_LINE_FRAME_TICK);
             }
         } else if let Some(line) = line {
-            line.into_owned().render(area, buf);
+            if area.height > 1
+                && let Some(wrapped) = self.wrapped_native_status(&line, area.width)
+            {
+                wrapped.render(area, buf);
+            } else {
+                line.into_owned().render(area, buf);
+            }
         }
     }
 }

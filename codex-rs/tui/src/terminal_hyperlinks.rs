@@ -482,24 +482,31 @@ pub(crate) fn remap_source_wrapped_line(
             let end = start + display_width(&text[range.clone()]);
             source_byte = range.end;
             source_column = end;
-            let hyperlinks = source
-                .hyperlinks
-                .iter()
-                .filter_map(|link| {
-                    let first = link.columns.start.max(start);
-                    let last = link.columns.end.min(end);
-                    (first < last).then(|| {
-                        link.with_columns(
-                            prefix_columns + first - start..prefix_columns + last - start,
-                        )
-                    })
-                })
-                .collect();
+            let hyperlinks =
+                project_hyperlink_columns(&source.hyperlinks, start..end, prefix_columns);
             HyperlinkLine {
                 line,
                 hyperlinks,
                 source: Some(logical.wrapped(range, wrapped.prefix_bytes)),
             }
+        })
+        .collect()
+}
+
+/// Translate links intersecting a source fragment into columns on the displayed row.
+pub(crate) fn project_hyperlink_columns(
+    links: &[TerminalHyperlink],
+    source: Range<usize>,
+    prefix: usize,
+) -> Vec<TerminalHyperlink> {
+    links
+        .iter()
+        .filter_map(|link| {
+            let first = link.columns.start.max(source.start);
+            let last = link.columns.end.min(source.end);
+            (first < last).then(|| {
+                link.with_columns(prefix + first - source.start..prefix + last - source.start)
+            })
         })
         .collect()
 }

@@ -13,13 +13,13 @@
 
 use std::cell::Cell;
 use std::time::Duration;
-use std::time::Instant;
 
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use tokio::time::Instant;
 
 use crate::color::blend;
 use crate::color::is_light;
@@ -63,7 +63,14 @@ impl EffortTier {
 pub(crate) struct EffortStatusLineTransition {
     tier: EffortTier,
     previous: HyperlinkLine,
-    started_at: Cell<Option<Instant>>,
+    phase: Cell<TransitionPhase>,
+}
+
+#[derive(Clone, Copy)]
+enum TransitionPhase {
+    Pending,
+    Running(Instant),
+    Finished,
 }
 
 impl EffortStatusLineTransition {
@@ -71,14 +78,12 @@ impl EffortStatusLineTransition {
         Self {
             tier,
             previous,
-            started_at: Cell::new(None),
+            phase: Cell::new(TransitionPhase::Pending),
         }
     }
 
     pub(crate) fn is_finished(&self) -> bool {
-        self.started_at
-            .get()
-            .is_some_and(|started| started.elapsed() >= TOTAL)
+        matches!(self.phase.get(), TransitionPhase::Finished)
     }
 
     pub(crate) fn render_line(
@@ -86,13 +91,18 @@ impl EffortStatusLineTransition {
         current: Option<HyperlinkLine>,
         width: u16,
     ) -> Option<HyperlinkLine> {
-        let elapsed = match self.started_at.get() {
-            Some(started) => started.elapsed(),
-            None => {
-                self.started_at.set(Some(Instant::now()));
+        let elapsed = match self.phase.get() {
+            TransitionPhase::Pending => {
+                self.phase.set(TransitionPhase::Running(Instant::now()));
                 Duration::ZERO
             }
+            TransitionPhase::Running(started) => started.elapsed(),
+            TransitionPhase::Finished => return current,
         };
+        // Paint the last single-row frame before the next layout restores wrapping.
+        if elapsed >= TOTAL {
+            self.phase.set(TransitionPhase::Finished);
+        }
         transition_line_at(self.tier, &self.previous, current, elapsed, width)
     }
 }

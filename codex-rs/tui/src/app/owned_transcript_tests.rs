@@ -503,6 +503,8 @@ async fn owned_drag_stops_when_focus_or_input_ownership_is_lost() -> Result<()> 
 async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     attach_thread(&mut app, ThreadId::new());
+    app.chat_widget
+        .set_status_line(Some("gpt-test default · /tmp/project".into()));
     app.transcript_cells = vec![user_cell("First prompt"), user_cell("Second prompt")];
     app.chat_widget
         .apply_external_edit("preserved draft".to_string());
@@ -647,8 +649,7 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
         app.transcript_view.link_at(column, row).as_deref(),
         Some("https://example.com/docs")
     );
-    let copied_cursor = tui.terminal.last_known_cursor_pos;
-    assert_eq!((copied_cursor.x, copied_cursor.y + 1), (caret.x, caret.y));
+    assert_eq!(tui.terminal.last_known_cursor_pos, caret);
     let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
     for pos in Rect::from(outer)
         .positions()

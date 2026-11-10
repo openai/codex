@@ -19,14 +19,17 @@ fn clock_waits_for_the_first_visible_frame() {
     let transition =
         EffortStatusLineTransition::new(EffortTier::Ultra, "gpt-5.4 high · main".into());
     assert!(!transition.is_finished());
-    assert_eq!(transition.started_at.get(), None);
+    assert!(matches!(transition.phase.get(), TransitionPhase::Pending));
 
     let current = HyperlinkLine::from("gpt-5.4 ultra · main");
     let line = transition
         .render_line(Some(current), /*width*/ 40)
         .expect("first frame should render the outgoing line");
     assert_eq!(text(&line.line), "gpt-5.4 high · main");
-    assert!(transition.started_at.get().is_some());
+    assert!(matches!(
+        transition.phase.get(),
+        TransitionPhase::Running(_)
+    ));
 }
 
 #[test]

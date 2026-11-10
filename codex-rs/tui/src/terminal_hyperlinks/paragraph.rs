@@ -113,6 +113,17 @@ impl HyperlinkLine {
         self.mark_cells(area, buf);
     }
 
+    /// Reserve the last visible grapheme for an unlinked overflow marker.
+    pub(crate) fn render_with_ellipsis(mut self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+        self.line =
+            crate::line_truncation::truncate_line_with_ellipsis(self.line, usize::from(area.width));
+        self.clip_hyperlinks_to_width(self.width().saturating_sub(1));
+        self.render_fitted(area, buf);
+    }
+
     fn mark_cells(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;

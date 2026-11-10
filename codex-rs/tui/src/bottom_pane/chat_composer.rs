@@ -414,6 +414,7 @@ mod paste_input;
 mod popup_state;
 mod reconnect;
 pub(crate) use reconnect::RestrictedInputMode;
+mod native_status;
 mod slash_input;
 mod sparkle;
 mod status_surface;
@@ -796,6 +797,7 @@ impl ChatComposer {
                 ide_context_active: false,
                 status_line_value: None,
                 measured_status_line: Default::default(),
+                wrapped_native_status: Default::default(),
                 status_line_enabled: false,
                 side_conversation_context_label: None,
                 active_agent_label: None,
