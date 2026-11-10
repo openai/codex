@@ -114,6 +114,9 @@ pub fn quote_windows_arg(arg: &str) -> String {
 /// Build a Windows command line for CreateProcess-style APIs.
 #[cfg(target_os = "windows")]
 pub fn argv_to_command_line(argv: &[String]) -> String {
+    if let Some(command_line) = crate::cmd_script_command_line(argv) {
+        return command_line;
+    }
     argv.iter()
         .map(|arg| quote_windows_arg(arg))
         .collect::<Vec<_>>()
@@ -330,7 +333,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn argv_to_command_line_quotes_each_argument_independently() {
+    fn argv_to_command_line_preserves_quoted_executable_in_cmd_script() {
         let argv = vec![
             "cmd.exe".to_string(),
             "/c".to_string(),
@@ -340,7 +343,7 @@ mod tests {
 
         assert_eq!(
             argv_to_command_line(&argv),
-            "cmd.exe /c \"\\\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\\\" -NoProfile -EncodedCommand abc==\""
+            r#""cmd.exe" /s /c ""C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -EncodedCommand abc==""#
         );
     }
 

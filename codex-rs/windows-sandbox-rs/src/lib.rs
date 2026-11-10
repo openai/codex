@@ -155,6 +155,9 @@ mod winutil;
 #[cfg(target_os = "windows")]
 mod workspace_acl;
 
+mod cmd_script;
+pub use cmd_script::cmd_script_command_line;
+
 mod deny_read_resolver;
 #[cfg(target_os = "windows")]
 mod uninstall_windows;
