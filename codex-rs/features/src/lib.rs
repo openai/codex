@@ -301,7 +301,7 @@ pub enum Feature {
     DeferredToolWorldState,
     /// Track top-level tool definitions in world state and emit incremental context updates.
     IncrementalTools,
-    /// Publish incremental tool declarations on regular Amazon Bedrock Responses.
+    /// Publish incremental tool declarations on regular Amazon Bedrock and GCP Responses.
     IncrementalToolsLegacy,
     /// Suppress the model ID announcement in incremental context after a model switch.
     SuppressModelChangeAnnouncements,

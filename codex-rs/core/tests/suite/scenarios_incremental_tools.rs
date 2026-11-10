@@ -7,6 +7,7 @@ use codex_core::compact::AutoCompactionDisabled;
 use codex_features::Feature;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
+use codex_model_provider_info::GCP_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
@@ -158,6 +159,8 @@ async fn prediction_fork_keeps_inherited_tools() -> Result<()> {
 #[test_case(false, None, true, AMAZON_BEDROCK_PROVIDER_ID; "mantle_provider_id_incremental")]
 #[test_case(false, None, false, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID; "runtime_provider_id")]
 #[test_case(false, None, true, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID; "runtime_provider_id_incremental")]
+#[test_case(false, None, false, GCP_PROVIDER_ID; "gcp_provider_id")]
+#[test_case(false, None, true, GCP_PROVIDER_ID; "gcp_provider_id_incremental")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incremental_tools_append_changed_catalog_without_rewriting_history(
     use_responses_lite: bool,
