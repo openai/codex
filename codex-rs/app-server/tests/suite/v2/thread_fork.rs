@@ -915,7 +915,7 @@ async fn assert_thread_fork_at_named_boundary_keeps_only_terminal_prefix(
         .with_codex_home(codex_home.path())
         .build_initialized()
         .await?;
-    let _: ThreadResumeResponse = resumed
+    let reopened: ThreadResumeResponse = resumed
         .request(|request_id| ClientRequest::ThreadResume {
             request_id,
             params: ThreadResumeParams {
@@ -935,6 +935,34 @@ async fn assert_thread_fork_at_named_boundary_keeps_only_terminal_prefix(
         })
         .await?;
     assert!(after_resume.data.is_empty());
+
+    if history_mode == ThreadHistoryMode::Paginated {
+        assert_eq!(reopened.thread.preview, "first");
+        // The source is closed. Place the next fork boundary immediately after a compaction
+        // whose replacement history no longer contains the opening user message.
+        for item in [
+            RolloutItem::Compacted(serde_json::from_value(json!({
+                "message": "summary", "replacement_history": [], "window_number": 1
+            }))?),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(serde_json::from_value(json!({
+                "turn_id": "after-compaction"
+            }))?)),
+        ] {
+            append_rollout_item_to_path(&source_path, &item).await?;
+        }
+        let fork: ThreadForkResponse = resumed
+            .request(|request_id| ClientRequest::ThreadFork {
+                request_id,
+                params: ThreadForkParams {
+                    thread_id: source_thread.id,
+                    before_turn_id: Some("after-compaction".to_string()),
+                    exclude_turns: true,
+                    ..Default::default()
+                },
+            })
+            .await?;
+        assert_eq!(fork.thread.preview, "first");
+    }
 
     Ok(())
 }
@@ -1618,6 +1646,15 @@ async fn thread_fork_creates_reference_backed_paginated_thread() -> Result<()> {
     assert_eq!(forked_thread.forked_from_id, Some(conversation_id.clone()));
     assert_eq!(forked_thread.turns.len(), 1);
     let forked_thread_id = forked_thread.id.clone();
+    let listed = list_threads(&mut mcp).await?;
+    assert_eq!(
+        listed
+            .data
+            .iter()
+            .find(|thread| thread.id == forked_thread_id)
+            .map(|thread| thread.preview.as_str()),
+        Some("Saved user message")
+    );
     let forked_path = forked_thread.path.expect("forked rollout path");
     assert!(!std::fs::read_to_string(forked_path.as_path())?.contains("Saved user message"));
     let meta = read_session_meta_line(forked_path.as_path()).await?;
@@ -1643,6 +1680,15 @@ async fn thread_fork_creates_reference_backed_paginated_thread() -> Result<()> {
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    let listed = list_threads(&mut mcp).await?;
+    assert_eq!(
+        listed
+            .data
+            .iter()
+            .find(|thread| thread.id == forked_thread_id)
+            .map(|thread| thread.preview.as_str()),
+        Some("Saved user message")
+    );
     let requests = server.received_requests().await.expect("wiremock requests");
     let response_request = requests
         .iter()

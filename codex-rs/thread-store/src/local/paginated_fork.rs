@@ -46,17 +46,19 @@ pub(super) async fn prepare(
             operation: "prepare_fork",
         });
     }
-    let (history_base, model_context) = lineage
+    let (history_base, model_context, preview_before_compaction) = lineage
         .read_with_fallback(store, |lineage| {
             read_fork_history(store, thread_id, boundary, lineage)
         })
         .await?;
-    Ok(PreparedFork::with_source_reservation(
+    let mut fork = PreparedFork::with_source_reservation(
         thread_id,
         history_base,
         Arc::new(model_context),
         source_reservation,
-    ))
+    );
+    fork.preview_before_compaction = preview_before_compaction;
+    Ok(fork)
 }
 
 async fn read_fork_history(
@@ -64,7 +66,7 @@ async fn read_fork_history(
     thread_id: ThreadId,
     boundary: &ForkBoundary,
     lineage: RolloutLineage,
-) -> ThreadStoreResult<(Option<HistoryPosition>, Vec<RolloutItem>)> {
+) -> ThreadStoreResult<(Option<HistoryPosition>, Vec<RolloutItem>, Option<String>)> {
     let source_segment = lineage
         .segments()
         .last()
@@ -97,8 +99,19 @@ async fn read_fork_history(
 
     let history_base = history_base_at_boundary(store, thread_id, boundary, &lineage).await?;
     drop(source_writer_guard);
-    let model_context = model_context::load_for_fork(lineage, history_base).await?;
-    Ok((history_base, model_context))
+    let model_context = model_context::load_for_fork(lineage.clone(), history_base).await?;
+    // A bounded replay starts with session metadata followed by the compaction. Its opening
+    // user message can only be recovered from the transcript within the same fork boundary.
+    let preview = if let [RolloutItem::SessionMeta(_), RolloutItem::Compacted(_), ..] =
+        model_context.as_slice()
+        && let Some(end) = history_base
+    {
+        let prefix = lineage.truncate_at(end).await?;
+        super::thread_history::first_user_preview(store, &prefix).await?
+    } else {
+        None
+    };
+    Ok((history_base, model_context, preview))
 }
 
 pub(super) async fn history_base_at_boundary(

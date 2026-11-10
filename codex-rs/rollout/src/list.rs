@@ -122,6 +122,7 @@ pub type ConversationsPage = ThreadsPage;
 struct HeadTailSummary {
     originator: Option<String>,
     saw_session_meta: bool,
+    has_fork_history: bool,
     attached_to_parent: bool,
     thread_id: Option<ThreadId>,
     first_user_message: Option<String>,
@@ -841,7 +842,9 @@ async fn build_thread_item(
         return None;
     }
     if summary.saw_session_meta
-        && (matches!(preview_filter, PreviewFilter::IncludeEmpty) || summary.preview.is_some())
+        && (matches!(preview_filter, PreviewFilter::IncludeEmpty)
+            || summary.preview.is_some()
+            || summary.has_fork_history)
     {
         let HeadTailSummary {
             originator,
@@ -1033,6 +1036,13 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                         .then(|| session_meta_line.meta.originator.clone());
                     summary.source = Some(session_meta_line.meta.source.clone());
                     summary.attached_to_parent = session_meta_line.meta.attached_thread;
+                    // A reference-backed fork can have a stored preview before its first local message.
+                    summary.has_fork_history = session_meta_line.meta.forked_from_id.is_some()
+                        && session_meta_line
+                            .meta
+                            .history_base
+                            .is_some_and(|base| base.end_ordinal_exclusive > 0)
+                        && !session_meta_line.meta.source.is_non_root_agent();
                     summary.history_mode = session_meta_line.meta.history_mode;
                     summary.parent_thread_id = session_meta_line.meta.parent_thread_id;
                     summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();

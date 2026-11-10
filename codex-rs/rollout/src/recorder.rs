@@ -1431,11 +1431,19 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         item.originator = originator;
     }
 
+    // A paginated fork's rollout starts with its own first turn. SQLite can hold a
+    // distinct preview inherited from the parent before that turn was written.
+    if item.preview.is_none()
+        || (item.history_mode == ThreadHistoryMode::Paginated
+            && preview
+                .as_deref()
+                .is_some_and(|preview| !preview.is_empty())
+            && preview != first_user_message)
+    {
+        item.preview = preview;
+    }
     if item.first_user_message.is_none() {
         item.first_user_message = first_user_message;
-    }
-    if item.preview.is_none() {
-        item.preview = preview;
     }
     item.section = section;
     item.project_id = project_id;

@@ -55,7 +55,10 @@ pub(crate) struct PendingThreadMetadataPatch {
 }
 
 impl ThreadMetadataSync {
-    pub(crate) async fn for_create(params: &CreateThreadParams) -> Self {
+    pub(crate) async fn for_create(
+        params: &CreateThreadParams,
+        inherited_preview: Option<&str>,
+    ) -> Self {
         let created_at = Utc::now();
         let cwd = params.metadata.cwd.clone().unwrap_or_default();
         let git_info = if get_git_repo_root(cwd.as_path()).is_some() {
@@ -93,7 +96,8 @@ impl ThreadMetadataSync {
         Self {
             thread_id: params.thread_id,
             cwd_seen: !cwd.as_os_str().is_empty(),
-            preview_seen: guardian_review,
+            preview_seen: guardian_review
+                || inherited_preview.is_some_and(|preview| !preview.is_empty()),
             first_user_message_seen: guardian_review,
             title_seen: guardian_review,
             pending_update: Some(update),
@@ -485,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn create_metadata_records_originator_without_project() {
         let thread_id = ThreadId::new();
-        let sync = ThreadMetadataSync::for_create(&CreateThreadParams {
+        let params = CreateThreadParams {
             attached_thread: false,
             creator_user_id: None,
             creator_account_id: None,
@@ -511,8 +515,8 @@ mod tests {
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
             },
-        })
-        .await;
+        };
+        let sync = ThreadMetadataSync::for_create(&params, /*inherited_preview*/ None).await;
 
         let update = sync.take_pending_update().expect("pending metadata update");
         assert_eq!(

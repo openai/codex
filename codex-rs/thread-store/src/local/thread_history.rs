@@ -22,6 +22,7 @@ pub(super) use realtime::list_timeline;
 pub(super) use search::search_thread_occurrences;
 pub(super) use turn_lookup::find_source_turn;
 pub(super) use turn_lookup::find_visible_turn;
+pub(super) use turn_lookup::first_user_preview;
 
 /// A valid complete rollout line with its absolute byte span in durable JSONL.
 ///

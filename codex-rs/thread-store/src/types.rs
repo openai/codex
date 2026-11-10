@@ -244,6 +244,8 @@ pub struct PreparedFork {
     pub history_base: Option<HistoryPosition>,
     /// Bounded model context selected by the requested fork boundary.
     pub model_context: Arc<Vec<RolloutItem>>,
+    /// Opening preview from the frozen transcript when compaction omitted it from model context.
+    pub preview_before_compaction: Option<String>,
     /// Prevents the source thread from being deleted until the child's history reference is
     /// finalized.
     ///
@@ -264,6 +266,7 @@ impl PreparedFork {
             source_thread_id,
             history_base,
             model_context,
+            preview_before_compaction: None,
             _source_reservation: Some(Box::new(source_reservation)),
         }
     }
@@ -279,6 +282,7 @@ impl PreparedFork {
             source_thread_id,
             history_base,
             model_context,
+            preview_before_compaction: None,
             _source_reservation: None,
         }
     }
