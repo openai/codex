@@ -151,7 +151,8 @@ impl Replies {
 
 /// Opens an app-server client backed by the authenticated native Cloud client.
 fn start_worker(client: cloud::Client, account: protocol::GetAccountResponse) -> AppServerClient {
-    let (app_client, commands, output) = CloudClient::channel(/*capacity*/ 32);
+    let (app_client, commands, output) =
+        CloudClient::channel_with_catalog(/*capacity*/ 32, Some(client.clone()));
     let mut requests = requests::Requests {
         client,
         account,

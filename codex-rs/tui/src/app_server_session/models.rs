@@ -44,11 +44,7 @@ pub(super) async fn list(
     request_handle: AppServerRequestHandle,
     request_id: RequestId,
 ) -> Result<Vec<ModelPreset>, TypedRequestError> {
-    if mode == ThreadParamsMode::Cloud {
-        // The internal preview uses the model returned by Cloud when the thread opens.
-        return Ok(Vec::new());
-    }
-    let response: ModelListResponse = request_handle
+    let response: ModelListResponse = match request_handle
         .request_typed(ClientRequest::ModelList {
             request_id,
             params: ModelListParams {
@@ -58,10 +54,24 @@ pub(super) async fn list(
                 model_provider: None,
             },
         })
-        .await?;
+        .await
+    {
+        Ok(response) => response,
+        // Older Cloud servers do not expose model discovery. Preserve their startup behavior.
+        Err(TypedRequestError::Server { source, .. })
+            if mode == ThreadParamsMode::Cloud && source.code == -32601 =>
+        {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
     Ok(response
         .data
         .into_iter()
         .map(model_preset_from_api_model)
         .collect())
 }
+
+#[cfg(test)]
+#[path = "models_tests.rs"]
+mod tests;

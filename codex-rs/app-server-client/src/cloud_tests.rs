@@ -102,3 +102,80 @@ async fn cloud_shutdown_times_out_when_owner_does_not_respond() {
     assert!(events.is_closed());
     assert!(commands.recv().await.is_none());
 }
+
+#[tokio::test]
+async fn native_model_list_bypasses_the_cloud_command_queue() -> color_eyre::Result<()> {
+    use codex_app_server_protocol::ModelListResponse;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::matchers::query_param;
+
+    let server = MockServer::start().await;
+    let home = tempfile::tempdir()?;
+    let config = crate::legacy_core::config::ConfigBuilder::default()
+        .codex_home(home.path().to_owned())
+        .fallback_cwd(Some(home.path().to_owned()))
+        .without_project_context()
+        .build()
+        .await?;
+    let native = codex_cloud_client::Client::new(
+        &config.http_client_factory(),
+        &server.uri(),
+        codex_cloud_client::Credentials::new("synthetic-bearer", "synthetic-account")?,
+    )?;
+    let response = serde_json::json!({
+        "data": [{
+            "id": "test-model",
+            "model": "test-model",
+            "displayName": "Test model",
+            "description": "Cloud catalog fixture",
+            "hidden": true,
+            "supportedReasoningEfforts": [],
+            "defaultReasoningEffort": "medium",
+            "isDefault": false
+        }],
+        "nextCursor": "next"
+    });
+    Mock::given(method("GET"))
+        .and(path("/v2/models"))
+        .and(header("authorization", "Bearer synthetic-bearer"))
+        .and(header("chatgpt-account-id", "synthetic-account"))
+        .and(query_param("cursor", "previous"))
+        .and(query_param("limit", "2"))
+        .and(query_param("includeHidden", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Leave the command receiver idle. The catalog must finish without its worker.
+    let (client, mut commands, _events) =
+        CloudClient::channel_with_catalog(/*capacity*/ 1, Some(native));
+    let handle = AppServerClient::Cloud(client).request_handle();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 5),
+        handle.request_typed::<ModelListResponse>(ClientRequest::ModelList {
+            request_id: RequestId::Integer(1),
+            params: ModelListParams {
+                cursor: Some("previous".into()),
+                limit: Some(2),
+                include_hidden: Some(true),
+                model_provider: None,
+            },
+        }),
+    )
+    .await??;
+    assert_eq!(
+        result,
+        serde_json::from_value::<ModelListResponse>(response)?
+    );
+    assert!(matches!(
+        commands.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    Ok(())
+}

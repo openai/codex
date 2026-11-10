@@ -5,6 +5,7 @@
 
 use super::App;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::ThreadParamsMode;
 use crate::app_server_session::ThreadSettingsOwner;
 use crate::service_tier_resolution;
 use codex_app_server_client::AppServerRequestHandle;
@@ -13,6 +14,7 @@ use codex_app_server_protocol::WriteStatus;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ReasoningEffort;
 use color_eyre::eyre::Result;
 
@@ -91,6 +93,49 @@ impl App {
         effort: Option<ReasoningEffort>,
         service_tier: Option<String>,
     ) {
+        if app_server.thread_params_mode() == ThreadParamsMode::Cloud {
+            let Some(thread_id) = self
+                .active_thread_id
+                .filter(|id| Some(*id) == self.chat_widget.thread_id())
+            else {
+                self.chat_widget.add_error_message(
+                    "Open the Cloud conversation before choosing a model.".into(),
+                );
+                return;
+            };
+            if service_tier.is_some()
+                || model == crate::model_catalog::LUNA_RESERVE_MODEL
+                || !self.model_catalog.models.iter().any(|preset| {
+                    preset.model == model
+                        && effort.as_ref().is_none_or(|effort| {
+                            *effort == preset.default_reasoning_effort
+                                || preset
+                                    .supported_reasoning_efforts
+                                    .iter()
+                                    .any(|preset| &preset.effort == effort)
+                        })
+                        && preset.model_specialty.as_deref() != Some(MODEL_SPECIALTY_CYBER)
+                })
+            {
+                self.chat_widget.add_error_message(
+                    "Choose a supported Cloud model and effort at the current speed.".into(),
+                );
+                return;
+            }
+            let label = Self::reasoning_label_for(&model, effort.as_ref())
+                .map_or_else(String::new, |label| format!(" {label}"));
+            let message =
+                format!("Selected {model}{label} for the next new turn in this conversation");
+            if app_server.stage_cloud_model_selection(thread_id, model, effort) {
+                self.chat_widget.add_info_message(message, /*hint*/ None);
+            } else {
+                self.chat_widget.add_error_message(
+                    "The Cloud account changed. Reopen the conversation before choosing a model."
+                        .into(),
+                );
+            }
+            return;
+        }
         // Changing effort or speed for the effective model must preserve permissions.
         let model_changed = self.chat_widget.current_model() != model;
         let params = if model_changed {

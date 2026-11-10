@@ -19,7 +19,6 @@ pub(super) async fn try_submit_user_turn(
         turn_trigger,
         cloud_submission,
         client_user_message_id,
-        model,
         ..
     } = op
     else {
@@ -47,7 +46,7 @@ pub(super) async fn try_submit_user_turn(
     };
     let original_active = app.active_turn_id_for_thread(thread_id).await;
     let mut active = original_active.clone();
-    let preflight = || {
+    let preflight = |model: &str| {
         let enabled = app.chat_widget.daybreak_enabled
             && !app.chat_widget.side_conversation_active()
             && !app.side_threads.contains_key(&thread_id);
@@ -94,7 +93,10 @@ pub(super) async fn try_submit_user_turn(
     }
 
     match result {
-        Ok(admission) => {
+        Ok((admission, selection)) => {
+            if selection.is_some() {
+                app.chat_widget.cloud_picker_selection = selection;
+            }
             if !matches!(&admission, UserMessageAdmission::Queued(_)) {
                 crate::startup_recovery::acknowledged(client_user_message_id);
             }

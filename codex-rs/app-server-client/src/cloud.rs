@@ -7,6 +7,7 @@ use crate::TypedRequestError;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::Turn;
@@ -62,6 +63,7 @@ pub struct CloudCommand {
 #[derive(Clone)]
 pub struct CloudRequestHandle {
     commands: mpsc::Sender<CloudCommand>,
+    catalog: Option<Arc<codex_cloud_client::Client>>,
 }
 
 /// Tracks only losses queued for delivery. The worker remains the sole owner
@@ -127,12 +129,26 @@ impl CloudClient {
         mpsc::Receiver<CloudCommand>,
         mpsc::UnboundedSender<AppServerEvent>,
     ) {
+        Self::channel_with_catalog(capacity, /*catalog*/ None)
+    }
+
+    pub(super) fn channel_with_catalog(
+        capacity: usize,
+        catalog: Option<codex_cloud_client::Client>,
+    ) -> (
+        Self,
+        mpsc::Receiver<CloudCommand>,
+        mpsc::UnboundedSender<AppServerEvent>,
+    ) {
         let (commands, receiver) = mpsc::channel(capacity.max(1));
         let (events, event_receiver) = mpsc::unbounded_channel();
         (
             Self {
                 stream_losses: CloudStreamLosses::default(),
-                handle: CloudRequestHandle { commands },
+                handle: CloudRequestHandle {
+                    commands,
+                    catalog: catalog.map(Arc::new),
+                },
                 events: event_receiver,
             },
             receiver,
@@ -191,6 +207,47 @@ impl CloudClient {
 }
 
 impl CloudRequestHandle {
+    /// Whether a completed model read still belongs to the bound Cloud account.
+    pub fn model_catalog_is_current(&self) -> bool {
+        self.catalog
+            .as_ref()
+            .is_none_or(|catalog| catalog.model_catalog_is_current())
+    }
+
+    async fn model_list(
+        catalog: &codex_cloud_client::Client,
+        params: &ModelListParams,
+    ) -> RequestResult {
+        if params.model_provider.is_some() {
+            return Err(JSONRPCErrorError {
+                code: -32602,
+                message: "Cloud model discovery uses the server's model provider.".into(),
+                data: None,
+            });
+        }
+        let result = async {
+            let body = catalog
+                .list_models(
+                    params.cursor.as_deref(),
+                    params.limit,
+                    params.include_hidden,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            if !catalog.model_catalog_is_current() {
+                return Err("Cloud model catalog account changed.".into());
+            }
+            serde_json::from_slice(&body)
+                .map_err(|_| "Invalid Cloud model catalog response.".into())
+        }
+        .await;
+        result.map_err(|message| JSONRPCErrorError {
+            code: -32000,
+            message,
+            data: None,
+        })
+    }
+
     pub(crate) async fn start_project_thread(
         &self,
         request_id: RequestId,
@@ -242,6 +299,12 @@ impl CloudRequestHandle {
     }
 
     pub(crate) async fn request(&self, request: ClientRequest) -> io::Result<RequestResult> {
+        // Catalog reads must not occupy the serialized send and attachment lane.
+        if let (Some(catalog), ClientRequest::ModelList { params, .. }) = (&self.catalog, &request)
+        {
+            // Keep the catalog HTTP state out of the shared request future.
+            return Ok(Box::pin(Self::model_list(catalog, params)).await);
+        }
         self.send(CloudOperation::Request(Box::new(request))).await
     }
 

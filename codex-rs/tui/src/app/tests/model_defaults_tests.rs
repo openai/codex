@@ -1,6 +1,8 @@
 use super::*;
 use crate::collaboration_modes;
 use codex_app_server_client::AppServerClient;
+use codex_app_server_client::CloudOperation;
+use codex_app_server_client::CloudUserMessageReceipt;
 use codex_config::LoaderOverrides;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use crossterm::event::KeyCode;
@@ -155,24 +157,28 @@ async fn standard_speed_selection_falls_back_for_older_app_servers() -> Result<(
 }
 
 #[tokio::test]
-async fn cloud_model_selection_requires_server_acceptance() -> Result<()> {
-    for event in [
-        AppEvent::SelectSessionModel {
-            model: "gpt-5.6-terra".into(),
-            effort: Some(ReasoningEffortConfig::High),
-            service_tier: None,
-        },
-        AppEvent::ApplyModelSelection {
-            model: "gpt-5.6-terra".into(),
-            effort: Some(ReasoningEffortConfig::High),
-        },
-        AppEvent::ApplyAdvancedReasoning {
-            model: "gpt-5.6-terra".into(),
-            effort: ReasoningEffortConfig::Ultra,
-        },
+async fn cloud_model_selection_waits_for_native_admission() -> Result<()> {
+    let turn = test_turn("cloud-turn", TurnStatus::InProgress, Vec::new());
+    for receipt in [
+        Ok(CloudUserMessageReceipt::Started(turn.clone())),
+        Ok(CloudUserMessageReceipt::Steered(turn)),
+        Err(codex_app_server_protocol::JSONRPCErrorError {
+            code: -32602,
+            message: "Cloud reply attachment failed local preflight".into(),
+            data: None,
+        }),
+        Err(codex_app_server_protocol::JSONRPCErrorError {
+            code: -32000,
+            message: "Native mutation outcome unknown".into(),
+            data: None,
+        }),
     ] {
-        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        let admitted = receipt.is_ok();
+        let unconfirmed = receipt.as_ref().is_err_and(|error| error.code == -32000);
+        let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
+        app.chat_widget
+            .handle_thread_session(test_thread_session(thread_id, app.config.cwd.to_path_buf()));
         app.active_thread_id = Some(thread_id);
         let original_model = app.chat_widget.current_model().to_string();
         let original_effort = app.chat_widget.current_reasoning_effort();
@@ -186,36 +192,13 @@ async fn cloud_model_selection_requires_server_acceptance() -> Result<()> {
         let mut tui = crate::tui::test_support::make_test_tui()?;
         while events.try_recv().is_ok() {}
 
-        let (result, operation) =
-            tokio::join!(app.handle_event(&mut tui, &mut server, event), async {
-                let command = commands.recv().await.expect("cloud settings update");
-                let codex_app_server_client::CloudOperation::Request(request) = command.operation
-                else {
-                    panic!("expected cloud request")
-                };
-                let ClientRequest::ThreadSettingsUpdate { params, .. } = *request else {
-                    panic!("expected thread/settings/update request")
-                };
-                command
-                    .response
-                    .send(Ok(Err(JSONRPCErrorError {
-                        code: -32601,
-                        data: None,
-                        message: "method not found".to_string(),
-                    })))
-                    .expect("model selection should still await its response");
-                params
-            });
-
-        result?;
-        assert_eq!(operation.thread_id, thread_id.to_string());
-        assert_eq!(
-            (
-                app.chat_widget.current_model(),
-                app.chat_widget.current_reasoning_effort(),
-            ),
-            (original_model.as_str(), original_effort)
-        );
+        let event = AppEvent::ApplyModelSelection {
+            model: "gpt-5.6-terra".into(),
+            effort: Some(ReasoningEffortConfig::High),
+        };
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+        assert!(commands.try_recv().is_err());
+        assert!(app.chat_widget.cloud_picker_selection.is_none());
         let messages = std::iter::from_fn(|| events.try_recv().ok())
             .filter_map(|event| match event {
                 AppEvent::InsertHistoryCell(cell) => {
@@ -227,8 +210,66 @@ async fn cloud_model_selection_requires_server_acceptance() -> Result<()> {
         insta::allow_duplicates! {
             insta::assert_snapshot!(
                 messages.join("\n"),
-                @"■ This cloud conversation does not support changing its model from the TUI."
+                @"• Selected gpt-5.6-terra high for the next new turn in this conversation"
             );
+        }
+        app.chat_widget.apply_external_edit("continue".into());
+        app.chat_widget.handle_key_event(KeyCode::Esc.into());
+        app.chat_widget.handle_key_event(KeyCode::Enter.into());
+        let op = next_user_turn_op(&mut ops);
+        let admit = async {
+            let command = commands.recv().await.expect("native admission request");
+            let CloudOperation::SubmitUserMessage(params) = command.operation else {
+                panic!("expected StartOrSteer");
+            };
+            assert_eq!(
+                (params.model.as_deref(), params.effort),
+                (Some("gpt-5.6-terra"), Some(ReasoningEffortConfig::High))
+            );
+            let response = receipt.map(|receipt| serde_json::to_value(receipt).unwrap());
+            command.response.send(Ok(response)).unwrap();
+        };
+        let submit = Box::pin(super::super::user_turn_submission::try_submit_user_turn(
+            &mut app,
+            &mut server,
+            thread_id,
+            &op,
+        ));
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(submit, admit)
+        })
+        .await?;
+        assert!(result?);
+        assert_eq!(
+            (
+                app.chat_widget.current_model(),
+                app.chat_widget.current_reasoning_effort(),
+            ),
+            (original_model.as_str(), original_effort),
+        );
+        let input = app.chat_widget.capture_thread_input_state();
+        let held = input.is_some_and(|input| input.has_unconfirmed_messages());
+        assert_eq!(held, unconfirmed);
+        let rejected = !admitted && !unconfirmed;
+        let restored = if rejected { "continue" } else { "" };
+        assert_eq!(app.chat_widget.composer_text_with_pending(), restored);
+        let accepted = app.chat_widget.cloud_picker_selection.as_ref();
+        assert_eq!(
+            accepted.map(|selection| (selection.model.as_str(), selection.effort.clone())),
+            admitted.then_some(("gpt-5.6-terra", Some(ReasoningEffortConfig::High))),
+        );
+        if accepted.is_some() {
+            app.chat_widget.open_model_popup();
+            let popup = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+            let label = popup.lines().find(|line| line.contains("Accepted for"));
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(label.unwrap().trim(), @"Accepted for future turns: gpt-5.6-terra · High");
+            }
+            app.chat_widget.handle_thread_session(test_thread_session(
+                thread_id,
+                app.config.cwd.to_path_buf(),
+            ));
+            assert!(app.chat_widget.cloud_picker_selection.is_none());
         }
     }
     Ok(())

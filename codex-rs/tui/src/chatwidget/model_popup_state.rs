@@ -2,6 +2,7 @@
 //! Preserve highlighted models by wire slug, independent of their display names.
 
 use super::model_popups::ALL_MODELS_SELECTION_VIEW_ID;
+use super::model_popups::MODEL_LOADING_VIEW_ID;
 use super::model_popups::MODEL_OPTIONS_VIEW_ID;
 use super::model_popups::MODEL_SELECTION_VIEW_ID;
 use super::*;
@@ -29,12 +30,18 @@ impl ChatWidget {
 
     pub(crate) fn dismiss_stale_model_picker(&mut self) {
         self.model_popup_request_id = None;
+        self.cloud_picker_selection = None;
+        let had_popup = !self.no_modal_or_popup_active();
         for id in [
+            MODEL_LOADING_VIEW_ID,
             MODEL_OPTIONS_VIEW_ID,
             ALL_MODELS_SELECTION_VIEW_ID,
             MODEL_SELECTION_VIEW_ID,
         ] {
             while self.bottom_pane.dismiss_view_by_id(id) {}
+        }
+        if had_popup && self.no_modal_or_popup_active() {
+            self.app_event_tx.send(AppEvent::SettingsSelectionClosed);
         }
     }
 
@@ -77,12 +84,21 @@ impl ChatWidget {
             return false;
         }
         self.model_popup_request_id = None;
+        let loading = self.bottom_pane.active_view_id() == Some(MODEL_LOADING_VIEW_ID);
+        self.bottom_pane.dismiss_view_by_id(MODEL_LOADING_VIEW_ID);
+        if loading {
+            match &result {
+                Ok(presets) => self.open_model_popup_with_presets(presets.clone()),
+                Err(_) => self.add_error_message("Could not load models. Try /model again.".into()),
+            }
+            if self.no_modal_or_popup_active() {
+                self.on_modal_or_popup_closed();
+            }
+        }
         let Ok(presets) = result else {
             return false;
         };
-        if presets.is_empty()
-            || self.model_catalog.try_list_models().ok().as_ref() == Some(&presets)
-        {
+        if presets.is_empty() || self.model_catalog.models == presets {
             return false;
         }
         Arc::make_mut(&mut self.model_catalog).models = presets;

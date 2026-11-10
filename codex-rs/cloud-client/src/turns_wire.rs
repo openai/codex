@@ -5,8 +5,12 @@ use prost::Message;
 pub(super) struct AddRequest {
     #[prost(string, tag = "4")]
     pub client_user_message_id: String,
+    #[prost(string, optional, tag = "9")]
+    pub effort: Option<String>,
     #[prost(message, optional, tag = "11")]
     pub input: Option<Input>,
+    #[prost(string, optional, tag = "12")]
+    pub model: Option<String>,
     #[prost(string, tag = "23")]
     pub thread_id: String,
     #[prost(string, optional, tag = "25")]

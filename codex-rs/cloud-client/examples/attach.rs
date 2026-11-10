@@ -30,6 +30,8 @@ async fn main() -> anyhow::Result<()> {
                 text_elements: vec![],
             }],
             turn_trigger: None,
+            model: None,
+            effort: None,
             mode: SubmissionMode::StartIfIdle,
             shared_access: false,
         }),

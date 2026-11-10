@@ -18,7 +18,7 @@ pub enum SubmissionMode {
     Queue,
     StartIfIdle,
 }
-/// Text and images using the existing thread configuration. Persist the message ID with
+/// Text and images with optional conversation model settings. Persist the message ID with
 /// the input before calling; never reuse it for a different logical submission.
 #[derive(Clone)]
 pub struct AddUserMessageRequest {
@@ -27,6 +27,9 @@ pub struct AddUserMessageRequest {
     pub input: Vec<UserMessageInput>,
     /// Optional classification supplied by the caller for this turn.
     pub turn_trigger: Option<String>,
+    /// Omit both to inherit the thread settings. A model alone uses its default effort.
+    pub model: Option<String>,
+    pub effort: Option<String>,
     pub mode: SubmissionMode,
     pub shared_access: bool,
 }
@@ -125,6 +128,8 @@ impl Client {
     ) -> Result<Admission, MutationError> {
         if request.thread_id.trim().is_empty()
             || request.client_user_message_id.trim().is_empty()
+            || ((request.model.is_some() || request.effort.is_some())
+                && matches!(request.mode, SubmissionMode::Queue))
             || !request.input.iter().any(|input| match input {
                 UserMessageInput::Text { text, .. } => !text.trim().is_empty(),
                 UserMessageInput::Image { .. } => true,
@@ -206,6 +211,8 @@ impl Client {
                     })
                     .collect(),
             }),
+            model: request.model.clone(),
+            effort: request.effort.clone(),
             thread_id: request.thread_id.clone(),
             turn_trigger: request.turn_trigger.clone(),
             access: request.shared_access.then_some(1),

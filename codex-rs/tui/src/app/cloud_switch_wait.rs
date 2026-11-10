@@ -108,7 +108,7 @@ fn handle_cloud_switch_event(
 
 fn show_cloud_switch_hint(app: &mut App, progress: CloudSwitchProgress) {
     let (label, action) = match progress {
-        CloudSwitchProgress::Connecting(_) => ("Connecting to Cloud…", "submit when ready"),
+        CloudSwitchProgress::Connecting(_) => ("Connecting to Cloud…", ""),
         CloudSwitchProgress::Failed => ("Cloud conversation did not open", "draft kept"),
     };
     app.chat_widget

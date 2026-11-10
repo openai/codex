@@ -10,6 +10,7 @@ use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStartParams;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::turn_input::CyberAccessProgram;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Report;
@@ -76,16 +77,43 @@ impl UserMessageSubmissionFailure {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct CloudModelSelection {
+    pub(crate) model: String,
+    pub(crate) effort: Option<ReasoningEffort>,
+}
+
 impl AppServerSession {
+    fn cloud_model_catalog_is_current(&self) -> bool {
+        matches!(&self.request_handle,
+            AppServerRequestHandle::Cloud(handle) if handle.model_catalog_is_current()
+        )
+    }
+
+    pub(crate) fn stage_cloud_model_selection(
+        &mut self,
+        thread_id: ThreadId,
+        model: String,
+        effort: Option<ReasoningEffort>,
+    ) -> bool {
+        if !self.cloud_model_catalog_is_current() {
+            return false;
+        }
+        self.cloud_model_selections
+            .insert(thread_id, CloudModelSelection { model, effort });
+        true
+    }
+
     pub(crate) async fn submit_user_message<'a>(
         &mut self,
         thread_id: ThreadId,
         op: &AppCommand,
         intent: CloudSubmissionIntent,
         active_turn: &mut Option<String>,
-        preflight: impl FnOnce() -> Result<Option<CyberAccessProgram>, String>,
+        preflight: impl FnOnce(&str) -> Result<Option<CyberAccessProgram>, String>,
         start_settings: impl FnOnce() -> TurnStartSettings<'a>,
-    ) -> Result<UserMessageAdmission, UserMessageSubmissionFailure> {
+    ) -> Result<(UserMessageAdmission, Option<CloudModelSelection>), UserMessageSubmissionFailure>
+    {
         let AppCommand::UserTurn {
             turn_trigger,
             client_user_message_id,
@@ -120,11 +148,13 @@ impl AppServerSession {
                     )
                     .await
                 {
-                    Ok(response) => return Ok(UserMessageAdmission::Steered(response.turn_id)),
+                    Ok(response) => {
+                        return Ok((UserMessageAdmission::Steered(response.turn_id), None));
+                    }
                     Err(error) => error,
                 };
                 if let Some(error) = active_turn_not_steerable_turn_error(&error) {
-                    return Ok(UserMessageAdmission::Queued(error.message));
+                    return Ok((UserMessageAdmission::Queued(error.message), None));
                 }
                 match active_turn_steer_race(&error) {
                     Some(ActiveTurnSteerRace::Missing) => {
@@ -148,29 +178,58 @@ impl AppServerSession {
             }
         }
 
-        let program = preflight().map_err(UserMessageSubmissionFailure::Preflight)?;
+        let selection =
+            if cloud && *turn_trigger == "user" && intent != CloudSubmissionIntent::UseKnownTurn {
+                self.cloud_model_selections.get(&thread_id).cloned()
+            } else {
+                None
+            };
+        if selection.is_some() && !self.cloud_model_catalog_is_current() {
+            self.cloud_model_selections.remove(&thread_id);
+            return Err(UserMessageSubmissionFailure::Preflight(
+                "The Cloud account changed. Reopen the conversation before sending.".into(),
+            ));
+        }
+        let selected_model = selection
+            .as_ref()
+            .map_or(model.as_str(), |selection| selection.model.as_str());
+        let program = preflight(selected_model).map_err(UserMessageSubmissionFailure::Preflight)?;
+        let take_selection = |session: &mut Self| {
+            selection.as_ref()?;
+            session
+                .cloud_model_selections
+                .remove(&thread_id)
+                .filter(|_| session.cloud_model_catalog_is_current())
+        };
         if cloud
             && intent == CloudSubmissionIntent::StartOrSteer
             && let AppServerRequestHandle::Cloud(handle) = &self.request_handle
         {
+            let (model, effort) = selection.as_ref().map_or((None, None), |selection| {
+                (Some(selection.model.clone()), selection.effort.clone())
+            });
             let result = handle
                 .submit_user_message(TurnStartParams {
                     thread_id: thread_id.to_string(),
+                    turn_trigger: model.as_ref().map(|_| turn_trigger.to_string()),
                     client_user_message_id: Some(client_user_message_id.clone()),
                     input: items.clone(),
                     output_schema: final_output_json_schema.clone(),
+                    model,
+                    effort,
                     ..Default::default()
                 })
                 .await;
-            return match result {
+            let admission = match result {
                 Ok(CloudUserMessageReceipt::Started(turn)) => {
                     Ok(UserMessageAdmission::Started(turn.id))
                 }
+                // A successful steer saves these settings for subsequent starts.
                 Ok(CloudUserMessageReceipt::Steered(turn)) => {
                     Ok(UserMessageAdmission::Steered(turn.id))
                 }
                 Ok(CloudUserMessageReceipt::Duplicate { .. }) => {
-                    Ok(UserMessageAdmission::Duplicate)
+                    return Ok((UserMessageAdmission::Duplicate, None));
                 }
                 // The adapter returns invalid params only for failures before admission.
                 Err(TypedRequestError::Server { source, .. })
@@ -184,7 +243,8 @@ impl AppServerSession {
                     error: error.into(),
                     reconnect: false,
                 }),
-            };
+            }?;
+            return Ok((admission, take_selection(self)));
         }
         let settings = start_settings();
         self.turn_start(
@@ -204,9 +264,13 @@ impl AppServerSession {
             collaboration_mode.clone(),
             final_output_json_schema.clone(),
             program.map(Into::into),
+            selection.as_ref(),
         )
         .await
-        .map(|response| UserMessageAdmission::StartResponse(response.turn.id))
+        .map(|response| {
+            let admission = UserMessageAdmission::StartResponse(response.turn.id);
+            (admission, take_selection(self))
+        })
         .map_err(
             |error| match UserMessageSubmissionFailure::conventional(error, intent) {
                 UserMessageSubmissionFailure::Rejected(error) => {

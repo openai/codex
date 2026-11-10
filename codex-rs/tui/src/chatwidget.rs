@@ -550,6 +550,8 @@ pub(crate) struct ChatWidget {
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,
     model_popup_request_id: Option<uuid::Uuid>,
+    pub(crate) cloud_picker_selection:
+        Option<crate::app_server_session::user_message_submission::CloudModelSelection>,
     /// An app event has been queued to open the permissions picker, but no view exists yet.
     pub(crate) permission_popup_pending: bool,
     permission_popup_request_id: Option<uuid::Uuid>,

@@ -8,6 +8,7 @@ use crate::model_catalog::LUNA_RESERVE_MODEL;
 
 const ULTRA_REASONING_CONCURRENCY_WARNING_THRESHOLD: usize = 8;
 pub(super) const MODEL_OPTIONS_VIEW_ID: &str = "model-options";
+pub(super) const MODEL_LOADING_VIEW_ID: &str = "model-loading";
 pub(super) const MODEL_SELECTION_VIEW_ID: &str = "model-selection";
 pub(super) const ALL_MODELS_SELECTION_VIEW_ID: &str = "all-models-selection";
 
@@ -40,7 +41,15 @@ impl ChatWidget {
         };
         let request_id = uuid::Uuid::new_v4();
         self.model_popup_request_id = Some(request_id);
-        self.open_model_popup_with_presets(presets);
+        if presets.is_empty() {
+            self.bottom_pane.show_selection_view(SelectionViewParams {
+                view_id: Some(MODEL_LOADING_VIEW_ID),
+                title: Some("Loading models…".into()),
+                ..SelectionViewParams::picker()
+            });
+        } else {
+            self.open_model_popup_with_presets(presets);
+        }
         // Show cached choices immediately and update any still-present picker when the reply arrives.
         self.app_event_tx.send(AppEvent::FetchModels { request_id });
     }
@@ -51,6 +60,17 @@ impl ChatWidget {
         let mut header = vec![Line::from(title.bold())];
         if !subtitle.is_empty() {
             header.push(Line::from(subtitle.dim()));
+        }
+        if let Some(selection) = &self.cloud_picker_selection {
+            let effort = selection
+                .effort
+                .as_ref()
+                .map_or_else(|| "server effort".to_string(), Self::reasoning_effort_label);
+            header.push(
+                format!("Accepted for future turns: {} · {effort}", selection.model)
+                    .dim()
+                    .into(),
+            );
         }
         if let Some(warning) = self.model_menu_warning_line() {
             header.push(warning);

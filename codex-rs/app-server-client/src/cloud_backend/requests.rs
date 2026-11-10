@@ -314,6 +314,11 @@ fn cloud_message(
         ))?;
     let input = std::mem::take(&mut params.input);
     let turn_trigger = params.turn_trigger.take();
+    let (model, effort) = if turn_trigger.as_deref() == Some("user") {
+        (params.model.take(), params.effort.take())
+    } else {
+        (None, None)
+    };
     if params != protocol::TurnStartParams::default() {
         return Err(PreflightRejection(
             "Changing cloud settings or sending structured input is not supported yet.",
@@ -385,6 +390,8 @@ fn cloud_message(
         client_user_message_id,
         input: content,
         turn_trigger,
+        model,
+        effort: effort.map(|effort| effort.to_string()),
         mode: cloud::SubmissionMode::StartIfIdle,
         shared_access: false,
     })

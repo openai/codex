@@ -1279,7 +1279,7 @@ async fn cloud_switch_wait_displays_pending_submission_hint() -> Result<()> {
             .find(|line| line.contains("Connecting to Cloud"))
             .expect("Cloud connection hint")
             .trim(),
-        @"Connecting to Cloud… submit when ready"
+        @"Connecting to Cloud…"
     );
     Ok(())
 }
