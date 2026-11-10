@@ -26,6 +26,7 @@ enum CodexErrorInfoWire {
     ModelNotFound,
     /// Capacity is unavailable on a route restricted by server policy.
     PolicyCapacityUnavailable,
+    InferenceHookDenied,
     CyberPolicy,
     BioPolicy,
     MisalignmentPolicyViolation,

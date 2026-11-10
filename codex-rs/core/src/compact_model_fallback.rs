@@ -17,6 +17,7 @@ pub(crate) fn should_retry_with_current_model(
         CodexErrorDetails::TurnAborted
             | CodexErrorDetails::Interrupted
             | CodexErrorDetails::SessionBudgetExceeded
+            | CodexErrorDetails::InferenceHookDenied { .. }
             | CodexErrorDetails::WorkspaceAccessDenied(_)
             | CodexErrorDetails::ContentPolicyViolation { .. }
             | CodexErrorDetails::ResponseIncomplete(_)

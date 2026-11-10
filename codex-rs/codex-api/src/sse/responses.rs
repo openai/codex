@@ -683,6 +683,7 @@ async fn process_sse_with_treatment(
                         | ApiError::ContextWindowExceeded
                         | ApiError::InvalidRequest { .. }
                         | ApiError::SessionBudgetExceeded
+                        | ApiError::InferenceHookDenied { .. }
                         | ApiError::AccessProgramNotEnabled { .. }
                         | ApiError::ContentPolicyViolation { .. }
                         | ApiError::ResponseIncomplete(_)

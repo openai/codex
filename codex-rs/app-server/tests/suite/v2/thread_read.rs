@@ -2818,15 +2818,17 @@ async fn thread_items_read_validates_ids_before_history_access() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case("model_not_found", CodexErrorInfo::ModelNotFound, "Access to this deployment ended."; "model_not_found")]
+#[test_case::test_case("inference_hook_denied", CodexErrorInfo::InferenceHookDenied, "Blocked by the workspace hook."; "inference_hook_denied")]
 #[tokio::test]
-async fn thread_read_preserves_model_not_found_after_failed_turn() -> Result<()> {
+async fn thread_read_preserves_provider_error_after_failed_turn(
+    code: &str,
+    expected: CodexErrorInfo,
+    message: &str,
+) -> Result<()> {
     let server = responses::start_mock_server().await;
-    let message = "Access to this deployment ended.";
-    let _response_mock = responses::mount_sse_once(
-        &server,
-        responses::sse_failed("resp-1", "model_not_found", message),
-    )
-    .await;
+    let response_mock =
+        responses::mount_sse_once(&server, responses::sse_failed("resp-1", code, message)).await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
@@ -2858,10 +2860,7 @@ async fn thread_read_preserves_model_not_found_after_failed_turn() -> Result<()>
     let live: ErrorNotification =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("error")).await??;
     assert!(!live.will_retry);
-    assert_eq!(
-        live.error.codex_error_info,
-        Some(CodexErrorInfo::ModelNotFound)
-    );
+    assert_eq!(live.error.codex_error_info, Some(expected));
     assert_eq!(live.error.message, message);
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -2883,6 +2882,7 @@ async fn thread_read_preserves_model_not_found_after_failed_turn() -> Result<()>
         thread.turns.last().and_then(|turn| turn.error.as_ref()),
         Some(&live.error)
     );
+    assert_eq!(response_mock.requests().len(), 1);
 
     Ok(())
 }

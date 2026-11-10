@@ -2534,6 +2534,9 @@ fn websocket_error_detail(err: &ApiError) -> String {
             "handshake error: model not found: [redacted]".to_string()
         }
         ApiError::InvalidPrompt { .. } => "handshake error: invalid prompt: [redacted]".to_string(),
+        ApiError::InferenceHookDenied { .. } => {
+            "handshake error: inference hook denied: [redacted]".to_string()
+        }
         ApiError::ContentPolicyViolation { .. } => {
             "handshake error: content policy violation".to_string()
         }

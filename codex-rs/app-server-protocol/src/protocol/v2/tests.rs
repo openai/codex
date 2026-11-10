@@ -4907,6 +4907,10 @@ fn core_error_info_converts_to_camel_case() {
             json!("policyCapacityUnavailable"),
         ),
         (CoreCodexErrorInfo::CyberPolicy, json!("cyberPolicy")),
+        (
+            CoreCodexErrorInfo::InferenceHookDenied,
+            json!("inferenceHookDenied"),
+        ),
         (CoreCodexErrorInfo::BioPolicy, json!("other")),
         (CoreCodexErrorInfo::InvalidPrompt, json!("other")),
         (
@@ -4918,9 +4922,11 @@ fn core_error_info_converts_to_camel_case() {
             json!("rateLimitExceeded"),
         ),
     ] {
+        let converted = CodexErrorInfo::from(core);
+        assert_eq!(serde_json::to_value(&converted).unwrap(), expected);
         assert_eq!(
-            serde_json::to_value(CodexErrorInfo::from(core)).unwrap(),
-            expected
+            serde_json::from_value::<CodexErrorInfo>(expected).unwrap(),
+            converted
         );
     }
 }

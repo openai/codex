@@ -8376,6 +8376,7 @@ class ActiveTurnNotSteerableCodexErrorInfo(BaseModel):
 class CodexErrorInfo(
     RootModel[
         CodexErrorInfoValue
+        | Literal["inferenceHookDenied"]
         | HttpConnectionFailedCodexErrorInfo
         | ResponseStreamConnectionFailedCodexErrorInfo
         | ResponseStreamDisconnectedCodexErrorInfo
@@ -8386,6 +8387,7 @@ class CodexErrorInfo(
 ):
     root: Annotated[
         CodexErrorInfoValue
+        | Literal["inferenceHookDenied"]
         | HttpConnectionFailedCodexErrorInfo
         | ResponseStreamConnectionFailedCodexErrorInfo
         | ResponseStreamDisconnectedCodexErrorInfo

@@ -336,6 +336,12 @@ fn map_api_error_preserves_typed_errors() {
     let message = "This request was rejected.";
     for (error, expected_info) in [
         (
+            ApiError::InferenceHookDenied {
+                message: message.to_string(),
+            },
+            CodexErrorInfo::InferenceHookDenied,
+        ),
+        (
             ApiError::BioPolicy {
                 message: message.to_string(),
             },
@@ -357,21 +363,30 @@ fn map_api_error_preserves_typed_errors() {
 
 #[test]
 fn map_api_error_maps_http_and_wrapped_websocket_typed_errors() {
-    for (code, expected_info, fallback) in [
+    for (status, code, expected_info, fallback) in [
         (
+            http::StatusCode::BAD_REQUEST,
             "content_policy_violation",
             CodexErrorInfo::InvalidPrompt,
             "The input was rejected by the content policy.",
         ),
         (
+            http::StatusCode::BAD_REQUEST,
             "bio_policy",
             CodexErrorInfo::BioPolicy,
             "This content was flagged for possible biological risk.",
         ),
         (
+            http::StatusCode::BAD_REQUEST,
             "invalid_prompt",
             CodexErrorInfo::InvalidPrompt,
             "Invalid request.",
+        ),
+        (
+            http::StatusCode::FORBIDDEN,
+            "inference_hook_denied",
+            CodexErrorInfo::InferenceHookDenied,
+            "Your workspace inference hook blocked this request.",
         ),
     ] {
         for wrapped in [false, true] {
@@ -390,11 +405,11 @@ fn map_api_error_maps_http_and_wrapped_websocket_typed_errors() {
                 }
                 if wrapped {
                     body["type"] = serde_json::json!("error");
-                    body["status"] = serde_json::json!(400);
+                    body["status"] = serde_json::json!(status.as_u16());
                 }
                 let err = map_api_error(ApiError::Transport(TransportError::Http {
                     retry_after: None,
-                    status: http::StatusCode::BAD_REQUEST,
+                    status,
                     url: None,
                     headers: None,
                     body: Some(body.to_string()),

@@ -26,6 +26,13 @@
           "type": "string"
         },
         {
+          "description": "The workspace's inference hook explicitly denied this request.",
+          "enum": [
+            "inferenceHookDenied"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "properties": {
             "httpConnectionFailed": {

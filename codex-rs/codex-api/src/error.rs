@@ -57,6 +57,8 @@ pub enum ApiError {
     #[error("invalid prompt: {message}")]
     InvalidPrompt { message: String },
     #[error("{message}")]
+    InferenceHookDenied { message: String },
+    #[error("{message}")]
     ContentPolicyViolation {
         message: String,
         status: Option<StatusCode>,
@@ -96,6 +98,13 @@ pub(crate) fn parse_terminal_provider_error(
         .and_then(Value::as_str)
         .filter(|message| !message.trim().is_empty());
     match (code, status) {
+        ("inference_hook_denied", None | Some(StatusCode::FORBIDDEN)) => {
+            Some(ApiError::InferenceHookDenied {
+                message: message
+                    .unwrap_or("Your workspace inference hook blocked this request.")
+                    .to_owned(),
+            })
+        }
         ("context_length_exceeded", None | Some(StatusCode::BAD_REQUEST)) => {
             Some(ApiError::ContextWindowExceeded)
         }

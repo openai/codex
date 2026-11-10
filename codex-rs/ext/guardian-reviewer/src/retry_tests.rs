@@ -115,6 +115,13 @@ fn guardian_review_retry_only_retries_recoverable_errors() {
             false,
         ),
         (
+            GuardianReviewOutcome::Error(GuardianReviewError::session_with_error_info(
+                anyhow::anyhow!("workspace inference hook denied the request"),
+                CodexErrorInfo::InferenceHookDenied,
+            )),
+            false,
+        ),
+        (
             GuardianReviewSessionOutcome::Completed(Ok(Some(GuardianReviewResponse::new(
                 "invalid assessment".to_owned(),
             ))))

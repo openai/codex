@@ -173,6 +173,9 @@ pub enum CodexErrorDetails {
     },
     #[error("{message}")]
     InvalidPrompt { message: String },
+    /// The workspace's inference hook explicitly denied this request.
+    #[error("{message}")]
+    InferenceHookDenied { message: String },
     /// The provider rejected the input under its content policy.
     #[error("{message}")]
     ContentPolicyViolation {
@@ -463,6 +466,7 @@ impl CodexErr {
             | CodexErrorDetails::ResponseIncomplete(_)
             | CodexErrorDetails::ModelNotFound { .. }
             | CodexErrorDetails::InvalidPrompt { .. }
+            | CodexErrorDetails::InferenceHookDenied { .. }
             | CodexErrorDetails::ContentPolicyViolation { .. }
             | CodexErrorDetails::ToolCollision(_)
             | CodexErrorDetails::RefreshTokenFailed(_)
@@ -544,6 +548,7 @@ impl CodexErr {
                 CodexErrorInfo::PolicyCapacityUnavailable
             }
             CodexErrorDetails::FlexUnavailable => CodexErrorInfo::FlexUnavailable,
+            CodexErrorDetails::InferenceHookDenied { .. } => CodexErrorInfo::InferenceHookDenied,
             CodexErrorDetails::CyberPolicy { .. } => CodexErrorInfo::CyberPolicy,
             CodexErrorDetails::BioPolicy { .. } => CodexErrorInfo::BioPolicy,
             CodexErrorDetails::ModelNotFound { .. } => CodexErrorInfo::ModelNotFound,

@@ -43,6 +43,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         | ApiError::InvalidAudioInput { .. }
         | ApiError::ModelNotFound { .. }
         | ApiError::InvalidPrompt { .. }
+        | ApiError::InferenceHookDenied { .. }
         | ApiError::ContentPolicyViolation { .. }
         | ApiError::CyberPolicy { .. }
         | ApiError::BioPolicy { .. }
@@ -104,6 +105,9 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
         }
         ApiError::InvalidPrompt { message } => {
             CodexErr::new(CodexErrorDetails::InvalidPrompt { message })
+        }
+        ApiError::InferenceHookDenied { message } => {
+            CodexErr::new(CodexErrorDetails::InferenceHookDenied { message })
         }
         ApiError::ContentPolicyViolation { message, status } => {
             CodexErrorDetails::ContentPolicyViolation { message, status }.into()

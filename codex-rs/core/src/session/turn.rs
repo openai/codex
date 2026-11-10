@@ -2036,7 +2036,9 @@ async fn run_sampling_request(
                     }
                     return Err(err);
                 }
-                CodexErrorDetails::SessionBudgetExceeded | CodexErrorDetails::Fatal(_) => {
+                CodexErrorDetails::SessionBudgetExceeded
+                | CodexErrorDetails::InferenceHookDenied { .. }
+                | CodexErrorDetails::Fatal(_) => {
                     return Err(err);
                 }
                 _ => err,

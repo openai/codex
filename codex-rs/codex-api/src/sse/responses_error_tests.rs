@@ -115,6 +115,7 @@ async fn terminal_failure_with_retry_header_ends_stream_immediately() {
     for (code, expected) in [
         ("flex_unavailable", CodexErrorInfo::FlexUnavailable),
         ("budget_reached", CodexErrorInfo::SessionBudgetExceeded),
+        ("inference_hook_denied", CodexErrorInfo::InferenceHookDenied),
         (
             "context_length_exceeded",
             CodexErrorInfo::ContextWindowExceeded,
