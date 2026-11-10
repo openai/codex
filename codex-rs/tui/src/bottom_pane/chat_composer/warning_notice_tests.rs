@@ -104,7 +104,10 @@ fn warning_notice_respects_shortcuts_and_interactive_hints() {
     composer.footer.show_warnings_key = Some(crate::key_hint::plain(KeyCode::F(12)).into());
     assert!(text(&render(&composer, /*width*/ 64, /*count*/ 2)).contains("f12 to view"));
     composer.footer.show_warnings_key = None;
-    assert!(text(&render(&composer, /*width*/ 64, /*count*/ 2)).contains("⚠ 2 · /warnings"));
+    assert!(
+        text(&render(&composer, /*width*/ 64, /*count*/ 2))
+            .contains("⚠ 2 warnings · /warnings to view")
+    );
     let interactive = TranscriptFooter {
         text: Line::from("Find: needle").into(),
         cursor_column: Some(6),

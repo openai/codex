@@ -21,23 +21,7 @@
 //!   instruction. In that state, the footer may render the configured status line, the active
 //!   agent label, side-conversation state, or some combination of those.
 //!
-//! Single-line collapse overview:
-//! 1. The composer decides the current `FooterMode` and hint flags, then calls
-//!    `single_line_footer_layout` for the base single-line modes.
-//! 2. `single_line_footer_layout` applies the width-based fallback rules:
-//!    (If this description is hard to follow, just try it out by resizing
-//!    your terminal width; these rules were built out of trial and error.)
-//!    - Start with the fullest left-side hint plus the right-side context.
-//!    - When the queue hint is active, prefer keeping that queue hint visible,
-//!      even if it means dropping the right-side context earlier; the queue
-//!      hint may also be shortened before it is removed.
-//!    - When the queue hint is not active but the mode cycle hint is applicable,
-//!      drop "? for shortcuts" before dropping "(shift+tab to cycle)".
-//!    - If "(shift+tab to cycle)" cannot fit, also hide the right-side
-//!      context to avoid too many state transitions in quick succession.
-//!    - Finally, try a mode-only line (with and without context), and fall
-//!      back to no left-side footer if nothing can fit.
-//! 3. The composer renders the chosen line, the default `FooterProps` mapping, or no left content.
+//! The composer fits ordinary navigation, modes, actions, and warnings in `chat_composer::passive_hints`.
 pub(crate) mod footer_content;
 
 use self::footer_content::FooterContent;
@@ -292,6 +276,7 @@ pub(crate) fn render_footer_from_props(
     .render(area, buf);
 }
 
+#[cfg(test)]
 pub(crate) fn left_fits(area: Rect, left_width: u16) -> bool {
     let max_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16);
     left_width <= max_width
@@ -302,6 +287,7 @@ enum SummaryHintKind {
     None,
     Shortcuts,
     QueueMessage,
+    #[cfg(test)]
     QueueShort,
 }
 
@@ -338,6 +324,7 @@ fn left_side_line(
                 line.push_span(" to queue message".set_style(secondary_text_style()));
             }
         }
+        #[cfg(test)]
         SummaryHintKind::QueueShort => {
             if let Some(key) = key_hints.queue {
                 line.extend(key.spans());
@@ -360,12 +347,14 @@ fn left_side_line(
     line
 }
 
+#[cfg(test)]
 pub(crate) enum SummaryLeft {
     Default,
     Custom(Line<'static>),
     None,
 }
 
+#[cfg(test)]
 /// Compute the single-line footer layout and whether the right-side context
 /// indicator can be shown alongside it.
 pub(crate) fn single_line_footer_layout(
@@ -752,10 +741,7 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
 ///
 /// This is the canonical FooterMode-to-text mapping. It powers transient,
 /// instructional states (shortcut overlay, Esc hint, quit reminder) and also
-/// the default rendering for base states when collapse is not applied (or when
-/// `single_line_footer_layout` returns `SummaryLeft::Default`). Collapse and
-/// fallback decisions live in `single_line_footer_layout`; this function only
-/// formats the chosen/default content.
+/// the default text for base states. The caller owns placement and collapse.
 fn footer_from_props_lines(
     props: &FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,

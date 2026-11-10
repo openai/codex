@@ -1,0 +1,31 @@
+---
+source: tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+expression: "frames.join(\"\\n---\\n\")"
+---
+fullscreen 120×2 empty
+  Build ready
+  ← for agents · ? for shortcuts      Vim: Normal · Plan mode (⇧tab to cycle) · IDE context · ⚠ 2 warnings · f2 to view
+---
+fullscreen 60×2 empty
+  Build ready
+  ← for agents     Vim: Normal · Plan mode · IDE · ⚠ 2 · f2
+---
+fullscreen 31×3 empty
+  Build ready
+       Vim: Normal · Plan mode
+---
+fullscreen 31×3 draft
+  Build ready
+       Vim: Normal · Plan mode
+  tab to queue message     IDE
+---
+fullscreen 31×2 draft
+  Build ready
+  tab to queue     Vim: Normal
+---
+scrollback 31×4 draft
+  Build ready
+  tab to queue     Vim: Normal
+---
+scrollback 31×1 draft
+  tab to queue     Vim: Normal

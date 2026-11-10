@@ -66,11 +66,7 @@ fn extension_status_line_clips_links_to_footer_layout() {
                 .collect();
             assert_eq!(
                 linked_text,
-                match (width, separate_status_line) {
-                    (12, false) => "P",
-                    (12, true) => "PR#",
-                    _ => "PR #42",
-                },
+                if width == 12 { "PR#" } else { "PR #42" },
                 "{buffer:?}"
             );
             assert!(linked.iter().all(|cell| !cell.symbol().contains('…')));
@@ -278,13 +274,17 @@ fn sidebar_focus_collapses_extension_status_to_its_dim_line() {
     let frames = [false, true, false].map(|unfocused| {
         let options = ComposerRenderOptions {
             separate_status_line: true,
+            warning_count: usize::from(unfocused),
             unfocused,
             ..Default::default()
         };
         let height = composer.desired_height_with_options(/*width*/ 40, options);
-        render_status(&composer, Rect::new(0, 0, 40, height), options)
-            .1
-            .join("\n")
+        let (buffer, rows) = render_status(&composer, Rect::new(0, 0, 40, height), options);
+        if unfocused {
+            assert_eq!(composer.footer.warning_notice_area.get(), None);
+            assert!(!buffer.content.iter().any(|cell| cell.symbol() == "⚠"));
+        }
+        rows.join("\n")
     });
     insta::assert_snapshot!(frames.join("\n---\n"), @"
     one
@@ -468,7 +468,7 @@ fn extension_status_keeps_its_rows_when_effort_changes() {
             if separate_status_line {
                 vec!["one", "two", "three"]
             } else {
-                vec!["one…"]
+                vec!["one", "two…"]
             }
         );
     }
@@ -713,11 +713,28 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
 
     // Configured items such as git-branch can have no value outside a repository.
     composer.set_status_line(/*status_line*/ None);
-    let (empty_narrow, _) = render(&composer, /*width*/ 24, /*footer*/ None);
-    assert!(
-        empty_narrow.lines().last().unwrap().contains("Plan mode"),
-        "{empty_narrow}"
-    );
+    for separate_status_line in [false, true] {
+        let options = ComposerRenderOptions {
+            separate_status_line,
+            ..Default::default()
+        };
+        let width = 20;
+        let area = Rect::new(
+            0,
+            0,
+            width,
+            composer.desired_height_with_options(width, options),
+        );
+        let (buf, _) = render_status(&composer, area, options);
+        let hint: String = (0..width)
+            .map(|x| buf[(x, area.bottom() - 1)].symbol())
+            .collect();
+        assert_eq!(
+            hint.trim(),
+            "Plan mode",
+            "separate_status_line={separate_status_line}"
+        );
+    }
     let (empty_wide, _) = render(&composer, /*width*/ 100, /*footer*/ None);
     assert!(
         empty_wide.contains("Plan mode (⇧tab to cycle)"),
@@ -742,21 +759,113 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
 #[test]
 fn footer_layout_in_fullscreen_and_scrollback() {
     let mut composer = composer();
-    composer.set_status_line(Some("Build ready".into()));
+    composer.command_center_enabled = true;
+    composer.set_vim_enabled(/*enabled*/ true);
+    composer.set_collaboration_modes_enabled(/*enabled*/ true);
     composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
-    let area = Rect::new(
-        /*x*/ 0, /*y*/ 0, /*width*/ 31, /*height*/ 4,
-    );
-    for separate_status_line in [false, true] {
+    composer.footer.ide_context_active = true;
+    composer.set_status_line(Some("Build ready".into()));
+    let mut frames = Vec::new();
+    for (fullscreen, width, rows, drafting) in [
+        (true, 120, 2, false),
+        (true, 60, 2, false),
+        (true, 31, 3, false),
+        (true, 31, 3, true),
+        (true, 31, 2, true),
+        (false, 31, 4, true),
+        (false, 31, 1, true),
+    ] {
+        if drafting && !composer.is_task_running {
+            composer.insert_str("draft");
+            composer.set_task_running(/*running*/ true);
+        }
         let options = ComposerRenderOptions {
-            separate_status_line,
+            separate_status_line: fullscreen,
+            warning_count: 2,
             ..Default::default()
         };
+        let area = Rect::new(/*x*/ 0, /*y*/ 0, width, 3 + rows);
         let layout = composer.layout_with_options(area, options);
-        assert_eq!((layout.status.height, layout.footer.height), (0, 1));
-        let (buf, _) = render_status(&composer, area, options);
-        assert!(frame(&buf).lines().last().unwrap().contains("Plan"));
+        let mut buf = Buffer::empty(area);
+        composer.render_with_options(area, &mut buf, /*mask_char*/ None, options);
+        let lines = (layout.status.y..area.bottom())
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        if let Some(hit) = composer.footer.warning_notice_area.get() {
+            assert_eq!(buf[(hit.x, hit.y)].symbol(), "⚠");
+            assert_eq!(hit.y, layout.footer.bottom() - 1);
+        }
+        frames.push(format!(
+            "{} {width}×{rows} {}\n{}",
+            if fullscreen {
+                "fullscreen"
+            } else {
+                "scrollback"
+            },
+            if drafting { "draft" } else { "empty" },
+            lines.join("\n")
+        ));
     }
+    insta::assert_snapshot!(frames.join("\n---\n"));
+}
+
+#[test]
+fn active_side_action_keeps_plan_expanded_on_the_other_row() {
+    let mut composer = composer();
+    composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
+    composer.set_side_conversation_active(/*active*/ true);
+    let label = "Side from main thread · ctrl+/ to switch · ctrl+c to close";
+    composer.set_side_conversation_context_label(Some(label.to_string()));
+    let options = ComposerRenderOptions {
+        separate_status_line: true,
+        warning_count: 2,
+        ..Default::default()
+    };
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 63, /*height*/ 6,
+    );
+    let (buf, _) = render_status(&composer, area, options);
+    let text = frame(&buf);
+    let mut rows = text.lines().rev().map(|row| row.trim_matches('|').trim());
+    assert_eq!(rows.next(), Some(label));
+    assert!(rows.next().unwrap().contains("Plan mode (⇧tab to cycle)"));
+}
+
+#[test]
+fn oversized_goal_yields_to_an_eligible_whole_hint_with_status_disabled() {
+    let mut composer = composer();
+    composer.set_status_line_enabled(/*enabled*/ false);
+    composer.set_context_window(Some(100), /*used_tokens*/ None);
+    let (text, _) = render(&composer, /*width*/ 18, /*footer*/ None);
+    assert_eq!(text.lines().last().map(str::trim), Some("? for shortcuts"));
+    let (text, _) = render(&composer, /*width*/ 20, /*footer*/ None);
+    assert_eq!(
+        text.lines().last().map(str::trim),
+        Some("100% context left")
+    );
+
+    composer.set_context_window_pending(/*pending*/ true);
+    composer.set_goal_status_indicator(Some(GoalStatusIndicator::Paused));
+    let (text, _) = render(&composer, /*width*/ 18, /*footer*/ None);
+    assert_eq!(text.lines().last().map(str::trim), Some("? for shortcuts"));
+    let options = ComposerRenderOptions {
+        separate_status_line: true,
+        ..Default::default()
+    };
+    assert_eq!(composer.footer_hint_height(/*width*/ 18, options), 1);
+    composer.set_input_enabled(/*enabled*/ false, /*placeholder*/ None);
+    assert_eq!(composer.footer_hint_height(/*width*/ 18, options), 0);
+    let (text, _) = render(&composer, /*width*/ 80, /*footer*/ None);
+    assert_eq!(
+        text.lines().last().map(str::trim),
+        Some("Goal paused (/goal resume)")
+    );
 }
 
 #[test]

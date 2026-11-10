@@ -20,7 +20,7 @@ Zoomed
 › xchild draft!
 
   GPT-6.1-Sol default · Agent
-  tab to queue message                                                                                                                                                                                                                                  Side from main thread · ⌃/ to switch · ⌃c to close
+  tab to queue message · Side from main thread · ⌃/ to switch · ⌃c to close
 Restored
 parent-24                                                                                                                                                                                            │ Side chat×                                                                                        +
                                                                                                                                                                                                      │• unfinished answer
@@ -39,7 +39,7 @@ parent-29                                                                       
 › xparent draft-!                                                                                                                                                                                    │› xchild draft!
   second line                                                                                                                                                                                        │
   GPT-6.1-Sol default                                                                                                                                                                                │  GPT-6.1-Sol default · Agent
-                                                                                                                                                                                                     │  tab to queue message                            Side from main thread · ⌃/ to switch · ⌃c to close
+                                                                                                                                                                                                     │  tab to queue message · Side from main thread · ⌃/ to switch · ⌃c to close
 Equalized
 parent-24                                                                                          │ Side chat×                                                                                      +
                                                                                                    │• unfinished answer
@@ -58,4 +58,4 @@ parent-29                                                                       
 › xparent draft-!                                                                                  │› xchild draft!
   second line                                                                                      │
   GPT-6.1-Sol default                                                                              │  GPT-6.1-Sol default · Agent
-                                                                                                   │  tab to queue message                          Side from main thread · ⌃/ to switch · ⌃c to close
+                                                                                                   │  tab to queue message · Side from main thread · ⌃/ to switch · ⌃c to close

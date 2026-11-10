@@ -352,7 +352,6 @@ use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::GoalStatusIndicator;
-use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
 use super::footer::context_window_line;
 use super::footer::esc_hint_mode;
@@ -367,7 +366,6 @@ use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::side_conversation_context_line;
-use super::footer::single_line_footer_layout;
 use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
 use super::mention_usage::MentionUsage;
@@ -410,6 +408,7 @@ mod history_search;
 mod inline_input;
 mod mouse;
 pub(crate) use mouse::ClipboardPasteTarget;
+mod passive_hints;
 mod paste_input;
 mod popup_state;
 mod reconnect;
@@ -4717,22 +4716,30 @@ impl ChatComposer {
             }
         }
         let transcript_hint_area = inset_footer_hint_area(footer_rect);
-        let warning_notice = self
-            .warning_notice_layout(transcript_hint_area, options)
-            .filter(|_| !options.unfocused);
+        let passive = self.passive_hints(options);
+        let warning_notice = if !options.unfocused && passive.is_none() {
+            self.warning_notice_layout(transcript_hint_area, options)
+        } else {
+            None
+        };
         let warning_area = warning_notice.as_ref().map(|(area, _)| *area);
-        match options.footer {
+        let mut painted_warning = warning_area;
+        match (options.footer, passive) {
             _ if options.unfocused => {}
-            Some(footer) => {
+            (_, Some(hints)) => {
+                let hint_area = passive_hints::hint_area(footer_rect);
+                painted_warning = hints.render(hint_area, buf);
+            }
+            (Some(footer), None) => {
                 self.render_transcript_footer(transcript_hint_area, buf, footer, warning_area);
             }
-            None if self.shortcuts_above_composer(options) => {
+            (None, None) if self.shortcuts_above_composer(options) => {
                 let props = self.hint_footer_props();
                 super::shortcut_overlay::render(&props, inset_footer_hint_area(popup_rect), buf);
                 super::shortcut_overlay::close_hint(&props, transcript_hint_area.width)
                     .render(transcript_hint_area, buf);
             }
-            None => {
+            (None, None) => {
                 let hint_rect = warning_notice::before_warning(footer_rect, warning_area);
                 if let Some(input) = self.draft.textarea.vim_query() {
                     input.render(inset_footer_hint_area(hint_rect), buf);
@@ -4795,73 +4802,23 @@ impl ChatComposer {
                         can_show_left_with_context(hint_rect, left_width, right_width);
                     let has_override =
                         self.footer.flash_visible() || active_footer_hint_override.is_some();
-                    let single_line_layout = if has_override {
-                        None
-                    } else {
-                        match footer_props.mode {
-                            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => {
-                                // Both of these modes render the single-line footer style (with
-                                // either the shortcuts hint or the optional queue hint). We still
-                                // want the single-line collapse rules so the mode label can win over
-                                // the context indicator on narrow widths.
-                                Some(single_line_footer_layout(
-                                    hint_rect,
-                                    right_width,
-                                    left_mode_indicator,
-                                    show_cycle_hint,
-                                    show_shortcuts_hint,
-                                    show_queue_hint,
-                                    footer_props.key_hints,
-                                ))
-                            }
-                            FooterMode::EscHint
-                            | FooterMode::HistorySearch
-                            | FooterMode::QuitShortcutReminder
-                            | FooterMode::ShortcutOverlay => None,
-                        }
-                    };
+                    let passive_mode = matches!(
+                        footer_props.mode,
+                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                    );
                     let show_right = if has_override && status_line_active {
                         can_show_left_and_context
-                    } else if matches!(
-                        footer_props.mode,
-                        FooterMode::EscHint
-                            | FooterMode::HistorySearch
-                            | FooterMode::QuitShortcutReminder
-                            | FooterMode::ShortcutOverlay
-                    ) {
-                        false
                     } else {
-                        single_line_layout
-                            .as_ref()
-                            .map(|(_, show_context)| *show_context)
-                            .unwrap_or(can_show_left_and_context)
+                        passive_mode && (!has_override || can_show_left_and_context)
                     };
 
-                    if let Some((summary_left, _)) = single_line_layout {
-                        match summary_left {
-                            SummaryLeft::Default => {
-                                render_footer_from_props(
-                                    hint_rect,
-                                    buf,
-                                    &footer_props,
-                                    left_mode_indicator,
-                                    show_cycle_hint,
-                                    show_shortcuts_hint,
-                                    show_queue_hint,
-                                );
-                            }
-                            SummaryLeft::Custom(line) => {
-                                render_footer_line(hint_rect, buf, line);
-                            }
-                            SummaryLeft::None => {}
-                        }
-                    } else if self.footer.flash_visible() {
+                    if self.footer.flash_visible() {
                         if let Some(flash) = self.footer.flash.as_ref() {
                             Widget::render(&flash.line, inset_footer_hint_area(hint_rect), buf);
                         }
                     } else if let Some(items) = active_footer_hint_override {
                         render_footer_hint_items(hint_rect, buf, items);
-                    } else {
+                    } else if !passive_mode {
                         render_footer_from_props(
                             hint_rect,
                             buf,
@@ -4878,7 +4835,7 @@ impl ChatComposer {
                 }
             }
         }
-        self.footer.warning_notice_area.set(warning_area);
+        self.footer.warning_notice_area.set(painted_warning);
         if let Some((warning_area, line)) = warning_notice {
             line.render(warning_area, buf);
         }

@@ -293,36 +293,9 @@ impl super::ChatComposer {
         if options.unfocused || self.shortcuts_above_composer(options) {
             return 1;
         }
-        if self.footer.status_line_enabled
-            && options.footer.is_none()
-            && self.custom_footer_height().is_none()
-            && matches!(
-                self.footer_mode(),
-                FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-            )
-        {
-            let mode = self.footer_mode();
-            let navigation = mode == FooterMode::ComposerEmpty
-                && !self.is_in_paste_burst()
-                && (self.agents_navigation_available()
-                    || self.footer.toggle_shortcuts_key.is_some());
-            let queue = mode == FooterMode::ComposerHasDraft
-                && self.is_task_running
-                && self.footer.queue_key.is_some();
-            return u16::from(
-                self.warning_notice_layout(
-                    super::inset_footer_hint_area(Rect::new(0, 0, width, 1)),
-                    options,
-                )
-                .is_some()
-                    || navigation
-                    || queue
-                    || self
-                        .mode_indicator_line(/*show_cycle_hint*/ false)
-                        .is_some()
-                    || self.shell_mode_footer_line().is_some()
-                    || self.footer.side_conversation_context_label.is_some(),
-            );
+        if let Some(hints) = self.passive_hints(options) {
+            return hints
+                .desired_rows(super::passive_hints::hint_area(Rect::new(0, 0, width, 1)).width);
         }
         options.footer.map_or_else(
             || {

@@ -7,4 +7,4 @@ expression: terminal.backend()
 "› Ask a follow-up question                                                      "
 "                                                                                "
 "  GPT-5.6-Sol                                                                   "
-"  ? for shortcuts   Side from main thread · ctrl+/ to switch · ctrl+c to close  "
+"  ? for shortcuts · Side from main thread · ctrl+/ to switch · ctrl+c to close  "

@@ -14,7 +14,7 @@ expression: "states.join(\"\\n---\\n\")"
 › Ask Codex
 
   MODEL · ~/project · Context 20% used
-  ? for shortcuts                    Plan mode (⇧tab to cycle)
+  ? for shortcuts                     Plan mode (⇧tab to cycle)
 ---
 
 
@@ -56,4 +56,4 @@ expression: "states.join(\"\\n---\\n\")"
 › Continue the task
 
   MODEL · ~/project · Context 20% used
-  tab to queue message                               Plan mode
+  tab to queue message                                Plan mode

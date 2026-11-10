@@ -37,10 +37,10 @@ parent-29                                                      │
                                                                │child-29
                                                                │
                                                                │
-› parent draft-                                                │› child draft!
-                                                               │
-  GPT-6.1-Sol default                                          │  GPT-6.1-Sol default · Agent
-                                                               │  Side from main thread · ⌃/ to swit
+› parent draft-                                                │
+                                                               │› child draft!
+  GPT-6.1-Sol default                                          │
+                                                               │  GPT-6.1-Sol default · Agent
 
 99 columns, reopened
  Side chat×                                                                                     +
@@ -60,4 +60,4 @@ child-29
 › child draft!
 
   GPT-6.1-Sol default · Agent
-                                               Side from main thread · ⌃/ to switch · ⌃c to close
+  Side from main thread · ⌃/ to switch · ⌃c to close
