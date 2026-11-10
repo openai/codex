@@ -8,7 +8,6 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 
 
-
 ⚠ Automatic approval review denied (risk: high): The planned action would
   transmit the full contents of a workspace source file (`core/src/codex.rs`) to
   `https://example.com`, which is an external and untrusted endpoint.
@@ -22,3 +21,4 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 › Ask Codex to do anything
 
   GPT-5.6-Sol default · /tmp/project
+  ? for shortcuts

@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/chat_composer_effort_tests.rs
-expression: footer
+expression: "rows.join(\"\\n\")"
 ---
   gpt-5.4 high · feature-branch
+  ? for shortcuts        Plan mode

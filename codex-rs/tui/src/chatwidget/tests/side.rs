@@ -329,7 +329,10 @@ async fn side_context_label_shows_parent_status_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw side conversation footer");
-    assert_chatwidget_snapshot!("side_context_label_shows_parent_status", terminal.backend());
+    assert_chatwidget_snapshot!(
+        "side_context_label_shows_parent_status",
+        normalized_backend_snapshot(terminal.backend())
+    );
 }
 
 #[tokio::test]

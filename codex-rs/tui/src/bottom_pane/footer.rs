@@ -877,15 +877,6 @@ impl FooterMode {
     }
 }
 
-/// Whether callers should reserve the dedicated status-line layout for a contextual footer row.
-///
-/// The dedicated layout exists for the configurable `/statusline` row. An agent label by itself
-/// can be rendered by the standard footer flow, so this only becomes `true` when the status line
-/// feature is enabled and the current mode allows contextual footer content.
-pub(crate) fn uses_passive_footer_status_layout(props: &FooterProps) -> bool {
-    props.status_line_enabled && props.mode.shows_passive_line(props.is_task_running)
-}
-
 pub(crate) fn footer_line_width(
     props: &FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
@@ -1070,7 +1061,8 @@ mod tests {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let status_line_active = uses_passive_footer_status_layout(props);
+                let status_line_active = props.status_line_enabled
+                    && props.mode.shows_passive_line(props.is_task_running);
                 let passive_status_line = if status_line_active {
                     passive_footer_status_line(props)
                         .map(|content| content.into_hyperlink_line().line)

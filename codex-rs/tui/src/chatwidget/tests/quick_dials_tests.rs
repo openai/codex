@@ -143,6 +143,7 @@ async fn saved_quick_dials_save_and_clear_picker_snapshots() {
     let (mut chat, mut events, _ops) =
         make_chatwidget_manual(/*model_override*/ Some("gpt-5.5")).await;
     chat.thread_id = Some(ThreadId::new());
+    chat.set_status_line(Some("GPT-5.5 default · /tmp/project".into()));
     chat.open_quick_dial_menu();
     assert_chatwidget_snapshot!(
         "quick_dial_shortcuts_empty",

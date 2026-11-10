@@ -7,4 +7,5 @@ expression: "reconnect_status.replace(&render_bottom_popup(&app.chat_widget, 80)
 
 › startup draft
 
+  GPT-5.6-Sol default · /tmp/project
   ⌃c quit

@@ -14,4 +14,5 @@ expression: "format!(\"{}\\n{}\",\nlines_to_single_string(&app.transcript_cells.
 
 › keep this draft!
 
+  gpt-test default · /tmp/project
   ⌃c quit

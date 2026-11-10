@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 4485
 expression: terminal.backend()
 ---
 "                                                                                                    "
@@ -10,5 +9,5 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"                                                                                                    "
 "  gpt-5.4 high fast · ~/code/codex-1 · Context 0% used                                              "
+"  ? for shortcuts                                                                                   "

@@ -78,22 +78,29 @@ fn extension_status_line_clips_links_to_footer_layout() {
     let (output, _) = render(&composer, /*width*/ 40, /*footer*/ None);
     assert!(output.contains("plain"), "{output}");
     assert!(!output.contains("bot"), "{output}");
+
+    composer.set_status_line(/*status_line*/ None);
+    let agent_rows = [false, true].map(|unfocused| {
+        let options = ComposerRenderOptions {
+            separate_status_line: true,
+            unfocused,
+            ..Default::default()
+        };
+        render_status(&composer, Rect::new(0, 0, 40, 8), options).1
+    });
+    assert_eq!(agent_rows, [vec!["bot".to_string()], vec![]]);
 }
 
-fn status_rows(
+fn render_status(
     composer: &ChatComposer,
     area: Rect,
     options: ComposerRenderOptions<'_>,
-) -> Vec<String> {
+) -> (Buffer, Vec<String>) {
     let layout = composer.layout_with_options(area, options);
-    let status = if options.separate_status_line {
-        layout.status
-    } else {
-        layout.footer
-    };
+    let status = layout.status;
     let mut buf = Buffer::empty(area);
     composer.render_with_options(area, &mut buf, /*mask_char*/ None, options);
-    (status.y..status.bottom())
+    let rows = (status.y..status.bottom())
         .map(|y| {
             (status.x..status.right())
                 .map(|x| buf[(x, y)].symbol())
@@ -101,11 +108,12 @@ fn status_rows(
                 .trim()
                 .to_owned()
         })
-        .collect()
+        .collect();
+    (buf, rows)
 }
 
 #[test]
-fn extension_layout_uses_the_width_left_by_the_mode_indicator_after_resize() {
+fn extension_uses_the_full_width_after_resize() {
     let mut composer = composer();
     composer.footer.show_warnings_key = None;
     let tree: crate::ui_tree::UiTree =
@@ -120,46 +128,31 @@ fn extension_layout_uses_the_width_left_by_the_mode_indicator_after_resize() {
         .chars()
         .map(|digit| osc8_hyperlink("https://example.com/pr/12345", &digit.to_string()))
         .collect();
-    let [shared, separate] = [false, true].map(|separate_status_line| {
-        let mut frames = Vec::new();
-        for (width, mode, warning_count) in [
-            (16, None, 0),
-            (15, None, 0),
-            (16, None, 0),
-            (25, Some(CollaborationModeIndicator::Plan), 0),
-            (19, None, 1),
+    for fullscreen in [false, true] {
+        for (width, mode, expected_rows) in [
+            (16, None, 1),
+            (15, None, 2),
+            (16, None, 1),
+            (27, Some(CollaborationModeIndicator::Plan), 1),
+            (19, Some(CollaborationModeIndicator::Plan), 1),
         ] {
             composer.set_collaboration_mode_indicator(mode);
             let options = ComposerRenderOptions {
-                separate_status_line,
-                warning_count,
+                separate_status_line: fullscreen,
+                warning_count: 1,
                 ..Default::default()
             };
             let height = composer.desired_height_with_options(width, options);
-            let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
-            let rows = status_rows(&composer, area, options);
+            let (buffer, rows) = render_status(&composer, Rect::new(0, 0, width, height), options);
+            assert_eq!(rows.len(), expected_rows);
             for row in &rows {
-                let text = strip_osc8(row);
-                assert_eq!(*row, text.replace("12345", &linked_number));
-                if warning_count == 0 {
-                    frames.push(format!("{width} | {text}"));
-                }
+                assert_eq!(*row, strip_osc8(row).replace("12345", &linked_number));
             }
-            if warning_count > 0 {
-                assert_eq!(
-                    composer.footer.warning_notice_area.get().unwrap().bottom(),
-                    height
-                );
-                assert_eq!(rows.len(), if separate_status_line { 1 } else { 2 });
-                let last = strip_osc8(rows.last().unwrap());
-                assert!(last.contains("PR 12345"));
-                assert_eq!(last.contains("⚠ 1"), !separate_status_line);
-            }
+            let warning = composer.footer.warning_notice_area.get().unwrap();
+            assert_eq!(buffer[(warning.x, warning.y)].symbol(), "⚠");
+            assert_eq!((warning.right(), warning.y), (width - 1, height - 1));
         }
-        frames.join("\n")
-    });
-    assert_eq!(shared, separate);
-    insta::assert_snapshot!(shared);
+    }
 }
 
 #[test]
@@ -173,17 +166,11 @@ fn status_rows_yield_to_the_composer_and_shared_footer_overrides() {
             separate_status_line,
             ..Default::default()
         };
-        let short = if separate_status_line {
-            "one…"
-        } else {
-            "one\ntwo…"
-        };
-        for (height, expected) in [(12, "one\ntwo\nthree\nfour…"), (7, short)] {
+        for (height, expected) in [(12, "one\ntwo\nthree\nfour…"), (7, "one…")] {
             let area = Rect::new(/*x*/ 0, /*y*/ 0, /*width*/ 7, height);
-            assert_eq!(status_rows(&composer, area, options).join("\n"), expected);
+            let (buffer, rows) = render_status(&composer, area, options);
+            assert_eq!(rows.join("\n"), expected);
             let input = composer.layout_with_options(area, options).textarea;
-            let mut buffer = Buffer::empty(area);
-            composer.render_with_options(area, &mut buffer, /*mask_char*/ None, options);
             assert!(input.height >= 3);
             let draft = [0, 1, 2].map(|dy| buffer[(input.x, input.y + dy)].symbol());
             assert_eq!(draft, ["a", "b", "c"]);
@@ -205,7 +192,7 @@ fn status_rows_yield_to_the_composer_and_shared_footer_overrides() {
     composer.set_status_line(Some(FooterContent::from(tree)));
     assert_eq!(
         composer.footer_hint_height(/*width*/ 7, ComposerRenderOptions::default()),
-        2
+        1
     );
     composer.show_footer_flash("Copied".into(), Duration::from_secs(/*secs*/ 3));
     assert_eq!(
@@ -227,7 +214,9 @@ fn sidebar_focus_collapses_extension_status_to_its_dim_line() {
             ..Default::default()
         };
         let height = composer.desired_height_with_options(/*width*/ 40, options);
-        status_rows(&composer, Rect::new(0, 0, 40, height), options).join("\n")
+        render_status(&composer, Rect::new(0, 0, 40, height), options)
+            .1
+            .join("\n")
     });
     insta::assert_snapshot!(frames.join("\n---\n"), @"
     one
@@ -307,7 +296,7 @@ fn extension_status_keeps_its_rows_when_effort_changes() {
             /*x*/ 0, /*y*/ 0, /*width*/ 7, /*height*/ 12,
         );
         assert_eq!(
-            status_rows(&composer, area, options),
+            render_status(&composer, area, options).1,
             ["one", "two", "three"]
         );
     }
@@ -401,8 +390,14 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
     composer.set_status_line(Some(status.into()));
     composer.set_active_agent_label(Some("reviewer".to_string()));
     let (narrow, _) = render(&composer, /*width*/ 37, /*footer*/ None);
-    let row = narrow.lines().rev().nth(1).expect("persistent status row");
-    insta::assert_snapshot!(strip_osc8(row).trim(), @"project · PR #42 · rev… Plan mode");
+    assert!(
+        strip_osc8(&narrow).contains("project · PR #42 · reviewer"),
+        "{narrow}"
+    );
+    assert!(
+        narrow.lines().last().unwrap().contains("Plan mode"),
+        "{narrow}"
+    );
     composer.set_active_agent_label(/*active_agent_label*/ None);
 
     composer.set_task_running(/*running*/ true);
@@ -417,15 +412,16 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
         is_interactive: true,
     };
     let (search, _) = render(&composer, /*width*/ 100, Some(&footer));
+    assert!(search.contains("Search: verify"), "{search}");
     assert!(search.contains("Plan mode"), "{search}");
     assert!(!search.contains("⇧tab"), "{search}");
 
     // Configured items such as git-branch can have no value outside a repository.
     composer.set_status_line(/*status_line*/ None);
     let (empty_narrow, _) = render(&composer, /*width*/ 24, /*footer*/ None);
-    assert_eq!(
-        empty_narrow.lines().rev().nth(1).map(str::trim),
-        Some("Plan mode")
+    assert!(
+        empty_narrow.lines().last().unwrap().contains("Plan mode"),
+        "{empty_narrow}"
     );
     let (empty_wide, _) = render(&composer, /*width*/ 100, /*footer*/ None);
     assert!(
@@ -435,16 +431,16 @@ fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
 
     composer.set_input_enabled(/*enabled*/ false, /*placeholder*/ None);
     let (read_only, _) = render(&composer, /*width*/ 100, /*footer*/ None);
-    assert_eq!(
-        read_only.lines().rev().nth(1).map(str::trim),
-        Some("Plan mode")
+    assert!(
+        read_only.lines().last().unwrap().contains("Plan mode"),
+        "{read_only}"
     );
     composer.set_input_enabled(/*enabled*/ true, /*placeholder*/ None);
     composer.set_parent_owned_thread();
     let (parent_owned, _) = render(&composer, /*width*/ 100, /*footer*/ None);
-    assert_eq!(
-        parent_owned.lines().rev().nth(1).map(str::trim),
-        Some("Plan mode")
+    assert!(
+        parent_owned.lines().last().unwrap().contains("Plan mode"),
+        "{parent_owned}"
     );
 }
 
@@ -687,14 +683,14 @@ fn slash_popup_preserves_footer_and_selection_style() {
             composer: surface,
             textarea,
             popup,
-            footer,
+            status,
             ..
         } = composer.layout_with_options(area, ComposerRenderOptions::default());
         assert_eq!(popup.bottom(), surface.y);
-        assert_eq!(surface.bottom(), footer.y);
+        assert_eq!(surface.bottom(), status.y);
         assert_eq!(composer.cursor_pos(area), Some((4, textarea.y)));
-        let footer_text: String = (0..width).map(|x| buf[(x, height - 1)].symbol()).collect();
-        assert!(footer_text.contains("model · high · fast"));
+        let status_text: String = (0..width).map(|x| buf[(x, status.y)].symbol()).collect();
+        assert!(status_text.contains("model · high · fast"));
         if !clipped && width == 80 {
             insta::assert_snapshot!("slash_popup_footer_wide", format!("{buf:?}"));
         }

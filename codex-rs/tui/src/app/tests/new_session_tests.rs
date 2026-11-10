@@ -500,10 +500,11 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         if explicit == "saved" {
             let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 140)
                 .replace(&server_config.cwd.display().to_string(), "<PROJECT>");
-            insta::assert_snapshot!(rendered, @r"
+            insta::assert_snapshot!(rendered, @"
             › Ask Codex to do anything
 
-              server-model high · <PROJECT> · ← for agents
+              server-model high · <PROJECT>
+              ← for agents · ? for shortcuts
             ");
         }
         if explicit.starts_with("profile_summary") {

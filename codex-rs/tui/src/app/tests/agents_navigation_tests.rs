@@ -30,7 +30,7 @@ async fn agents_navigation_opens_the_command_center_on_every_target() -> Result<
         let composer = render_bottom_popup(&app.chat_widget, /*width*/ 96);
         let footer = composer.lines().last().expect("composer footer").trim();
         insta::allow_duplicates! {
-            insta::assert_snapshot!(normalize_snapshot_paths(footer), @"GPT-5.6-Sol default · /tmp/project · ← for agents");
+            insta::assert_snapshot!(normalize_snapshot_paths(footer), @"← for agents · ? for shortcuts");
         }
         app.handle_tui_event(
             &mut tui,

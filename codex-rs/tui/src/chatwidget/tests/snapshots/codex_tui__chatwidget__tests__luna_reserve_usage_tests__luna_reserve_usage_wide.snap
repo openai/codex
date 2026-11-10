@@ -2,7 +2,7 @@
 source: tui/src/chatwidget/tests/luna_reserve_usage_tests.rs
 expression: rendered
 ---
-
 › Ask Codex to do anything
 
   Luna Reserve default · /tmp/project
+  ? for shortcuts

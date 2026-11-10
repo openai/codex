@@ -4,7 +4,6 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
 
 
-
 ⚠ MCP client for `alpha` failed to start: handshake failed
 ⚠ MCP startup incomplete (failed: alpha)
 
@@ -12,3 +11,4 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 › Ask Codex to do anything
 
   GPT-5.6-Sol default · /tmp/project
+  ? for shortcuts

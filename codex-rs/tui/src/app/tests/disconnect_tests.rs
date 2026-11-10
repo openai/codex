@@ -17,10 +17,10 @@ use serde_json::json;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
-fn normalize_reconnect_status(popup: &str) -> String {
+pub(super) fn normalize_reconnect_status(popup: &str) -> String {
     let status =
-        regex_lite::Regex::new(r"(?m)^[•◦] (Reconnecting to server… )\([\dhms ]+\)").unwrap();
-    status.replace(popup, "• ${1}(<elapsed>)").into_owned()
+        regex_lite::Regex::new(r"(?m)^[•◦] (Reconnecting to server…|Reconnect failed — check the endpoint, then relaunch) \([\dhms ]+\)").unwrap();
+    normalize_snapshot_paths(status.replace(popup, "• ${1} (<elapsed>)").into_owned())
 }
 
 #[tokio::test]

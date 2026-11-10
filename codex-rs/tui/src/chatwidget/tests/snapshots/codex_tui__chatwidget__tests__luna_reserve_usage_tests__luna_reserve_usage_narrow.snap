@@ -2,7 +2,7 @@
 source: tui/src/chatwidget/tests/luna_reserve_usage_tests.rs
 expression: "render_bottom_popup(&chat, 34)"
 ---
-
 › Ask Codex to do anything
 
   Luna Reserve default · /tmp/pro…
+  ? for shortcuts

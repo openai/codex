@@ -7,3 +7,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "› Ask Codex to do anything                                                      "
 "                                                                                "
 "  gpt-5.2 high · Roadmap cleanup                                                "
+"  ? for shortcuts                                                               "

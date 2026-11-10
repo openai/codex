@@ -45,7 +45,7 @@ pub(crate) fn normalize_working_snapshot(text: String) -> String {
     let text = normalize_snapshot_paths(text)
         .replace("◦ Working", "• Working")
         .replace("◦ Wor…", "• Wor…");
-    regex_lite::Regex::new(r"(?m)^• Working \(\d+s")
+    regex_lite::Regex::new(r"• Working \(\d+s")
         .expect("valid working timer pattern")
         .replace_all(&text, "• Working (0s")
         .into_owned()

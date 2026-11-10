@@ -13,8 +13,8 @@ expression: "states.join(\"\\n---\\n\")"
 
 › Ask Codex
 
-  MODEL · ~/project · Context 20% used               Plan mode
-  ? for shortcuts
+  MODEL · ~/project · Context 20% used
+  ? for shortcuts                    Plan mode (⇧tab to cycle)
 ---
 
 
@@ -27,8 +27,8 @@ expression: "states.join(\"\\n---\\n\")"
 
 › Ask Codex
 
-  MODEL · ~/project · Context 20% used               Plan mode
-  Copied selection
+  MODEL · ~/project · Context 20% used
+  Copied selection                   Plan mode (⇧tab to cycle)
 ---
 
 
@@ -41,8 +41,8 @@ expression: "states.join(\"\\n---\\n\")"
 
 › Ask Codex
 
-  MODEL · ~/project · Context 20% used               Plan mode
-  Ctrl+X waiting for chord
+  MODEL · ~/project · Context 20% used
+  Ctrl+X waiting for chord           Plan mode (⇧tab to cycle)
 ---
 
 
@@ -55,5 +55,5 @@ expression: "states.join(\"\\n---\\n\")"
 
 › Continue the task
 
-  MODEL · ~/project · Context 20% used               Plan mode
-  tab to queue message
+  MODEL · ~/project · Context 20% used
+  tab to queue message                               Plan mode

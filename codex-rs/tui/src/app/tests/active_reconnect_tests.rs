@@ -662,7 +662,10 @@ async fn reconnect_exhaustion_and_unknown_initial_thread_stay_offline() -> Resul
         "reconnect_failed",
         format!(
             "{error}\n{}",
-            render_bottom_popup(&app.chat_widget, /*width*/ 80)
+            super::disconnect::normalize_reconnect_status(&render_bottom_popup(
+                &app.chat_widget,
+                /*width*/ 80
+            ))
         )
     );
     tokio::time::resume();

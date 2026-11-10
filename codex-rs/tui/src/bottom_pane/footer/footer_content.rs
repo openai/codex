@@ -1,10 +1,9 @@
-//! The composer measures the natural width before allocating the left column, then renders
-//! the selected content in the allotted rectangle.
+//! Native and extension status content measured and painted inside the status rectangle.
 
+use crate::line_truncation::line_width;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::Widget;
 use std::sync::Arc;
 
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
@@ -13,7 +12,7 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::ui_tree::PreparedUiTree;
 use crate::ui_tree::UiTree;
 
-/// Owned content for the footer's negotiated left-hand area.
+/// Owned status content displayed below the composer.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FooterContent {
     Line(Line<'static>),
@@ -30,10 +29,10 @@ impl From<UiTree> for FooterContent {
 }
 
 impl FooterContent {
-    /// Natural display width, before the footer allocates space for the right indicator.
+    /// Natural display width in terminal cells.
     pub(crate) fn width(&self) -> u16 {
         let width = match self {
-            Self::Line(line) => line.width(),
+            Self::Line(line) => line_width(line),
             Self::HyperlinkLine(line) => line.width(),
             Self::Extension { content } => return content.measure_natural().width,
         };
@@ -43,11 +42,11 @@ impl FooterContent {
     /// Paint only inside the final area supplied by the parent.
     pub(crate) fn render(self, area: Rect, buf: &mut Buffer) {
         match self {
-            Self::Line(line) => Widget::render(line, area, buf),
             Self::Extension { content } => {
                 with_syntax_theme(|theme| content.render(area, theme, buf));
             }
-            Self::HyperlinkLine(mut line) => {
+            native => {
+                let mut line = native.into_hyperlink_line();
                 let area = Rect {
                     height: area.height.min(1),
                     ..area

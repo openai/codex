@@ -176,10 +176,10 @@ fn mention_menu_reserves_height_above_composer_and_owns_cursor_over_interactive_
         composer: surface,
         textarea,
         popup,
-        footer,
+        status,
         ..
     } = composer.layout_with_options(area, options);
-    assert_eq!((popup.bottom(), surface.bottom()), (surface.y, footer.y));
+    assert_eq!((popup.bottom(), surface.bottom()), (surface.y, status.y));
     assert_eq!(
         composer.cursor_pos_with_options(area, options),
         Some((3, textarea.y))

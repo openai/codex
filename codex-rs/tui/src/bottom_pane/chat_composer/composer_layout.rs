@@ -41,26 +41,16 @@ impl ChatComposer {
         area: Rect,
         options: ComposerRenderOptions<'_>,
     ) -> ComposerLayout {
-        let mut footer_hint_height = self.footer_hint_height(area.width, options);
-        let mut status_height = self.status_surface_height(area.width, options);
-        let shared = footer_hint_height > 1 && self.shows_shared_status(options);
-        if shared || status_height > 1 {
-            // Extra status rows yield to the draft, voice strip and other composer surfaces.
-            let desired =
-                self.height_with_rows(area.width, options, footer_hint_height, status_height);
-            let rows = if shared {
-                &mut footer_hint_height
-            } else {
-                &mut status_height
-            };
-            *rows = rows
-                .saturating_sub(desired.saturating_sub(area.height))
-                .max(1);
-        }
-        let status_height = status_height.min(
-            area.height
-                .saturating_sub(footer_hint_height.saturating_add(/*rhs*/ 3)),
-        );
+        let footer_hint_height = self.footer_hint_height(area.width, options);
+        let wanted = self.status_surface_height(area.width, /*available*/ 4, options);
+        let desired = self.height_with_rows(area.width, options, footer_hint_height, wanted);
+        let status_height = wanted
+            .saturating_sub(desired.saturating_sub(area.height))
+            .max(wanted.min(1))
+            .min(
+                area.height
+                    .saturating_sub(footer_hint_height.saturating_add(3)),
+            );
         let status = Rect {
             y: area
                 .bottom()
@@ -90,7 +80,7 @@ impl ChatComposer {
         let shortcuts_above = self.shortcuts_above_composer(options);
         let (composer_rect, popup_rect, mut footer_rect) = if shortcuts_above {
             let [shortcuts, composer, footer] = Layout::vertical([
-                Constraint::Max(footer_height(&self.hint_footer_props(options), area.width)),
+                Constraint::Max(footer_height(&self.hint_footer_props(), area.width)),
                 Constraint::Min(3 + voice_rows),
                 Constraint::Length(footer_hint_height),
             ])
@@ -213,7 +203,7 @@ impl ChatComposer {
             width,
             options,
             self.footer_hint_height(width, options),
-            self.status_surface_height(width, options),
+            self.status_surface_height(width, /*available*/ 4, options),
         )
     }
 
@@ -241,7 +231,7 @@ impl ChatComposer {
             remote_images_separator,
             status_height,
             if self.shortcuts_above_composer(options) {
-                footer_height(&self.hint_footer_props(options), width)
+                footer_height(&self.hint_footer_props(), width)
             } else {
                 0
             },

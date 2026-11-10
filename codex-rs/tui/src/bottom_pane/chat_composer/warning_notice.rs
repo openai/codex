@@ -1,5 +1,5 @@
 //! Fit warning counts and the configured warnings shortcut into the existing passive hint row.
-//! Interactive hints retain priority. Shared status content wraps beside the warning.
+//! Interactive hints retain priority. Warnings occupy the trailing edge of the hints row.
 //! Only the count and warning label receive an amber accent; surrounding hints stay muted.
 
 use super::*;

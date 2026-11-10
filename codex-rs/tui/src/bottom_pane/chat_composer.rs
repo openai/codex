@@ -360,7 +360,6 @@ use super::footer::footer_height;
 use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
-use super::footer::max_left_width_for_right;
 use super::footer::passive_footer_status_line;
 use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
@@ -371,7 +370,6 @@ use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::status_line_right_indicator_line;
 use super::footer::toggle_shortcut_mode;
-use super::footer::uses_passive_footer_status_layout;
 use super::mention_usage::MentionUsage;
 use super::mentions_v2::MentionV2Popup;
 use super::mentions_v2::MentionV2Selection;
@@ -397,7 +395,6 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
-use crate::ui_consts::FOOTER_INDENT_COLS;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
@@ -911,12 +908,13 @@ impl ChatComposer {
             let style = IgnitionStyle::random(self.effort_animation_style);
             self.effort_ignition = Some(EffortIgnition::new(tier, style));
             self.effort_animation_style = Some(style);
-            if self.footer.status_line_enabled
-                && let Some(FooterContent::HyperlinkLine(previous)) =
-                    passive_footer_status_line(&self.footer_props())
+            if let Some(previous) = self.status_surface_content()
+                && !matches!(previous.as_ref(), FooterContent::Extension { .. })
             {
-                self.effort_status_line_transition =
-                    Some(EffortStatusLineTransition::new(tier, previous));
+                self.effort_status_line_transition = Some(EffortStatusLineTransition::new(
+                    tier,
+                    previous.into_owned().into_hyperlink_line(),
+                ));
             }
             if let Some(frame_requester) = &self.frame_requester {
                 frame_requester.schedule_frame();
@@ -4727,7 +4725,7 @@ impl ChatComposer {
                 self.render_transcript_footer(transcript_hint_area, buf, footer, warning_area);
             }
             None if self.shortcuts_above_composer(options) => {
-                let props = self.hint_footer_props(options);
+                let props = self.hint_footer_props();
                 super::shortcut_overlay::render(&props, inset_footer_hint_area(popup_rect), buf);
                 super::shortcut_overlay::close_hint(&props, transcript_hint_area.width)
                     .render(transcript_hint_area, buf);
@@ -4738,24 +4736,23 @@ impl ChatComposer {
                     input.render(inset_footer_hint_area(hint_rect), buf);
                 } else if let Some(line) = self.history_search_footer_line() {
                     render_footer_line(hint_rect, buf, line);
-                } else if self.shows_shared_status(options) {
-                    self.render_status_surface(hint_rect, buf, options);
                 } else {
-                    let footer_props = self.hint_footer_props(options);
-                    let show_cycle_hint = !self.has_separate_status(options)
+                    let footer_props = self.hint_footer_props();
+                    let show_cycle_hint = !self.popup_active()
+                        && !self.blocks_direct_input
+                        && self.draft.input_enabled
                         && !footer_props.is_task_running
                         && self.footer.collaboration_mode_indicator.is_some();
                     let show_shortcuts_hint =
                         footer_props.mode == FooterMode::ComposerEmpty && !self.is_in_paste_burst();
                     let show_queue_hint = footer_props.mode == FooterMode::ComposerHasDraft
                         && footer_props.is_task_running;
-                    let status_line_active = uses_passive_footer_status_layout(&footer_props);
-                    let left_mode_indicator =
-                        if status_line_active || self.has_separate_status(options) {
-                            None
-                        } else {
-                            self.footer.collaboration_mode_indicator
-                        };
+                    let status_line_active = self.footer.status_line_enabled;
+                    let left_mode_indicator = if status_line_active {
+                        None
+                    } else {
+                        self.footer.collaboration_mode_indicator
+                    };
                     let active_footer_hint_override = self.footer.hint_override.as_ref();
                     let left_width = if self.footer.flash_visible() {
                         self.footer
@@ -4779,8 +4776,6 @@ impl ChatComposer {
                             Some(side_conversation_context_line(label))
                         } else if let Some(line) = self.shell_mode_footer_line() {
                             Some(line)
-                        } else if self.has_separate_status(options) {
-                            None
                         } else if status_line_active {
                             let full = self.mode_indicator_line(show_cycle_hint);
                             let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
@@ -4798,7 +4793,7 @@ impl ChatComposer {
                         can_show_left_with_context(hint_rect, left_width, right_width);
                     let has_override =
                         self.footer.flash_visible() || active_footer_hint_override.is_some();
-                    let single_line_layout = if has_override || status_line_active {
+                    let single_line_layout = if has_override {
                         None
                     } else {
                         match footer_props.mode {
@@ -4823,7 +4818,9 @@ impl ChatComposer {
                             | FooterMode::ShortcutOverlay => None,
                         }
                     };
-                    let show_right = if matches!(
+                    let show_right = if has_override && status_line_active {
+                        can_show_left_and_context
+                    } else if matches!(
                         footer_props.mode,
                         FooterMode::EscHint
                             | FooterMode::HistorySearch
@@ -4867,7 +4864,7 @@ impl ChatComposer {
                             hint_rect,
                             buf,
                             &footer_props,
-                            self.footer.collaboration_mode_indicator,
+                            left_mode_indicator,
                             show_cycle_hint,
                             show_shortcuts_hint,
                             show_queue_hint,

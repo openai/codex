@@ -6,4 +6,5 @@ expression: terminal.backend()
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  GPT-5.6-Sol                                                  ctrl+/ for side  "
+"  GPT-5.6-Sol                                                                   "
+"  ? for shortcuts                                              ctrl+/ for side  "

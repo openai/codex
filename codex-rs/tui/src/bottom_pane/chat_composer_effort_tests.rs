@@ -67,7 +67,7 @@ fn extension_content_skips_the_effort_transition_in_both_directions() {
 fn effort_transition_does_not_queue_a_missing_outgoing_status_line() {
     let (mut composer, _rx) = new_test_composer();
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("gpt-5.4 high · main").into()));
+    composer.set_status_line(/*status_line*/ None);
     composer.set_task_running(/*running*/ true);
     composer.set_text_content("queued draft".to_string(), Vec::new(), Vec::new());
     composer.set_active_reasoning_effort(
@@ -171,13 +171,17 @@ fn effort_transition_keeps_the_full_footer_row() {
     );
     let mut buf = Buffer::empty(area);
     composer.render(area, &mut buf);
-    let footer = (0..area.width)
-        .map(|column| buf[(column, area.bottom() - 1)].symbol())
-        .collect::<String>();
-
-    assert!(footer.contains("gpt-5.4 high · feature-branch"));
-    assert!(!footer.contains("Plan mode"));
-    insta::assert_snapshot!("effort_transition_keeps_the_full_footer_row", footer);
+    let rows = [area.bottom() - 2, area.bottom() - 1].map(|y| {
+        (0..area.width)
+            .map(|column| buf[(column, y)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_owned()
+    });
+    insta::assert_snapshot!(
+        "effort_transition_keeps_the_full_footer_row",
+        rows.join("\n")
+    );
 }
 
 #[test]
