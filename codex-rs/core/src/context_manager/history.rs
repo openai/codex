@@ -105,6 +105,8 @@ fn next_guardian_review_context_revision() -> u64 {
 pub(crate) struct ContextManager {
     item_id_generator: ItemIdGenerator,
     sampling: super::sampling::SamplingProgress,
+    /// Inclusive sequence cutoff for calls that may still be running in the fork source.
+    pub(crate) restored_through_sequence: u64,
     /// The oldest items are at the beginning of the vector. Snapshots share the vector until a
     /// caller needs to mutate it, avoiding deep copies for read-only history consumers.
     items: Arc<Vec<ResponseItemEnvelope>>,
@@ -319,6 +321,7 @@ impl ContextManager {
         Self {
             item_id_generator,
             sampling: Default::default(),
+            restored_through_sequence: 0,
             items: Arc::new(Vec::new()),
             review_history: None,
             review_budgeting: ContextBudgeting::Fixed,
@@ -876,6 +879,9 @@ impl ContextManager {
 
     pub(crate) fn replace_annotated(&mut self, mut items: Vec<ResponseItemEnvelope>) {
         self.sampling = super::sampling::SamplingProgress::restore(&mut items);
+        self.restored_through_sequence = self
+            .restored_through_sequence
+            .min(self.sampling.last_sequence);
         self.retained_context = Arc::default();
         self.user_message_revision = self.user_message_revision.saturating_add(1);
         if let Some(review_history) = &mut self.review_history {
@@ -1174,7 +1180,7 @@ impl ContextManager {
         let items = Arc::make_mut(&mut self.items);
 
         // all function/tool calls must have a corresponding output
-        normalize::ensure_call_outputs_present(items);
+        normalize::ensure_call_outputs_present(items, self.restored_through_sequence);
 
         // Paired outputs must have a corresponding call; named external outputs stand alone.
         normalize::remove_orphan_outputs(items);

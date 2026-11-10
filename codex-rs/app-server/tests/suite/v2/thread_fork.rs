@@ -1958,6 +1958,11 @@ async fn thread_fork_freezes_active_paginated_turn_as_interrupted(
         &completed_user_item("before-fork", /*completed_at_ms*/ 1),
     )
     .await?;
+    let pending_call = serde_json::from_value(json!({
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call", "call_id": "pending", "name": "apply_patch", "input": "patch"}
+    }))?;
+    append_rollout_item_to_path(&source_path, &pending_call).await?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -2093,6 +2098,11 @@ async fn thread_fork_freezes_active_paginated_turn_as_interrupted(
         .body_json::<Value>()?["input"]
         .clone();
     let serialized_input = serde_json::to_string(&input)?;
+    assert!(input.as_array().expect("model input").iter().any(|item| {
+        item["type"] == "custom_tool_call_output"
+            && item["call_id"] == "pending"
+            && item["output"] == "aborted"
+    }));
     assert!(serialized_input.contains("before-fork model input"));
     assert!(!serialized_input.contains("after-fork model input"));
     assert!(input.as_array().is_some_and(|items| {

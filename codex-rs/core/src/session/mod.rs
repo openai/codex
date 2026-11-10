@@ -2037,6 +2037,7 @@ impl Session {
                 reference_context_item,
                 HistoryReplacement::Reset,
             );
+            state.history.restored_through_sequence = state.history.input_sequence();
             state
                 .history
                 .restore_rejected_audio_file_ids(rejected_audio_file_ids);
