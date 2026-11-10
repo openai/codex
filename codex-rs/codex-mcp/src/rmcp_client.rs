@@ -103,7 +103,6 @@ use rmcp::model::Tool as RmcpTool;
 use tokio::sync::watch;
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
-use tracing::Instrument;
 use tracing::instrument;
 use tracing::warn;
 
@@ -447,8 +446,7 @@ impl ManagedClientStartup {
             outcome
         };
         originator
-            .scope(Box::pin(startup))
-            .in_current_span()
+            .scope(codex_rmcp_client::McpRequestTrace::current().scope(Box::pin(startup)))
             .boxed()
             .shared()
     }

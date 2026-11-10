@@ -23,6 +23,7 @@ use codex_exec_server::HttpHeader;
 use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpResponseBodyStream;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::StreamExt;
 use futures::stream;
 use futures::stream::BoxStream;
@@ -84,6 +85,8 @@ pub(crate) struct StreamableHttpClientAdapter {
     has_configured_headers: bool,
     redirect_mode: StreamableHttpRedirectMode,
     initialize_deadline: Arc<Mutex<Option<Instant>>>,
+    // The SDK sends handshakes on its worker without request metadata.
+    handshake_trace: Option<W3cTraceContext>,
 }
 
 struct EventStreamCancellation {
@@ -131,6 +134,7 @@ impl StreamableHttpClientAdapter {
             has_configured_headers,
             redirect_mode,
             initialize_deadline,
+            handshake_trace: crate::trace_context::current_w3c_trace_context(),
         }
     }
 
@@ -235,7 +239,17 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         };
 
         let body = serde_json::to_value(&message).map_err(StreamableHttpError::Deserialize)?;
-        let request_span = crate::trace_context::request_span(&body);
+        let handshake_trace = if is_discovery_request || mcp_method.as_deref() == Some("initialize")
+        {
+            self.handshake_trace.as_ref()
+        } else {
+            None
+        };
+        let request_span = crate::trace_context::request_span_and_trace_headers(
+            &body,
+            &mut headers,
+            handshake_trace,
+        );
         let body = serde_json::to_vec(&body).map_err(StreamableHttpError::Deserialize)?;
         let has_authorization_header = headers.contains_key(AUTHORIZATION);
 

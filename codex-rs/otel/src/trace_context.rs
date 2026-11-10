@@ -31,13 +31,17 @@ pub fn current_span_w3c_trace_context() -> Option<W3cTraceContext> {
 }
 
 pub fn span_w3c_trace_context(span: &Span) -> Option<W3cTraceContext> {
-    let context = span.context();
+    w3c_trace_context_from_context(&span.context())
+}
+
+/// Serializes a valid OpenTelemetry context into a W3C trace carrier.
+pub fn w3c_trace_context_from_context(context: &Context) -> Option<W3cTraceContext> {
     if !context.span().span_context().is_valid() {
         return None;
     }
 
     let mut headers = HashMap::new();
-    TraceContextPropagator::new().inject_context(&context, &mut headers);
+    TraceContextPropagator::new().inject_context(context, &mut headers);
     let tracestate = headers.remove("tracestate");
     let configured_tracestate_guard = tracestate_entries()
         .read()

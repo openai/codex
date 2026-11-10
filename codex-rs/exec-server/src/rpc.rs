@@ -608,6 +608,16 @@ impl RpcClient {
         })
     }
 
+    pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
+    where
+        P: Serialize,
+        T: DeserializeOwned,
+    {
+        self.call_with_trace_fallback(method, params, /*trace_fallback*/ None)
+            .await
+    }
+
+    /// Uses the supplied carrier only when this process cannot create an active W3C span.
     #[tracing::instrument(
         name = "codex.exec_server.request",
         level = "info",
@@ -618,12 +628,20 @@ impl RpcClient {
             method,
         )
     )]
-    pub(crate) async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, RpcCallError>
+    pub(crate) async fn call_with_trace_fallback<P, T>(
+        &self,
+        method: &str,
+        params: &P,
+        trace_fallback: Option<W3cTraceContext>,
+    ) -> Result<T, RpcCallError>
     where
         P: Serialize,
         T: DeserializeOwned,
     {
-        self.call_untraced(method, params).await
+        record_client_request(self.metrics.as_ref(), method);
+        let _call_slot = self.acquire_regular_call_slot()?;
+        self.call_inner(method, params, RpcCallTimeout::None, trace_fallback)
+            .await
     }
 
     /// Send one request without creating the standard request span.
@@ -641,7 +659,13 @@ impl RpcClient {
     {
         record_client_request(self.metrics.as_ref(), method);
         let _call_slot = self.acquire_regular_call_slot()?;
-        self.call_inner(method, params, RpcCallTimeout::None).await
+        self.call_inner(
+            method,
+            params,
+            RpcCallTimeout::None,
+            /*trace_fallback*/ None,
+        )
+        .await
     }
 
     pub(crate) async fn call_with_timeout<P, T>(
@@ -656,8 +680,13 @@ impl RpcClient {
     {
         record_client_request(self.metrics.as_ref(), method);
         let _call_slot = self.acquire_regular_call_slot()?;
-        self.call_inner(method, params, RpcCallTimeout::After(call_timeout))
-            .await
+        self.call_inner(
+            method,
+            params,
+            RpcCallTimeout::After(call_timeout),
+            /*trace_fallback*/ None,
+        )
+        .await
     }
 
     #[tracing::instrument(
@@ -690,7 +719,13 @@ impl RpcClient {
                 }
             },
         };
-        self.call_inner(method, params, RpcCallTimeout::None).await
+        self.call_inner(
+            method,
+            params,
+            RpcCallTimeout::None,
+            /*trace_fallback*/ None,
+        )
+        .await
     }
 
     async fn call_inner<P, T>(
@@ -698,6 +733,7 @@ impl RpcClient {
         method: &str,
         params: &P,
         call_timeout: RpcCallTimeout,
+        trace_fallback: Option<W3cTraceContext>,
     ) -> Result<T, RpcCallError>
     where
         P: Serialize,
@@ -725,7 +761,14 @@ impl RpcClient {
         };
         let params = serde_json::to_value(params).map_err(RpcCallError::Json)?;
         let response = self
-            .send_request_and_wait(method, request_id, params, response_rx, call_timeout)
+            .send_request_and_wait(
+                method,
+                request_id,
+                params,
+                response_rx,
+                call_timeout,
+                trace_fallback,
+            )
             .await?;
         serde_json::from_value(response).map_err(RpcCallError::Json)
     }
@@ -740,6 +783,7 @@ impl RpcClient {
         params: Value,
         response_rx: oneshot::Receiver<RpcCompletion>,
         call_timeout: RpcCallTimeout,
+        trace_fallback: Option<W3cTraceContext>,
     ) -> Result<Value, RpcCallError> {
         let enqueue_started = Instant::now();
         if self
@@ -748,7 +792,7 @@ impl RpcClient {
                 id: request_id.clone(),
                 method: method.to_string(),
                 params: Some(params),
-                trace: codex_otel::current_span_w3c_trace_context(),
+                trace: codex_otel::current_span_w3c_trace_context().or(trace_fallback),
             }))
             .await
             .is_err()

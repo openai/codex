@@ -118,4 +118,5 @@ pub use stdio_server_launcher::ExecutorStdioServerLauncher;
 pub use stdio_server_launcher::LocalStdioServerLauncher;
 pub use stdio_server_launcher::StdioServerLauncher;
 pub use tool_list_changes::ToolListRevision;
+pub use trace_context::McpRequestTrace;
 pub use user_verification::UserVerificationReason;

@@ -1097,7 +1097,8 @@ impl McpConnectionSet {
                 // Dormant servers must not hold the initial startup summary open.
                 deferred_workers.push(startup);
             } else {
-                eager_workers.push(startup.boxed());
+                let trace = codex_rmcp_client::McpRequestTrace::current();
+                eager_workers.push(trace.scope(startup).boxed());
             }
         }
         let manager = Self {

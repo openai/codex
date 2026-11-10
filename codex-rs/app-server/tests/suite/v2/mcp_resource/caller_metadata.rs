@@ -1,8 +1,49 @@
-//! Public JSON-RPC coverage for caller metadata on a thread's stdio resource read.
+//! Public JSON-RPC coverage for caller metadata on MCP resource reads.
 
 use super::*;
+use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCRequest;
+use codex_protocol::protocol::W3cTraceContext;
 use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_resource_read_forwards_rpc_trace_context() -> Result<()> {
+    let responses = responses::start_mock_server().await;
+    let (url, calls, server) = start_resource_apps_mcp_server().await?;
+    let (_home, mut mcp) = start_resource_test_app_server_with_extra_config(
+        &url,
+        &responses.uri(),
+        "[otel]\ntrace_exporter = \"none\"",
+        ResourceTestEnvironment::Auto,
+    )
+    .await?;
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let tracestate = "vendor=origin";
+    let id = RequestId::String("traced-read".to_string());
+    mcp.send_jsonrpc_message(JSONRPCMessage::Request(JSONRPCRequest {
+        id: id.clone(),
+        method: "mcpServer/resource/read".to_string(),
+        params: Some(json!({"server": "codex_apps", "uri": TEST_RESOURCE_URI})),
+        trace: Some(W3cTraceContext {
+            traceparent: Some(traceparent.to_string()),
+            tracestate: Some(tracestate.to_string()),
+        }),
+    }))
+    .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(id),
+    )
+    .await??;
+    server.abort();
+
+    let reads = calls.read_metadata.lock().expect("resource read metadata");
+    let read = reads.last().expect("resource read reached the MCP server");
+    assert_eq!(read.get("traceparent"), Some(&json!(traceparent)));
+    assert_eq!(read.get("tracestate"), Some(&json!(tracestate)));
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_resource_receives_caller_metadata() -> Result<()> {

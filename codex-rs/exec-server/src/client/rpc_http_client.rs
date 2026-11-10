@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use codex_protocol::protocol::W3cTraceContext;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use tokio::sync::mpsc;
@@ -17,8 +18,10 @@ use crate::HttpClient;
 use crate::client::ExecServerClient;
 use crate::client::ExecServerError;
 use crate::protocol::HTTP_REQUEST_METHOD;
+use crate::protocol::HttpHeader;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::HttpRequestResponse;
+use crate::rpc::RpcClient;
 
 /// Maximum queued body frames per streamed HTTP response.
 const HTTP_BODY_DELTA_CHANNEL_CAPACITY: usize = 256;
@@ -30,7 +33,8 @@ impl ExecServerClient {
         mut params: HttpRequestParams,
     ) -> Result<HttpRequestResponse, ExecServerError> {
         params.stream_response = false;
-        self.call(HTTP_REQUEST_METHOD, &params).await
+        let rpc_client = self.rpc_client().await?;
+        self.call_http_request(&rpc_client, &params).await
     }
 
     /// Performs an HTTP request and returns a body stream.
@@ -52,10 +56,7 @@ impl ExecServerClient {
             .await?;
         let mut registration =
             HttpBodyStreamRegistration::new(Arc::clone(&self.inner), request_id.clone());
-        let response = match self
-            .call_rpc(&rpc_client, HTTP_REQUEST_METHOD, &params)
-            .await
-        {
+        let response = match self.call_http_request(&rpc_client, &params).await {
             Ok(response) => response,
             Err(error) => {
                 self.inner.remove_http_body_stream(&request_id).await;
@@ -69,6 +70,34 @@ impl ExecServerClient {
             HttpResponseBodyStream::remote(Arc::clone(&self.inner), request_id, rx),
         ))
     }
+
+    async fn call_http_request(
+        &self,
+        rpc_client: &RpcClient,
+        params: &HttpRequestParams,
+    ) -> Result<HttpRequestResponse, ExecServerError> {
+        let trace = trace_from_http_headers(&params.headers);
+        self.map_rpc_call_result(
+            rpc_client
+                .call_with_trace_fallback(HTTP_REQUEST_METHOD, params, trace)
+                .await,
+        )
+    }
+}
+
+fn trace_from_http_headers(headers: &[HttpHeader]) -> Option<W3cTraceContext> {
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|header| header.name.eq_ignore_ascii_case(name) && header.value_env_var.is_none())
+            .map(|header| header.value.clone())
+    };
+    let trace = W3cTraceContext {
+        traceparent: Some(header("traceparent")?),
+        tracestate: header("tracestate"),
+    };
+    codex_otel::context_from_w3c_trace_context(&trace)
+        .and_then(|context| codex_otel::w3c_trace_context_from_context(&context))
 }
 
 impl HttpClient for ExecServerClient {

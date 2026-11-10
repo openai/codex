@@ -12,6 +12,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_rmcp_client::McpRequestTrace;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
@@ -57,7 +58,7 @@ impl McpConnectionSet {
                 continue;
             };
             let timeout = view.tool_timeout;
-            join_set.spawn(async move {
+            let task = async move {
                 let resources = collect_paginated("resources/list", timeout, |params| {
                     let client = client.clone();
                     async move {
@@ -67,7 +68,8 @@ impl McpConnectionSet {
                 })
                 .await;
                 (server_name, resources)
-            });
+            };
+            join_set.spawn(McpRequestTrace::current().scope(task));
         }
 
         let mut resources = HashMap::new();
@@ -101,7 +103,7 @@ impl McpConnectionSet {
                 continue;
             };
             let timeout = view.tool_timeout;
-            join_set.spawn(async move {
+            let task = async move {
                 let templates = collect_paginated("resources/templates/list", timeout, |params| {
                     let client = client.clone();
                     async move {
@@ -111,7 +113,8 @@ impl McpConnectionSet {
                 })
                 .await;
                 (server_name, templates)
-            });
+            };
+            join_set.spawn(McpRequestTrace::current().scope(task));
         }
 
         let mut templates = HashMap::new();
