@@ -1,12 +1,15 @@
 use super::agent_control::HostRuntime;
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::AgentRuntimeOwnership;
 use codex_core::AgentServiceTier;
 use codex_core::AgentTurnAdmission;
 use codex_core::CodexThreadSettingsOverrides;
 use codex_core::InheritedSessionId;
+use codex_core::SteerSubmission;
 use codex_core::ThreadManager;
 use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_core::TurnStartOptions;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_features::Feature;
@@ -200,19 +203,17 @@ impl AgentServiceTier for HostTier {
         Box::pin(async { self.value.borrow().clone() })
     }
 
-    fn update(&self, value: Option<String>) -> BoxFuture<'static, ()> {
+    fn update(&self, value: Option<String>) -> BoxFuture<'static, Result<(), String>> {
         let (polling, waiting) = oneshot::channel();
         let (accept, accepted) = oneshot::channel();
-        self.updates
-            .send(TierHandoff {
-                value,
-                waiting,
-                accept,
-            })
-            .expect("tier handoff");
+        let _ = self.updates.send(TierHandoff {
+            value,
+            waiting,
+            accept,
+        });
         Box::pin(async move {
             let _ = polling.send(());
-            accepted.await.expect("local tier acceptance");
+            accepted.await.map_err(|_| "tier worker stopped".into())
         })
     }
 }
@@ -254,6 +255,227 @@ async fn accept_committed_tier<T>(
         assert!(handoffs.is_empty(), "same-tier retry published another update");
         Ok((result, value))
     }).await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_host_tier_settings_reply_does_not_block_interrupt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let completed = ev_completed("root-turn");
+    let server = start_websocket_server(vec![
+        vec![vec![
+            ev_response_created("fixture-warm"),
+            ev_completed("fixture-warm"),
+        ]],
+        vec![
+            vec![ev_response_created("root-warm"), ev_completed("root-warm")],
+            vec![
+                ev_response_created("root-after-cancel"),
+                ev_assistant_message("still-running", "Ready."),
+                ev_completed("root-after-cancel"),
+            ],
+            vec![ev_response_created("root-turn"), completed.clone()],
+        ],
+    ])
+    .await;
+    let release_completion = server.gate_response_event(&completed);
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            // Keep sampling behind the gate until the explicit interrupt.
+            config.features.disable(Feature::InstantInterrupt).unwrap();
+            config
+                .features
+                .enable(Feature::FastMode)
+                .expect("fast mode");
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?;
+
+    let (updates, mut handoffs) = mpsc::unbounded_channel();
+    let tier = Arc::new(HostTier {
+        value: watch::Sender::new(None),
+        updates,
+    });
+    let mut options = test.start_thread_options().await;
+    let root_id = test.thread_manager.reserve_thread_id();
+    options.reserved_thread_id = Some(root_id);
+    options.config.service_tier = Some("default".into());
+    options
+        .thread_extension_init
+        .insert(AgentRuntimeOwnership::Host);
+    options
+        .thread_extension_init
+        .insert(Arc::new(HostRuntime) as Arc<dyn AgentTurnAdmission>);
+    options
+        .thread_extension_init
+        .insert(tier as Arc<dyn AgentServiceTier>);
+    let manager = Arc::clone(&test.thread_manager);
+    let start = tokio::spawn(async move { manager.start_thread(options).await });
+    let TierHandoff {
+        value,
+        waiting,
+        accept,
+    } = tokio::time::timeout(Duration::from_secs(10), handoffs.recv())
+        .await?
+        .expect("startup tier handoff");
+    assert_eq!(value.as_deref(), Some("default"));
+    tokio::time::timeout(Duration::from_secs(10), waiting).await??;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
+    )
+    .await?;
+    start.abort();
+    let Err(error) = start.await else {
+        anyhow::bail!("startup caller returned while the receipt was pending");
+    };
+    assert!(error.is_cancelled());
+    let root = test.thread_manager.get_thread(root_id).await?;
+    accept
+        .send(())
+        .expect("registered root retains the handoff");
+
+    let request = TurnInputRequest::user_input(vec![UserInput::Text {
+        text: "Confirm the root still runs after startup cancellation.".into(),
+        text_elements: Vec::new(),
+    }]);
+    tokio::time::timeout(Duration::from_secs(10), root.start_or_steer_turn(request))
+        .await
+        .context("root did not accept a turn after startup cancellation")??;
+    wait_for_successful_turn(&root).await;
+
+    let request = TurnInputRequest::user_input(vec![UserInput::Text {
+        text: "Wait for an interrupt.".into(),
+        text_elements: Vec::new(),
+    }])
+    .with_thread_settings(ThreadSettingsOverrides {
+        service_tier: Some(Some("flex".into())),
+        ..Default::default()
+    });
+    let TurnInputSubmission::Started { turn_id, .. } =
+        tokio::time::timeout(Duration::from_secs(10), root.start_or_steer_turn(request)).await??
+    else {
+        anyhow::bail!("expected a new root turn");
+    };
+    let request = tokio::time::timeout(
+        Duration::from_secs(10),
+        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 2),
+    )
+    .await?;
+    let handoff = handoffs.try_recv().expect("turn tier handoff");
+    assert_eq!(handoff.value.as_deref(), Some("flex"));
+    assert_eq!(request.body_json()["service_tier"], "flex");
+    handoff.accept.send(()).expect("accept the turn tier");
+
+    // Keep both host acknowledgements pending while the same turn is running.
+    submit_thread_settings(
+        &root,
+        ThreadSettingsOverrides {
+            service_tier: Some(Some("default".into())),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let no_reply = handoffs.try_recv().expect("no-reply tier handoff");
+    assert_eq!(no_reply.value.as_deref(), Some("default"));
+
+    let steer = TurnInputRequest::user_input(vec![UserInput::Text {
+        text: "Stay on this task.".into(),
+        text_elements: Vec::new(),
+    }])
+    .with_thread_settings(ThreadSettingsOverrides {
+        service_tier: Some(Some("flex".into())),
+        ..Default::default()
+    });
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            root.steer_turn(steer, turn_id.clone())
+        )
+        .await??,
+        SteerSubmission::Steered {
+            turn_id: turn_id.clone()
+        }
+    );
+    let steered = handoffs.try_recv().expect("steered tier handoff");
+    assert_eq!(steered.value.as_deref(), Some("flex"));
+
+    let thread = Arc::clone(&root);
+    let settings = tokio::spawn(async move {
+        thread
+            .update_thread_settings(ThreadSettingsOverrides {
+                service_tier: Some(Some("default".into())),
+                ..Default::default()
+            })
+            .await
+    });
+    let TierHandoff {
+        value,
+        waiting,
+        accept,
+    } = tokio::time::timeout(Duration::from_secs(10), handoffs.recv())
+        .await?
+        .expect("tier handoff");
+    assert_eq!(value.as_deref(), Some("default"));
+    tokio::time::timeout(Duration::from_secs(10), waiting).await??;
+
+    root.submit(Op::Interrupt).await?;
+    wait_for_event(&root, |event| {
+        matches!(event, EventMsg::TurnAborted(aborted) if aborted.turn_id.as_deref() == Some(turn_id.as_str()))
+    })
+    .await;
+    drop((no_reply, steered));
+    drop(release_completion);
+    assert!(
+        !settings.is_finished(),
+        "interrupt does not accept the tier"
+    );
+    drop(accept);
+    let error = tokio::time::timeout(Duration::from_secs(10), settings)
+        .await??
+        .expect_err("the host dropped its receipt");
+    assert_eq!(
+        error.to_string(),
+        "service tier committed locally; host acceptance unconfirmed: tier worker stopped"
+    );
+    assert_eq!(root.thread_settings_snapshot().await.service_tier, value);
+
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        root.restore_thread_settings(CodexThreadSettingsOverrides {
+            service_tier: Some(value.clone()),
+            ..Default::default()
+        }),
+    )
+    .await??;
+    assert!(
+        handoffs.is_empty(),
+        "restore does not retry a failed handoff"
+    );
+
+    accept_committed_tier(
+        root.update_thread_settings(ThreadSettingsOverrides {
+            service_tier: Some(value),
+            ..Default::default()
+        }),
+        &mut handoffs,
+        &test.thread_manager,
+        root_id,
+        "default",
+    )
+    .await?;
+
+    root.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

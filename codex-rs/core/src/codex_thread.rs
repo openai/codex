@@ -826,7 +826,9 @@ impl CodexThread {
     }
 
     /// Queues settings for future turns and waits for Core to accept or reject them.
-    /// Rejections are returned to the caller instead of emitted as thread errors.
+    /// Rejections are returned to the caller instead of emitted as thread errors. A host-root
+    /// service-tier update also waits for local host acceptance outside Core's submission loop.
+    /// A handoff error leaves the settings committed locally. Callers can retry the same tier.
     pub async fn update_thread_settings(
         &self,
         thread_settings: impl Into<WithTurnExtensionData<ThreadSettingsOverrides>>,
@@ -857,7 +859,11 @@ impl CodexThread {
         settings: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<()> {
         let updates = self.thread_settings_update(settings);
-        self.session.update_settings(updates).await.map(|_| ())
+        let commit = self.session.update_settings(updates).await?;
+        if let Some(accepted) = commit.host_acceptance {
+            let _ = accepted.await;
+        }
+        Ok(())
     }
 
     /// Replaces tools for subsequent model steps and future turns, preserving in-flight calls.

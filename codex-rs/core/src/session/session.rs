@@ -666,6 +666,8 @@ impl SessionConfiguration {
 pub(crate) struct SessionSettingsCommit {
     pub(crate) configuration: SessionConfiguration,
     pub(crate) snapshot: ThreadSettingsSnapshot,
+    /// Receipt for the host's local acceptance of this commit, when applicable.
+    pub(crate) host_acceptance: Option<Shared<BoxFuture<'static, Result<(), String>>>>,
 }
 
 #[derive(Default, Clone)]
@@ -682,6 +684,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) service_tier_for_turn: Option<String>,
+    /// An explicit settings reply waits for host acceptance and can retry an observed failure.
+    pub(crate) host_acceptance_in_reply: bool,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
     pub(crate) disabled_plugin_ids: Option<Vec<String>>,

@@ -8,7 +8,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 
-pub(crate) type ServiceTierAcceptance = Shared<BoxFuture<'static, ()>>;
+pub(crate) type ServiceTierAcceptance = Shared<BoxFuture<'static, Result<(), String>>>;
 
 /// The host's view of the service tier shared within an agent session.
 ///
@@ -27,9 +27,12 @@ pub trait AgentServiceTier: Send + Sync {
     /// Hand off the committed tier in call order and return a receipt for local acceptance.
     /// Core calls this method under its commit locks: the handoff must be fast and nonblocking.
     /// Drive the update independently of the receipt: dropping the receipt only cancels the wait.
-    /// Core awaits it outside the state and registry locks. Explicit settings updates that
-    /// request the same committed tier share this receipt until the tier changes.
-    fn update(&self, service_tier: Option<String>) -> BoxFuture<'static, ()>;
+    /// Core waits outside the state and registry locks. `Ok(())` confirms local acceptance.
+    /// `Err` leaves acceptance unconfirmed and carries a caller-safe message. Core surfaces it
+    /// in an explicit thread settings reply. A later settings request with a reply can hand off
+    /// the same tier again after Core observes a failed receipt. The host must preserve commit
+    /// order and tolerate repeated handoffs.
+    fn update(&self, service_tier: Option<String>) -> BoxFuture<'static, Result<(), String>>;
 }
 
 pub(crate) fn host_child_uses_shared_service_tier(session: &Session) -> bool {
