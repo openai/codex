@@ -293,10 +293,6 @@ impl ChatWidget {
             let bottom_pane = self.bottom_pane.backdrop_with_options(options);
             let above_composer = if self.quick_dial_menu && !options.floating_shortcuts {
                 RenderableItem::Owned(Box::new(self.quick_dial_hud()))
-            } else if let Some(pending) = &self.safety_recourse
-                && !self.bottom_pane.has_active_view()
-            {
-                RenderableItem::Borrowed(&pending.notice)
             } else if let Some(backend) = self.visible_new_backend_control() {
                 let mut spans = vec!["  ".into(), backend.into()];
                 let keymap = self.bottom_pane.keymap();

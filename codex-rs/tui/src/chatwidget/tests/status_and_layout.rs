@@ -234,11 +234,117 @@ async fn daybreak_refusal_offers_enable_for_the_next_turn() {
         "daybreak_recourse_picker",
         render_bottom_popup(&chat, /*width*/ 80)
     );
+    chat.handle_key_event(KeyCode::Char('5').into());
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::OpenFeedbackConsent {
+                category: crate::app_event::FeedbackCategory::SafetyCheck
+            }
+        ))
+    );
+    chat.open_feedback_consent(crate::app_event::FeedbackCategory::SafetyCheck);
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Upload logs?"));
+    chat.handle_key_event(KeyCode::Esc.into());
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("1. Overview"));
     chat.handle_key_event(KeyCode::Char('4').into());
     assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
         event, AppEvent::PersistDaybreakSelection { thread_id: id, enabled: true } if id == thread_id
     )));
 
+    let mut daybreak = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+    daybreak.model = "gpt-5.6-sol".into();
+    daybreak.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
+    });
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![daybreak.clone()]));
+    chat.set_model("gpt-5.6-sol");
+    chat.daybreak_enabled = true;
+    handle_turn_started(&mut chat, "daybreak-recourse");
+    safety_recourse::on_metadata(
+        &mut chat,
+        codex_app_server_protocol::TurnModerationMetadataNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "daybreak-recourse".into(),
+            metadata: json!({"safety_recourse": {
+                "schema_version": 1, "domain": "cyber", "source": "user_request",
+                "source_message": {"id":"1", "kind":"ordinary_message", "role":"user"},
+                "topic": "unauthorized_account_or_system_access",
+                "suggestions": [
+                    {"label": "Overview", "prompt_text": "Explain access"},
+                    {"label": "Recovery", "prompt_text": "Explain account recovery"},
+                    {"label": "Prevention", "prompt_text": "Explain account protection"}
+                ]
+            }}),
+        },
+    );
+    let pending = chat.safety_recourse.take();
+    assert!(chat.daybreak_account_eligible());
+    assert!(chat.daybreak_enabled);
+    assert_eq!(chat.cyber_policy_notice(), crate::daybreak::Notice::Enabled);
+    assert!(safety_recourse::render_failure(&mut chat, pending, &error));
+    let cells = drain_insert_history(&mut events);
+    let notices = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>();
+    let notice = notices
+        .iter()
+        .find(|notice| notice.contains("Daybreak is on"))
+        .unwrap_or_else(|| panic!("missing Daybreak-on notice: {notices:#?}"));
+    assert!(notice.contains("You can ask Codex for an overview"));
+    let picker = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(picker.contains("Overview"));
+    assert!(!picker.contains("Enable Daybreak"));
+    chat.handle_key_event(KeyCode::Esc.into());
+    chat.daybreak_enabled = false;
+
+    let mut astra = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+    astra.model = "gpt-6-astra".into();
+    astra.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        cyber: vec![codex_protocol::turn_input::CyberAccessProgram::Standard],
+    });
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![astra]));
+    chat.set_model("gpt-6-astra");
+    handle_turn_started(&mut chat, "astra-recourse");
+    safety_recourse::on_metadata(
+        &mut chat,
+        codex_app_server_protocol::TurnModerationMetadataNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "astra-recourse".into(),
+            metadata: json!({"safety_recourse": {
+                "schema_version": 1, "domain": "cyber", "source": "user_request",
+                "source_message": {"id":"1", "kind":"ordinary_message", "role":"user"},
+                "topic": "unauthorized_account_or_system_access",
+                "suggestions": [
+                    {"label": "Overview", "prompt_text": "Explain access"},
+                    {"label": "Recovery", "prompt_text": "Explain account recovery"},
+                    {"label": "Prevention", "prompt_text": "Explain account protection"}
+                ]
+            }}),
+        },
+    );
+    let pending = chat.safety_recourse.take();
+    assert!(safety_recourse::render_failure(&mut chat, pending, &error));
+    let cells = drain_insert_history(&mut events);
+    let notices = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>();
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("Daybreak isn’t available for Astra")),
+        "missing Astra notice: {notices:#?}"
+    );
+    let picker = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(picker.contains("Overview"));
+    assert!(!picker.contains("Enable Daybreak"));
+    chat.handle_key_event(KeyCode::Esc.into());
+
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![daybreak]));
+    chat.set_model("gpt-5.6-sol");
+    chat.daybreak_enabled = false;
     chat.set_parent_owned_thread();
     handle_error(
         &mut chat,

@@ -12,7 +12,6 @@ pub(super) const VIEW_ID: &str = "safety-recourse";
 
 pub(super) struct PendingRecourse {
     domain: Domain,
-    pub(super) notice: Box<dyn HistoryCell>,
     result: Option<Recourse>,
     pub(super) deferred_error: Option<TurnError>,
 }
@@ -32,10 +31,6 @@ pub(super) fn on_metadata(chat: &mut ChatWidget, notification: TurnModerationMet
     };
     let pending = chat.safety_recourse.get_or_insert(PendingRecourse {
         domain,
-        notice: Box::new(match domain {
-            Domain::Bio => history_cell::new_safety_access_block_event(),
-            Domain::Cyber => history_cell::new_cyber_policy_error_event(chat.cyber_policy_notice()),
-        }),
         result: None,
         deferred_error: None,
     });
@@ -43,7 +38,9 @@ pub(super) fn on_metadata(chat: &mut ChatWidget, notification: TurnModerationMet
         pending.result = result;
         chat.clear_safety_buffering();
         chat.bottom_pane.ensure_status_indicator();
-        chat.set_status_header("Finding an explanation and safer ways to continue…".into());
+        chat.set_status_header(
+            "I can’t help with this request. Preparing alternative suggestions…".into(),
+        );
     }
 }
 
@@ -90,8 +87,6 @@ pub(super) fn render_failure(
         return false;
     };
     let mut items = Vec::new();
-    let subtitle = (!result.suggestions.is_empty())
-        .then(|| "Choosing a rewrite sends it in a new chat.".into());
     for (label, prompt) in result.suggestions {
         let turn_id = turn_id.to_string();
         items.push(SelectionItem {
@@ -126,6 +121,17 @@ pub(super) fn render_failure(
             history_cell::new_cyber_policy_error_event(notice)
         }
     };
+    if chat.config.feedback_enabled {
+        items.push(SelectionItem {
+            name: "Give feedback".into(),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenFeedbackConsent {
+                    category: crate::app_event::FeedbackCategory::SafetyCheck,
+                })
+            })],
+            ..Default::default()
+        });
+    }
     cell.explanation = Some(result.explanation);
     chat.input_queue.submit_pending_steers_after_interrupt = false;
     chat.finalize_turn();
@@ -133,8 +139,9 @@ pub(super) fn render_failure(
     if !items.is_empty() {
         chat.bottom_pane.show_selection_view(SelectionViewParams {
             view_id: Some(VIEW_ID),
-            title: Some("Here are a few ways I can help:".into()),
-            subtitle,
+            title: Some(
+                "You can choose a rewrite to start a new chat with your earlier context:".into(),
+            ),
             items,
             ..SelectionViewParams::picker()
         });

@@ -242,7 +242,13 @@ async fn safety_recourse_handles_a_policy_block() -> Result<()> {
         app.chat_widget
             .apply_external_edit(UNSENT_DRAFT.to_string());
         loop {
-            let event = server.next_event().await.expect("moderation metadata");
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(5), server.next_event())
+                    .await
+                    .unwrap_or_else(|_| {
+                        panic!("timed out waiting for {domain} moderation metadata")
+                    })
+                    .expect("moderation metadata");
             let is_metadata = matches!(&event.event, AppServerEvent::ServerNotification(notification)
             if matches!(notification.as_ref(), ServerNotification::TurnModerationMetadata(_)));
             app.handle_backend_event(&server, event).await;
@@ -272,7 +278,10 @@ async fn safety_recourse_handles_a_policy_block() -> Result<()> {
             continue;
         }
         if domain == "bio" {
-            assert!(loading.contains("Finding an explanation and safer ways to continue…"));
+            assert!(
+                loading
+                    .contains("I can’t help with this request. Preparing alternative suggestions…")
+            );
             assert!(notice.contains("research and safety considerations."));
             continue;
         }
