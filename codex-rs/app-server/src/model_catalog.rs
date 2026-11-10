@@ -1,5 +1,6 @@
 //! Loads the model catalog for the current effective provider configuration.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,6 +8,8 @@ use codex_config::ConfigLayerStack;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_features::Feature;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::ModelOrigin;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::openai_models::ModelPreset;
@@ -144,8 +147,33 @@ impl ModelCatalog {
         self.config_manager
             .check_thread_model_provider(&config)
             .await?;
-        Ok(models_manager
-            .list_models(refresh_strategy, config.http_client_factory())
-            .await)
+        let catalog = models_manager
+            .model_catalog_with_origins(refresh_strategy, config.http_client_factory())
+            .await;
+        // The first-party catalog supplies picker rows in display order. Bundled,
+        // configured and third-party catalogs rely on the manager's priority order.
+        let use_catalog_order = config.model_provider_id == OPENAI_PROVIDER_ID
+            && (config.model_provider.supports_codex_backend_routes()
+                || config.model_provider.model_catalog_url.is_some())
+            && catalog
+                .iter()
+                .all(|entry| entry.origin == ModelOrigin::Provider);
+        let positions = use_catalog_order.then(|| {
+            catalog
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (entry.slug.clone(), index))
+                .collect::<HashMap<_, _>>()
+        });
+        let models = catalog
+            .into_iter()
+            .map(|entry| Arc::unwrap_or_clone(entry.model))
+            .collect();
+        let mut presets = models_manager.build_available_models(models);
+        if let Some(positions) = positions {
+            // The manager has filtered the models and marked the default using priority.
+            presets.sort_by_key(|preset| positions[&preset.model]);
+        }
+        Ok(presets)
     }
 }
