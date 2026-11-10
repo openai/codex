@@ -716,13 +716,35 @@ fn import_skills_returns_only_new_skill_directory_names() {
         .expect("create source a");
     fs::create_dir_all(external_agent_home.join("skills").join("skill-b"))
         .expect("create source b");
+    for reserved_skill in [
+        "synced/test-account/cloud-example",
+        "synced/.trash/deleted-example",
+        ".trash/deleted-example",
+    ] {
+        let directory = external_agent_home.join("skills").join(reserved_skill);
+        fs::create_dir_all(&directory).expect("create fixture directory");
+        fs::write(directory.join("SKILL.md"), "# Example").expect("write fixture skill");
+    }
     fs::create_dir_all(agents_skills.join("skill-a")).expect("create existing target");
 
-    let copied_names = service_for_paths(external_agent_home, codex_home)
-        .import_skills(/*cwd*/ None)
-        .expect("import skills");
-
-    assert_eq!(copied_names, vec!["skill-b".to_string()]);
+    let service = service_for_paths(external_agent_home, codex_home);
+    let mut split = service.with_migration_source(Some("claude-code-local-skills"));
+    split.external_agent_home = service.external_agent_home.clone();
+    assert_eq!(
+        split.import_skills(/*cwd*/ None).expect("split import"),
+        vec!["skill-b"]
+    );
+    assert_eq!(
+        service.import_skills(/*cwd*/ None).expect("legacy import"),
+        vec!["synced"]
+    );
+    assert!(!agents_skills.join(".trash").exists());
+    assert!(!agents_skills.join("synced/.trash").exists());
+    assert!(
+        agents_skills
+            .join("synced/test-account/cloud-example/SKILL.md")
+            .is_file()
+    );
 }
 
 #[test]

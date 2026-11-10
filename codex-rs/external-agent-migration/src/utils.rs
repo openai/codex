@@ -45,6 +45,7 @@ pub(super) fn copy_dir_recursive(
     source: &Path,
     target: &Path,
     rewrite_profile: RewriteProfile,
+    excluded_directory: Option<&std::ffi::OsStr>,
 ) -> io::Result<()> {
     fs::create_dir_all(target)?;
 
@@ -55,7 +56,15 @@ pub(super) fn copy_dir_recursive(
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &target_path, rewrite_profile)?;
+            if excluded_directory == Some(entry.file_name().as_os_str()) {
+                continue;
+            }
+            copy_dir_recursive(
+                &source_path,
+                &target_path,
+                rewrite_profile,
+                excluded_directory,
+            )?;
             continue;
         }
 

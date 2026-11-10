@@ -212,6 +212,11 @@ impl ExternalAgentConfigService {
                 &target_skills,
             )?);
         }
+        skill_names.retain(|name| {
+            !self
+                .source
+                .is_reserved_skill_directory(scope, name.as_ref(), self.skill_import_mode)
+        });
         skill_names.sort();
         skill_names.dedup();
         let skills_count = skill_names.len();

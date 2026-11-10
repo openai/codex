@@ -55,14 +55,22 @@ pub(super) enum ExternalAgentSource {
     Cur,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SkillImportMode {
+    All,
+    LocalOnly,
+}
+
 impl ExternalAgentSource {
-    pub(super) fn from_migration_source(migration_source: Option<&str>) -> Self {
+    pub(super) fn from_migration_source(migration_source: Option<&str>) -> (Self, SkillImportMode) {
         if migration_source
             .is_some_and(|source| source.eq_ignore_ascii_case(CurSource::MIGRATION_SOURCE))
         {
-            Self::Cur
+            (Self::Cur, SkillImportMode::All)
+        } else if migration_source == Some("claude-code-local-skills") {
+            (Self::Cla, SkillImportMode::LocalOnly)
         } else {
-            Self::Cla
+            (Self::Cla, SkillImportMode::All)
         }
     }
 
@@ -79,6 +87,26 @@ impl ExternalAgentSource {
             (Self::Cur, MigrationScope::Home) => &["skills", "skills-cursor"],
             _ => &["skills"],
         }
+    }
+
+    pub(super) fn is_reserved_skill_directory(
+        self,
+        scope: &MigrationScope,
+        name: &std::ffi::OsStr,
+        mode: SkillImportMode,
+    ) -> bool {
+        self == Self::Cla
+            && matches!(scope, MigrationScope::Home)
+            && (name == ".trash" || (mode == SkillImportMode::LocalOnly && name == "synced"))
+    }
+
+    pub(super) fn excluded_skill_subdirectory(
+        self,
+        scope: &MigrationScope,
+        root: &std::ffi::OsStr,
+    ) -> Option<&'static std::ffi::OsStr> {
+        (self == Self::Cla && matches!(scope, MigrationScope::Home) && root == "synced")
+            .then_some(std::ffi::OsStr::new(".trash"))
     }
 
     pub(super) fn supports_memory(self) -> bool {
