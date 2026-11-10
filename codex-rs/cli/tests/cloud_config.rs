@@ -480,6 +480,48 @@ async fn mock_startup_bundle(server: &MockServer, status: u16, config: &str, req
         .await;
 }
 
+#[tokio::test]
+async fn tcp_tunnel_ssh_enforces_cloud_requirements_before_gateway_connection() -> Result<()> {
+    for (config, requirements, expected_error) in [
+        (
+            "",
+            "[application.network.domains]\n'example.com' = 'allow'",
+            "destination denied by application network policy",
+        ),
+        (
+            "forced_login_method = 'api'",
+            "",
+            "ChatGPT OAuth login required for SSH",
+        ),
+        (
+            "forced_chatgpt_workspace_id = 'different-workspace'",
+            "",
+            "ChatGPT OAuth login required for SSH",
+        ),
+    ] {
+        let Some(fixture) = CloudManagedConfigFixture::for_backend().await? else {
+            return Ok(());
+        };
+        mock_startup_bundle(&fixture.server, /*status*/ 200, config, requirements).await;
+        let output = fixture
+            .command(&[
+                "tcp-tunnel",
+                "--environment-id",
+                "ccarenv_fixture",
+                "--port",
+                "22",
+            ])?
+            .output()
+            .await?;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains(expected_error), "{stderr}");
+        fixture.server.verify().await;
+    }
+    Ok(())
+}
+
 async fn successful_json(command: &mut Command) -> Result<Value> {
     let output = command.output().await?;
     ensure!(output.status.success(), "{output:?}");

@@ -110,7 +110,11 @@ async fn control_input_acknowledges_bearer_renewal_with_or_without_metadata() ->
             true,
         ),
     ] {
-        let (metadata, mut tokens) = control_input(Cursor::new(input), includes_metadata)?;
+        let (metadata, mut tokens) = control_input(
+            Cursor::new(input),
+            includes_metadata,
+            "https://proxy.example",
+        )?;
         let metadata = metadata.await??;
         if includes_metadata {
             assert_eq!(metadata["x-test-route"], "private-value");
@@ -134,8 +138,88 @@ async fn control_input_acknowledges_bearer_renewal_with_or_without_metadata() ->
 }
 
 #[tokio::test]
+async fn portals_jwt_listener_requires_v2_at_startup_and_on_renewal() -> Result<()> {
+    // Inert parser fixtures with a placeholder signature. No signing key or live credential.
+    const HEADER: &str = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9";
+    let v1 = format!("{HEADER}.eyJ2ZXIiOjF9.fixture");
+    let v2 = format!("{HEADER}.eyJ2ZXIiOjJ9.fixture");
+    let origin = super::ssh::PUBLIC_GATEWAY;
+    for invalid in [
+        &v1[..],
+        "opaque",
+        "malformed.parts",
+        &format!("{HEADER}.e30.fixture"),
+    ] {
+        let (_, mut tokens) = control_input(
+            Cursor::new(invalid.to_owned()),
+            /*connect_headers_stdin*/ false,
+            origin,
+        )?;
+        let error = tokens.recv().await.unwrap().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Portals requires an ERS-issued v2 tunnel JWT"
+        );
+    }
+
+    let (_, mut tokens) = control_input(
+        Cursor::new(format!("{v2}\n{v2}\n{v1}\n")),
+        /*connect_headers_stdin*/ false,
+        origin,
+    )?;
+    let initial = tokens.recv().await.unwrap()?.unwrap();
+    assert_eq!(initial.to_str()?, format!("Bearer {v2}"));
+    let (updates, latest) = watch::channel(initial.clone());
+    let (ready, readiness) = oneshot::channel();
+    ready.send(()).unwrap();
+    let mut output = Vec::new();
+    let error = update_auth_tokens(&mut tokens, updates, readiness, &mut output)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Portals requires an ERS-issued v2 tunnel JWT"
+    );
+    assert_eq!(output, b"AUTH_UPDATED\n");
+    assert_eq!(*latest.borrow(), initial);
+    Ok(())
+}
+
+#[tokio::test]
+async fn other_bearer_modes_reject_ers_v1_and_accept_unrelated_jwts() -> Result<()> {
+    let unrelated = "eyJ0eXAiOiJKV1QifQ.eyJ2ZXIiOjF9.fixture";
+    let ers_v1 = "eyJ0eXAiOiJjY2EtdHVubmVsK2p3dCJ9.eyJ2ZXIiOjF9.fixture";
+    for (origin, metadata) in [
+        (
+            super::ssh::PUBLIC_GATEWAY,
+            r#"[["x-portals-auth-mode","oauth"]]"#,
+        ),
+        ("https://proxy.example", "[]"),
+    ] {
+        let (headers, mut tokens) = control_input(
+            Cursor::new(format!("{metadata}\n{unrelated}\n{ers_v1}\n")),
+            /*connect_headers_stdin*/ true,
+            origin,
+        )?;
+        headers.await??;
+        let initial = tokens.recv().await.unwrap()?.unwrap();
+        assert_eq!(initial.to_str()?, format!("Bearer {unrelated}"));
+        let error = tokens.recv().await.unwrap().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Portals requires an ERS-issued v2 tunnel JWT"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn closed_parent_pipe_finishes_even_before_proxy_readiness() -> Result<()> {
-    let (_, mut tokens) = control_input(Cursor::new([]), /*connect_headers_stdin*/ false)?;
+    let (_, mut tokens) = control_input(
+        Cursor::new([]),
+        /*connect_headers_stdin*/ false,
+        "https://proxy.example",
+    )?;
     let (updates, _) = watch::channel("Bearer initial".parse()?);
     let (_ready, readiness) = oneshot::channel();
     let mut output = Vec::new();
@@ -185,8 +269,11 @@ async fn invalid_control_input_stops_credentials_without_exposing_secrets() -> R
     for &(case, input) in invalid_metadata {
         let mut input = input.to_vec();
         input.extend_from_slice(b"private-secret\n");
-        let (metadata, mut tokens) =
-            control_input(Cursor::new(input), /*connect_headers_stdin*/ true)?;
+        let (metadata, mut tokens) = control_input(
+            Cursor::new(input),
+            /*connect_headers_stdin*/ true,
+            "https://proxy.example",
+        )?;
         let error = metadata.await?.expect_err(case);
         assert!(!format!("{error:#}").contains("private-"), "{case}");
         assert!(tokens.recv().await.is_none(), "{case}");
@@ -196,8 +283,11 @@ async fn invalid_control_input_stops_credentials_without_exposing_secrets() -> R
         ("empty bearer", b"\n".to_vec()),
         ("bearer limit", vec![b'x'; MAX_TOKEN_BYTES + 1]),
     ] {
-        let (metadata, mut tokens) =
-            control_input(Cursor::new(input), /*connect_headers_stdin*/ false)?;
+        let (metadata, mut tokens) = control_input(
+            Cursor::new(input),
+            /*connect_headers_stdin*/ false,
+            "https://proxy.example",
+        )?;
         assert!(metadata.await??.is_empty(), "{case}");
         let error = tokens.recv().await.expect(case).expect_err(case);
         assert!(!format!("{error:#}").contains("private-"), "{case}");
@@ -206,35 +296,127 @@ async fn invalid_control_input_stops_credentials_without_exposing_secrets() -> R
     Ok(())
 }
 
+fn local_proxy() -> Result<(quinn::Endpoint, quinn::ClientConfig)> {
+    let CertifiedKey { cert, signing_key } =
+        generate_simple_self_signed(vec!["127.0.0.1".to_string()])?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut server_tls = rustls::ServerConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
+        )?;
+    server_tls.alpn_protocols = vec![b"h3".to_vec()];
+    let server_config = quinn::ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(server_tls)?,
+    ));
+    let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse()?)?;
+
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(cert.der().clone())?;
+    let mut client_tls = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    client_tls.alpn_protocols = vec![b"h3".to_vec()];
+    let config = quinn::ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)?,
+    ));
+
+    Ok((endpoint, config))
+}
+
+#[tokio::test]
+async fn stdio_propagates_half_close_and_exits_on_gateway_eof_or_rejection() -> Result<()> {
+    let (endpoint, config) = local_proxy()?;
+    let address = endpoint.local_addr()?;
+    let target = ProxyTarget {
+        host: address.ip().to_string(),
+        port: address.port(),
+        authority: address.to_string(),
+    };
+    let (done, keep_alive) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let quic = endpoint.accept().await.unwrap().await?;
+        let mut http = h3::server::Connection::new(h3_quinn::Connection::new(quic)).await?;
+        for (index, status) in [200, 200, 401].into_iter().enumerate() {
+            let (_, mut stream) = http.accept().await?.unwrap().resolve_request().await?;
+            stream
+                .send_response(Response::builder().status(status).body(())?)
+                .await?;
+            if status == 200 {
+                stream.send_data(Bytes::from_static(b"\0\xff")).await?;
+            }
+            // First request must forward the final bytes and FIN before reading the reply.
+            // The next request sees remote EOF with its own input still open.
+            if index == 0 {
+                let mut data = stream.recv_data().await?.unwrap();
+                let size = data.remaining();
+                assert_eq!(data.copy_to_bytes(size), Bytes::from_static(b"request"));
+                assert!(stream.recv_data().await?.is_none());
+                stream.send_data(Bytes::from_static(b"after FIN")).await?;
+            }
+            stream.finish().await?;
+        }
+        let _ = keep_alive.await;
+        anyhow::Ok(())
+    });
+    let ProxyConnection {
+        endpoint: _endpoint,
+        quic: _quic,
+        mut connection,
+        mut sender,
+    } = ProxyConnection::connect(&target, &config).await?;
+    let driver = tokio::spawn(async move { connection.wait_idle().await });
+    for index in 0..3 {
+        let request = target.request(http::HeaderMap::new(), "Bearer fixture".parse()?)?;
+        let (mut input, reader) = tokio::io::duplex(16);
+        if index == 0 {
+            input.write_all(b"request").await?;
+            input.shutdown().await?;
+        }
+        let mut output = Vec::new();
+        let result = timeout(
+            Duration::from_secs(3),
+            super::bridge(
+                reader,
+                &mut output,
+                &mut sender,
+                request,
+                super::BridgeMode::ProxyCommand,
+            ),
+        )
+        .await?;
+        match index {
+            0 => {
+                result?;
+                assert_eq!(output, b"\0\xffafter FIN");
+            }
+            1 => {
+                result?;
+                assert_eq!(output, b"\0\xff");
+            }
+            _ => {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "MASQUE CONNECT rejected with status 401"
+                );
+                assert!(output.is_empty());
+            }
+        }
+    }
+    done.send(()).unwrap();
+    server.await??;
+    driver.abort();
+    Ok(())
+}
+
 #[tokio::test]
 async fn connect_rejects_qpack_expansion_and_keeps_connection_usable() -> Result<()> {
     timeout(Duration::from_secs(15), async {
-        let CertifiedKey { cert, signing_key } =
-            generate_simple_self_signed(vec!["127.0.0.1".to_string()])?;
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let mut server_tls = rustls::ServerConfig::builder_with_provider(provider.clone())
-            .with_safe_default_protocol_versions()?
-            .with_no_client_auth()
-            .with_single_cert(
-                vec![cert.der().clone()],
-                PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
-            )?;
-        server_tls.alpn_protocols = vec![b"h3".to_vec()];
-        let server_config = quinn::ServerConfig::with_crypto(Arc::new(
-            quinn::crypto::rustls::QuicServerConfig::try_from(server_tls)?,
-        ));
-        let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse()?)?;
+        let (endpoint, config) = local_proxy()?;
         let address = endpoint.local_addr()?;
-        let mut roots = rustls::RootCertStore::empty();
-        roots.add(cert.der().clone())?;
-        let mut client_tls = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        client_tls.alpn_protocols = vec![b"h3".to_vec()];
-        let config = quinn::ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)?,
-        ));
 
         let (done_tx, done_rx) = oneshot::channel();
         let server = tokio::spawn(async move {
@@ -299,33 +481,8 @@ async fn connect_rejects_qpack_expansion_and_keeps_connection_usable() -> Result
 
 #[tokio::test]
 async fn transport_reconnect_keeps_listener_and_does_not_replay_old_tcp_streams() -> Result<()> {
-    let CertifiedKey { cert, signing_key } =
-        generate_simple_self_signed(vec!["127.0.0.1".to_string()])?;
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut server_tls = rustls::ServerConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()?
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![cert.der().clone()],
-            PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
-        )?;
-    server_tls.alpn_protocols = vec![b"h3".to_vec()];
-    let server_config = quinn::ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(server_tls)?,
-    ));
-    let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse()?)?;
+    let (endpoint, config) = local_proxy()?;
     let proxy_address = endpoint.local_addr()?;
-
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(cert.der().clone())?;
-    let mut client_tls = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    client_tls.alpn_protocols = vec![b"h3".to_vec()];
-    let config = quinn::ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)?,
-    ));
 
     let request_count = Arc::new(AtomicUsize::new(0));
     let server_request_count = request_count.clone();

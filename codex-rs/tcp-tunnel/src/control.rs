@@ -6,6 +6,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::ensure;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header;
@@ -57,21 +59,52 @@ pub(super) fn read_connect_headers(reader: &mut impl BufRead) -> Result<HeaderMa
     Ok(headers)
 }
 
-pub(super) fn read_auth_token(reader: &mut impl BufRead) -> Result<Option<HeaderValue>> {
-    let mut line = Vec::new();
-    std::io::Read::take(&mut *reader, (MAX_TOKEN_BYTES + 1) as u64)
-        .read_until(b'\n', &mut line)
-        .context("reading MASQUE token")?;
-    if line.is_empty() {
-        return Ok(None);
+#[derive(Clone, Copy)]
+pub(super) enum TunnelCredential {
+    Bearer,
+    ErsTunnelJwt,
+}
+
+impl TunnelCredential {
+    pub(super) fn read(self, reader: &mut impl BufRead) -> Result<Option<HeaderValue>> {
+        let mut line = Vec::new();
+        std::io::Read::take(&mut *reader, (MAX_TOKEN_BYTES + 1) as u64)
+            .read_until(b'\n', &mut line)
+            .context("reading MASQUE token")?;
+        if line.is_empty() {
+            return Ok(None);
+        }
+        ensure!(line.len() <= MAX_TOKEN_BYTES, "MASQUE token is too long");
+        let token = std::str::from_utf8(&line)
+            .context("invalid MASQUE token encoding")?
+            .trim();
+        Ok(Some(self.header(token)?))
     }
-    ensure!(line.len() <= MAX_TOKEN_BYTES, "MASQUE token is too long");
-    let token = std::str::from_utf8(&line)
-        .context("invalid MASQUE token encoding")?
-        .trim();
-    ensure!(!token.is_empty(), "empty MASQUE token");
-    let mut auth =
-        HeaderValue::from_str(&format!("Bearer {token}")).context("invalid MASQUE token header")?;
-    auth.set_sensitive(true);
-    Ok(Some(auth))
+
+    pub(super) fn header(self, token: &str) -> Result<HeaderValue> {
+        ensure!(!token.is_empty(), "empty MASQUE token");
+        let mut parts = token.split('.');
+        let ers = parts
+            .next()
+            .and_then(json_segment)
+            .is_some_and(|header| header["typ"] == "cca-tunnel+jwt");
+        if ers || matches!(self, Self::ErsTunnelJwt) {
+            // Check the wire version locally. The gateway verifies the signature.
+            let claims = parts.next().and_then(json_segment);
+            ensure!(
+                ers && claims.is_some_and(|claims| claims["ver"].as_u64() == Some(2))
+                    && parts.next().is_some_and(|signature| !signature.is_empty())
+                    && parts.next().is_none(),
+                "Portals requires an ERS-issued v2 tunnel JWT"
+            );
+        }
+        let mut auth = HeaderValue::from_str(&format!("Bearer {token}"))
+            .context("invalid MASQUE token header")?;
+        auth.set_sensitive(true);
+        Ok(auth)
+    }
+}
+
+fn json_segment(segment: &str) -> Option<serde_json::Value> {
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segment).ok()?).ok()
 }
