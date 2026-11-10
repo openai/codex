@@ -188,15 +188,20 @@ def verify(package, reports, expected_target, configuration: ProfileConfiguratio
         binary = package / relative
         target = package / APP if relative == EXECUTABLE else binary
         prefix = reports / f"{binary.name}-cert-"
-        subprocess.run(
-            ["codesign", "-d", f"--extract-certificates={prefix}", str(target)],
-            check=True,
-        )
-        if (
-            hashlib.sha256(Path(f"{prefix}0").read_bytes()).hexdigest()
-            != configuration.certificate_sha256
-        ):
-            raise ValueError(f"Unexpected signing certificate: {relative}")
+        verify_certificate(target, prefix, configuration)
+
+
+def verify_certificate(target, prefix, configuration: ProfileConfiguration):
+    """Require the independently approved leaf certificate for each signed executable."""
+    subprocess.run(
+        ["codesign", "-d", f"--extract-certificates={prefix}", str(target)],
+        check=True,
+    )
+    if (
+        hashlib.sha256(Path(f"{prefix}0").read_bytes()).hexdigest()
+        != configuration.certificate_sha256
+    ):
+        raise ValueError(f"Unexpected signing certificate: {target}")
 
 
 def parse_profile_args(parser, configuration: ProfileConfiguration | None):

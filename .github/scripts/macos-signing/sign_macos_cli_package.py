@@ -12,7 +12,7 @@ import provisioned_macos_cli_package as bundle
 
 def main(configuration: bundle.ProfileConfiguration | None = None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("sign", "verify"))
+    parser.add_argument("operation", choices=("sign", "sign-only", "verify"))
     parser.add_argument("package", type=Path)
     args, configuration = bundle.parse_profile_args(parser, configuration)
     package = args.package.resolve(strict=True)
@@ -24,11 +24,13 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
     reports = Path(repo_root) / "signing-verification"
     reports.mkdir(parents=True, exist_ok=True)
     provisioned = os.environ.get("PROVISIONED_MACOS", "false") == "true"
+    signing = args.operation in ("sign", "sign-only")
+    if signing:
+        configuration.validate_signing_certificate(
+            Path(os.environ["OAI_AKV_SIGNING_CERTIFICATE_PEM"])
+        )
     if provisioned:
-        if args.operation == "sign":
-            configuration.validate_signing_certificate(
-                Path(os.environ["OAI_AKV_SIGNING_CERTIFICATE_PEM"])
-            )
+        if signing:
             bundle.prepare(package, reports, configuration)
         else:
             bundle.verify(package, reports, os.environ["TARGET"], configuration)
@@ -44,7 +46,7 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
             target = package / bundle.APP
             identifier = bundle.CODE_SIGNING_ID
             entitlements = reports / "codex-provisioned-entitlements.plist"
-        if args.operation == "sign":
+        if signing:
             command = [
                 "bash",
                 str(bundle.SIGNING / "sign_macos_code.sh"),
@@ -72,7 +74,7 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
                     stdout=output,
                     check=True,
                 )
-            if not provisioned:
+            if args.operation == "sign" and not provisioned:
                 subprocess.run(
                     [
                         "bash",
@@ -103,11 +105,11 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
                 " and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
                 " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
             )
+            requirement += (
+                f' and certificate leaf[subject.OU] = "{configuration.team_id}"'
+            )
             if provisioned and relative == "bin/codex":
-                requirement += (
-                    f' and identifier "{bundle.CODE_SIGNING_ID}"'
-                    f' and certificate leaf[subject.OU] = "{configuration.team_id}"'
-                )
+                requirement += f' and identifier "{bundle.CODE_SIGNING_ID}"'
             subprocess.run(
                 [
                     "codesign",
@@ -120,6 +122,10 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
                 ],
                 check=True,
             )
+            if not provisioned:
+                bundle.verify_certificate(
+                    target, reports / f"{name}-cert-", configuration
+                )
             signature = reports / f"{name}-signature.txt"
             with signature.open("wb") as output:
                 subprocess.run(

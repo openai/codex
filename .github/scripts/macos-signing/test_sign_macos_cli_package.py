@@ -26,7 +26,7 @@ with open(os.environ["CALL_LOG"], "a") as log:
 if name == "codesign":
     for arg in args:
         if arg.startswith("--extract-certificates="):
-            Path(arg.split("=", 1)[1] + "0").write_bytes(Path(os.environ["MOCK_CERTIFICATE"]).read_bytes())
+            Path(arg.split("=", 1)[1] + "0").write_bytes(b"wrong certificate" if os.environ.get("MOCK_WRONG_CERTIFICATE") else Path(os.environ["MOCK_CERTIFICATE"]).read_bytes())
     if "--test-requirement" in args and os.environ.get("MOCK_WRONG_SIGNING_IDENTITY"):
         print("code failed to satisfy specified code requirement(s)", file=sys.stderr)
         sys.exit(1)
@@ -148,6 +148,26 @@ class MacosSigningTests(ProvisioningTestCase):
             timeout=30,
             check=False,
         )
+
+    def test_sign_only_signs_standard_package_without_notarization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            package, driver, env = self.fixture(root, False, "aarch64-apple-darwin")
+            result = self.run_driver(driver, "sign-only", package, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [
+                json.loads(line)
+                for line in (root / "calls.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(
+                [
+                    call[call.index("--target") + 1]
+                    for call in calls
+                    if call[0] == "sign_macos_code.sh"
+                ],
+                [str(package / path) for path in ("bin/codex", *bundle.HELPERS)],
+            )
+            self.assertFalse(any(call[0].startswith("notarize") for call in calls))
 
     def test_standard_and_provisioned_signing_and_verification(self):
         for provisioned, target, omit_empty in itertools.product(
@@ -333,6 +353,7 @@ class MacosSigningTests(ProvisioningTestCase):
             (
                 "MOCK_WRONG_SIGNING_IDENTITY",
                 "MOCK_WRONG_ENTITLEMENTS",
+                "MOCK_WRONG_CERTIFICATE",
                 "MOCK_EXECUTOR_ENTITLEMENTS",
             ),
         ):
@@ -353,6 +374,8 @@ class MacosSigningTests(ProvisioningTestCase):
                         "code failed to satisfy specified code requirement(s)",
                         result.stderr,
                     )
+                elif failure == "MOCK_WRONG_CERTIFICATE":
+                    self.assertIn("Unexpected signing certificate", result.stderr)
                 else:
                     self.assertIn("unexpected", result.stdout)
 
