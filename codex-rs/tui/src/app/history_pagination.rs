@@ -242,7 +242,7 @@ impl App {
         }
     }
 
-    /// Project successful turn completion metadata after the corresponding page's final item.
+    /// Project each terminal row on the page containing the end of its turn.
     fn project_older_history_cells(
         &mut self,
         items: Vec<ThreadItemPayload>,
@@ -253,9 +253,9 @@ impl App {
         visibility: RawReasoningVisibility,
     ) -> Vec<Arc<dyn HistoryCell>> {
         let mut cells = Vec::new();
-        for (items, completed_turn) in completion::group_completed_turn_items(items, turns) {
+        for (range, turn_end) in completion::group_turn_items(&items, turns) {
             // Internal prompts stay invisible, but still separate adjacent tool groups.
-            for visible in items.split(|item| hidden_item_ids.contains(item.id())) {
+            for visible in items[range].split(|item| hidden_item_ids.contains(item.id())) {
                 cells.extend(thread_items_to_transcript_cells(
                     Some(thread_id),
                     cwd,
@@ -264,7 +264,12 @@ impl App {
                     Some(&self.config),
                 ));
             }
-            if let Some(turn) = completed_turn
+            let Some(turn) = turn_end else { continue };
+            if turn.status == TurnStatus::Interrupted && !self.side_threads.contains_key(&thread_id)
+            {
+                cells.push(Arc::new(history_cell::new_interruption_notice()));
+            }
+            if turn.status == TurnStatus::Completed
                 && let Some(completion) = if let Some(pane) =
                     self.side_companions.get_mut(&thread_id)
                     && self.chat_widget.thread_id() != Some(thread_id)
@@ -474,6 +479,9 @@ fn merge_older_turns(current_turns: &mut Vec<Turn>, mut older_turns: Vec<Turn>) 
             .into_iter()
             .filter(|item| !current.items.iter().any(|known| known.id() == item.id()))
             .collect::<Vec<_>>();
+        if current.items_view == codex_app_server_protocol::TurnItemsView::NotLoaded {
+            current.items_view = turn.items_view;
+        }
         current.items.splice(0..0, items);
         false
     });

@@ -292,6 +292,50 @@ impl HistoryCell for ExecCell {
         self.detailed_hyperlink_lines(width, HistoryRenderMode::Rich)
     }
 
+    fn tool_call_labels(&self) -> Vec<String> {
+        self.iter_calls()
+            .filter(|call| !call.is_user_shell_command())
+            .map(|call| {
+                let active = call.duration.is_none();
+                let (running, finished, target) = match call.parsed.as_slice() {
+                    [ParsedCommand::Read { name, .. }] => ("Reading", "Read", name.clone()),
+                    [
+                        ParsedCommand::Search {
+                            query: Some(query),
+                            path,
+                            ..
+                        },
+                    ] => {
+                        let target = match path {
+                            Some(path) => format!("{query} in {path}"),
+                            None => query.clone(),
+                        };
+                        ("Searching for", "Searched for", target)
+                    }
+                    [
+                        ParsedCommand::Search {
+                            path: Some(path), ..
+                        },
+                    ] => ("Searching files in", "Searched files in", path.clone()),
+                    [ParsedCommand::ListFiles { path, .. }] => (
+                        "Listing files in",
+                        "Listed files in",
+                        path.as_deref().unwrap_or(".").to_owned(),
+                    ),
+                    _ => ("Running", "Ran", strip_bash_lc_and_escape(&call.command)),
+                };
+                let verb = if active { running } else { finished };
+                let mut label = format!("{verb} {target}");
+                if let Some(output) = &call.output
+                    && output.exit_code != 0
+                {
+                    label.push_str(&format!(" (exit {})", output.exit_code));
+                }
+                label
+            })
+            .collect()
+    }
+
     fn activity_ids(&self) -> Vec<String> {
         self.iter_calls()
             .map(|call| format!("exec:{}", call.call_id))

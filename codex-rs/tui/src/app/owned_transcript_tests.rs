@@ -1664,6 +1664,17 @@ async fn find_refreshes_live_details_before_searching_the_first_query() -> Resul
         ))
         .contains("needle")
     );
+    app.local_settings.tui.collapse_turn_details = true;
+    app.render_owned_transcript(&mut tui, Size::new(80, 24))?;
+    let summary = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+        &tui.terminal,
+    ));
+    assert!(
+        summary.contains("Running")
+            && summary.contains("printf visible")
+            && !summary.contains("needle"),
+        "{summary}"
+    );
     crate::app::test_support::enable_side_retention(&mut app)?;
     app.handle_tui_event(
         &mut tui,

@@ -19,6 +19,8 @@ pub(super) struct Disclosure {
     pub(super) expanded: HashSet<String>,
     pub(super) focused: Option<Vec<String>>,
     pub(super) resume_after_approval: Option<(ThreadId, String)>,
+    // Resolve against the next layout, once a toggled live row has also been rebuilt.
+    pub(super) anchor_control: Option<EntryKey>,
     pub(super) live_ids: Vec<String>,
     pub(super) keymap: RuntimeKeymap,
 }
@@ -29,6 +31,7 @@ impl Default for Disclosure {
             expanded: HashSet::new(),
             focused: None,
             resume_after_approval: None,
+            anchor_control: None,
             live_ids: Vec::new(),
             keymap: RuntimeKeymap::defaults(),
         }
@@ -92,7 +95,10 @@ impl TranscriptView {
     pub(super) fn activity_ids(&self, cells: &[Arc<dyn HistoryCell>], index: usize) -> Vec<String> {
         cells.get(index).map_or_else(
             || self.disclosure.live_ids.clone(),
-            |cell| cell.activity_ids(),
+            |cell| match self.tool_summary(cell.as_ref()) {
+                Some(row) if !self.is_search_expanded(EntryKey::cell(cell)) => row.ids,
+                _ => cell.activity_ids(),
+            },
         )
     }
 
@@ -103,6 +109,9 @@ impl TranscriptView {
         index: usize,
     ) -> Arc<[String]> {
         let key = cells.get(index).map_or(EntryKey::Live, EntryKey::cell);
+        if self.is_search_expanded(key) {
+            return self.activity_ids(cells, index).into();
+        }
         self.snapshot()
             .and_then(|snapshot| snapshot.activities.get(&key))
             .cloned()
@@ -330,8 +339,16 @@ impl TranscriptView {
         }
         let key = self.entry_key(cells, index);
         let matched = self.is_search_expanded(key);
+        self.disclosure.anchor_control = None;
         let previous_top = self.visible.first().map(|visible| {
             let offset = visible.layout.position_at(visible.row, /*column*/ 0);
+            if !matched
+                && offset == 0
+                && visible.layout.disclosure_row() == Some(visible.row)
+                && visible.activity_ids.iter().any(|id| ids.contains(id))
+            {
+                self.disclosure.anchor_control = Some(key);
+            }
             (
                 visible.key,
                 Arc::clone(&visible.activity_ids),

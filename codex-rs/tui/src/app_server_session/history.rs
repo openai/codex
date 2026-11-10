@@ -24,6 +24,7 @@ use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -139,6 +140,21 @@ fn prepend_older_turns(turns: &mut Vec<Turn>, mut older: Vec<Turn>) {
     turns.splice(0..0, older.into_iter().rev());
 }
 
+// Turn metadata can extend before the loaded item window. Inside the window an empty
+// interrupted turn is genuinely itemless and its notice is ready to replay.
+fn mark_loaded_interruptions(turns: &mut [Turn], older_cursor: Option<&str>) {
+    let mut in_window = older_cursor.is_none();
+    for turn in turns {
+        in_window |= !turn.items.is_empty();
+        if in_window
+            && turn.status == TurnStatus::Interrupted
+            && turn.items_view == TurnItemsView::NotLoaded
+        {
+            turn.items_view = TurnItemsView::Summary;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ThreadHistoryPagination {
     pub(super) history_mode: ThreadHistoryMode,
@@ -237,6 +253,7 @@ impl AppServerSession {
         let items = self
             .merge_thread_item_page(thread_id, page, &mut state, turns)
             .await?;
+        mark_loaded_interruptions(turns, state.next_item_cursor.as_deref());
         state.loading_older = false;
         self.history_pagination.insert(thread_id, state);
         Ok(items)
@@ -450,6 +467,7 @@ impl AppServerSession {
                 prepend_older_turns(&mut thread.turns, page.data);
             }
         }
+        mark_loaded_interruptions(&mut thread.turns, state.next_item_cursor.as_deref());
         if config.is_some() {
             self.history_pagination.insert(thread_id, state);
         }

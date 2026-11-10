@@ -186,7 +186,7 @@ impl TextLayout {
         label: String,
         source_offset: usize,
     ) -> Self {
-        if self.text.is_empty() || label.is_empty() {
+        if label.is_empty() {
             return self;
         }
         if let Some(control) = self.disclosure_control.take() {
@@ -337,6 +337,16 @@ impl TextLayout {
                     || crate::transcript_image::terminal_cell_size()
                         == Some((image.cell_width, image.cell_height)))
         })
+    }
+
+    /// A control label is visible activity even when its selectable source is empty.
+    pub(super) fn activity_content(&self) -> (&str, Option<&str>) {
+        (
+            self.text(),
+            self.disclosure_control
+                .as_ref()
+                .map(|control| control.label.as_str()),
+        )
     }
 
     pub(super) fn disclosure_row(&self) -> Option<usize> {

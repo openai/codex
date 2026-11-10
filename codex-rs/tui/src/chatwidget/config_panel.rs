@@ -113,6 +113,7 @@ impl ChatWidget {
                 self.status_surface_overrides.status_line_use_colors = None;
             }
             ConfigToggle::AutomaticRecaps
+            | ConfigToggle::CollapseTurnDetails
             | ConfigToggle::CopyOnSelectClearSelection
             | ConfigToggle::Notifications
             | ConfigToggle::StartInVimMode
@@ -155,6 +156,7 @@ impl ChatWidget {
                     );
                 }
                 ConfigToggle::AutomaticRecaps
+                | ConfigToggle::CollapseTurnDetails
                 | ConfigToggle::CopyOnSelectClearSelection
                 | ConfigToggle::Notifications
                 | ConfigToggle::PasteDetection
@@ -203,6 +205,7 @@ impl ChatWidget {
 
     fn config_panel_status(&self) -> ConfigPanelStatus {
         ConfigPanelStatus {
+            transcript_mode: self.local_settings.transcript_mode,
             copy_on_select: self
                 .local_settings
                 .copy_on_select(&codex_terminal_detection::terminal_info()),

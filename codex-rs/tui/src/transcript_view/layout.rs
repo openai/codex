@@ -238,6 +238,13 @@ impl TranscriptView {
         }
         let mode = self.mode;
         let mut presentation = self.content_presentation(cell.as_ref(), full_content, mode);
+        if !full_content && let Some(summary) = self.tool_summary(cell.as_ref()) {
+            let expanded = self.disclosure.is_expanded(&summary.ids);
+            if expanded {
+                self.disclosure.expanded.extend(summary.ids.iter().cloned());
+            }
+            return Some(Arc::new(summary.layout(width, expanded, Vec::new())));
+        }
         let shortcut = self
             .disclosure
             .keymap
@@ -254,6 +261,9 @@ impl TranscriptView {
                             .cloned()
                     }) {
                         return layout.row_count() > 0;
+                    }
+                    if !full_content && self.tool_summary(previous.as_ref()).is_some() {
+                        return true;
                     }
                     let previous_presentation =
                         self.content_presentation(previous.as_ref(), self.detailed, mode);

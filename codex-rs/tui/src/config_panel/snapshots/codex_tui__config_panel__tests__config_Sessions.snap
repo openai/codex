@@ -12,7 +12,7 @@ expression: "render(&panel, 140)"
   Session picker layout  Dense ›              Choose tighter rows or a roomier list when resuming and forking conversations
   Resume directory       Ask ›                Choose which working directory to use when the current directory and saved session differ
   Model providers        Choose ›             Choose the default provider for new chats on the connected server
-
+  Collapse turn details  [ ] Off              Summarize tool calls in the conversation
 
 
   left/right group · / search · enter toggle · esc clear search/close

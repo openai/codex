@@ -14,6 +14,7 @@ use codex_config::types::Tui;
 pub(crate) enum ConfigToggle {
     Animations,
     AutomaticRecaps,
+    CollapseTurnDetails,
     ComposerStars,
     CopyOnSelectClearSelection,
     Notifications,
@@ -102,6 +103,7 @@ impl ConfigToggle {
             }
             Self::Animations => ("animations", enabled),
             Self::AutomaticRecaps => ("auto_recap", enabled),
+            Self::CollapseTurnDetails => ("collapse_turn_details", enabled),
             Self::CopyOnSelectClearSelection => ("copy_on_select_clear_selection", enabled),
             Self::PasteDetection => ("disable_paste_burst", !enabled),
             Self::StartInVimMode => ("vim_mode_default", enabled),
@@ -118,6 +120,7 @@ impl ConfigToggle {
         match self {
             Self::Animations => tui.animations,
             Self::AutomaticRecaps => tui.auto_recap,
+            Self::CollapseTurnDetails => tui.collapse_turn_details,
             Self::ComposerStars => tui.effects.starfield,
             Self::CopyOnSelectClearSelection => tui.copy_on_select_clear_selection,
             Self::Notifications => !matches!(
@@ -136,6 +139,9 @@ impl ConfigToggle {
         match self {
             Self::Animations => target.animations = source.animations,
             Self::AutomaticRecaps => target.auto_recap = source.auto_recap,
+            Self::CollapseTurnDetails => {
+                target.collapse_turn_details = source.collapse_turn_details
+            }
             Self::ComposerStars => target.effects.starfield = source.effects.starfield,
             Self::CopyOnSelectClearSelection => {
                 target.copy_on_select_clear_selection = source.copy_on_select_clear_selection;

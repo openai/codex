@@ -75,6 +75,7 @@ pub(crate) enum ResumeCurrentAvailability {
 /// Effective state the panel cannot derive from the `Tui` preferences alone.
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigPanelStatus {
+    pub(crate) transcript_mode: crate::transcript_mode::TranscriptMode,
     pub(crate) copy_on_select: bool,
     pub(crate) right_click_paste: Result<bool, &'static str>,
     pub(crate) custom_notification_filters: bool,
@@ -273,7 +274,7 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
         tui.notification_settings.notifications,
         Notifications::Enabled(false)
     );
-    vec![
+    let mut settings = vec![
         ConfigSetting {
             section: ConfigSection::Appearance,
             label: "Theme",
@@ -445,7 +446,20 @@ fn settings(tui: &Tui, status: ConfigPanelStatus) -> Vec<ConfigSetting> {
             keywords: "clipboard mouse paste automatic",
             value: ConfigEditor::RightClickPaste.value(tui, status),
         },
-    ]
+    ];
+    if status.transcript_mode.is_owned() {
+        settings.push(ConfigSetting {
+            section: ConfigSection::Sessions,
+            label: "Collapse turn details",
+            description: "Summarize tool calls in the conversation",
+            keywords: "collapse_turn_details fullscreen transcript expand history",
+            value: ConfigSettingValue::Toggle {
+                setting: ConfigToggle::CollapseTurnDetails,
+                enabled: ConfigToggle::CollapseTurnDetails.enabled(tui),
+            },
+        });
+    }
+    settings
 }
 
 pub(crate) struct ConfigPanel {

@@ -938,6 +938,10 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub fullscreen_transcript: bool,
 
+    /// Summarize tool calls and collapse completed turns in the full-screen transcript. Defaults to `false`.
+    #[serde(default)]
+    pub collapse_turn_details: bool,
+
     /// Preferred docked sidebar width as a percentage of the terminal. Defaults to one third.
     #[serde(default)]
     #[schemars(range(min = 1, max = 99))]

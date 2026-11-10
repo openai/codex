@@ -20,7 +20,7 @@ impl TranscriptView {
             let key = cells.get(index).map_or(EntryKey::Live, EntryKey::cell);
             return self.visible.last().is_some_and(|visible| {
                 visible.key == key
-                    && visible.layout.text() == layout.text()
+                    && visible.layout.activity_content() == layout.activity_content()
                     && visible.row + 1 == layout.row_count()
             });
         }

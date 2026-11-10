@@ -24,6 +24,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 
 const STATUS: ConfigPanelStatus = ConfigPanelStatus {
+    transcript_mode: crate::transcript_mode::TranscriptMode::Owned,
     copy_on_select: true,
     right_click_paste: Ok(false),
     custom_notification_filters: false,
@@ -371,9 +372,16 @@ fn unavailable_right_click_paste_remains_editable() {
         AppEventSender::new(tx),
         RuntimeKeymap::defaults().list,
         ConfigPanelStatus {
+            transcript_mode: crate::transcript_mode::TranscriptMode::Terminal,
             right_click_paste: Err("Unavailable in inline mode; use your terminal's paste command"),
             ..STATUS
         },
+    );
+    assert!(
+        !panel
+            .settings
+            .iter()
+            .any(|row| row.label == "Collapse turn details")
     );
     for _ in 0..4 {
         panel.handle_key_event(KeyCode::Right.into());

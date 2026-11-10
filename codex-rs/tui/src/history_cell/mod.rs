@@ -258,6 +258,11 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         }
     }
 
+    /// Output-free descriptions of individual tool invocations, in transcript order.
+    fn tool_call_labels(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Stable, namespaced member identities used to retain disclosure across grouping and replay.
     /// Empty identities indicate ordinary content without a local disclosure control.
     fn activity_ids(&self) -> Vec<String> {

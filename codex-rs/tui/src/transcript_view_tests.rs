@@ -1362,3 +1362,77 @@ fn spoken_prompt_selection_keeps_its_fallback_contrast() {
         },
     );
 }
+
+fn parked_screen(
+    view: &mut TranscriptView,
+    cells: &[Arc<dyn HistoryCell>],
+    active: Option<&dyn HistoryCell>,
+) -> String {
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 8,
+    );
+    let mut buf = Buffer::empty(area);
+    view.render_parked(
+        area,
+        &mut buf,
+        cells,
+        active,
+        &[],
+        /*collapse_turn_details*/ true,
+    );
+    text(&buf).trim_end().to_owned()
+}
+
+#[test]
+fn live_search_group_keeps_its_summary_in_the_parked_pane() {
+    use codex_app_server_protocol::CommandExecutionSource;
+    use codex_shell_command::parse_command::parse_command;
+    let search = |query: &str| ["rg", "-l", query, "src"].map(str::to_owned).to_vec();
+    let first_call = search("TODO");
+    let second_call = search("FIXME");
+    let mut command = crate::exec_cell::new_active_exec_command(
+        "first".into(),
+        first_call.clone(),
+        parse_command(&first_call),
+        CommandExecutionSource::Agent,
+        /*interaction_input*/ None,
+        /*animations_enabled*/ false,
+    );
+    command.append_output("first", "private output");
+    let mut view = TranscriptView::default();
+    let first = parked_screen(&mut view, &[], Some(&command));
+    view.scroll(&[], /*rows*/ 0); // Pin the visible live row.
+    assert!(command.add_call(
+        "second".into(),
+        second_call.clone(),
+        parse_command(&second_call),
+        CommandExecutionSource::Agent,
+        /*interaction_input*/ None
+    ));
+    let (summary, expanded) =
+        view.sync_live_tool_summary(&[], /*enabled*/ true, Some(&command));
+    view.sync_live_layout(/*width*/ 40, /*key*/ None, |width| {
+        Some(summary.unwrap().layout(width, expanded, Vec::new()))
+    });
+    assert!(view.unseen_activity);
+    assert!(!view.current_tail_is_visible(&[]));
+    view.jump_to_latest();
+    let grouped = parked_screen(&mut view, &[], Some(&command));
+    assert!(view.toggle_disclosure_at(&[], /*column*/ 4, /*row*/ 0));
+    let opened = parked_screen(&mut view, &[], Some(&command));
+    assert!(view.toggle_disclosure_at(&[], /*column*/ 4, /*row*/ 0));
+    assert_eq!(parked_screen(&mut view, &[], Some(&command)), grouped);
+    let cells: &[Arc<dyn HistoryCell>] = &[Arc::new(command)];
+    assert_eq!(parked_screen(&mut view, cells, /*active*/ None), grouped);
+    view.jump_to_latest();
+    view.handle_key(KeyCode::F(4).into(), cells);
+    view.handle_key(KeyCode::Enter.into(), cells);
+    assert_eq!(parked_screen(&mut view, cells, /*active*/ None), opened);
+    insta::assert_snapshot!(format!("{first}\n{grouped}\n{opened}"), @r"
+        ⌕ Searching for TODO in src
+        ⌕ 2 tool calls · Searching for FIXME
+        ▾ 2 tool calls · Searching for FIXME
+          Searching for TODO in src
+          Searching for FIXME in src
+    ");
+}

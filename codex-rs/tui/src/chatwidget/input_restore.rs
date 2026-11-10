@@ -453,12 +453,7 @@ impl ChatWidget {
                     TurnAbortReason::BudgetLimited => history_cell::new_error_event(
                         "Goal budget reached - the turn was stopped.".to_string(),
                     ),
-                    TurnAbortReason::Interrupted => PlainHistoryCell::new(vec![
-                        Line::from(
-                            "■ Conversation interrupted - use /feedback if something went wrong",
-                        )
-                        .style(crate::style::secondary_text_style()),
-                    ]),
+                    TurnAbortReason::Interrupted => history_cell::new_interruption_notice(),
                 });
             }
         }

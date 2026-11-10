@@ -3,6 +3,7 @@
 use super::*;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::TurnStatus;
 use pretty_assertions::assert_eq;
 
 fn payloads(items: &[codex_app_server_protocol::ThreadItem]) -> Vec<ThreadItemPayload> {
@@ -39,12 +40,12 @@ fn split_turn_only_completes_on_the_page_with_its_last_item() {
         &["first", "second", "last"],
     )];
     assert_eq!(
-        group_completed_turn_items(payloads(&turns[0].items[1..]), &turns),
-        vec![(payloads(&turns[0].items[1..]), Some(&turns[0]))],
+        group_turn_items(&payloads(&turns[0].items[1..]), &turns),
+        vec![(0..2, Some(&turns[0]))],
     );
     assert_eq!(
-        group_completed_turn_items(payloads(&turns[0].items[..1]), &turns),
-        vec![(payloads(&turns[0].items[..1]), None)],
+        group_turn_items(&payloads(&turns[0].items[..1]), &turns),
+        vec![(0..1, None)],
     );
 }
 
@@ -58,33 +59,31 @@ fn multiple_turns_keep_item_groups_and_completion_order() {
         .iter()
         .flat_map(Turn::item_payloads)
         .cloned()
-        .collect();
+        .collect::<Vec<_>>();
     assert_eq!(
-        group_completed_turn_items(items, &turns),
-        vec![
-            (payloads(&turns[0].items), Some(&turns[0])),
-            (payloads(&turns[1].items), Some(&turns[1])),
-        ],
+        group_turn_items(&items, &turns),
+        vec![(0..2, Some(&turns[0])), (2..4, Some(&turns[1])),],
     );
 }
 
 #[test]
-fn unsuccessful_and_running_turns_separate_groups_without_completion_metadata() {
-    let turns = vec![
+fn itemless_interruptions_keep_their_position_on_the_owning_page() {
+    let turns = [
+        turn("empty first", TurnStatus::Interrupted, &[]),
         turn("failed", TurnStatus::Failed, &["a"]),
-        turn("interrupted", TurnStatus::Interrupted, &["b"]),
-        turn("running", TurnStatus::InProgress, &["c"]),
+        turn("empty between", TurnStatus::Interrupted, &[]),
+        turn("running", TurnStatus::InProgress, &["b"]),
     ];
-    let items = turns
-        .iter()
-        .flat_map(Turn::item_payloads)
-        .cloned()
-        .collect::<Vec<_>>();
     assert_eq!(
-        group_completed_turn_items(items, &turns),
-        turns
-            .iter()
-            .map(|turn| (payloads(&turn.items), None))
-            .collect::<Vec<_>>(),
+        group_turn_items(&payloads(&turns[1].items), &turns),
+        vec![
+            (0..0, Some(&turns[0])),
+            (0..1, Some(&turns[1])),
+            (1..1, Some(&turns[2]))
+        ],
+    );
+    assert_eq!(
+        group_turn_items(&payloads(&turns[3].items), &turns),
+        vec![(0..1, Some(&turns[3]))],
     );
 }

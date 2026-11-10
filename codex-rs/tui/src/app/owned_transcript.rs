@@ -14,6 +14,7 @@ use crate::bottom_pane::CommandPopupPlacement;
 use crate::bottom_pane::ComposerRenderOptions;
 use crate::custom_terminal::Frame;
 use crate::empty_state_animation::ComposerState;
+#[cfg(test)]
 use crate::history_cell::HistoryRenderMode;
 use crate::keymap::KeymapContext;
 use crate::keymap::bindings_for_action;
@@ -217,17 +218,24 @@ impl App {
             self.local_settings.tui.copy_on_select_clear_selection;
         view.set_keymap_bindings(&self.keymap);
         view.set_presentation(view.is_detailed(), chat_widget.history_render_mode());
+        let active = chat_widget.active_activity_cell();
+        let (live_summary, expanded) = view.sync_live_tool_summary(
+            &self.transcript_cells,
+            self.local_settings.tui.collapse_turn_details,
+            active,
+        );
         let active_key = chat_widget.active_cell_transcript_key();
         let detailed = view.is_detailed();
-        let active_ids = chat_widget.active_activity_ids();
-        let expanded = view.sync_live_activity(&self.transcript_cells, active_ids)
-            && chat_widget.history_render_mode() == HistoryRenderMode::Rich;
         let search_changed = view.sync_search_live_tail(transcript_width, active_key, |width| {
             chat_widget.active_cell_transcript_hyperlink_lines(width)
         });
         let changed = if detailed {
             view.sync_live_tail(transcript_width, active_key, |width| {
                 chat_widget.active_cell_transcript_hyperlink_lines(width)
+            })
+        } else if let Some(row) = live_summary {
+            view.sync_live_layout(transcript_width, active_key, |width| {
+                Some(row.layout(width, expanded, chat_widget.active_auxiliary_lines(width)))
             })
         } else {
             view.sync_live_activity_tail(transcript_width, active_key, expanded, |width| {
@@ -329,7 +337,12 @@ impl App {
                 Some(sidebar::SidebarLayout::Chat(panes)) => {
                     if let Some(companion) = self.side_companions.get_mut(&panes.passive_thread) {
                         companion.view.image_protocol = self.transcript_view.image_protocol;
-                        panes.paint_companion(companion, frame, &frames);
+                        panes.paint_companion(
+                            companion,
+                            frame,
+                            self.local_settings.tui.collapse_turn_details,
+                            &frames,
+                        );
                     }
                 }
                 Some(sidebar::SidebarLayout::Chooser { sidebar, focus, .. }) => {

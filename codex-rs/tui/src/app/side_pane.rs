@@ -434,6 +434,7 @@ impl SidePaneLayout {
         &self,
         companion: &mut SideCompanion,
         frame: &mut Frame<'_>,
+        collapse_turn_details: bool,
         frames: &FrameRequester,
     ) {
         companion.flush_answer();
@@ -464,6 +465,7 @@ impl SidePaneLayout {
             &companion.cells,
             companion.display.active.as_deref(),
             &companion.display.auxiliary,
+            collapse_turn_details,
         );
         frame
             .image_placements

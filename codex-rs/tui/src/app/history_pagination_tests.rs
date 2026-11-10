@@ -118,6 +118,62 @@ fn repeated_prompt_matching_removes_only_the_hidden_occurrence() {
 }
 
 #[tokio::test]
+async fn resume_places_interruption_before_searches_split_across_pages() {
+    let (mut app, mut events, _) = crate::app::tests::make_test_app_with_channels().await;
+    let mut canceled = turn("canceled", TurnStatus::Interrupted, &[]);
+    canceled.items_view = TurnItemsView::NotLoaded;
+    let search = |query: &str| {
+        serde_json::from_value(serde_json::json!({
+            "type": "webSearch", "id": query, "query": query,
+        }))
+        .expect("valid search")
+    };
+    let mut audit = turn("audit", TurnStatus::Completed, &[]);
+    audit.items = vec![search("newer")];
+    app.chat_widget.replay_thread_turns(
+        vec![canceled.clone(), audit.clone()],
+        ReplayKind::ResumeInitialMessages,
+    );
+    let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            cells.push(Arc::from(cell));
+        }
+    }
+
+    canceled.items.push(search("canceled"));
+    audit.items.insert(/*index*/ 0, search("older"));
+    let page = vec![
+        canceled.items[0].payload.clone(),
+        audit.items[0].payload.clone(),
+    ];
+    let cwd = app.config.cwd.clone();
+    let older = app.project_older_history_cells(
+        page,
+        &[canceled, audit],
+        &HashSet::new(),
+        ThreadId::new(),
+        &cwd,
+        RawReasoningVisibility::Hidden,
+    );
+    cells.splice(0..0, older);
+    let rows = cells
+        .iter()
+        .flat_map(|cell| cell.display_lines(/*width*/ 100))
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "• Searched the web for canceled",
+            "■ Conversation interrupted - use /feedback if something went wrong",
+            "• Searched the web for older",
+            "• Searched the web for newer",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn hidden_last_item_keeps_turn_groups_and_completion_boundaries() {
     let computer = |id: &str| {
         serde_json::from_value(serde_json::json!({

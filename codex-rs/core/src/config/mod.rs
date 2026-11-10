@@ -849,6 +849,7 @@ pub struct Config {
 
     /// Own the fullscreen transcript when the alternate screen is enabled.
     pub tui_fullscreen_transcript: bool,
+    pub tui_collapse_turn_details: bool,
 
     /// Preferred docked sidebar width as a percentage of the terminal.
     pub tui_sidebar_width_percent: Option<u8>,
@@ -4874,6 +4875,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.raw_output_mode)
                 .unwrap_or(false),
+            tui_collapse_turn_details: cfg.tui.as_ref().is_some_and(|tui| tui.collapse_turn_details),
             tui_fullscreen_transcript: cfg
                 .tui
                 .as_ref()

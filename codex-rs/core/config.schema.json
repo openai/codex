@@ -5245,6 +5245,11 @@
           "description": "Generate automatic conversation recaps when the terminal is unfocused. Defaults to `true`. Disabling this leaves `/recap` available on demand.",
           "type": "boolean"
         },
+        "collapse_turn_details": {
+          "default": false,
+          "description": "Summarize tool calls and collapse completed turns in the full-screen transcript. Defaults to `false`.",
+          "type": "boolean"
+        },
         "copy_on_select": {
           "allOf": [
             {
