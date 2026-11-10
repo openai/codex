@@ -914,7 +914,7 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
     };
     *model = "standard-only".into();
     while events.try_recv().is_ok() {}
-    app.submit_thread_op(&mut server, thread_id, unsupported_turn)
+    app.submit_thread_op(&mut server, thread_id, unsupported_turn.clone())
         .await?;
     assert!(recorded_params(&requests, "turn/start").is_empty());
     assert!(next_history_message(&mut events).contains("Daybreak support for model standard-only"));
@@ -953,7 +953,17 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
     app.chat_widget.set_daybreak_enabled(/*enabled*/ true);
     app.chat_widget
         .set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ false);
-    let models = app.chat_widget.model_catalog().models.clone();
+    let mut models = app.chat_widget.model_catalog().models.clone();
+    for (name, cyber) in [
+        ("red", vec![CyberAccessProgram::DaybreakRed]),
+        ("empty", vec![]),
+    ] {
+        models.push(ModelPreset {
+            model: name.into(),
+            available_access_programs: Some(ModelAccessPrograms { cyber }),
+            ..models[0].clone()
+        });
+    }
     app.chat_widget.update_account_state(
         Some(crate::status::StatusAccountDisplay::ApiKey),
         /*plan_type*/ None,
@@ -968,7 +978,26 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
         })
         .last()
         .expect("account model refresh");
+    let next_disable = |events: &mut tokio::sync::mpsc::UnboundedReceiver<_>| {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .find(|event| matches!(event, AppEvent::DisableUnavailableDaybreak { .. }))
+    };
+    // A switch during discovery must wait for the current account's catalog.
+    app.chat_widget
+        .set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ true);
+    app.chat_widget.set_daybreak_enabled(/*enabled*/ true);
+    let original_model = app.chat_widget.current_model().to_owned();
+    app.chat_widget.set_model("standard-only");
+    assert!(next_disable(&mut events).is_none());
     assert!(app.chat_widget.on_models_loaded(request_id, Ok(models)));
+    assert!(matches!(next_disable(&mut events),
+        Some(AppEvent::DisableUnavailableDaybreak { thread_id: id, model })
+            if id == thread_id && model == "standard-only"
+    ));
+    for model in ["red", "empty", "unlisted", &original_model] {
+        app.chat_widget.set_model(model);
+    }
+    assert!(next_disable(&mut events).is_none());
     for (cli_daybreak, api_key_cyber_access_programs, enabled) in [
         (false, false, true),
         (false, true, true),
@@ -998,11 +1027,41 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
 
     let missing_thread_id = ThreadId::new();
     app.active_thread_id = Some(missing_thread_id);
-    app.persist_daybreak_selection(&mut server, missing_thread_id, /*enabled*/ true)
-        .await;
+    assert!(
+        !app.persist_daybreak_selection(&mut server, missing_thread_id, /*enabled*/ true)
+            .await
+    );
     assert!(next_history_message(&mut events).contains("Failed to read the thread"));
     assert!(!app.chat_widget.daybreak_enabled);
     assert!(!app.config.daybreak_enabled);
+
+    app.active_thread_id = Some(thread_id);
+    app.persist_daybreak_selection(&mut server, thread_id, /*enabled*/ true)
+        .await;
+    assert!(next_history_message(&mut events).contains("Daybreak on"));
+    app.chat_widget.set_model("standard-only");
+    let disable = next_disable(&mut events).expect("model switch disables Daybreak");
+    assert!(app.chat_widget.daybreak_enabled);
+    app.handle_event(&mut tui, &mut server, disable).await?;
+    assert!(next_history_message(&mut events).contains("Daybreak off"));
+    let warning = next_history_message(&mut events);
+    insta::assert_snapshot!("daybreak_model_switch_warning", warning);
+    assert_eq!(
+        server
+            .thread_read(thread_id, /*include_turns*/ false)
+            .await?
+            .daybreak_enabled,
+        Some(false)
+    );
+    assert!(!app.config.daybreak_enabled);
+    app.submit_thread_op(&mut server, thread_id, unsupported_turn)
+        .await?;
+    assert_eq!(
+        recorded_params(&requests, "turn/start")[turns.len()]["cyberAccessProgram"],
+        "standard"
+    );
+    app.chat_widget.set_model(&original_model);
+    assert!(!app.chat_widget.daybreak_enabled);
     server.shutdown().await?;
     proxy.await??;
     Ok(())

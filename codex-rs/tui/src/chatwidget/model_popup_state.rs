@@ -87,6 +87,7 @@ impl ChatWidget {
         }
         Arc::make_mut(&mut self.model_catalog).models = presets;
         self.set_daybreak_enabled(self.daybreak_enabled);
+        self.queue_unavailable_daybreak_disable(self.current_model());
         self.refresh_effective_service_tier();
         self.refresh_model_dependent_surfaces();
         true

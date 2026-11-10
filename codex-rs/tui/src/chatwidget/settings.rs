@@ -311,6 +311,7 @@ impl ChatWidget {
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
         if model != self.current_model() {
+            self.queue_unavailable_daybreak_disable(model);
             if self.current_model() == crate::model_catalog::LUNA_RESERVE_MODEL {
                 self.clear_reserve_return();
             } else {
@@ -330,6 +331,26 @@ impl ChatWidget {
         }
         self.refresh_effective_service_tier();
         self.refresh_model_dependent_surfaces();
+    }
+
+    pub(super) fn queue_unavailable_daybreak_disable(&self, model: &str) {
+        if let Some(thread_id) = self.thread_id
+            && self.should_disable_daybreak(model)
+        {
+            self.app_event_tx
+                .send(AppEvent::DisableUnavailableDaybreak {
+                    thread_id,
+                    model: model.to_owned(),
+                });
+        }
+    }
+
+    pub(crate) fn should_disable_daybreak(&self, model: &str) -> bool {
+        self.daybreak_enabled
+            && self.model_catalog.models.iter().any(|entry| {
+                entry.model == model
+                    && crate::daybreak::availability(std::slice::from_ref(entry)) == Some(false)
+            })
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -550,6 +571,9 @@ impl ChatWidget {
             }
         }
 
+        if self.current_model() != settings.model {
+            self.queue_unavailable_daybreak_disable(&settings.model);
+        }
         settings.collaboration_mode.settings.model = settings.model;
         settings.collaboration_mode.settings.reasoning_effort = settings.effort;
         self.set_effective_collaboration_mode(settings.collaboration_mode);
@@ -738,6 +762,9 @@ impl ChatWidget {
         }
         self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
+        if previous_model != self.current_model() {
+            self.queue_unavailable_daybreak_disable(self.current_model());
+        }
         self.refresh_model_dependent_surfaces();
         let next_mode = self.active_mode_kind();
         let next_model = self.current_model();

@@ -2890,7 +2890,18 @@ impl App {
                     .await;
             }
             AppEvent::PersistDaybreakSelection { thread_id, enabled } => {
-                self.persist_daybreak_selection(app_server, thread_id, enabled).await;
+                Box::pin(self.persist_daybreak_selection(app_server, thread_id, enabled)).await;
+            }
+            AppEvent::DisableUnavailableDaybreak { thread_id, model } => {
+                if self.chat_widget.current_model() == model
+                    && self.chat_widget.should_disable_daybreak(&model)
+                    && Box::pin(self.persist_daybreak_selection(app_server, thread_id, /*enabled*/ false)).await
+                {
+                    self.chat_widget.add_info_message(
+                        format!("Daybreak has been turned off for new turns because it is not available for {model} with your current account and server. Prior cybersecurity context in this thread may cause a refusal. You can switch back to a model where you have Daybreak access and use /daybreak to re-enable it."),
+                        /*hint*/ None,
+                    );
+                }
             }
             AppEvent::SelectSessionModel { model, effort, service_tier } => {
                 self.app_event_tx.send(AppEvent::FollowTranscript);

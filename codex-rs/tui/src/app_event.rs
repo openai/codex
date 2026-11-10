@@ -1513,6 +1513,11 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
         enabled: bool,
     },
+    /// Disable Daybreak after explicit account-scoped metadata excludes it for the selected model.
+    DisableUnavailableDaybreak {
+        thread_id: ThreadId,
+        model: String,
+    },
 
     /// Fetch the current catalog even when cached models produce no picker.
     FetchModels {

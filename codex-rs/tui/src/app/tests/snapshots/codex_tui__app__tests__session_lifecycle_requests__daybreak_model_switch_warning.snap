@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests/session_lifecycle_requests.rs
+assertion_line: 181
+expression: warning
+---
+• Daybreak has been turned off for new turns because it is not available for standard-only with your current account and server. Prior cybersecurity context in this thread may cause a refusal. You can switch back to a model where you have Daybreak access and use /daybreak to re-enable it.
