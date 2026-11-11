@@ -23,6 +23,7 @@ use codex_prompts::ResolvedModelMessages;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -38,6 +39,7 @@ use super::ApprovalRequestReasons;
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
+use super::GuardianReviewSessionManager;
 use super::approval_request::format_guardian_action_pretty;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
@@ -103,6 +105,20 @@ pub(super) struct GuardianReviewSessionConfig {
     pub(super) spawn_config: crate::config::Config,
     pub(super) node_repl_policy: GuardianNodeReplPolicy,
     review_model: ReviewModel,
+}
+
+/// Selects the thread's reviewer and leaves configuration resolution under the caller's deadline.
+fn select_synchronous_reviewer(
+    session: &Session,
+    context: &GuardianReviewContext,
+) -> Option<(
+    Arc<GuardianReviewSessionManager>,
+    impl Future<Output = anyhow::Result<GuardianReviewSessionConfig>>,
+)> {
+    Some((
+        session.guardian_review_session()?,
+        guardian_review_session_config(session, context),
+    ))
 }
 
 pub(super) async fn guardian_review_session_config(
@@ -201,12 +217,13 @@ impl ReviewInput {
         cancellation: &CancellationToken,
     ) -> Result<GuardianAssessment, GuardianReviewError> {
         let review = async {
-            let pool = self.session.guardian_review_session().ok_or_else(|| {
-                GuardianReviewError::session(anyhow::anyhow!("Guardian reviewer is unavailable"))
-            })?;
-            let config = guardian_review_session_config(&self.session, &self.context)
-                .await
-                .map_err(GuardianReviewError::prompt_build)?;
+            let (pool, config) = select_synchronous_reviewer(&self.session, &self.context)
+                .ok_or_else(|| {
+                    GuardianReviewError::session(anyhow::anyhow!(
+                        "Guardian reviewer is unavailable"
+                    ))
+                })?;
+            let config = config.await.map_err(GuardianReviewError::prompt_build)?;
             let category = self.request.guardian_scope();
             let params = self.into_params(
                 config,
@@ -258,7 +275,7 @@ async fn run_guardian_review_session_before_deadline(
     reasons: ApprovalRequestReasons,
     options: ReviewAttemptOptions,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-    let Some(pool) = session.guardian_review_session() else {
+    let Some((pool, config)) = select_synchronous_reviewer(&session, &context) else {
         return (
             GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(anyhow::anyhow!(
                 "Guardian extension is not installed for this thread"
@@ -269,7 +286,7 @@ async fn run_guardian_review_session_before_deadline(
     let session_config = match run_before_review_deadline(
         options.deadline,
         options.external_cancel.as_ref(),
-        guardian_review_session_config(session.as_ref(), &context),
+        config,
     )
     .await
     {
