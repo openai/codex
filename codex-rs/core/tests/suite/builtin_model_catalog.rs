@@ -2,9 +2,9 @@
 #![cfg(test)]
 
 use anyhow::Result;
-use codex_core::config::ConfigBuilder;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
+use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
@@ -49,10 +49,7 @@ model_catalog_url = "https://chatgpt.com/backend-api/codex/models"
             inference.uri(),
         ),
     )?;
-    let mut loaded = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
-        .build()
-        .await?;
+    let mut loaded = load_default_config_for_test(&home).await;
     assert_eq!(
         loaded
             .model_provider

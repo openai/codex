@@ -331,6 +331,13 @@ pub(crate) async fn test_config() -> Config {
     Config::load_from_base_config_with_overrides(
         ConfigToml {
             model: Some("gpt-5.5".to_string()),
+            features: Some(
+                BTreeMap::from([
+                    (Feature::ToolSuggest.key().to_string(), false),
+                    (Feature::RecommendedPlugins.key().to_string(), false),
+                ])
+                .into(),
+            ),
             ..Default::default()
         },
         ConfigOverrides::default(),
@@ -1890,6 +1897,7 @@ impl Config {
             self.http_client_factory(),
             self.apps_mcp_product_sku.clone(),
         )
+        .with_plugin_recommendations_enabled(self.features.plugin_recommendations_enabled())
         .with_runtime_auth_mode(
             (self.features.enabled(Feature::RuntimeAgentInstances)
                 && codex_runtime_agent_instance::is_openai_api_url(&self.chatgpt_base_url))

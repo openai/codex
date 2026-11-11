@@ -175,6 +175,7 @@ pub struct PluginsConfigInput {
     pub remote_plugin_enabled: bool,
     pub chatgpt_base_url: String,
     pub product_sku: Option<String>,
+    plugin_recommendations_enabled: bool,
     http_client_factory: HttpClientFactory,
     remote_http_clients: Arc<OnceLock<Arc<dyn HttpClientSelector>>>,
     runtime_http_clients: Arc<OnceLock<Arc<dyn HttpClientSelector>>>,
@@ -203,10 +204,16 @@ impl PluginsConfigInput {
             chatgpt_base_url,
             http_client_factory,
             product_sku,
+            plugin_recommendations_enabled: false,
             remote_http_clients: Arc::new(OnceLock::new()),
             runtime_http_clients: Arc::new(OnceLock::new()),
             runtime_auth_mode: None,
         }
+    }
+
+    pub fn with_plugin_recommendations_enabled(mut self, enabled: bool) -> Self {
+        self.plugin_recommendations_enabled = enabled;
+        self
     }
 
     pub fn with_runtime_auth_mode(mut self, mode: Option<RuntimeAuthMode>) -> Self {
@@ -1698,6 +1705,10 @@ impl PluginsManager {
             on_effective_plugins_changed,
             EffectivePluginsChange::default(),
         );
+
+        if !config.plugin_recommendations_enabled {
+            return;
+        }
 
         let manager = Arc::clone(self);
         let config = config.clone();

@@ -31,30 +31,26 @@ use wiremock::matchers::query_param;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(20);
 const WORKSPACE_ID: &str = "123e4567-e89b-42d3-a456-426614174010";
 
-enum ToolSuggestFeature {
-    Enabled,
-    Disabled,
+enum RecommendationFeature {
+    ToolSuggest,
+    RecommendedPlugins,
 }
 
 #[tokio::test]
 async fn first_turn_after_external_login_waits_for_recommended_plugins() -> Result<()> {
-    recommended_plugins_after_external_login(ToolSuggestFeature::Enabled).await
+    recommended_plugins_after_external_login(RecommendationFeature::ToolSuggest).await
 }
 
 #[tokio::test]
 async fn first_turn_after_external_login_waits_for_recommended_plugins_without_tool_suggest()
 -> Result<()> {
-    recommended_plugins_after_external_login(ToolSuggestFeature::Disabled).await
+    recommended_plugins_after_external_login(RecommendationFeature::RecommendedPlugins).await
 }
 
-async fn recommended_plugins_after_external_login(
-    tool_suggest_feature: ToolSuggestFeature,
-) -> Result<()> {
-    let tool_suggest_enabled = matches!(tool_suggest_feature, ToolSuggestFeature::Enabled);
-    let recommended_plugins_config = if tool_suggest_enabled {
-        ""
-    } else {
-        "recommended_plugins = true\n"
+async fn recommended_plugins_after_external_login(feature: RecommendationFeature) -> Result<()> {
+    let feature_args: &[&str] = match feature {
+        RecommendationFeature::ToolSuggest => &["-c", "features.tool_suggest=true"],
+        RecommendationFeature::RecommendedPlugins => &["-c", "features.recommended_plugins=true"],
     };
     let server = responses::start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
@@ -89,19 +85,12 @@ async fn recommended_plugins_after_external_login(
         &server.uri(),
         &apps_server.chatgpt_base_url,
     )?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        config_path,
-        format!(
-            "{config}\n[features]\napps = true\nplugins = true\ntool_suggest = {tool_suggest_enabled}\n{recommended_plugins_config}"
-        ),
-    )?;
-
     let sqlite_home = codex_home.path().to_string_lossy();
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_managed_config()
+        .with_args(&["-c", "features.apps=true", "-c", "features.plugins=true"])
+        .with_args(feature_args)
         .with_env_overrides(&[("CODEX_SQLITE_HOME", Some(sqlite_home.as_ref()))])
         .build()
         .await?;
@@ -218,7 +207,7 @@ async fn recommended_plugins_after_external_login(
         .collect::<Vec<_>>();
     assert_eq!(
         tool_names.contains(&"request_plugin_install"),
-        tool_suggest_enabled
+        matches!(feature, RecommendationFeature::ToolSuggest)
     );
     assert!(!tool_names.contains(&"list_available_plugins_to_install"));
     Ok(())

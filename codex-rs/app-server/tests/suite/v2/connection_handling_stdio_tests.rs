@@ -2,7 +2,7 @@
 
 use anyhow::Context;
 use anyhow::Result;
-use app_test_support::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
+use app_test_support::DEFAULT_APP_SERVER_TEST_ARGS;
 use app_test_support::TestAppServer;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -53,7 +53,7 @@ async fn stdio_sigterm_times_out_with_blocked_stderr() -> Result<()> {
     // TestAppServer drains stderr, so keep this subprocess's stderr pipe unread.
     let codex_home = TempDir::new()?;
     let mut process = tokio::process::Command::new(cargo_bin("codex-app-server")?)
-        .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
+        .args(DEFAULT_APP_SERVER_TEST_ARGS)
         .env("CODEX_HOME", codex_home.path())
         .env(
             "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
