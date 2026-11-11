@@ -141,6 +141,7 @@ fn changing_retained_context_and_attestations_preserves_history_before_the_curre
                     target: ContextTarget::Async,
                     history: &history,
                     transcript: &profile.transcript,
+                    is_selected_exec_output: None,
                     root_conversation: &[],
                     root_conversation_candidates: None,
                     trusted_user_answers: &[],
@@ -259,6 +260,7 @@ fn elastic_verified_answers_preserve_question_answer_identity() {
                 target: ContextTarget::Sync,
                 history: &history,
                 transcript: &profile.transcript,
+                is_selected_exec_output: None,
                 root_conversation: &root,
                 root_conversation_candidates: None,
                 trusted_user_answers: &trusted_answers,
@@ -291,6 +293,7 @@ fn elastic_verified_answers_preserve_question_answer_identity() {
                 ),
             ]
             .into(),
+            ..Default::default()
         };
         let messages = prepare_context(
             std::borrow::Cow::Owned(collected),

@@ -148,6 +148,9 @@ pub struct GuardianV2ReviewScopeConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuardianElasticSectionConfigToml {
+    /// Exact Code Mode tool names for the transcript_selected_exec_results section.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nested_tool_names: Vec<String>,
     pub min_total_section_tokens: usize,
     pub max_section_entry_tokens: usize,
     /// Upper bound for the section's allocation.

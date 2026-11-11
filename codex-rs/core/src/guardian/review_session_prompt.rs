@@ -1,9 +1,11 @@
 //! Captures synchronous evidence once for the common preparation pass.
 //! Reviewer-history token measurement is needed only for captured images.
 
+use codex_guardian_context::ElasticSection;
 use codex_guardian_reviewer::GuardianPromptItems;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -31,13 +33,30 @@ pub(super) async fn build_guardian_prompt_items(
     mode: GuardianPromptMode,
     reviewed_node_repl_evidence_sequence: u64,
 ) -> anyhow::Result<GuardianPromptItems> {
+    let selected_tool_names = params
+        .spawn_config
+        .guardian_sync_elastic_budget
+        .as_ref()
+        .filter(|budget| {
+            budget
+                .sections
+                .contains_key(&ElasticSection::TranscriptSelectedExecResults)
+        })
+        .map_or(&[][..], |budget| budget.selected_exec_tool_names.as_slice());
+    let select_exec_output = |output: &ResponseItem| {
+        params
+            .parent_session
+            .services
+            .executed_tool_calls
+            .exec_output_matches(output, selected_tool_names)
+    };
     let collected = collect_guardian_prompt_items_with_parent_turn(
         params.parent_session.as_ref(),
         history,
         Some(&params.parent_context),
         params.reasons.clone(),
         params.request.clone(),
-        mode,
+        (!selected_tool_names.is_empty()).then_some(&select_exec_output),
         reviewed_node_repl_evidence_sequence,
     )
     .await?;
@@ -73,7 +92,7 @@ pub(super) async fn build_guardian_prompt_items(
     codex_guardian_reviewer::compose_guardian_prompt_with_preparation(
         collected.sections,
         &collected.profile,
-        collected.mode,
+        mode,
         collected.history_version,
         &collected.session_id,
         collected.node_repl_evidence_sequence,

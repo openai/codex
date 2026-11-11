@@ -480,14 +480,14 @@ async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> an
             justification: None,
             tty: false,
         },
-        GuardianPromptMode::Full,
+        /*is_selected_exec_output*/ None,
         /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await?;
     let prompt = codex_guardian_reviewer::compose_guardian_prompt(
         collected.sections,
         &collected.profile,
-        collected.mode,
+        GuardianPromptMode::Full,
         collected.history_version,
         &collected.session_id,
         collected.node_repl_evidence_sequence,
@@ -571,14 +571,14 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
             justification: Some("Need to inspect the secret file.".to_string()),
             tty: false,
         },
-        GuardianPromptMode::Full,
+        /*is_selected_exec_output*/ None,
         /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await?;
     let prompt = codex_guardian_reviewer::compose_guardian_prompt(
         collected.sections,
         &collected.profile,
-        collected.mode,
+        GuardianPromptMode::Full,
         collected.history_version,
         &collected.session_id,
         collected.node_repl_evidence_sequence,
@@ -700,14 +700,14 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
             Some(&context),
             ApprovalRequestReasons::default(),
             request,
-            GuardianPromptMode::Full,
+            /*is_selected_exec_output*/ None,
             /*reviewed_node_repl_evidence_sequence*/ 0,
         )
         .await?;
         let prompt = codex_guardian_reviewer::compose_guardian_prompt(
             collected.sections,
             &collected.profile,
-            collected.mode,
+            GuardianPromptMode::Full,
             collected.history_version,
             &collected.session_id,
             collected.node_repl_evidence_sequence,
@@ -796,14 +796,14 @@ async fn guardian_mcp_uses_thread_permissions_for_an_unavailable_captured_enviro
         Some(&context),
         ApprovalRequestReasons::default(),
         guardian_mcp_request("server", "tool"),
-        GuardianPromptMode::Full,
+        /*is_selected_exec_output*/ None,
         /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await?;
     let prompt = codex_guardian_reviewer::compose_guardian_prompt(
         collected.sections,
         &collected.profile,
-        collected.mode,
+        GuardianPromptMode::Full,
         collected.history_version,
         &collected.session_id,
         collected.node_repl_evidence_sequence,
@@ -924,15 +924,22 @@ fn collect_guardian_transcript_entries(
 ) -> Vec<ConversationTranscriptEntry> {
     let mut profile = codex_guardian_context::ContextProfile::synchronous();
     profile.transcript.entry_limits.node_repl_output_tokens = node_repl_result_token_limit;
-    prompt::collect_guardian_context(
+    prompt::collect_guardian_context(codex_guardian_context::SectionInput {
+        target: profile.target,
         history,
-        &profile,
-        /*root_conversation_candidates*/ None,
-        &[],
-        /*planned_action*/ None,
-        /*permissions*/ None,
-        /*node_repl*/ None,
-    )
+        transcript: &profile.transcript,
+        is_selected_exec_output: None,
+        root_conversation: &[],
+        root_conversation_candidates: None,
+        trusted_user_answers: &[],
+        planned_action: None,
+        permissions: None,
+        previous_reviews: None,
+        trusted_tool: None,
+        trusted_skill_paths: &[],
+        images: None,
+        node_repl: None,
+    })
     .expect("collect Guardian context")
     .transcript_entries()
     .to_vec()
@@ -1048,14 +1055,14 @@ async fn build_guardian_prompt_items_keeps_required_node_repl_reviews_generic() 
             retry: Some("Retry the authorized browser inspection.".to_string()),
         },
         guardian_mcp_request("node_repl", "js"),
-        GuardianPromptMode::Full,
+        /*is_selected_exec_output*/ None,
         /*reviewed_node_repl_evidence_sequence*/ 0,
     )
     .await?;
     let prompt = codex_guardian_reviewer::compose_guardian_prompt(
         collected.sections,
         &collected.profile,
-        collected.mode,
+        GuardianPromptMode::Full,
         collected.history_version,
         &collected.session_id,
         collected.node_repl_evidence_sequence,

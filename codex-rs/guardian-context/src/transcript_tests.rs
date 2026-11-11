@@ -278,6 +278,7 @@ fn registered_transcript_filters_roles_and_preserves_node_repl_tool_attribution(
             target: ContextTarget::Async,
             history: &history,
             transcript: &config,
+            is_selected_exec_output: None,
             root_conversation: &[],
             root_conversation_candidates: None,
             trusted_user_answers: &[],
@@ -368,6 +369,7 @@ fn excluded_tool_calls_still_attribute_included_results() {
             target: ContextTarget::Async,
             history: &history,
             transcript: &config,
+            is_selected_exec_output: None,
             root_conversation: &[],
             root_conversation_candidates: None,
             trusted_user_answers: &[],
@@ -387,6 +389,41 @@ fn excluded_tool_calls_still_attribute_included_results() {
             ConversationTranscriptEntryKind::ToolOutput("tool read_file result".to_string()),
             "file contents"
         )]
+    );
+}
+
+#[test]
+fn missing_exec_call_preserves_recorder_verified_output() {
+    let outputs = ["verified", "unknown"].map(|call_id| ResponseItem::CustomToolCallOutput {
+        id: None,
+        call_id: call_id.to_owned(),
+        name: None,
+        output: FunctionCallOutputPayload::from_text("saved instructions".to_owned()),
+        internal_chat_message_metadata_passthrough: None,
+    });
+    let is_verified = |output: &ResponseItem| matches!(output, ResponseItem::CustomToolCallOutput { call_id, .. } if call_id == "verified");
+    let ordinary = entry(
+        ConversationTranscriptEntryKind::ToolOutput("tool result".into()),
+        "saved instructions",
+    );
+    assert_eq!(
+        collect_transcript(&outputs, &transcript_config()),
+        vec![ordinary.clone(), ordinary.clone()]
+    );
+    assert_eq!(
+        super::collect_transcript_for_review(
+            &outputs,
+            &transcript_config(),
+            /*proposed_call_id*/ None,
+            Some(&is_verified)
+        ),
+        vec![
+            entry(
+                ConversationTranscriptEntryKind::SelectedExecOutput,
+                "saved instructions"
+            ),
+            ordinary,
+        ]
     );
 }
 
@@ -483,6 +520,7 @@ fn outputs_with_call_ids_or_explicit_names_are_retained() {
                     target,
                     history: &history,
                     transcript: &config,
+                    is_selected_exec_output: None,
                     root_conversation: &[],
                     root_conversation_candidates: None,
                     trusted_user_answers: &[],
@@ -544,6 +582,7 @@ fn reused_registry_applies_current_history_sources_and_preserves_originals() {
                 target,
                 history: &history,
                 transcript: &config,
+                is_selected_exec_output: None,
                 root_conversation: &[],
                 root_conversation_candidates: None,
                 trusted_user_answers: &[],
@@ -593,6 +632,7 @@ fn reused_registry_applies_current_history_sources_and_preserves_originals() {
                 target: ContextTarget::Async,
                 history: &history,
                 transcript: &config,
+                is_selected_exec_output: None,
                 root_conversation: &[],
                 root_conversation_candidates: None,
                 trusted_user_answers: &[],

@@ -132,6 +132,11 @@ pub(crate) fn allocation_section(
     retention: Retention,
 ) -> Result<ElasticSection, SectionError> {
     Ok(match section {
+        "conversation_transcript"
+            if retention == Retention::Optional(BudgetPriority::SelectedExecResult) =>
+        {
+            ElasticSection::TranscriptSelectedExecResults
+        }
         "conversation_transcript" if retention == Retention::Optional(BudgetPriority::Tool) => {
             ElasticSection::TranscriptTools
         }

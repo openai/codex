@@ -2249,6 +2249,13 @@
           "format": "uint",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "nested_tool_names": {
+          "description": "Exact Code Mode tool names for the transcript_selected_exec_results section.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

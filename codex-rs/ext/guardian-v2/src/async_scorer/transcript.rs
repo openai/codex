@@ -131,6 +131,7 @@ impl TranscriptConfig {
             target,
             history: &history,
             transcript: &profile.transcript,
+            is_selected_exec_output: None,
             root_conversation,
             root_conversation_candidates: None,
             trusted_user_answers: &trusted_user_answers,

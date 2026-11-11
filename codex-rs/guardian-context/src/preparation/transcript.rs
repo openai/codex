@@ -59,6 +59,7 @@ struct TranscriptEntry {
     original_bytes: usize,
     retained_bytes: usize,
     source: Option<codex_history::RetainedSource>,
+    tool_priority: BudgetPriority,
 }
 
 impl ContextProfile {
@@ -152,7 +153,8 @@ impl ContextProfile {
                     }
                     ConversationTranscriptEntryKind::Assistant
                     | ConversationTranscriptEntryKind::Reasoning => TranscriptEntryKind::Message,
-                    ConversationTranscriptEntryKind::ToolCall(_)
+                    ConversationTranscriptEntryKind::SelectedExecOutput
+                    | ConversationTranscriptEntryKind::ToolCall(_)
                     | ConversationTranscriptEntryKind::ToolOutput(_)
                     | ConversationTranscriptEntryKind::NodeReplToolOutput(_) => {
                         TranscriptEntryKind::Tool
@@ -207,6 +209,13 @@ impl ContextProfile {
                     original_bytes: entry.original_bytes,
                     retained_bytes,
                     source: retained_source.map(|retained| retained.source.clone()),
+                    tool_priority: match (&entry.kind, budgeting) {
+                        (
+                            ConversationTranscriptEntryKind::SelectedExecOutput,
+                            ContextBudgeting::Elastic,
+                        ) => BudgetPriority::SelectedExecResult,
+                        _ => BudgetPriority::Tool,
+                    },
                 }
             })
             .collect::<Vec<_>>();
@@ -314,7 +323,7 @@ impl ContextProfile {
                             Budgeted::optional(entry.content, BudgetPriority::Commentary)
                         }
                         TranscriptEntryKind::Tool => {
-                            Budgeted::optional(entry.content, BudgetPriority::Tool)
+                            Budgeted::optional(entry.content, entry.tool_priority)
                         }
                     })
                 } else {
@@ -380,6 +389,7 @@ fn prepare_fixed_content<'a>(
         | ConversationTranscriptEntryKind::ProtectedAssistant
         | ConversationTranscriptEntryKind::Reasoning => limits.message_tokens,
         ConversationTranscriptEntryKind::NodeReplToolOutput(_) => limits.node_repl_output_tokens,
+        ConversationTranscriptEntryKind::SelectedExecOutput => limits.tool_tokens,
         ConversationTranscriptEntryKind::User | ConversationTranscriptEntryKind::Developer => {
             return std::borrow::Cow::Borrowed(&entry.content);
         }

@@ -180,6 +180,9 @@ impl SectionScope {
     }
 }
 
+/// Identifies exec outputs eligible for this review's configured section budget.
+pub type SelectedExecOutputPredicate<'a> = dyn Fn(&ResponseItem) -> bool + Sync + 'a;
+
 /// Borrowed host inputs available while one Guardian context section is built.
 #[derive(Clone, Copy)]
 pub struct SectionInput<'a> {
@@ -189,6 +192,8 @@ pub struct SectionInput<'a> {
     pub history: &'a dyn SectionHistory,
     /// Evidence sources and request-time entry limits.
     pub transcript: &'a ConversationTranscriptConfig,
+    /// Supplied by the sync host when selected exec results have a configured budget.
+    pub is_selected_exec_output: Option<&'a SelectedExecOutputPredicate<'a>>,
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],
     /// Sync originals retained until request preparation; preferred over the bounded view.

@@ -89,6 +89,7 @@ fn entry_caps_bound_required_and_optional_text_preserving_metadata_and_opaque_pa
             (ElasticSection::TranscriptMessages, limits),
         ]
         .into(),
+        ..Default::default()
     });
     let prepared = context.prepare_elastic_entries(&config).unwrap();
     let SectionDelivery::UserContent(items) = &prepared.context.sections[0].delivery else {
@@ -192,6 +193,7 @@ fn exact_actions_stay_whole_while_supporting_context_is_capped() {
             ]
             .map(|section| (section, limits))
             .into(),
+            ..Default::default()
         });
         let prepared = context.prepare_elastic_entries(&config).unwrap();
         let SectionDelivery::UserContent(items) =

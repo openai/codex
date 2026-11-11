@@ -100,6 +100,34 @@ fn tool_calls_complete(item: &ResponseItem) -> Option<bool> {
 }
 
 #[test]
+fn selected_exec_result_uses_only_the_retained_wrapper_inventory() {
+    let recorder = new_recorder(InitialHistory::New);
+    let cell = CellId::new("cell".to_string());
+    recorder.start_cell(&cell, "exec");
+    recorder.record_nested_tool_call(
+        cell.clone(),
+        "inner".to_owned(),
+        ExecutedToolCall::new("normalized-alias__lookup".to_owned(), json!({})),
+        /*original_bytes*/ 2,
+    );
+    recorder.finish_cell_recording(&cell);
+    let exec = exec_output("exec");
+    let tools = ["normalized_alias__lookup".to_owned()];
+    assert!(!recorder.exec_output_matches(&exec, &tools));
+    let mut prompt = vec![exec_input("exec"), exec.clone()];
+    recorder.attach_to_prompt(&mut prompt, &mut HashMap::new());
+
+    assert!(recorder.exec_output_matches(&exec, &tools));
+    assert!(recorder.exec_output_matches(&exec, &["normalized-alias__lookup".to_owned()]));
+    assert!(!recorder.exec_output_matches(&exec, &["another_tool".to_owned()]));
+    assert!(!recorder.exec_output_matches(&exec_output("inner"), &tools));
+    assert!(!recorder.exec_output_matches(&output("exec"), &tools));
+
+    recorder.attach_to_prompt(&mut [], &mut HashMap::new());
+    assert!(!recorder.exec_output_matches(&exec, &tools));
+}
+
+#[test]
 fn compaction_attaches_pending_and_retained_code_mode_metadata() {
     for previously_sampled in [false, true] {
         let recorder = new_recorder(InitialHistory::New);

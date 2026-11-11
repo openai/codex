@@ -126,6 +126,7 @@ fn build_guardian_prompt_items(
         target: profile.target,
         history,
         transcript: &profile.transcript,
+        is_selected_exec_output: None,
         root_conversation: &[],
         root_conversation_candidates: None,
         trusted_user_answers: &[],

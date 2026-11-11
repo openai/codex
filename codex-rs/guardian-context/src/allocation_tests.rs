@@ -45,6 +45,7 @@ fn groups_select_recent_whole_entries_and_redistribute_packing_gaps() {
         let limits = ElasticSectionLimits::new(minimum, minimum).unwrap();
         let mut config = ElasticBudgetConfig {
             sections: groups.map(|group| (group, limits)).into(),
+            ..Default::default()
         };
         config.sections.insert(
             groups[1],
@@ -200,8 +201,10 @@ fn whole_images_use_defaults_and_charge_shared_framing_once() {
             (ElasticSection::TranscriptImages, limits),
         ]),
     ] {
-        let config =
-            crate::budget::tests::complete_minimum_budget(ElasticBudgetConfig { sections });
+        let config = crate::budget::tests::complete_minimum_budget(ElasticBudgetConfig {
+            sections,
+            ..Default::default()
+        });
         let mut demand = collect_demand(&context).unwrap();
         let allowance = context.estimated_tokens() - demand.protected_tokens;
         let expected_selection = demand
@@ -288,6 +291,7 @@ fn whole_images_use_defaults_and_charge_shared_framing_once() {
                         .unwrap(),
                 ),
             ]),
+            ..Default::default()
         });
         let budget = RequestBudget {
             max_input_tokens: context.estimated_tokens() + HISTORY_TOKENS,

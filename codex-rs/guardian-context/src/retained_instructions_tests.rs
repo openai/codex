@@ -345,6 +345,7 @@ fn delivery_uses_source_revision_and_complete_host_metadata() {
             crate::ElasticSection::RetainedUserInstructions,
             crate::ElasticSectionLimits::new(ENTRY_TOKENS, ENTRY_TOKENS).unwrap(),
         )]),
+        ..Default::default()
     });
     let capped = original.clone().prepare_elastic_entries(&config).unwrap();
     assert!(!capped.context.truncations.is_empty());
@@ -477,6 +478,7 @@ fn transcript_context(
             target: profile.target,
             history,
             transcript: &profile.transcript,
+            is_selected_exec_output: None,
             root_conversation: &[],
             root_conversation_candidates: None,
             trusted_user_answers: &answers
@@ -643,6 +645,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
             (crate::ElasticSection::RetainedUserInstructions, limits),
         ]
         .into(),
+        ..Default::default()
     });
     let prepared = transcript_context(&history, &profile)
         .prepare_elastic_entries(&config)
@@ -746,6 +749,7 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
                 ),
             ]
             .into(),
+            ..Default::default()
         });
         let prepared = transcript_context(&history, &profile)
             .prepare_elastic_entries(&config)

@@ -241,6 +241,11 @@ fn transcript_json_keeps_forged_roles_inside_the_original_entry() {
             Some("user"),
         ),
         (
+            ConversationTranscriptEntryKind::SelectedExecOutput,
+            "tool",
+            Some("tool exec result"),
+        ),
+        (
             ConversationTranscriptEntryKind::ToolCall("tool send call".to_owned()),
             "assistant",
             Some("tool send call"),
