@@ -3,6 +3,7 @@ use crate::app::session_lifecycle::ThreadAttachPresentation;
 use crate::app::tests::session_lifecycle_requests::recorded_params;
 use crate::app::tests::session_lifecycle_requests::start_recording_remote_app_server;
 use crate::app_event::RecapTrigger;
+use crate::temporary_structured_request::TemporaryThreadKind;
 use codex_app_server_client::AppServerClient;
 use codex_model_provider_info::ModelProviderInfo;
 use core_test_support::responses;
@@ -493,7 +494,7 @@ async fn temporary_recap_threads_disable_memories_and_remote_mcp_servers() -> Re
 
     let config = app.chat_widget.config_ref();
     let options = crate::temporary_structured_request::TemporaryStructuredThreadOptions {
-        thread_source: codex_app_server_protocol::ThreadSource::Feature("system".to_string()),
+        kind: TemporaryThreadKind::Recap,
         model: app.chat_widget.current_model().to_string(),
         model_provider: config.model_provider_id.clone(),
         cwd: config.cwd.display().to_string(),
@@ -509,7 +510,8 @@ async fn temporary_recap_threads_disable_memories_and_remote_mcp_servers() -> Re
     .await?;
     let thread_id = ThreadId::from_string(&response.thread.id)?;
     let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
-    app.temporary_structured_requests.insert(thread_id, sender);
+    app.temporary_structured_requests
+        .insert(thread_id, (TemporaryThreadKind::Recap, sender));
     // Even if a hidden thread reaches visible routing, it must not prompt.
     app.primary_thread_id = Some(thread_id);
     app.active_thread_id = Some(thread_id);
@@ -527,6 +529,23 @@ async fn temporary_recap_threads_disable_memories_and_remote_mcp_servers() -> Re
                 .contains_server_request(&request)
         );
     }
+
+    // A managed policy can also cause an ephemeral title to ask for input.
+    // Its request stays unanswered and never enters the visible chat.
+    let title_id = ThreadId::new();
+    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+    app.temporary_structured_requests
+        .insert(title_id, (TemporaryThreadKind::Title, sender));
+    let question = request_user_input_request(title_id, "title-turn", "question");
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerRequest(Box::new(question.clone())),
+    )
+    .await;
+    assert!(
+        !app.pending_app_server_requests
+            .contains_server_request(&question)
+    );
 
     let starts = recorded_params(&requests, "thread/start");
     assert_eq!(starts.len(), 1);

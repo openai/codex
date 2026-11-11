@@ -412,8 +412,8 @@ impl ChatWidget {
         )));
     }
 
-    /// Update status surfaces before a confirmed manual rename's server notification arrives.
-    pub(crate) fn expect_manual_thread_name(&mut self, thread_id: ThreadId, name: String) {
+    /// Show a provisional or manually chosen name before its server notification arrives.
+    pub(crate) fn display_thread_name(&mut self, thread_id: ThreadId, name: String) {
         if self.thread_id == Some(thread_id) {
             self.thread_name = Some(name);
             self.refresh_status_surfaces();

@@ -228,7 +228,7 @@ impl App {
         // Hidden helper threads must not enter visible thread routing or overview refreshes.
         let target = server_notification_thread_target(&notification);
         if let ServerNotificationThreadTarget::Thread(thread_id) = target
-            && let Some(sender) = self.temporary_structured_requests.get(&thread_id)
+            && let Some((_, sender)) = self.temporary_structured_requests.get(&thread_id)
         {
             if matches!(
                 &notification,
@@ -597,9 +597,16 @@ impl App {
     ) {
         let request = &buffered_request.request;
         let thread_id = server_request_thread_id(request);
-        if thread_id
-            .is_some_and(|thread_id| self.temporary_structured_requests.contains_key(&thread_id))
+        if let Some((kind, _)) =
+            thread_id.and_then(|id| self.temporary_structured_requests.get(&id))
         {
+            // Managed policy can allow a title turn to ask a question. Keep it on
+            // the hidden thread until the structured turn times out, as on desktop.
+            if *kind == crate::temporary_structured_request::TemporaryThreadKind::Title
+                && matches!(request, ServerRequest::ToolRequestUserInput { params, .. } if params.is_blocking)
+            {
+                return;
+            }
             self.reject_unsupported_app_server_request(
                 super::app_server_requests::UnsupportedAppServerRequest {
                     request_id: request.id().clone(),

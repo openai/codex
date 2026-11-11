@@ -3278,7 +3278,7 @@ impl App {
             AppEvent::RenameAgentsOverviewThread { thread_id, name } => {
                 match app_server.thread_set_name(thread_id, name.clone()).await {
                     Ok(()) => {
-                        self.chat_widget.expect_manual_thread_name(thread_id, name);
+                        self.chat_widget.display_thread_name(thread_id, name);
                         self.cancel_thread_title_generation(thread_id);
                     }
                     Err(error) => {
@@ -3316,6 +3316,7 @@ impl App {
                 thread_id,
                 destination,
                 prompt,
+                fallback_title,
                 effort,
                 result,
             } => {
@@ -3324,6 +3325,7 @@ impl App {
                     thread_id,
                     destination,
                     prompt,
+                    fallback_title,
                     effort,
                     result,
                     cancellation,

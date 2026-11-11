@@ -2176,7 +2176,7 @@ async fn live_app_server_manual_thread_name_updates_status_surfaces() {
         ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").expect("thread id");
     chat.thread_id = Some(thread_id);
 
-    chat.expect_manual_thread_name(thread_id, "review-fix".to_string());
+    chat.display_thread_name(thread_id, "review-fix".to_string());
 
     chat.handle_server_notification(
         ServerNotification::ThreadNameUpdated(
@@ -2245,7 +2245,7 @@ async fn live_app_server_manual_thread_name_is_visible_before_notification() {
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
 
-    chat.expect_manual_thread_name(thread_id, "Manual title".to_string());
+    chat.display_thread_name(thread_id, "Manual title".to_string());
 
     assert_eq!(chat.thread_name(), Some("Manual title".to_string()));
     assert!(drain_insert_history(&mut rx).is_empty());

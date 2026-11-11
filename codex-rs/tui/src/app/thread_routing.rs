@@ -857,7 +857,7 @@ impl App {
             AppCommand::SetThreadName { name } => {
                 let name = name.to_string();
                 app_server.thread_set_name(thread_id, name.clone()).await?;
-                self.chat_widget.expect_manual_thread_name(thread_id, name);
+                self.chat_widget.display_thread_name(thread_id, name);
                 self.cancel_thread_title_generation(thread_id);
                 Ok(true)
             }
@@ -2206,7 +2206,7 @@ impl App {
                 app_server,
                 thread_id,
                 ThreadTitleDestination::Automatic,
-                super::thread_title::thread_title_prompt(&user_message),
+                &user_message,
             );
         }
         if !had_active_modal
