@@ -22,6 +22,7 @@ codex-http-client = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-image = { workspace = true }
+codex-utils-model-facing-id = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-redacted-string = { workspace = true }
 codex-utils-string = { workspace = true }

@@ -438,9 +438,11 @@ impl CodexResponsesMetadata {
             turn_id: self.turn_id.as_deref(),
             window_id: has_request_identity.then_some(self.window_id.as_str()),
             window_number: has_request_identity.then_some(self.window_number).flatten(),
-            context_window_id: has_request_identity
-                .then_some(self.context_window_id.as_ref())
-                .flatten(),
+            context_window_id: self
+                .context_window_id
+                .as_ref()
+                .filter(|_| has_request_identity)
+                .map(ToString::to_string),
             request_kind: request_kind_value,
             history_initialization: self.history_initialization,
             forked_from_thread_id: self.forked_from_thread_id,
@@ -572,7 +574,7 @@ struct CodexTurnMetadataPayload<'a> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     window_number: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    context_window_id: Option<&'a ContextWindowId>,
+    context_window_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request_kind: Option<&'static str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

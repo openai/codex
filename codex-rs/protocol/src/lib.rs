@@ -17,6 +17,7 @@ use item_id_generator::uuid_v7_item_id_generator_for_test;
 pub use permission_profile_intersection::PermissionIntersectionError;
 pub use permission_profile_intersection::intersect_effective_permission_profiles;
 pub use response_item_id::ResponseItemId;
+pub use response_item_id::ResponseItemIdAllocation;
 pub use response_usage::ResponseUsageMetadata;
 pub use sanitized_git_url::SanitizedGitUrl;
 pub use session_id::SessionId;

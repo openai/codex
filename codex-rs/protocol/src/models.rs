@@ -31,6 +31,7 @@ use schemars::JsonSchema;
 
 use crate::ResponseItemId;
 use crate::mcp::CallToolResult;
+use crate::response_item_id::OptionalWireItemId;
 use codex_utils_path_uri::PathUri;
 
 mod configuration_update;
@@ -1096,7 +1097,8 @@ impl InternalChatMessageMetadataPassthrough {
 pub enum ResponseItem {
     AdditionalTools {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         role: String,
         #[ts(type = "unknown[]")]
@@ -1111,7 +1113,8 @@ pub enum ResponseItem {
         #[ts(optional)]
         status: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         role: String,
         content: Vec<ContentItem>,
@@ -1127,7 +1130,8 @@ pub enum ResponseItem {
     },
     AgentMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         author: String,
         recipient: String,
@@ -1138,7 +1142,8 @@ pub enum ResponseItem {
     },
     Reasoning {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -1155,7 +1160,8 @@ pub enum ResponseItem {
         encrypted_content: Option<String>,
         /// Legacy id field retained for compatibility with older payloads.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         /// Set when using the Responses API.
         call_id: Option<String>,
@@ -1173,7 +1179,8 @@ pub enum ResponseItem {
         #[ts(optional)]
         status: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1196,7 +1203,8 @@ pub enum ResponseItem {
         #[ts(optional)]
         encrypted_content: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         call_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1216,7 +1224,8 @@ pub enum ResponseItem {
     // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -1239,7 +1248,8 @@ pub enum ResponseItem {
         #[ts(optional)]
         encrypted_content: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -1260,7 +1270,8 @@ pub enum ResponseItem {
     // text or structured content items.
     CustomToolCallOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         call_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1275,7 +1286,8 @@ pub enum ResponseItem {
     },
     ToolSearchOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         call_id: Option<String>,
         status: String,
@@ -1299,7 +1311,8 @@ pub enum ResponseItem {
         #[ts(optional)]
         encrypted_content: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -1325,7 +1338,8 @@ pub enum ResponseItem {
         #[ts(optional)]
         encrypted_content: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         status: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1339,7 +1353,8 @@ pub enum ResponseItem {
     #[serde(alias = "compaction_summary")]
     Compaction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         encrypted_content: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1354,7 +1369,8 @@ pub enum ResponseItem {
     CompactionTrigger {},
     ContextCompaction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[serde(with = "OptionalWireItemId")]
+        #[ts(optional, as = "Option<ResponseItemId>")]
         id: Option<ResponseItemId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
