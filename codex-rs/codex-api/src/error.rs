@@ -15,6 +15,8 @@ pub enum ApiError {
     Api { status: StatusCode, message: String },
     #[error("stream error: {0}")]
     Stream(String),
+    #[error("websocket request exceeds the peer's message size limit (close code 1009)")]
+    WebsocketMessageTooLarge,
     #[error("stream error: Incomplete response returned, reason: content_filter")]
     ContentFilter,
     #[error(transparent)]

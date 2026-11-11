@@ -47,6 +47,7 @@ use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::Fragment;
 use tokio_tungstenite::tungstenite::protocol::frame::Frame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::Data;
 use tracing::Instrument;
 use tracing::Span;
@@ -848,6 +849,7 @@ async fn run_websocket_response_stream(
     let mut interrupt_request = interrupt.clone().fuse();
     let mut interruption = None;
     let mut response_id = None;
+    let mut received_text = false;
     let mut awaiting_interrupt_ack = false;
     loop {
         let poll_start = Instant::now();
@@ -896,6 +898,7 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
+                received_text = true;
                 let event = serde_json::from_str::<ResponsesStreamEvent>(&text);
                 let kind = event.as_ref().ok().map(ResponsesStreamEvent::kind);
                 if let Some(t) = telemetry.as_ref() {
@@ -1032,6 +1035,9 @@ async fn run_websocket_response_stream(
             }
             Message::Binary(_) => {
                 return Err(ApiError::Stream("unexpected binary websocket event".into()));
+            }
+            Message::Close(Some(frame)) if frame.code == CloseCode::Size && !received_text => {
+                return Err(ApiError::WebsocketMessageTooLarge);
             }
             Message::Close(_) => {
                 return Err(ApiError::Stream(

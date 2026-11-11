@@ -2571,6 +2571,10 @@ impl ModelClientSession {
                 while let Some(event) = stream.next().await {
                     match event {
                         Ok(ResponseEvent::Completed { .. }) => break,
+                        Err(err) if err.requires_http_fallback() => {
+                            self.try_switch_fallback_transport(session_telemetry, model_info);
+                            break;
+                        }
                         Err(err) => return Err(err),
                         _ => {}
                     }

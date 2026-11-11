@@ -118,12 +118,13 @@ pub(crate) async fn handle_response_stream_error(
         return Ok(());
     }
 
-    if retry_state.retries >= max_retries
+    let requires_http_fallback = err.requires_http_fallback();
+    let switched = (requires_http_fallback || retry_state.retries >= max_retries)
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,
             turn_context.model_info(),
-        )
-    {
+        );
+    if switched {
         // Changing transport must not bypass the server's retry deadline.
         if let Some(retry_after) = retry_after {
             tokio::time::sleep_until(retry_after.deadline()).await;
@@ -135,6 +136,9 @@ pub(crate) async fn handle_response_stream_error(
             }),
         )
         .await;
+    }
+    // Another request can already have switched this session to HTTP.
+    if switched || requires_http_fallback {
         retry_state.retries = 0;
         return Ok(());
     }

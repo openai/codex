@@ -3158,7 +3158,10 @@ async fn try_run_sampling_request(
                     .await;
                     should_emit_token_count |= incomplete.token_usage.is_some();
                 }
-                if *draining_for_mailbox && matches!(err.details(), CodexErrorDetails::Stream(_)) {
+                if *draining_for_mailbox
+                    && (matches!(err.details(), CodexErrorDetails::Stream(_))
+                        || err.requires_http_fallback())
+                {
                     // Mail already requires a follow-up, even if the producer exited before
                     // receiving the interrupt. Do not retry without that pending input.
                     break Ok(SamplingRequestResult {

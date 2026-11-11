@@ -81,6 +81,13 @@ pub struct CodexErr {
     agent_context: Option<AgentErrorContext>,
 }
 
+enum RetryPolicy {
+    Never,
+    ServerDirected,
+    Backoff,
+    FallBackToHttp,
+}
+
 /// A terminal response that stopped before the model finished, with any reported usage.
 /// Content-filter retries and explicit interruptions have separate handling.
 #[derive(derive_more::Debug, Error, PartialEq, Eq)]
@@ -114,6 +121,9 @@ pub enum CodexErrorDetails {
     /// The Session loop treats this as a transient error and will automatically retry the turn.
     #[error("stream disconnected before completion: {0}")]
     Stream(String),
+    /// Retry the rejected request over HTTP instead of sending it on another socket.
+    #[error("websocket request exceeds the peer's message size limit (close code 1009)")]
+    WebsocketMessageTooLarge,
     /// A response stopped by the content filter. Sampling retries need developer guidance.
     #[error(
         "stream disconnected before completion: Incomplete response returned, reason: content_filter"
@@ -438,11 +448,27 @@ impl CodexErr {
         &self.details
     }
 
+    /// Whether retrying this request requires switching from WebSocket to HTTP.
+    pub fn requires_http_fallback(&self) -> bool {
+        matches!(self.retry_policy(), RetryPolicy::FallBackToHttp)
+    }
+
     /// Returns the delay before the given retry attempt, or `None` for a terminal error.
     ///
     /// The first retry is attempt one. Retryable errors use server advice when available and
     /// otherwise use exponential backoff with jitter. Callers enforce their own retry budgets.
     pub fn retry_delay(&self, retry_count: u64) -> Option<Duration> {
+        match self.retry_policy() {
+            RetryPolicy::Never => None,
+            RetryPolicy::ServerDirected => self.server_retry_delay(),
+            RetryPolicy::Backoff | RetryPolicy::FallBackToHttp => Some(
+                self.server_retry_delay()
+                    .unwrap_or_else(|| backoff(retry_count)),
+            ),
+        }
+    }
+
+    fn retry_policy(&self) -> RetryPolicy {
         match self.details() {
             CodexErrorDetails::UnexpectedStatus(error)
                 if is_runtime_auth_denial(
@@ -451,7 +477,7 @@ impl CodexErr {
                     error.identity_error_code.as_deref(),
                 ) =>
             {
-                None
+                RetryPolicy::Never
             }
             CodexErrorDetails::TurnAborted
             | CodexErrorDetails::SessionBudgetExceeded
@@ -485,10 +511,11 @@ impl CodexErr {
             | CodexErrorDetails::BioPolicy { .. }
             | CodexErrorDetails::WorkspaceAccessDenied(_)
             | CodexErrorDetails::AccessProgramNotEnabled(_)
-            | CodexErrorDetails::MisalignmentPolicyViolation { .. } => None,
+            | CodexErrorDetails::MisalignmentPolicyViolation { .. } => RetryPolicy::Never,
             CodexErrorDetails::ServerOverloaded
             | CodexErrorDetails::PolicyCapacityUnavailable
-            | CodexErrorDetails::RetryLimit(_) => self.server_retry_delay(),
+            | CodexErrorDetails::RetryLimit(_) => RetryPolicy::ServerDirected,
+            CodexErrorDetails::WebsocketMessageTooLarge => RetryPolicy::FallBackToHttp,
             CodexErrorDetails::Stream(..)
             | CodexErrorDetails::ContentFilter
             | CodexErrorDetails::RateLimitExceeded(_)
@@ -501,12 +528,11 @@ impl CodexErr {
             | CodexErrorDetails::InternalAgentDied
             | CodexErrorDetails::Io(_)
             | CodexErrorDetails::Json(_)
-            | CodexErrorDetails::TokioJoin(_) => Some(
-                self.server_retry_delay()
-                    .unwrap_or_else(|| backoff(retry_count)),
-            ),
+            | CodexErrorDetails::TokioJoin(_) => RetryPolicy::Backoff,
             #[cfg(target_os = "linux")]
-            CodexErrorDetails::LandlockRuleset(_) | CodexErrorDetails::LandlockPathFd(_) => None,
+            CodexErrorDetails::LandlockRuleset(_) | CodexErrorDetails::LandlockPathFd(_) => {
+                RetryPolicy::Never
+            }
         }
     }
 
