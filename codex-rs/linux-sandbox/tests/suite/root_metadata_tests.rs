@@ -33,8 +33,25 @@ async fn root_metadata_symlinks_cannot_reopen_approved_denials() {
     fs::write(work.join("public/secret"), "outside").unwrap();
     fs::write(private.join("reopened/secret"), "private").unwrap();
     fs::write(private.join("sibling"), "sibling").unwrap();
-    codex_utils_cargo_bin::copy_executable(&codex_linux_sandbox_exe(), &work.join("sandbox"))
-        .unwrap();
+    let sandbox_exe = codex_linux_sandbox_exe();
+    codex_utils_cargo_bin::copy_executable(&sandbox_exe, &work.join("sandbox")).unwrap();
+    // Carry the bundled fallback into the isolated root. Cargo builds without
+    // an embedded digest can use the system binary when no bundle is available.
+    let fixture_bwrap = codex_linux_sandbox::find_bundled_bwrap_for_exe(
+        &sandbox_exe,
+        &std::env::current_dir().expect("current directory"),
+        |key| std::env::var_os(key),
+    )
+    .map(AbsolutePathBuf::into_path_buf)
+    .or_else(|| {
+        option_env!("CODEX_BWRAP_SHA256")
+            .is_none_or(|digest| digest.chars().all(|character| character == '0'))
+            .then(|| bwrap.clone())
+    })
+    .expect("digest-verified builds require the matching bundled bubblewrap");
+    let resources = work.join("codex-resources");
+    fs::create_dir(&resources).unwrap();
+    codex_utils_cargo_bin::copy_executable(&fixture_bwrap, &resources.join("bwrap")).unwrap();
 
     let path_entry = |path: &str, access| {
         FileSystemSandboxEntry::new(
