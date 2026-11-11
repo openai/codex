@@ -223,7 +223,9 @@ impl PackageLifecycle {
         if self.installation.borrow().is_some() {
             return Ok(());
         }
-        let Some(record) = crate::installation_record::load()? else {
+        let setup_lock =
+            codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
+        let Some(mut record) = crate::installation_record::load()? else {
             return Ok(());
         };
 
@@ -244,6 +246,23 @@ impl PackageLifecycle {
             user_sid == record.user_sid,
             "logged-in user does not match the recorded sandbox owner"
         );
+
+        let mut pins = Vec::new();
+        if let Some(home) = with_owner_impersonation(token.as_raw_handle(), || {
+            crate::installation_record::resolve_restored_home(
+                &record.codex_home,
+                record.runtime.as_ref(),
+                &mut pins,
+            )
+        })? {
+            record.codex_home = home;
+            if let Some(desktop) = &mut record.desktop_installation {
+                // A historical junction cannot authorize deleting its target on uninstall.
+                desktop.created_codex_home = false;
+            }
+            crate::installation_record::save_runtime(&record)?;
+        }
+        drop(setup_lock);
 
         self.register_authenticated_user(
             InstallationRecord {

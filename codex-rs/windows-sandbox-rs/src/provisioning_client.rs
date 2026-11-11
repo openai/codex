@@ -162,7 +162,7 @@ fn provision(
         version: crate::PROVISIONING_PROTOCOL_VERSION,
         message: crate::ProvisioningMessage::ProvisionSandboxRequest {
             payload: crate::SandboxProvisioningRequest {
-                codex_home: codex_home
+                codex_home: crate::path_normalization::canonicalize_path(codex_home)
                     .to_str()
                     .context("sandbox provisioning home is not valid UTF-8")?
                     .to_owned(),
@@ -226,7 +226,7 @@ pub fn register_desktop_installation(codex_home: &Path) -> anyhow::Result<()> {
     let request = crate::FramedProvisioningMessage {
         version: crate::PROVISIONING_PROTOCOL_VERSION,
         message: crate::ProvisioningMessage::RegisterInstallationRequest {
-            codex_home: codex_home
+            codex_home: crate::path_normalization::canonicalize_path(codex_home)
                 .to_str()
                 .context("desktop home is not valid UTF-8")?
                 .to_owned(),
