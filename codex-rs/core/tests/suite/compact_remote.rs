@@ -583,6 +583,10 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
                         config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
                         config
                             .features
+                            .enable(Feature::IncrementalToolsLegacyGcp)
+                            .expect("enable incremental tools on Vertex");
+                        config
+                            .features
                             .enable(Feature::RemoteCompactionV2)
                             .expect("test config should allow feature update");
                     }),
@@ -652,7 +656,7 @@ async fn provider_automatic_compaction_uses_v2_responses_endpoint(
                     request.header("x-openai-internal-codex-responses-lite"),
                     None
                 );
-                assert!(request.inputs_of_type("additional_tools").is_empty());
+                assert!(!request.inputs_of_type("additional_tools").is_empty());
             }
         }
     }
