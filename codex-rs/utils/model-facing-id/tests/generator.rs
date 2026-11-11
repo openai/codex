@@ -23,16 +23,28 @@ fn exhausts_three_digit_ids_before_opening_the_six_digit_pool() {
     assert_eq!(generator.fetch_next().to_string(), "environment825109");
 }
 
-/// IDs can have the same display text and still round-trip with distinct salts and values.
+/// The same text can come from different salts, ordinals, and values.
 #[test]
-fn persisted_ids_keep_the_salt_and_value_separate() -> Result<(), serde_json::Error> {
-    for (salt, value) in [("env123", 0), ("env", 123_000)] {
-        let saved = json!({ "salt": salt, "value": value });
+fn persisted_ids_keep_the_allocation_fields_separate() -> Result<(), serde_json::Error> {
+    for (salt, ordinal, value) in [("env123", 8, 0), ("env", 97, 123_000)] {
+        let saved = json!({ "salt": salt, "ordinal": ordinal, "value": value });
         let id: ModelFacingId = serde_json::from_value(saved.clone())?;
         assert_eq!(id.to_string(), "env123000");
         assert_eq!(serde_json::to_value(id)?, saved);
     }
     Ok(())
+}
+
+#[test]
+fn an_allocated_id_recovers_the_next_value_without_a_generator_snapshot() {
+    let mut original = ModelFacingIdGenerator::starting_at(42, "item", /*next_ordinal*/ 999);
+    let last = original.fetch_next();
+    let recorded = serde_json::to_value(&last).unwrap();
+    assert_eq!(recorded["ordinal"], 999);
+    assert_eq!(original.next_ordinal(), 1_000);
+    let last: ModelFacingId = serde_json::from_value(recorded).unwrap();
+    let mut resumed = ModelFacingIdGenerator::starting_at(42, "item", last.ordinal() + 1);
+    assert_eq!(resumed.fetch_next(), original.fetch_next());
 }
 
 /// A saved cursor resumes the uninterrupted sequence both inside and between pools.
