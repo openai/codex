@@ -62,11 +62,13 @@ impl StepContext {
         if self.settings.model_info.use_responses_lite {
             Some(Feature::IncrementalTools)
         } else {
-            matches!(
-                self.turn.config.model_provider_id.as_str(),
-                AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID | GCP_PROVIDER_ID
-            )
-            .then_some(Feature::IncrementalToolsLegacy)
+            match self.turn.config.model_provider_id.as_str() {
+                AMAZON_BEDROCK_PROVIDER_ID | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID => {
+                    Some(Feature::IncrementalToolsLegacy)
+                }
+                GCP_PROVIDER_ID => Some(Feature::IncrementalToolsLegacyGcp),
+                _ => None,
+            }
         }
     }
 
