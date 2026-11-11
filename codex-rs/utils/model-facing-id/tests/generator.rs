@@ -37,13 +37,15 @@ fn persisted_ids_keep_the_allocation_fields_separate() -> Result<(), serde_json:
 
 #[test]
 fn an_allocated_id_recovers_the_next_value_without_a_generator_snapshot() {
-    let mut original = ModelFacingIdGenerator::starting_at(42, "item", /*next_ordinal*/ 999);
+    let mut original =
+        ModelFacingIdGenerator::starting_at(/*seed*/ 42, "item", /*next_ordinal*/ 999);
     let last = original.fetch_next();
     let recorded = serde_json::to_value(&last).unwrap();
     assert_eq!(recorded["ordinal"], 999);
     assert_eq!(original.next_ordinal(), 1_000);
     let last: ModelFacingId = serde_json::from_value(recorded).unwrap();
-    let mut resumed = ModelFacingIdGenerator::starting_at(42, "item", last.ordinal() + 1);
+    let mut resumed =
+        ModelFacingIdGenerator::starting_at(/*seed*/ 42, "item", last.ordinal() + 1);
     assert_eq!(resumed.fetch_next(), original.fetch_next());
 }
 
