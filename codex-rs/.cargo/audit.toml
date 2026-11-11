@@ -10,6 +10,12 @@ ignore = [
     "RUSTSEC-2025-0141", # bincode via syntect; remove when syntect drops or updates it
     "RUSTSEC-2026-0118", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0119", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
+    # TODO(ioanbudea): after upgrading Rust to 1.96+, upgrade Rama to use
+    # hickory-proto >=0.26.2 and remove these temporary exceptions.
+    "RUSTSEC-2026-0487", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
+    "RUSTSEC-2026-0489", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
+    "RUSTSEC-2026-0490", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
+    "RUSTSEC-2026-0491", # hickory-proto 0.25.2 via rama-dns/rama-tcp; remove after the Rust/Rama upgrade to hickory-proto >=0.26.2
     "RUSTSEC-2026-0194", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0195", # quick-xml via plist/syntect and wayland-scanner; trusted inputs only; remove when rust-plist#191 and wayland-rs#938 are released
     "RUSTSEC-2026-0370", # zvariant 4.2.0 via zbus 4.4.0 in Linux TUI and keyring/secret-service; remove when those paths migrate off the retired standalone crates

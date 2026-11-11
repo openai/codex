@@ -217,6 +217,7 @@ archive_override(
         "//patches:rules_rs_build_script_deps_annotation.patch",
         "//patches:rules_rs_rust_debug_modes.patch",
         "//patches:rules_rs_workspace_package_version.patch",
+        "//patches:rules_rs_zlib_snapshot_urls.patch",
     ],
     strip_prefix = "rules_rs-7a05511772a8a85db5382ff7536bf2f1e6a8dde3",
     urls = ["https://github.com/hermeticbuild/rules_rs/archive/7a05511772a8a85db5382ff7536bf2f1e6a8dde3.tar.gz"],

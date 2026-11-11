@@ -28,6 +28,7 @@ use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
@@ -41,15 +42,27 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::SetHandleInformation;
 use windows_sys::Win32::Foundation::WAIT_FAILED;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+use windows_sys::Win32::System::Console::GetConsoleWindow;
+use windows_sys::Win32::System::Console::GetStdHandle;
+use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
+use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
+use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Threading::OpenProcess;
 use windows_sys::Win32::System::Threading::PROCESS_SYNCHRONIZE;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 static TEST_HOME_COUNTER: AtomicU64 = AtomicU64::new(0);
 static LEGACY_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+const LEGACY_FIXTURE_ROLE: &str = "CODEX_TEST_LEGACY_PROCESS_ROLE";
+const LEGACY_FIXTURE_TEST: &str =
+    "unified_exec::tests::legacy_capture_emits_output_and_preserves_descendant_after_normal_exit";
 
 const ASSERT_NO_CONSOLE: &str = r#"Add-Type -ErrorAction Stop 'using System; using System.Runtime.InteropServices; public class ConsoleProbe { [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); }'; if ([ConsoleProbe]::GetConsoleWindow() -ne [IntPtr]::Zero) { throw 'piped sandbox process unexpectedly has a console' };"#;
 
@@ -133,6 +146,17 @@ fn wait_for_path(path: &Path, timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(25));
     }
     path.exists()
+}
+
+async fn wait_for_path_async(path: &Path, wait: Duration) -> bool {
+    // Let the single-threaded runtime continue driving the process session.
+    timeout(wait, async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .is_ok()
 }
 
 fn open_process_for_wait(pid: u32) -> std::io::Result<OwnedHandle> {
@@ -662,49 +686,91 @@ fn runner_resizer_sends_resize_frame() {
     });
 }
 
+fn run_legacy_process_fixture(role: &str) {
+    let cwd = std::env::current_dir().expect("fixture cwd");
+    let ready = cwd.join("descendant-started");
+    if role == "child" {
+        assert!(unsafe { GetConsoleWindow() }.is_null());
+        let temporary = cwd.join("descendant-started.tmp");
+        fs::write(&temporary, std::process::id().to_string()).expect("write child PID");
+        fs::rename(temporary, ready).expect("publish child PID");
+        assert!(wait_for_path(
+            &cwd.join("release-descendant"),
+            Duration::from_secs(30)
+        ));
+        fs::write(cwd.join("descendant-survived"), "survived").expect("write survival marker");
+        return;
+    }
+    assert!(matches!(role, "capture" | "preserve" | "terminate"));
+    if role == "capture" {
+        assert!(unsafe { GetConsoleWindow() }.is_null());
+    }
+    // This is an isolated fixture process. Do not let the child retain the
+    // root's capture pipes or ConPTY handles alongside its explicit file stdio.
+    // Otherwise EOF cannot arrive until the child that our caller releases exits.
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        let handle = unsafe { GetStdHandle(id) };
+        if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+            assert_ne!(
+                unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) },
+                0
+            );
+        }
+    }
+    let child = codex_utils_process::background_command(
+        std::env::current_exe().expect("fixture executable"),
+    )
+    .args(["--exact", LEGACY_FIXTURE_TEST, "--nocapture"])
+    .env(LEGACY_FIXTURE_ROLE, "child")
+    .stdin(Stdio::null())
+    .stdout(fs::File::create(cwd.join("descendant.stdout")).expect("child stdout"))
+    .stderr(fs::File::create(cwd.join("descendant.stderr")).expect("child stderr"))
+    .spawn()
+    .expect("spawn fixture descendant");
+    drop(child); // Closing a process handle must not terminate the descendant.
+    assert!(wait_for_path(&ready, Duration::from_secs(10)));
+    println!("LEGACY-CAPTURE-DIRECT");
+    if role == "terminate" {
+        std::thread::sleep(Duration::from_secs(30));
+    }
+}
+
 #[test]
 fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
-    let Some(pwsh) = pwsh_path() else {
+    if let Ok(role) = std::env::var(LEGACY_FIXTURE_ROLE) {
+        run_legacy_process_fixture(&role);
         return;
-    };
+    }
     let _guard = legacy_process_test_guard();
-    let cwd = sandbox_cwd();
-    let codex_home = sandbox_home("legacy-capture-pwsh");
-    println!("capture pwsh codex_home={}", codex_home.path().display());
-    let ready_marker = codex_home.path().join("descendant-started");
-    let release_marker = codex_home.path().join("release-descendant");
-    let survival_marker = codex_home.path().join("descendant-survived");
-    let descendant_command = format!(
-        "$deadline=(Get-Date).AddSeconds(30); Set-Content -LiteralPath '{}' -Value $PID; while (-not (Test-Path -LiteralPath '{}')) {{ if ((Get-Date) -ge $deadline) {{ exit 3 }}; Start-Sleep -Milliseconds 25 }}; Set-Content -LiteralPath '{}' -Value survived",
-        powershell_literal(&ready_marker),
-        powershell_literal(&release_marker),
-        powershell_literal(&survival_marker),
-    );
-    let parent_tail = format!(
-        "while (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 25 }}",
-        powershell_literal(&ready_marker),
-    );
-    let parent_command = format!(
-        "{ASSERT_NO_CONSOLE} Write-Output LEGACY-CAPTURE-DIRECT; {}",
-        start_powershell_child(&pwsh, codex_home.path(), &descendant_command, &parent_tail,),
-    );
+    // Child-owned markers and redirected output belong in the writable workspace,
+    // not the protected Codex home used for sandbox control state.
+    let workspace = tempfile::tempdir().expect("create sandbox workspace");
+    let cwd = workspace.path().to_path_buf();
+    let codex_home = sandbox_home("legacy-capture-native");
+    println!("capture native codex_home={}", codex_home.path().display());
+    let ready_marker = cwd.join("descendant-started");
+    let release_marker = cwd.join("release-descendant");
+    let survival_marker = cwd.join("descendant-survived");
     let permission_profile = PermissionProfile::workspace_write();
     let result = run_windows_sandbox_capture(
         &permission_profile,
         workspace_roots_for(cwd.as_path()).as_slice(),
         codex_home.path(),
         vec![
-            pwsh.display().to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            parent_command,
+            std::env::current_exe()
+                .expect("fixture executable")
+                .display()
+                .to_string(),
+            "--exact".to_string(),
+            LEGACY_FIXTURE_TEST.to_string(),
+            "--nocapture".to_string(),
         ],
         cwd.as_path(),
-        HashMap::new(),
+        HashMap::from([(LEGACY_FIXTURE_ROLE.to_string(), "capture".to_string())]),
         Some(10_000),
         /*cancellation*/ None,
     )
-    .expect("run legacy capture powershell");
+    .expect("run legacy capture fixture");
     let descendant_pid = fs::read_to_string(&ready_marker)
         .expect("read descendant pid")
         .trim()
@@ -714,11 +780,11 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
     fs::write(&release_marker, "release").expect("release descendant after root exit");
     let descendant_process = descendant_process.expect("open descendant after normal capture exit");
 
-    println!("capture pwsh exit_code={}", result.exit_code);
-    println!("capture pwsh timed_out={}", result.timed_out);
+    println!("capture native exit_code={}", result.exit_code);
+    println!("capture native timed_out={}", result.timed_out);
     let stdout = String::from_utf8_lossy(&result.stdout);
     let stderr = String::from_utf8_lossy(&result.stderr);
-    println!("capture pwsh stderr={stderr:?}");
+    println!("capture native stderr={stderr:?}");
     assert_eq!(result.exit_code, 0, "stdout={stdout:?} stderr={stderr:?}");
     assert!(
         stdout.contains("LEGACY-CAPTURE-DIRECT"),
@@ -852,10 +918,13 @@ fn legacy_capture_cancellation_terminates_descendants_without_timeout() {
         return;
     };
     let _guard = legacy_process_test_guard();
-    let cwd = sandbox_cwd();
+    // Child-owned markers and redirected output belong in the writable workspace,
+    // not the protected Codex home used for sandbox control state.
+    let workspace = tempfile::tempdir().expect("create sandbox workspace");
+    let cwd = workspace.path().to_path_buf();
     let codex_home = sandbox_home("legacy-capture-cancel");
-    let descendant_marker = codex_home.path().join("descendant-survived");
-    let ready_marker = codex_home.path().join("descendant-started");
+    let descendant_marker = cwd.join("descendant-survived");
+    let ready_marker = cwd.join("descendant-started");
     let descendant_command = format!(
         "Set-Content -LiteralPath '{}' -Value $PID; Start-Sleep -Seconds 1; Set-Content -LiteralPath '{}' -Value survived",
         powershell_literal(&ready_marker),
@@ -863,7 +932,7 @@ fn legacy_capture_cancellation_terminates_descendants_without_timeout() {
     );
     let parent_command = start_powershell_child(
         &pwsh,
-        codex_home.path(),
+        cwd.as_path(),
         &descendant_command,
         "Start-Sleep -Seconds 30",
     );
@@ -933,62 +1002,48 @@ enum LegacyTtyDescendantLifecycle {
     Preserve,
 }
 
-async fn assert_legacy_tty_descendant_lifecycle(
-    pwsh: &Path,
-    lifecycle: LegacyTtyDescendantLifecycle,
-) {
-    let cwd = sandbox_cwd();
+async fn assert_legacy_tty_descendant_lifecycle(lifecycle: LegacyTtyDescendantLifecycle) {
+    // Child-owned markers and redirected output belong in the writable workspace,
+    // not the protected Codex home used for sandbox control state.
+    let workspace = tempfile::tempdir().expect("create sandbox workspace");
+    let cwd = workspace.path().to_path_buf();
     let codex_home = sandbox_home(match lifecycle {
         LegacyTtyDescendantLifecycle::Terminate => "legacy-tty-descendant-terminate",
         LegacyTtyDescendantLifecycle::Preserve => "legacy-tty-descendant-preserve",
     });
-    let ready_marker = codex_home.path().join("descendant-started");
-    let release_marker = codex_home.path().join("release-descendant");
-    let survival_marker = codex_home.path().join("descendant-survived");
-    let child_tail = match lifecycle {
-        LegacyTtyDescendantLifecycle::Terminate => "Start-Sleep -Seconds 30".to_string(),
-        LegacyTtyDescendantLifecycle::Preserve => format!(
-            "$deadline=(Get-Date).AddSeconds(30); while (-not (Test-Path -LiteralPath '{}')) {{ if ((Get-Date) -ge $deadline) {{ exit 3 }}; Start-Sleep -Milliseconds 25 }}; Set-Content -LiteralPath '{}' -Value survived",
-            powershell_literal(&release_marker),
-            powershell_literal(&survival_marker),
-        ),
+    let ready_marker = cwd.join("descendant-started");
+    let release_marker = cwd.join("release-descendant");
+    let survival_marker = cwd.join("descendant-survived");
+    let role = match lifecycle {
+        LegacyTtyDescendantLifecycle::Terminate => "terminate",
+        LegacyTtyDescendantLifecycle::Preserve => "preserve",
     };
-    let child_command = format!(
-        "Set-Content -LiteralPath '{}' -Value $PID; {child_tail}",
-        powershell_literal(&ready_marker),
-    );
-    let parent_tail = match lifecycle {
-        LegacyTtyDescendantLifecycle::Terminate => "Start-Sleep -Seconds 30".to_string(),
-        LegacyTtyDescendantLifecycle::Preserve => format!(
-            "while (-not (Test-Path -LiteralPath '{}')) {{ Start-Sleep -Milliseconds 25 }}",
-            powershell_literal(&ready_marker),
-        ),
-    };
-    let parent_command =
-        start_powershell_child(pwsh, codex_home.path(), &child_command, &parent_tail);
     let permission_profile = PermissionProfile::workspace_write();
     let spawned = spawn_windows_sandbox_session_legacy(
         &permission_profile,
         workspace_roots_for(cwd.as_path()).as_slice(),
         codex_home.path(),
         vec![
-            pwsh.display().to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            parent_command,
+            std::env::current_exe()
+                .expect("fixture executable")
+                .display()
+                .to_string(),
+            "--exact".to_string(),
+            LEGACY_FIXTURE_TEST.to_string(),
+            "--nocapture".to_string(),
         ],
         cwd.as_path(),
-        HashMap::new(),
+        HashMap::from([(LEGACY_FIXTURE_ROLE.to_string(), role.to_string())]),
         Some(30_000),
         &[],
         &[],
         /*tty*/ true,
-        /*stdin_open*/ false,
+        /*stdin_open*/ true,
     )
     .await
     .expect("spawn legacy sandbox ConPTY lifecycle test");
     assert!(
-        wait_for_path(&ready_marker, Duration::from_secs(10)),
+        wait_for_path_async(&ready_marker, Duration::from_secs(10)).await,
         "{lifecycle:?} descendant did not start"
     );
     let descendant_pid = fs::read_to_string(&ready_marker)
@@ -1013,7 +1068,7 @@ async fn assert_legacy_tty_descendant_lifecycle(
         LegacyTtyDescendantLifecycle::Preserve => {
             assert_eq!(exit_code, 0);
             assert!(
-                wait_for_path(&survival_marker, Duration::from_secs(10)),
+                wait_for_path_async(&survival_marker, Duration::from_secs(10)).await,
                 "sandbox ConPTY descendant did not survive normal exit"
             );
         }
@@ -1024,15 +1079,10 @@ async fn assert_legacy_tty_descendant_lifecycle(
 
 #[test]
 fn legacy_tty_job_terminates_and_preserves_descendants() {
-    let Some(pwsh) = pwsh_path() else {
-        eprintln!("skipping sandbox ConPTY lifecycle test: PowerShell 7 is not installed");
-        return;
-    };
     let _guard = legacy_process_test_guard();
     current_thread_runtime().block_on(async move {
-        assert_legacy_tty_descendant_lifecycle(&pwsh, LegacyTtyDescendantLifecycle::Terminate)
-            .await;
-        assert_legacy_tty_descendant_lifecycle(&pwsh, LegacyTtyDescendantLifecycle::Preserve).await;
+        assert_legacy_tty_descendant_lifecycle(LegacyTtyDescendantLifecycle::Terminate).await;
+        assert_legacy_tty_descendant_lifecycle(LegacyTtyDescendantLifecycle::Preserve).await;
     });
 }
 
