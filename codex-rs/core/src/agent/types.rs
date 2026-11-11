@@ -23,6 +23,14 @@ pub enum SpawnAgentForkMode {
     FullHistory,
 }
 
+/// Whether a spawn program was chosen for the child or copied from its parent turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpawnProgramSource {
+    #[default]
+    Explicit,
+    ParentTurn,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SpawnAgentOptions {
     pub fork_parent_spawn_call_id: Option<String>,
@@ -39,6 +47,8 @@ pub struct SpawnAgentOptions {
     pub disabled_plugin_ids: Option<Vec<String>>,
     pub multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
     pub cyber_access_program: Option<CyberAccessProgram>,
+    /// Parent selections apply to the first turn and may need adapting to the child's model.
+    pub cyber_access_program_source: SpawnProgramSource,
 }
 
 /// Identity and status observed from a loaded agent, without a handle to its runtime.

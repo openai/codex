@@ -81,6 +81,7 @@ pub use agent::types::MessageDeliveryMode;
 pub use agent::types::ResolvedMultiAgentV2UsageHints;
 pub use agent::types::SpawnAgentForkMode;
 pub use agent::types::SpawnAgentOptions;
+pub use agent::types::SpawnProgramSource;
 pub use rollout_budget::RolloutBudgetReminder;
 mod agent_communication;
 pub use agent_communication::PendingAgentMessage;

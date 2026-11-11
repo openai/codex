@@ -1491,7 +1491,7 @@ impl Session {
         turn_context.cyber_access_program =
             cyber_access_program::for_provider(&turn_context.config, options.cyber_access_program);
         if let Some(admission) = options.helper_admission {
-            admission.capture_intent(self, &turn_context).await;
+            admission.capture_intent(self, &mut turn_context).await;
         }
         // Tool observers retain this turn's selection even after a later turn starts.
         if let Some(program) = turn_context.cyber_access_program {

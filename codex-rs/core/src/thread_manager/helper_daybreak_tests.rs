@@ -8,6 +8,7 @@ use crate::agent::helper_daybreak::saved_choice;
 use crate::agent::helper_daybreak::turn::HelperTurnAdmission;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::types::SpawnAgentOptions;
+use crate::agent::types::SpawnProgramSource;
 use crate::config::Config;
 use crate::config::test_config;
 use crate::session::turn_context::NewTurnContextOptions;
@@ -78,6 +79,7 @@ async fn spawn_child(
     config: &Config,
     parent: &CodexThread,
     spawning_turn: &TurnContext,
+    program_source: SpawnProgramSource,
 ) -> codex_protocol::error::Result<Arc<CodexThread>> {
     let parent_id = parent.session.thread_id();
     let source = thread_spawn_source(
@@ -101,6 +103,7 @@ async fn spawn_child(
                 parent_thread_id: Some(parent_id),
                 parent_turn_id: Some(spawning_turn.sub_id.clone()),
                 cyber_access_program: spawning_turn.cyber_access_program,
+                cyber_access_program_source: program_source,
                 ..Default::default()
             },
         )
@@ -133,6 +136,48 @@ fn saved(store: &ExtensionData) -> Option<SavedDaybreakChoice> {
     })
 }
 
+async fn paused_helpers(
+    home: &std::path::Path,
+    programs: Option<Vec<CyberAccessProgram>>,
+) -> (Config, ThreadManager, mpsc::UnboundedReceiver<String>) {
+    let mut config = test_config().await;
+    config.codex_home = home.abs();
+    config.cwd = home.abs();
+    config.agent_max_depth = 2;
+    config.model_provider.supports_websockets = false;
+    config.model_provider.base_url = Some("http://127.0.0.1:9/v1".to_owned());
+    config.chatgpt_base_url = "http://127.0.0.1:9".to_owned();
+    let mut catalog = codex_models_manager::bundled_models_response().expect("local catalog");
+    if let Some(programs) = programs {
+        for model in &mut catalog.models {
+            model.available_access_programs =
+                Some(codex_protocol::openai_models::ModelAccessPrograms {
+                    cyber: programs.clone(),
+                });
+        }
+    }
+    config.model_catalog = Some(catalog);
+    config
+        .features
+        .enable(Feature::DaybreakProgramPropagation)
+        .expect("enable propagation");
+    let mut manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        crate::init_state_db(&config).await,
+    );
+    let (tx, turns) = mpsc::unbounded_channel();
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.turn_lifecycle_contributor(Arc::new(PauseAdmittedTurn(tx)));
+    Arc::get_mut(&mut manager.state)
+        .expect("unshared manager")
+        .extensions = Arc::new(extensions.build());
+
+    (config, manager, turns)
+}
+
 #[test_case::test_case(Some(false), None, None; "saved off")]
 #[test_case::test_case(None, Some(false), None; "pending off before materialization")]
 #[test_case::test_case(None, None, None; "unset")]
@@ -145,33 +190,7 @@ async fn native_spawn_captures_the_saved_choice(
     explicit: Option<CyberAccessProgram>,
 ) {
     let home = tempdir().expect("create test home");
-    let mut config = test_config().await;
-    config.codex_home = home.path().abs();
-    config.cwd = home.path().abs();
-    config.agent_max_depth = 2;
-    config.model_provider.supports_websockets = false;
-    config.model_provider.base_url = Some("http://127.0.0.1:9/v1".to_owned());
-    config.chatgpt_base_url = "http://127.0.0.1:9".to_owned();
-    config.model_catalog =
-        Some(codex_models_manager::bundled_models_response().expect("local catalog"));
-    config
-        .features
-        .enable(Feature::DaybreakProgramPropagation)
-        .expect("enable propagation");
-    let mut manager = ThreadManager::with_models_provider_home_and_state_for_tests(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
-        crate::init_state_db(&config).await,
-    );
-    let (tx, mut turns) = mpsc::unbounded_channel();
-    let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.turn_lifecycle_contributor(Arc::new(PauseAdmittedTurn(tx)));
-    Arc::get_mut(&mut manager.state)
-        .expect("unshared manager")
-        .extensions = Arc::new(extensions.build());
-
+    let (config, manager, mut turns) = paused_helpers(home.path(), /*programs*/ None).await;
     let mut start_options = StartThreadOptions::new(config.clone());
     let thread_store = &manager.state.thread_store;
     if let Some(enabled) = pending {
@@ -221,10 +240,16 @@ async fn native_spawn_captures_the_saved_choice(
         let backup = path.with_extension("backup");
         std::fs::rename(&path, &backup).expect("move healthy rollout");
         std::fs::write(&path, b"invalid metadata\n").expect("inject failed metadata read");
-        let error = spawn_child(&manager, &config, &root.thread, &root_turn)
-            .await
-            .err()
-            .expect("required read must fail spawn");
+        let error = spawn_child(
+            &manager,
+            &config,
+            &root.thread,
+            &root_turn,
+            SpawnProgramSource::ParentTurn,
+        )
+        .await
+        .err()
+        .expect("required read must fail spawn");
         assert!(
             error
                 .to_string()
@@ -235,9 +260,15 @@ async fn native_spawn_captures_the_saved_choice(
         std::fs::remove_file(&path).expect("remove invalid rollout");
         std::fs::rename(backup, path).expect("restore storage before retry");
     }
-    let child = spawn_child(&manager, &config, &root.thread, &root_turn)
-        .await
-        .expect("start child");
+    let child = spawn_child(
+        &manager,
+        &config,
+        &root.thread,
+        &root_turn,
+        SpawnProgramSource::ParentTurn,
+    )
+    .await
+    .expect("start child");
     let child_turn = admitted_turn(&mut turns, &child).await;
     let expected = stored
         .or(pending)
@@ -262,9 +293,15 @@ async fn native_spawn_captures_the_saved_choice(
             Some(SavedDaybreakChoice::On)
         );
         save_choice(&root.thread, /*enabled*/ false).await;
-        let sibling = spawn_child(&manager, &config, &root.thread, &root_turn)
-            .await
-            .expect("start sibling after preference change");
+        let sibling = spawn_child(
+            &manager,
+            &config,
+            &root.thread,
+            &root_turn,
+            SpawnProgramSource::ParentTurn,
+        )
+        .await
+        .expect("start sibling after preference change");
         let sibling_turn = admitted_turn(&mut turns, &sibling).await;
         assert_eq!(
             saved(&sibling_turn.extension_data),
@@ -288,9 +325,15 @@ async fn native_spawn_captures_the_saved_choice(
                 .await,
             crate::ConfigRefreshOutcome::Published
         );
-        let unenrolled = spawn_child(&manager, &config, &root.thread, &root_turn)
-            .await
-            .expect("start child after parent rollout withdrawal");
+        let unenrolled = spawn_child(
+            &manager,
+            &config,
+            &root.thread,
+            &root_turn,
+            SpawnProgramSource::ParentTurn,
+        )
+        .await
+        .expect("start child after parent rollout withdrawal");
         let unenrolled_turn = admitted_turn(&mut turns, &unenrolled).await;
         assert_eq!(saved(&unenrolled_turn.extension_data), None);
         assert!(
@@ -330,9 +373,15 @@ async fn native_spawn_captures_the_saved_choice(
 
         // A local toggle affects later turns. This nested spawn belongs to the turn above.
         save_choice(&child, /*enabled*/ false).await;
-        let nested = spawn_child(&manager, &config, &child, &explicit_turn)
-            .await
-            .expect("start nested child");
+        let nested = spawn_child(
+            &manager,
+            &config,
+            &child,
+            &explicit_turn,
+            SpawnProgramSource::ParentTurn,
+        )
+        .await
+        .expect("start nested child");
         let nested_turn = admitted_turn(&mut turns, &nested).await;
         assert_eq!(nested_turn.cyber_access_program, direct);
         assert_eq!(
@@ -369,4 +418,99 @@ async fn native_spawn_captures_the_saved_choice(
         .shutdown_and_wait()
         .await
         .expect("shut down root");
+}
+
+#[tokio::test]
+async fn copied_program_rechecks_the_spawning_turn_owner() {
+    let home = tempdir().expect("create test home");
+    let blue = CyberAccessProgram::DaybreakBlue;
+    let (config, mut manager, mut turns) =
+        paused_helpers(home.path(), Some(vec![blue, CyberAccessProgram::Standard])).await;
+    Arc::get_mut(&mut manager.state)
+        .expect("unshared manager")
+        .auth_manager = codex_login::AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        home.path().to_owned(),
+    );
+    let root = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("start root");
+    save_choice(&root.thread, /*enabled*/ true).await;
+    root.thread
+        .start_or_steer_turn(TurnInputRequest::user_input(text()))
+        .await
+        .expect("start root turn");
+    let root_turn = admitted_turn(&mut turns, &root.thread).await;
+    let child = spawn_child(
+        &manager,
+        &config,
+        &root.thread,
+        &root_turn,
+        SpawnProgramSource::ParentTurn,
+    )
+    .await
+    .expect("start child");
+    let turn = admitted_turn(&mut turns, &child).await;
+    assert_eq!(turn.cyber_access_program, Some(blue));
+    assert_eq!(
+        crate::agent::helper_daybreak::turn::explicit_program_for_spawn(&turn),
+        None
+    );
+
+    let auth = manager.auth_manager();
+    let previous = auth.auth_owner();
+    codex_login::auth::login_with_chatgpt_auth_tokens(
+        home.path(),
+        "header.e30.changed",
+        "other-account",
+        /*chatgpt_plan_type*/ None,
+    )
+    .expect("switch account");
+    auth.reload().await;
+    assert!(!previous.is_current());
+    assert_eq!(
+        auth.auth_cached()
+            .and_then(|auth| auth.get_account_id())
+            .as_deref(),
+        Some("other-account")
+    );
+    let err = spawn_child(
+        &manager,
+        &config,
+        &child,
+        &turn,
+        SpawnProgramSource::ParentTurn,
+    )
+    .await
+    .err()
+    .expect("reject copied program from the previous account");
+    assert!(
+        err.to_string()
+            .contains("saved Daybreak choice has changed"),
+        "{err}"
+    );
+    let explicit = spawn_child(
+        &manager,
+        &config,
+        &child,
+        &turn,
+        SpawnProgramSource::Explicit,
+    )
+    .await
+    .expect("accept program explicitly chosen for this child");
+    let explicit_turn = admitted_turn(&mut turns, &explicit).await;
+    assert_eq!(explicit_turn.cyber_access_program, Some(blue));
+    assert!(
+        explicit_turn
+            .extension_data
+            .get::<crate::agent::helper_daybreak::turn::SavedProgramResolution>()
+            .is_none()
+    );
+    explicit
+        .shutdown_and_wait()
+        .await
+        .expect("stop explicit child");
+    child.shutdown_and_wait().await.expect("stop child");
+    root.thread.shutdown_and_wait().await.expect("stop root");
 }

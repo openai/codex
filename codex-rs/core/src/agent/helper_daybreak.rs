@@ -54,7 +54,6 @@ pub(crate) async fn spawning_intent(
     let choice = match saved_choice(parent).await {
         Ok(Some(enabled)) => Ok(SavedDaybreakChoice::from(Some(enabled))),
         Ok(None) => return None,
-        Err(_) if turn.cyber_access_program.is_some() => return None,
         Err(error) => Err(error),
     };
     Some(SavedIntent {

@@ -12,6 +12,7 @@ use crate::agent::role::apply_role_to_config;
 use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
 use crate::agent::types::SpawnAgentOptions;
+use crate::agent::types::SpawnProgramSource;
 use crate::agents_md_manager::SessionInstructions;
 use crate::codex_thread::CodexThread;
 use crate::codex_thread::ThreadConfigSnapshot;
@@ -746,51 +747,86 @@ impl LocalAgentControl {
             disabled_plugin_ids,
             ..StartThreadOptions::new(config.clone())
         };
+        let mut cyber_access_program = options.cyber_access_program;
+        let mut inherited_program_to_resolve = None;
         if let Some(parent_id) = session_source
             .as_ref()
             .and_then(SessionSource::parent_thread_id)
             && let Ok(parent) = state.get_thread(parent_id).await
-            && config.features.enabled(Feature::DaybreakProgramPropagation)
-            && let Some(enrollment) = parent
-                .thread_extension_data()
-                .get::<helper_daybreak::Enrollment>()
-            && parent
-                .session
-                .get_config()
-                .await
-                .features
-                .enabled(Feature::DaybreakProgramPropagation)
         {
-            start_options
-                .thread_extension_init
-                .insert(helper_daybreak::Enrollment::NativeHelper);
+            let turn = match options.parent_turn_id.as_deref() {
+                Some(id) => parent.session.turn_context_for_sub_id(id).await,
+                None => None,
+            };
             let spawn_owner = helper_daybreak::eligible_owner(&parent.session);
-            if let Some(turn_id) = options.parent_turn_id.as_deref()
-                && let Some(turn) = parent.session.turn_context_for_sub_id(turn_id).await
-                && let Some(intent) = helper_daybreak::spawning_intent(
-                    &parent.session,
-                    &turn,
-                    &enrollment,
-                    spawn_owner.as_ref(),
-                )
-                .await
+            if options.cyber_access_program_source == SpawnProgramSource::ParentTurn
+                && let Some(resolution) = turn.as_ref().and_then(|turn| {
+                    turn.extension_data
+                        .get::<helper_daybreak::turn::SavedProgramResolution>()
+                })
             {
-                if let Err(error) = &intent.choice {
-                    // Only a usable, successful read can become a child's inherited default.
-                    if options.cyber_access_program.is_none()
-                        && config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID
+                resolution
+                    .validate()
+                    .map_err(|err| err.with_agent_context(AgentErrorContext::ChildStartup))?;
+                // Carry the saved choice. The child resolves it for its own model and account.
+                cyber_access_program = None;
+            }
+            if config.features.enabled(Feature::DaybreakProgramPropagation)
+                && let Some(enrollment) = parent
+                    .thread_extension_data()
+                    .get::<helper_daybreak::Enrollment>()
+                && parent
+                    .session
+                    .get_config()
+                    .await
+                    .features
+                    .enabled(Feature::DaybreakProgramPropagation)
+            {
+                start_options
+                    .thread_extension_init
+                    .insert(helper_daybreak::Enrollment::NativeHelper);
+                if let Some(turn) = turn {
+                    let propagate_program = spawn_owner.is_some()
+                        && turn.config.model_provider_id
+                            == codex_model_provider_info::OPENAI_PROVIDER_ID
+                        && codex_model_provider::provider_uses_first_party_auth_path(
+                            turn.provider.info(),
+                        )
+                        && config.model_provider_id
+                            == codex_model_provider_info::OPENAI_PROVIDER_ID
                         && config
                             .model_provider
                             .supports_cyber_access_programs(&config.model_provider_id)
                         && codex_model_provider::provider_uses_first_party_auth_path(
                             &config.model_provider,
-                        )
+                        );
+                    if propagate_program
+                        && options.cyber_access_program_source == SpawnProgramSource::ParentTurn
                     {
-                        return Err(CodexErr::InvalidRequest(error.clone())
-                            .with_agent_context(AgentErrorContext::ChildStartup));
+                        inherited_program_to_resolve = cyber_access_program;
                     }
-                } else {
-                    start_options.thread_extension_init.insert(intent);
+                    if let Some(intent) = helper_daybreak::spawning_intent(
+                        &parent.session,
+                        &turn,
+                        &enrollment,
+                        spawn_owner.as_ref(),
+                    )
+                    .await
+                    {
+                        // A read failure must not become an immutable default on a live child.
+                        if propagate_program
+                            && (options.cyber_access_program.is_none()
+                                || options.cyber_access_program_source
+                                    == SpawnProgramSource::ParentTurn)
+                            && let Err(error) = &intent.choice
+                        {
+                            return Err(CodexErr::InvalidRequest(error.clone())
+                                .with_agent_context(AgentErrorContext::ChildStartup));
+                        }
+                        if intent.choice.is_ok() {
+                            start_options.thread_extension_init.insert(intent);
+                        }
+                    }
                 }
             }
         }
@@ -898,11 +934,31 @@ impl LocalAgentControl {
             None
         };
 
+        if let Some(inherited) = inherited_program_to_resolve
+            && inherited != codex_protocol::turn_input::CyberAccessProgram::Standard
+            && let Some(model) = new_thread
+                .thread
+                .thread_extension_data()
+                .get::<codex_protocol::openai_models::ModelInfo>()
+            && model
+                .available_access_programs
+                .as_ref()
+                .is_some_and(|programs| !programs.cyber.contains(&inherited))
+        {
+            // Preserve the parent's turn override, adapting Blue/Red to the child model.
+            // The separately captured saved choice remains the default for later turns.
+            cyber_access_program = helper_daybreak::turn::select_program(
+                &model,
+                codex_protocol::openai_models::SavedDaybreakChoice::On,
+            )
+            .map_err(CodexErr::InvalidRequest)?
+            .or(Some(inherited));
+        }
         let start_options = TurnStartOptions {
             parent_turn_id: options.parent_turn_id,
             turn_trigger: options.turn_trigger,
             root_turn_id: options.root_turn_id,
-            cyber_access_program: options.cyber_access_program,
+            cyber_access_program,
             ..Default::default()
         };
         let input_admission_started_at = Instant::now();
