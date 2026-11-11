@@ -117,7 +117,7 @@ pub enum RolloutRecorderParams {
         history_mode: ThreadHistoryMode,
         history_base: Option<HistoryPosition>,
         subagent_history_start_ordinal: Option<u64>,
-        initial_window_id: Option<String>,
+        initial_window_id: Option<codex_protocol::ContextWindowId>,
     },
     Resume {
         path: PathBuf,
@@ -373,7 +373,10 @@ impl RolloutRecorderParams {
         self
     }
 
-    pub fn with_initial_window_id(mut self, initial_window_id: String) -> Self {
+    pub fn with_initial_window_id(
+        mut self,
+        initial_window_id: codex_protocol::ContextWindowId,
+    ) -> Self {
         if let Self::Create {
             initial_window_id: window_id,
             ..

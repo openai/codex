@@ -16,6 +16,7 @@ use super::TurnContextItem;
 use super::WorldStateItem;
 use crate::RetainedContextEvent;
 use crate::RetainedUserMessage;
+use codex_protocol::ContextWindowId;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
@@ -337,11 +338,11 @@ pub(super) struct CompactedItemWire<'a> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     window_number: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    first_window_id: Option<Cow<'a, str>>,
+    first_window_id: Option<Cow<'a, ContextWindowId>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    previous_window_id: Option<Cow<'a, str>>,
+    previous_window_id: Option<Cow<'a, ContextWindowId>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
+    #[schemars(with = "Option<ContextWindowId>")]
     window_id: Option<WindowIdWire<'a>>,
     #[serde(default)]
     compaction_response_id: Option<Cow<'a, str>>,
@@ -380,11 +381,11 @@ impl<'a> From<&'a CompactedItem> for CompactedItemWire<'a> {
             retained_context: item.retained_context.as_ref().map(Cow::Borrowed),
             mcp_resource_origins: item.mcp_resource_origins.as_ref().map(Cow::Borrowed),
             window_number: item.window_number,
-            first_window_id: item.first_window_id.as_deref().map(Cow::Borrowed),
-            previous_window_id: item.previous_window_id.as_deref().map(Cow::Borrowed),
+            first_window_id: item.first_window_id.as_ref().map(Cow::Borrowed),
+            previous_window_id: item.previous_window_id.as_ref().map(Cow::Borrowed),
             window_id: item
                 .window_id
-                .as_deref()
+                .as_ref()
                 .map(|window_id| WindowIdWire::Id(Cow::Borrowed(window_id))),
             compaction_response_id: item.compaction_response_id.as_deref().map(Cow::Borrowed),
             latest_token_usage_record: item.latest_token_usage_record.as_ref().map(Cow::Borrowed),
@@ -463,6 +464,6 @@ impl TryFrom<CompactedItemWire<'_>> for CompactedItem {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum WindowIdWire<'a> {
-    Id(Cow<'a, str>),
+    Id(Cow<'a, ContextWindowId>),
     LegacyWindowNumber(u64),
 }

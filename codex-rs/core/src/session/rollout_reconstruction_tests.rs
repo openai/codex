@@ -1461,7 +1461,7 @@ async fn reconstruct_history_restores_initial_window_from_session_meta() {
             session_id: thread_id.into(),
             id: thread_id,
             context_window: Some(SessionContextWindow {
-                window_id: initial_window_id.to_string(),
+                window_id: initial_window_id.clone(),
             }),
             ..SessionMeta::default()
         },
@@ -1495,7 +1495,7 @@ async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
                 session_id: thread_id.into(),
                 id: thread_id,
                 context_window: Some(SessionContextWindow {
-                    window_id: initial_window_id.to_string(),
+                    window_id: initial_window_id.clone(),
                 }),
                 ..SessionMeta::default()
             },
@@ -1508,9 +1508,9 @@ async fn reconstruct_history_prefers_compacted_window_over_session_meta() {
             guardian_history: None,
             mcp_resource_origins: None,
             window_number: Some(2),
-            first_window_id: Some(compacted_first_window_id.to_string()),
-            previous_window_id: Some(compacted_previous_window_id.to_string()),
-            window_id: Some(compacted_window_id.to_string()),
+            first_window_id: Some(compacted_first_window_id.clone()),
+            previous_window_id: Some(compacted_previous_window_id.clone()),
+            window_id: Some(compacted_window_id.clone()),
             compaction_response_id: None,
             latest_token_usage_record: None,
             resume_metadata: None,
@@ -1636,9 +1636,9 @@ async fn bounded_replay_matches_full_replay_after_empty_turn_compactions(
                     ])),
                     mcp_resource_origins: None,
                     window_number: Some(window_number as u64),
-                    first_window_id: Some(window_ids[0].to_string()),
-                    previous_window_id: Some(window_ids[window_number - 1].to_string()),
-                    window_id: Some(window_ids[window_number].to_string()),
+                    first_window_id: Some(window_ids[0].clone()),
+                    previous_window_id: Some(window_ids[window_number - 1].clone()),
+                    window_id: Some(window_ids[window_number].clone()),
                     compaction_response_id: None,
                     latest_token_usage_record: None,
                     resume_metadata: current.then(|| codex_history::CompactionResumeMetadata {
@@ -1993,7 +1993,7 @@ async fn reconstruct_history_preserves_legacy_compaction_count_with_session_meta
                 session_id: thread_id.into(),
                 id: thread_id,
                 context_window: Some(SessionContextWindow {
-                    window_id: initial_window_id.to_string(),
+                    window_id: initial_window_id.clone(),
                 }),
                 ..SessionMeta::default()
             },

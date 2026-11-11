@@ -322,9 +322,9 @@ pub struct CompactedItem {
     pub retained_context: Option<RetainedContext>,
     pub mcp_resource_origins: Option<McpResourceOriginCheckpoint>,
     pub window_number: Option<u64>,
-    pub first_window_id: Option<String>,
-    pub previous_window_id: Option<String>,
-    pub window_id: Option<String>,
+    pub first_window_id: Option<codex_protocol::ContextWindowId>,
+    pub previous_window_id: Option<codex_protocol::ContextWindowId>,
+    pub window_id: Option<codex_protocol::ContextWindowId>,
     /// Responses API ID for the model-backed compaction request, when one exists.
     pub compaction_response_id: Option<String>,
     /// Snapshot of the latest reachable token usage record when this compaction was written.

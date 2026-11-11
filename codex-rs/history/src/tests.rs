@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_protocol::ContextWindowId;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::ConfigurationReasoning;
 use codex_protocol::models::PermissionProfile;
@@ -1047,9 +1048,9 @@ fn compacted_item_serializes_window_number_and_id() -> Result<()> {
         guardian_history: None,
         mcp_resource_origins: None,
         window_number: Some(3),
-        first_window_id: Some("019b3f6e-0000-7000-8000-000000000001".to_string()),
-        previous_window_id: Some("019b3f6e-0000-7000-8000-000000000002".to_string()),
-        window_id: Some("019b3f6e-7a10-7cc3-8b6e-1d09e2f7a001".to_string()),
+        first_window_id: ContextWindowId::parse("019b3f6e-0000-7000-8000-000000000001"),
+        previous_window_id: ContextWindowId::parse("019b3f6e-0000-7000-8000-000000000002"),
+        window_id: ContextWindowId::parse("019b3f6e-7a10-7cc3-8b6e-1d09e2f7a001"),
         compaction_response_id: None,
         latest_token_usage_record: None,
         resume_metadata: None,

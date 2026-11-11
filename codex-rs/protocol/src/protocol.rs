@@ -3448,14 +3448,14 @@ pub enum MultiAgentVersion {
     V2,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct SessionContextWindow {
     /// UUIDv7 identity of this context window.
-    pub window_id: String,
+    pub window_id: crate::ContextWindowId,
 }
 
 impl SessionContextWindow {
-    pub fn new(window_id: String) -> Self {
+    pub fn new(window_id: crate::ContextWindowId) -> Self {
         Self { window_id }
     }
 }
@@ -3481,7 +3481,7 @@ pub struct HistoryPosition {
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
 /// now save that on TurnContext. base_instructions stores the base instructions for the session,
 /// and should be used when there is no config override.
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct SessionMeta {
     /// Scope discovery to the creator. Absent on threads created before account filtering.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -3513,7 +3513,6 @@ pub struct SessionMeta {
     /// An absent value means unknown; an empty list means no roots.
     /// Keep native paths parseable across hosts; validate them when restoring settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     pub originator: String,
     pub cli_version: String,
@@ -3602,7 +3601,7 @@ impl Default for SessionMeta {
     }
 }
 
-#[derive(Serialize, Debug, Clone, JsonSchema, TS)]
+#[derive(Serialize, Debug, Clone, JsonSchema)]
 pub struct SessionMetaLine {
     #[serde(flatten)]
     pub meta: SessionMeta,

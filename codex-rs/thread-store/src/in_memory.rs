@@ -186,7 +186,7 @@ mod tests {
                     history_mode: ThreadHistoryMode::Legacy,
                     history_base: None,
                     subagent_history_start_ordinal: None,
-                    initial_window_id: ContextWindowId::new_uuid_v7().to_string(),
+                    initial_window_id: ContextWindowId::new_uuid_v7(),
                     runtime_workspace_roots: None,
                     metadata: ThreadPersistenceMetadata {
                         cwd: None,
@@ -463,7 +463,7 @@ mod tests {
             history_mode,
             history_base: None,
             subagent_history_start_ordinal: None,
-            initial_window_id: ContextWindowId::new_uuid_v7().to_string(),
+            initial_window_id: ContextWindowId::new_uuid_v7(),
             runtime_workspace_roots: None,
             metadata: thread_metadata(),
         }

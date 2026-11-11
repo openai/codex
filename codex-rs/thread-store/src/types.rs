@@ -113,7 +113,7 @@ pub struct CreateThreadParams {
     /// First rollout ordinal that belongs to this subagent's projected history.
     pub subagent_history_start_ordinal: Option<u64>,
     /// Initial context-window identity captured when the thread was created.
-    pub initial_window_id: String,
+    pub initial_window_id: codex_protocol::ContextWindowId,
     /// Runtime workspace roots at creation, excluding permission-profile roots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,

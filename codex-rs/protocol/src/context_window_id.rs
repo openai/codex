@@ -1,10 +1,12 @@
 //! Context window identity used for compaction, rollout restoration, and request metadata.
 
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
 use uuid::Uuid;
 
-#[derive(derive_more::Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(derive_more::Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[debug("{_0}")]
 #[serde(transparent)]
 pub struct ContextWindowId(String);
@@ -20,6 +22,11 @@ impl ContextWindowId {
             .ok()
             .filter(|uuid| uuid.get_version_num() == 7)
             .map(|uuid| Self(uuid.to_string()))
+    }
+
+    /// Validate a deserialized window ID before restoring it.
+    pub fn validated(&self) -> Option<Self> {
+        Self::parse(&self.0)
     }
 }
 
