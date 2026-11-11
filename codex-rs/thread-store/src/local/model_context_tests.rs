@@ -95,6 +95,14 @@ async fn stops_at_newest_usable_compaction_and_keeps_companions() {
     let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
     let world_state = RolloutItem::WorldState(WorldStateItem::full(Default::default()));
     let turn_context = turn_context(home.path(), "companion");
+    let checkpoint: RolloutItem = serde_json::from_value(serde_json::json!({
+        "type": "compacted", "payload": {
+            "message": "latest compaction", "replacement_history": [], "window_number": 2,
+            "window_id": {"salt": "window", "ordinal": 2, "value": 6},
+            "resume_metadata": {"next_item_ordinal": 24}
+        }
+    }))
+    .expect("seeded checkpoint");
     let path = write_paginated_rollout(
         home.path(),
         "2025-01-03T13-00-00",
@@ -103,7 +111,7 @@ async fn stops_at_newest_usable_compaction_and_keeps_companions() {
             user_message("older history"),
             compacted("older compaction", Some(Vec::new())),
             user_message("superseded suffix"),
-            compacted("latest compaction", Some(Vec::new())),
+            checkpoint.clone(),
             world_state.clone(),
             turn_context.clone(),
         ],
@@ -125,7 +133,7 @@ async fn stops_at_newest_usable_compaction_and_keeps_companions() {
         serde_json::to_value(context.items).expect("serialize context"),
         serde_json::to_value(vec![
             RolloutItem::SessionMeta(Box::new(session_meta)),
-            compacted("latest compaction", Some(Vec::new())),
+            checkpoint,
             world_state,
             turn_context,
         ])
@@ -272,6 +280,7 @@ async fn fork_version_stops_before_older_segments_once_resolved() {
             unreachable!();
         };
         compacted.resume_metadata = Some(codex_rollout::CompactionResumeMetadata {
+            next_item_ordinal: None,
             rejected_audio_file_ids: Default::default(),
             dynamic_tools: None,
             multi_agent_version: Some(MultiAgentVersion::V2),

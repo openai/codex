@@ -290,6 +290,8 @@ impl JsonSchema for RolloutItem {
 }
 
 mod guardian_history;
+mod model_id_ordinals;
+pub use model_id_ordinals::next_model_id_ordinals;
 mod reconciled_retained_context;
 mod retained_context;
 mod sender_user_messages;

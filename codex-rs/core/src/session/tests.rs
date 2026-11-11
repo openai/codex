@@ -2631,6 +2631,25 @@ async fn inter_agent_communication_waits_for_confirmed_delivery_persistence() {
         ]
     );
     let live = session.clone_history().await;
+    let replayed = session
+        .reconstruct_history_from_rollout(&replay_turn, &resumed.history)
+        .await;
+    let delivery_sources = |context: &codex_history::RetainedContext| {
+        context
+            .ordered_entries()
+            .filter_map(|(_, entry)| match entry {
+                codex_history::RetainedContextEntry::AssistantMessage(_) => Some(
+                    context
+                        .source(entry)
+                        .expect("confirmed delivery has a revision"),
+                ),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = delivery_sources(live.retained_context());
+    assert_eq!(expected.len(), 2);
+    assert_eq!(delivery_sources(&replayed.retained_context), expected);
     let communication = live
         .annotated_items()
         .iter()
@@ -6219,6 +6238,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
 
     session.multi_agent_version = std::sync::OnceLock::from(MultiAgentVersion::V2);
     let expected = CompactionResumeMetadata {
+        next_item_ordinal: None,
         rejected_audio_file_ids: Default::default(),
         dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
             thread_id: session.thread_id(),

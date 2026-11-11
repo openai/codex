@@ -130,6 +130,7 @@ Approved action: {"action":{"command":"write /workspace/report.txt"},"outcome":"
         acceptance_order: Some(2),
     });
     let delivered = RolloutItem::RetainedContext(RetainedContextEvent::DeliveredAssistantMessage {
+        retained_source: None,
         message: RetainedUserMessage {
             turn_id: "turn-1".into(),
             message_id: Some("delivered-1".into()),

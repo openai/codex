@@ -1642,6 +1642,7 @@ async fn bounded_replay_matches_full_replay_after_empty_turn_compactions(
                     compaction_response_id: None,
                     latest_token_usage_record: None,
                     resume_metadata: current.then(|| codex_history::CompactionResumeMetadata {
+                        next_item_ordinal: None,
                         rejected_audio_file_ids: Default::default(),
                         dynamic_tools: None,
                         multi_agent_version: None,

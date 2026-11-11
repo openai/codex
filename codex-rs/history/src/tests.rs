@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_protocol::ContextWindowId;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::AudioReference;
 use codex_protocol::models::ConfigurationReasoning;
 use codex_protocol::models::PermissionProfile;
@@ -366,7 +367,8 @@ fn delivered_assistant_rollout_survives_an_earlier_read_and_rewrite() -> Result<
     }
 
     for complete in [true, false] {
-        let original = RetainedContextEvent::DeliveredAssistantMessage {
+        let mut original = RetainedContextEvent::DeliveredAssistantMessage {
+            retained_source: None,
             message: RetainedUserMessage {
                 origin: crate::UserInputOrigin::User,
                 turn_id: "root-turn".to_owned(),
@@ -377,6 +379,14 @@ fn delivered_assistant_rollout_survives_an_earlier_read_and_rewrite() -> Result<
             },
             acceptance_order: 7,
         };
+        let sequence = std::sync::Mutex::new(
+            codex_utils_model_facing_id::ModelFacingIdGenerator::new(/*seed*/ 42, "item"),
+        );
+        let generator: codex_protocol::ItemIdGenerator = Arc::new(move |kind| {
+            ResponseItemId::generated(kind, sequence.lock().unwrap().fetch_next())
+        });
+        let mut live = RetainedContext::default();
+        assert!(live.record_and_capture(&mut original, &generator));
         let wire = serde_json::to_value(RolloutItem::RetainedContext(original.clone()))?;
         let earlier = serde_json::from_value::<EarlierRolloutItem>(wire)?;
         let EarlierRolloutItem::ResponseItem { payload, metadata } = &earlier;
@@ -432,6 +442,13 @@ fn delivered_assistant_rollout_survives_an_earlier_read_and_rewrite() -> Result<
             panic!("new readers need the model-invisible delivery event");
         };
         assert_eq!(restored, original);
+        let mut replayed = RetainedContext::default();
+        assert!(replayed.record(&restored, &generator));
+        assert_eq!(replayed, live);
+        assert_eq!(
+            crate::next_model_id_ordinals(&[RolloutItem::RetainedContext(restored)]),
+            (1, 0)
+        );
     }
     Ok(())
 }
@@ -679,6 +696,7 @@ fn compacted_replacement_history_stores_metadata_in_an_aligned_sidecar() -> Resu
 #[test]
 fn compacted_resume_metadata_presence_round_trips_empty_values() -> Result<()> {
     let resume_metadata = CompactionResumeMetadata {
+        next_item_ordinal: None,
         rejected_audio_file_ids: Default::default(),
         dynamic_tools: None,
         multi_agent_version: None,
@@ -792,6 +810,7 @@ fn compacted_metadata_remains_compatible_with_legacy_response_item_readers() -> 
         compaction_response_id: None,
         latest_token_usage_record: None,
         resume_metadata: Some(CompactionResumeMetadata {
+            next_item_ordinal: None,
             rejected_audio_file_ids: Default::default(),
             dynamic_tools: None,
             multi_agent_version: Some(MultiAgentVersion::V2),
@@ -1155,6 +1174,46 @@ fn compacted_item_serializes_window_number_and_id() -> Result<()> {
             "latest_token_usage_record": null,
         })
     );
+    Ok(())
+}
+
+#[test]
+fn model_id_ordinals_resume_at_the_checkpoint_and_advance_for_local_items() -> Result<()> {
+    let record = |ordinal| {
+        json!({
+            "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [],
+            "id": "external", "id_allocation": {"salt": "item", "ordinal": ordinal, "value": 3}}
+        })
+    };
+    let source = |ordinal| {
+        json!({
+            "id": {"turn_id": "turn", "message_id": "external", "role": "assistant"},
+            "revision": {"id": "retained_item007",
+                "id_allocation": {"prefix": "retained", "salt": "item", "ordinal": ordinal, "value": 7}},
+            "complete": true
+        })
+    };
+    let mut tail = record(24);
+    tail["metadata"] = json!({
+        "retained_source": source(25),
+        "guardian_sources": [source(300)],
+        "guardian_review_ids": [{"id": "review_item008",
+            "id_allocation": {"prefix": "review", "salt": "item", "ordinal": 301, "value": 8}}]
+    });
+    let records: Vec<RolloutItem> = serde_json::from_value(json!([
+        record(19),
+        {"type": "compacted", "payload": {
+            "message": "", "window_number": 4,
+            "window_id": {"salt": "window", "ordinal": 4, "value": 812},
+            "replacement_history": [record(8)["payload"]],
+            "resume_metadata": {"next_item_ordinal": 24}
+        }},
+        tail
+    ]))?;
+    assert_eq!(crate::next_model_id_ordinals(&[]), (0, 0));
+    assert_eq!(crate::next_model_id_ordinals(&records[1..2]), (24, 5));
+    assert_eq!(crate::next_model_id_ordinals(&records[1..]), (26, 5));
+    assert_eq!(crate::next_model_id_ordinals(&records), (26, 5));
     Ok(())
 }
 

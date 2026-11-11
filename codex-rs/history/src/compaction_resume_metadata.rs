@@ -18,6 +18,9 @@ use std::sync::Arc;
 /// compactions that did not.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CompactionResumeMetadata {
+    /// Next ordinal in the producing thread's seeded item ID sequence at this checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_item_ordinal: Option<u64>,
     /// Immutable file references rejected before this checkpoint.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub rejected_audio_file_ids: Arc<BTreeSet<String>>,

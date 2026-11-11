@@ -203,6 +203,7 @@ fn delivered_assistant_context_invalidates_reviews_without_changing_authorizatio
     let before_delivery = history.conversation_history_snapshot();
     let authorization = before_delivery.user_message_revision();
     let event = RetainedContextEvent::DeliveredAssistantMessage {
+        retained_source: None,
         message: codex_history::RetainedUserMessage {
             origin: codex_history::UserInputOrigin::User,
             turn_id: "turn".to_owned(),

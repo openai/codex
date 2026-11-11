@@ -389,7 +389,16 @@ impl ContextManager {
     }
 
     pub(crate) fn record_retained_context(&mut self, event: &RetainedContextEvent) -> bool {
-        if !Arc::make_mut(&mut self.retained_context).record(event, &self.item_id_generator) {
+        self.record_retained_context_for_persistence(&mut event.clone())
+    }
+
+    pub(crate) fn record_retained_context_for_persistence(
+        &mut self,
+        event: &mut RetainedContextEvent,
+    ) -> bool {
+        if !Arc::make_mut(&mut self.retained_context)
+            .record_and_capture(event, &self.item_id_generator)
+        {
             return false;
         }
         match event {

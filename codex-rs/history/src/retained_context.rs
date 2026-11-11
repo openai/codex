@@ -179,6 +179,9 @@ pub enum RetainedContextEvent {
         #[serde(flatten)]
         message: RetainedUserMessage,
         acceptance_order: u64,
+        /// The host-captured evidence revision. Older deliveries only persisted the call ID.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retained_source: Option<RetainedSource>,
     },
 }
 
@@ -477,16 +480,24 @@ impl RetainedContext {
         event: &RetainedContextEvent,
         item_id_generator: &ItemIdGenerator,
     ) -> bool {
-        let mut event = event.clone();
+        self.record_and_capture(&mut event.clone(), item_id_generator)
+    }
+
+    /// Records a host event and fills in its retained source for rollout persistence.
+    pub fn record_and_capture(
+        &mut self,
+        event: &mut RetainedContextEvent,
+        item_id_generator: &ItemIdGenerator,
+    ) -> bool {
         event.bound();
         match event {
             RetainedContextEvent::AcceptedFileAudio { evidence } => {
                 if !evidence.fits_record_budget()
-                    || self.accepted_file_audio.as_ref() == Some(&evidence)
+                    || self.accepted_file_audio.as_ref() == Some(evidence)
                 {
                     return false;
                 }
-                self.accepted_file_audio = Some(evidence);
+                self.accepted_file_audio = Some(Arc::clone(evidence));
                 true
             }
             RetainedContextEvent::VerifiedAnswer {
@@ -497,17 +508,17 @@ impl RetainedContext {
                     existing.value.turn_id == answer.turn_id
                         && existing.value.call_id == answer.call_id
                 }) {
-                    if self.verified_answers[index].value == answer {
+                    if self.verified_answers[index].value == *answer {
                         return false;
                     }
                     self.verified_answers.remove(index);
                 }
-                let order = self.record_order(acceptance_order);
+                let order = self.record_order(*acceptance_order);
                 self.verified_answers.push_back(Ordered {
                     revision: None,
                     inherited: false,
                     order,
-                    value: answer,
+                    value: answer.clone(),
                 });
                 bound_family(
                     &mut self.verified_answers,
@@ -518,19 +529,26 @@ impl RetainedContext {
             RetainedContextEvent::DeliveredAssistantMessage {
                 message,
                 acceptance_order,
+                retained_source,
             } => {
-                if self.assistant_messages.iter().any(|entry| {
+                if let Some(existing) = self.assistant_messages.iter().find(|entry| {
                     message.message_id.is_some()
                         && entry.value.message_id == message.message_id
-                        && entry.value == message
+                        && entry.value == *message
                         && !entry.inherited
                 }) {
+                    *retained_source = existing.source(RetainedSourceRole::Assistant);
                     return false;
                 }
-                self.record_assistant_message(
-                    message,
-                    RetainedInputSource::Local(Some(acceptance_order)),
-                    item_id_generator,
+                *retained_source = self.record_assistant_message_with_revision(
+                    message.clone(),
+                    RetainedInputSource::Local(Some(*acceptance_order)),
+                    || {
+                        retained_source.as_ref().map_or_else(
+                            || item_id_generator("retained"),
+                            |source| source.revision.clone(),
+                        )
+                    },
                 );
                 true
             }

@@ -218,6 +218,7 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
             RolloutItem::RetainedContext(RetainedContextEvent::DeliveredAssistantMessage {
                 message,
                 acceptance_order,
+                retained_source,
             }) => {
                 // Earlier clients preserve this as genuine assistant context, including across compaction.
                 let text = if message.complete {
@@ -256,6 +257,7 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
                         id_allocation: None,
                     },
                     metadata: Some(Cow::Owned(CodexHarnessMetadata {
+                        retained_source: retained_source.clone(),
                         delivered_assistant_message: Some(marker),
                         user_input_order: Some(*acceptance_order),
                         ..Default::default()
@@ -323,6 +325,7 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
                                 phase: None,
                             },
                             acceptance_order,
+                            retained_source: metadata.retained_source.clone(),
                         },
                     );
                 }

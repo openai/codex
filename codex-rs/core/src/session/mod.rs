@@ -4959,6 +4959,7 @@ impl Session {
                 compaction_response_id: metadata.compaction_response_id,
                 latest_token_usage_record: state.latest_token_usage_record.clone(),
                 resume_metadata: Some(CompactionResumeMetadata {
+                    next_item_ordinal: None,
                     rejected_audio_file_ids: state.history.rejected_audio_file_ids(),
                     dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
                         thread_id: self.thread_id(),

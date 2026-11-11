@@ -312,6 +312,7 @@ impl RollbackPlanner {
                 codex_rollout::RetainedContextEvent::DeliveredAssistantMessage {
                     message,
                     acceptance_order,
+                    ..
                 },
             ) => {
                 // Nested calls have no response item; match them to instructions by acceptance order.

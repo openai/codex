@@ -3850,6 +3850,7 @@ dependencies = [
  "codex-protocol",
  "codex-protocol-test-support",
  "codex-utils-absolute-path",
+ "codex-utils-model-facing-id",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
