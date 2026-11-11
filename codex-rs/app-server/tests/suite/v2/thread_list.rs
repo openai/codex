@@ -1082,7 +1082,7 @@ async fn thread_search_matches_json_escaped_content() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
 
-    let search_term = r#"quoted "needle" \ path"#;
+    let search_term = "find  \"needle\"\nunder\tC:\\docs";
     let thread_id = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T10-00-00",
@@ -1111,7 +1111,7 @@ async fn thread_search_matches_json_escaped_content() -> Result<()> {
 
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].thread.id, thread_id);
-    assert_eq!(data[0].snippet, search_term);
+    assert_eq!(data[0].snippet, r#"find "needle" under C:\docs"#);
 
     Ok(())
 }

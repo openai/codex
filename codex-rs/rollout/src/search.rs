@@ -361,14 +361,10 @@ fn content_item_text(item: &ContentItem) -> Option<&str> {
 }
 
 fn excerpt_around_match(text: &str, search_term: &Regex) -> Option<String> {
-    let normalized = normalize_preview_text(text);
-    let matched = search_term.find(normalized.as_str())?;
-    let match_start = matched.start();
-    let match_end = matched.end();
-    let excerpt_start =
-        char_start_before(normalized.as_str(), match_start, MATCH_CONTEXT_BEFORE_CHARS);
-    let excerpt_end = char_end_after(normalized.as_str(), match_end, MATCH_CONTEXT_AFTER_CHARS);
-    let excerpt = normalized[excerpt_start..excerpt_end].trim();
+    let matched = search_term.find(text)?;
+    let excerpt_start = char_start_before(text, matched.start(), MATCH_CONTEXT_BEFORE_CHARS);
+    let excerpt_end = char_end_after(text, matched.end(), MATCH_CONTEXT_AFTER_CHARS);
+    let excerpt = normalize_preview_text(&text[excerpt_start..excerpt_end]);
     if excerpt.is_empty() {
         return None;
     }
@@ -377,8 +373,8 @@ fn excerpt_around_match(text: &str, search_term: &Regex) -> Option<String> {
     if excerpt_start > 0 {
         snippet.push_str("... ");
     }
-    snippet.push_str(excerpt);
-    if excerpt_end < normalized.len() {
+    snippet.push_str(&excerpt);
+    if excerpt_end < text.len() {
         snippet.push_str(" ...");
     }
     Some(snippet)
