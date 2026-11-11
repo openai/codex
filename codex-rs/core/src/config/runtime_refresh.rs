@@ -1,4 +1,4 @@
-//! Resolves refreshable MCP inputs without rebuilding unrelated session configuration.
+//! Resolves refreshable MCP inputs and operational controls without rebuilding session configuration.
 //! Existing sessions refresh ordinary MCP state without gaining enterprise authority.
 //! Validate the retained backend after applying the refreshable requirements.
 
@@ -92,6 +92,7 @@ impl Config {
             Feature::McpLazyStdioStartup,
             Feature::SecretAuthStorage,
             Feature::McpOAuthRefreshCoordination,
+            Feature::DaybreakProgramPropagation,
         ] {
             if matches!(scope, RuntimeConfigRefresh::UserFiles) {
                 let explicitly_configured = cfg.features.as_ref().is_some_and(|features| {
@@ -156,6 +157,15 @@ impl Config {
             .features
             .refresh_mcp_features(&features)
             .map_err(std::io::Error::other)?;
+        if matches!(scope, RuntimeConfigRefresh::UserFiles) {
+            config
+                .features
+                .set_enabled(
+                    Feature::DaybreakProgramPropagation,
+                    features.enabled(Feature::DaybreakProgramPropagation),
+                )
+                .map_err(std::io::Error::other)?;
+        }
         config.mcp_servers =
             constrain_mcp_servers(servers, layers.requirements().mcp_servers.as_ref())
                 .map_err(std::io::Error::other)?;

@@ -106,6 +106,8 @@ pub enum Feature {
     ApiKeyCyberAccessPrograms,
     /// Enable Daybreak controls and automatic access-program selection in CLI clients.
     CliDaybreak,
+    /// Capture the saved Daybreak choice for a native helper and its turns.
+    DaybreakProgramPropagation,
     /// Restrict CLI resume of attributed local threads to their creator.
     CliResumeAccountCheck,
     /// Removed no-op; use `tui.fullscreen_transcript` instead.
@@ -1585,6 +1587,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "api_key_cyber_access_programs",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::DaybreakProgramPropagation,
+        key: "daybreak_program_propagation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::EnableRequestCompression,

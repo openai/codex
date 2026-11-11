@@ -61,6 +61,7 @@ pub use projects::UpdateProjectParams;
 pub use projects::UpdatedProject;
 pub use queue_store::LocalQueueStore;
 pub use queue_store::QueueStore;
+pub use store::PendingDaybreakPreference;
 pub use store::PersistContext;
 pub use store::ThreadStore;
 pub use store::ThreadStoreFuture;

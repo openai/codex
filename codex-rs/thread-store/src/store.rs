@@ -125,6 +125,22 @@ impl PersistContext {
     }
 }
 
+/// A saved Daybreak choice staged for a thread before its stored row is materialized.
+pub struct PendingDaybreakPreference(Option<bool>);
+
+impl PendingDaybreakPreference {
+    /// Read staging before the stored row: materialization can consume the staged metadata.
+    pub async fn read(store: &dyn ThreadStore, thread_id: ThreadId) -> ThreadStoreResult<Self> {
+        let pending = store.read_pending_thread_metadata(thread_id).await?;
+        Ok(Self(pending.and_then(|patch| patch.daybreak_enabled)))
+    }
+
+    /// A stored choice, including explicit Off, takes precedence over the staged snapshot.
+    pub fn resolve(&self, stored: Option<bool>) -> Option<bool> {
+        stored.or(self.0)
+    }
+}
+
 /// Storage-neutral thread persistence boundary.
 pub trait ThreadStore: Any + Send + Sync {
     /// Return this store as [`Any`] for implementation-owned escape hatches.

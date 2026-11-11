@@ -1183,6 +1183,16 @@ impl Session {
                 )),
             );
         }
+        // Native children receive their enrollment at spawn. A cold resume or durable fork
+        // has no live attachment, even when the rollout is enabled at startup.
+        if matches!(
+            &initial_history,
+            InitialHistory::New | InitialHistory::Cleared
+        ) && !session_source.is_non_root_agent()
+            && config.features.enabled(Feature::DaybreakProgramPropagation)
+        {
+            thread_extension_data.insert(crate::agent::helper_daybreak::Enrollment::Root);
+        }
         thread_extension_data.insert(crate::context::GuardianReviewEvidence::default());
         crate::model_search::SearchOwner::restore(&thread_extension_data, &initial_history);
         // Kick off independent async setup tasks in parallel to reduce startup latency.

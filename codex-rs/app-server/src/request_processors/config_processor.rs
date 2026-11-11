@@ -72,6 +72,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "auth_elicitation",
     BACKGROUND_PAGINATED_ROLLOUT_MIGRATION_FEATURE,
     "codex_apps_mcp_2026_07_28",
+    "daybreak_program_propagation",
     "mcp_2026_07_28",
     "mcp_connection_sharing",
     "mcp_lazy_stdio_startup",

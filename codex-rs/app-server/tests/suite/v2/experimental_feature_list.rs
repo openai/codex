@@ -282,6 +282,7 @@ async fn experimental_feature_enablement_set_applies_to_global_and_thread_config
     let enablement = BTreeMap::from([
         ("auth_elicitation".to_string(), true),
         ("mcp_lazy_stdio_startup".to_string(), true),
+        ("daybreak_program_propagation".to_string(), true),
     ]);
     let actual = set_experimental_feature_enablement(&mut mcp, enablement.clone()).await?;
     assert_eq!(actual.enablement, enablement);

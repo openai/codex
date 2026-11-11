@@ -5,6 +5,7 @@ use super::spawn_telemetry::SpawnMeasurements;
 use super::spawn_telemetry::record_spawn_success;
 use super::*;
 use crate::agent::child_config::build_agent_resume_config;
+use crate::agent::helper_daybreak;
 use crate::agent::history::load_agent_model_context;
 use crate::agent::history::prepare_forked_history;
 use crate::agent::role::apply_role_to_config;
@@ -745,6 +746,54 @@ impl LocalAgentControl {
             disabled_plugin_ids,
             ..StartThreadOptions::new(config.clone())
         };
+        if let Some(parent_id) = session_source
+            .as_ref()
+            .and_then(SessionSource::parent_thread_id)
+            && let Ok(parent) = state.get_thread(parent_id).await
+            && config.features.enabled(Feature::DaybreakProgramPropagation)
+            && let Some(enrollment) = parent
+                .thread_extension_data()
+                .get::<helper_daybreak::Enrollment>()
+            && parent
+                .session
+                .get_config()
+                .await
+                .features
+                .enabled(Feature::DaybreakProgramPropagation)
+        {
+            start_options
+                .thread_extension_init
+                .insert(helper_daybreak::Enrollment::NativeHelper);
+            let spawn_owner = helper_daybreak::eligible_owner(&parent.session);
+            if let Some(turn_id) = options.parent_turn_id.as_deref()
+                && let Some(turn) = parent.session.turn_context_for_sub_id(turn_id).await
+                && let Some(intent) = helper_daybreak::spawning_intent(
+                    &parent.session,
+                    &turn,
+                    &enrollment,
+                    spawn_owner.as_ref(),
+                )
+                .await
+            {
+                if let Err(error) = &intent.choice {
+                    // Only a usable, successful read can become a child's inherited default.
+                    if options.cyber_access_program.is_none()
+                        && config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID
+                        && config
+                            .model_provider
+                            .supports_cyber_access_programs(&config.model_provider_id)
+                        && codex_model_provider::provider_uses_first_party_auth_path(
+                            &config.model_provider,
+                        )
+                    {
+                        return Err(CodexErr::InvalidRequest(error.clone())
+                            .with_agent_context(AgentErrorContext::ChildStartup));
+                    }
+                } else {
+                    start_options.thread_extension_init.insert(intent);
+                }
+            }
+        }
         let fork_context = match (session_source, options.fork_mode.as_ref()) {
             (Some(session_source), Some(_)) => {
                 let fork_context_started_at = Instant::now();

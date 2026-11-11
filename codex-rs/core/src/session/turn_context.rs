@@ -338,6 +338,7 @@ pub(crate) struct NewTurnContextOptions {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) prompt_cache_ttl: Option<crate::PromptCacheTtl>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
+    pub(crate) helper_admission: Option<crate::agent::helper_daybreak::turn::HelperTurnAdmission>,
 }
 
 /// The context needed for a single turn of the thread.
@@ -1489,6 +1490,9 @@ impl Session {
         turn_context.prompt_cache_ttl = options.prompt_cache_ttl;
         turn_context.cyber_access_program =
             cyber_access_program::for_provider(&turn_context.config, options.cyber_access_program);
+        if let Some(admission) = options.helper_admission {
+            admission.capture_intent(self, &turn_context).await;
+        }
         // Tool observers retain this turn's selection even after a later turn starts.
         if let Some(program) = turn_context.cyber_access_program {
             turn_context.extension_data.insert(program);

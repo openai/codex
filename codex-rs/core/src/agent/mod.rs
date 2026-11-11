@@ -2,6 +2,7 @@ pub(crate) mod agent_resolver;
 pub(crate) mod api;
 pub(crate) mod child_config;
 pub(crate) mod control;
+pub(crate) mod helper_daybreak;
 mod history;
 pub(crate) mod host;
 mod registry;

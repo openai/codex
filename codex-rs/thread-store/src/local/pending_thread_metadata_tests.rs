@@ -233,6 +233,63 @@ async fn naming_empty_paginated_thread_propagates_rollout_persistence_failure() 
 }
 
 #[tokio::test]
+async fn saved_daybreak_preference_survives_materialization_and_prefers_the_stored_choice() {
+    let (_home, store, _runtime) = store_with_runtime().await;
+    for (staged, persisted) in [
+        (Some(false), Some(true)),
+        (Some(true), Some(false)),
+        (None, None),
+    ] {
+        let thread_id = ThreadId::new();
+        if staged.is_some() {
+            store
+                .stage_pending_thread_metadata(
+                    thread_id,
+                    ThreadMetadataPatch {
+                        daybreak_enabled: staged,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("stage Daybreak preference");
+        }
+        let pending = crate::PendingDaybreakPreference::read(store.as_ref(), thread_id)
+            .await
+            .expect("read staged preference");
+        let live = LiveThread::create(store.clone(), create_thread_params(thread_id))
+            .await
+            .expect("create thread");
+        live.append_items(&[user_message_item("materialize the saved preference")])
+            .await
+            .expect("materialize thread");
+        assert_pending_metadata_consumed(&store, thread_id).await;
+        assert_eq!(pending.resolve(/*stored*/ None), staged);
+
+        if persisted.is_some() {
+            store
+                .update_thread_metadata(UpdateThreadMetadataParams {
+                    thread_id,
+                    patch: ThreadMetadataPatch {
+                        daybreak_enabled: persisted,
+                        ..Default::default()
+                    },
+                    include_archived: false,
+                })
+                .await
+                .expect("save new preference");
+        }
+        let row = live
+            .read_thread(
+                /*include_archived*/ false, /*include_history*/ false,
+            )
+            .await
+            .expect("read stored preference");
+        assert_eq!(row.daybreak_enabled, persisted);
+        assert_eq!(pending.resolve(row.daybreak_enabled), persisted);
+    }
+}
+
+#[tokio::test]
 async fn pending_thread_metadata_is_consumed_by_first_metadata_update() {
     let (_home, store, runtime) = store_with_runtime().await;
     let thread_id = ThreadId::new();

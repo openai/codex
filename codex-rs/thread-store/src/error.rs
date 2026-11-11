@@ -81,6 +81,24 @@ pub enum ThreadStoreError {
     },
 }
 
+impl ThreadStoreError {
+    /// Whether a read found no persisted record for this specific thread.
+    pub fn is_missing_for_read(&self, requested_thread_id: ThreadId) -> bool {
+        match self {
+            Self::ThreadNotFound { thread_id } => *thread_id == requested_thread_id,
+            // The local store's strict read uses this legacy error for an unmaterialized rollout.
+            Self::InvalidRequest { message } => {
+                message == &format!("no rollout found for thread id {requested_thread_id}")
+            }
+            Self::Conflict { .. }
+            | Self::Unsupported { .. }
+            | Self::Retryable { .. }
+            | Self::OutcomeUnknown { .. }
+            | Self::Internal { .. } => false,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "error_tests.rs"]
 mod tests;

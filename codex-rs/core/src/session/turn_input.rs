@@ -22,6 +22,7 @@ use super::thread_settings;
 use super::turn_context::NewTurnContextOptions;
 use super::turn_context::TurnContext;
 use crate::WithTurnExtensionData;
+use crate::agent::helper_daybreak::turn::HelperTurnAdmission;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianSenderMessages;
 use crate::state::ActiveTurn;
@@ -160,6 +161,12 @@ impl PreparedTurnInputSettings {
             root_turn_id,
             cyber_access_program,
         } = self.start_options;
+        let helper_admission =
+            if kind == TurnStartKind::User && turn_trigger.as_deref() != Some("queue") {
+                HelperTurnAdmission::capture(session)
+            } else {
+                None
+            };
         let emit_thread_settings_applied = self.thread_settings_update.is_some();
         let _settings_guard = if emit_thread_settings_applied {
             Some(thread_settings::acquire_persistence_lock(session).await)
@@ -174,6 +181,7 @@ impl PreparedTurnInputSettings {
             final_output_json_schema,
             prompt_cache_ttl,
             cyber_access_program,
+            helper_admission,
         };
         let turn_context = match kind {
             TurnStartKind::User | TurnStartKind::Recovery => Some(

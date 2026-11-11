@@ -1,5 +1,8 @@
 #![cfg(test)]
 
+#[path = "thread_manager/helper_daybreak_tests.rs"]
+mod helper_daybreak;
+
 use super::*;
 use crate::ThreadStoreBuilder;
 use crate::agent::types::SpawnAgentOptions;

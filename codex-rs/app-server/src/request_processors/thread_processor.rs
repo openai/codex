@@ -50,6 +50,7 @@ use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::plain_output_text;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::LocalHistoryAccount;
+use codex_thread_store::PendingDaybreakPreference;
 use codex_thread_store::PersistContext;
 use std::ops::ControlFlow;
 
@@ -3143,17 +3144,14 @@ impl ThreadRequestProcessor {
         thread_id: ThreadId,
         include_turns: bool,
     ) -> Result<Thread, ThreadReadViewError> {
-        // Read staging first: persistence can consume it while the stored thread is read.
-        let pending_daybreak_enabled = self
-            .thread_store
-            .read_pending_thread_metadata(thread_id)
-            .await
-            .map_err(|err| {
-                ThreadReadViewError::Internal(format!(
-                    "failed to read pending thread metadata: {err}"
-                ))
-            })?
-            .and_then(|metadata| metadata.daybreak_enabled);
+        let pending_preference =
+            PendingDaybreakPreference::read(self.thread_store.as_ref(), thread_id)
+                .await
+                .map_err(|err| {
+                    ThreadReadViewError::Internal(format!(
+                        "failed to read pending thread metadata: {err}"
+                    ))
+                })?;
         let loaded_thread = self.thread_manager.get_thread(thread_id).await.ok();
         let mut thread = if include_turns {
             if let Some(loaded_thread) = loaded_thread.as_ref() {
@@ -3207,7 +3205,7 @@ impl ThreadRequestProcessor {
             )));
         };
 
-        thread.daybreak_enabled = thread.daybreak_enabled.or(pending_daybreak_enabled);
+        thread.daybreak_enabled = pending_preference.resolve(thread.daybreak_enabled);
 
         let has_live_in_progress_turn = if let Some(loaded_thread) = loaded_thread.as_ref() {
             matches!(loaded_thread.agent_status().await, AgentStatus::Running)
@@ -3280,14 +3278,7 @@ impl ThreadRequestProcessor {
             .await
         {
             Ok(stored_thread) => Ok(Some(stored_thread)),
-            Err(ThreadStoreError::InvalidRequest { message })
-                if message == format!("no rollout found for thread id {thread_id}") =>
-            {
-                Ok(None)
-            }
-            Err(ThreadStoreError::ThreadNotFound {
-                thread_id: missing_thread_id,
-            }) if missing_thread_id == thread_id => Ok(None),
+            Err(err) if err.is_missing_for_read(thread_id) => Ok(None),
             Err(ThreadStoreError::InvalidRequest { message }) => {
                 Err(ThreadReadViewError::InvalidRequest(message))
             }
