@@ -179,3 +179,9 @@ fn sparse_catalog_messages_preserve_defaults_and_explicit_empty_descriptions() {
         expected
     );
 }
+
+#[test]
+fn bundled_tool_contracts() {
+    let specs = super::HistoryNotesAction::ALL.map(|action| action.spec(None, None));
+    insta::assert_snapshot!(serde_json::to_string_pretty(&specs).unwrap());
+}
