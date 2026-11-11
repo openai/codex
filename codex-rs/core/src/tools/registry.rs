@@ -118,7 +118,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
 
     /// Returns the owning server only for MCP-backed tool runtimes.
     fn mcp_server_name(&self) -> Option<&str> {
-        self.mcp_tool_info().map(|tool| tool.server_name.as_str())
+        self.mcp_tool_info().map(codex_mcp::ToolInfo::server_name)
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -213,7 +213,7 @@ pub(super) fn with_updated_function_input(
     invocation: ToolInvocation,
     mut updated_input: Value,
 ) -> Result<ToolInvocation, FunctionCallError> {
-    let ToolPayload::Function { .. } = &invocation.payload else {
+    let ToolPayload::Function { arguments } = &invocation.payload else {
         return Err(FunctionCallError::RespondToModel(
             "hook input rewrite received unsupported function tool payload".to_string(),
         ));
@@ -230,13 +230,36 @@ pub(super) fn with_updated_function_input(
             }
         }
         ToolEnvironments::Mcp { server, .. } => {
-            if let Some(Value::String(value)) = updated_input.get_mut("server") {
-                *value = value.trim().to_owned();
-                if value.is_empty() {
-                    updated_input["server"] = Value::Null;
+            for field in ["server", "environment_id"] {
+                if let Some(Value::String(value)) = updated_input.get_mut(field) {
+                    *value = value.trim().to_owned();
+                    if value.is_empty() {
+                        updated_input[field] = Value::Null;
+                    }
                 }
             }
             preserve_hook_selector(&mut updated_input, "server", serde_json::json!(server))?;
+            if invocation
+                .step_context
+                .mcp
+                .config()
+                .mcp_server_catalog
+                .exposure()
+                == codex_mcp::McpServerExposure::EnvironmentQualified
+            {
+                // Resource hooks may edit the URI, but cannot switch to another computer's server.
+                let original = function_hook_tool_input(arguments);
+                let environment_id = original
+                    .get("environment_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                preserve_hook_selector(
+                    &mut updated_input,
+                    "environment_id",
+                    serde_json::json!(environment_id),
+                )?;
+            }
         }
         ToolEnvironments::Terminal(terminal) => {
             preserve_hook_selector(

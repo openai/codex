@@ -64,7 +64,9 @@ async fn dispatch_revokes_access_and_holds_call_id_through_callbacks() -> anyhow
     extensions.tool_lifecycle_contributor(gate.clone());
     Arc::get_mut(&mut session).unwrap().services.extensions = Arc::new(extensions.build());
     let mut registry = ToolRegistry::default();
-    registry.add(ListMcpResourcesHandler::new(/*messages*/ None));
+    registry.add(ListMcpResourcesHandler::new(
+        /*messages*/ None, /*include_environment_id*/ false,
+    ));
     let router = ToolRouter::from_parts(
         registry,
         vec![],

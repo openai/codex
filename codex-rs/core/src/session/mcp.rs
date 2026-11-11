@@ -3,6 +3,7 @@ use crate::McpRefreshReason;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::combine_selected_capability_roots;
 use crate::mcp_tool_call::McpToolApprovalContext;
+use crate::mcp_tool_call::capture_environment_permissions;
 use anyhow::Context;
 use codex_exec_server::DiscoverV2CapabilitiesRequest;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
@@ -405,7 +406,11 @@ impl Session {
             Some(self.mcp_elicitation_reviewer()),
         );
         anyhow::ensure!(
-            input.mcp_servers.contains_key(CODEX_APPS_MCP_SERVER_NAME),
+            input
+                .mcp_servers
+                .contains_key(&codex_mcp::McpServerKey::unscoped(
+                    CODEX_APPS_MCP_SERVER_NAME
+                )),
             "unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"
         );
         let refreshed = AuthStorageOriginator::from_client_name(&desired.originator)
@@ -492,16 +497,15 @@ impl Session {
             }
             self.refresh_mcp_if_dirty().await;
         }
-        let required_servers = required_servers
-            .iter()
-            .chain(&recovered_oauth_servers)
-            .cloned()
-            .collect::<Vec<_>>();
         self.wait_for_apps_tool_refresh().await;
         if let Some(binding) = self
             .services
             .mcp_runtime
-            .current_binding_with_requirements(&required_servers, required_plugins)
+            .current_binding_with_requirements(
+                required_servers,
+                &recovered_oauth_servers,
+                required_plugins,
+            )
             .await
         {
             return binding;
@@ -1004,6 +1008,17 @@ async fn review_guardian_mcp_elicitation(
         return Ok(None);
     };
     let step_settings = turn_context.next_step_settings.load_full();
+    // A callback for a running call keeps the permissions captured by that call.
+    let call_id = request
+        .elicitation
+        .meta()
+        .and_then(|meta| match request.server_name.as_str() {
+            CODEX_APPS_MCP_SERVER_NAME => meta.get(MCP_TOOL_CODEX_APPS_META_KEY)?.get("call_id"),
+            _ => meta.get("callId"),
+        })
+        .and_then(Value::as_str);
+    let approval_context = call_id
+        .and_then(|call_id| session.mcp_tool_approval_metadata(&request.server_key, call_id));
 
     // User approval skips ordinary CUA checks, not separate sensitive requests.
     let user_cua_execution = step_settings.approvals_reviewer() == ApprovalsReviewer::User
@@ -1017,15 +1032,48 @@ async fn review_guardian_mcp_elicitation(
                 && meta.get("codex_requires_user_input") != Some(&Value::Bool(true))
         });
 
-    // Full Access skips inference, not the active-turn and cancellation checks.
-    if (user_cua_execution
-        || turn_context.initial_environments.has_full_access(
+    // A scoped server must use its own rules, not the primary computer's Full Access.
+    let scoped = mcp_config
+        .mcp_server_catalog
+        .exposure()
+        .environment_id(&request.server_key)
+        .is_some();
+    let environment_permissions = approval_context
+        .as_ref()
+        .and_then(|context| context.environment_permissions.clone())
+        .or_else(|| {
+            if !scoped {
+                return None;
+            }
+            capture_environment_permissions(
+                mcp_config.permission_source_for_server(&request.server_key)?,
+            )
+        });
+    let full_access = if scoped {
+        let policy = approval_context
+            .as_ref()
+            .filter(|context| context.environment_permissions.is_some())
+            .map_or(mcp_config.approval_policy.value(), |context| {
+                context.review_context.approval_policy
+            });
+        let permissions = environment_permissions
+            .as_ref()
+            .map(|(_, sandbox)| &sandbox.permissions)
+            .or_else(|| mcp_config.permission_profile_for_server(&request.server_key));
+        permissions.is_some_and(|permissions| {
+            codex_protocol::protocol::has_full_access(policy, permissions, std::iter::empty())
+        })
+    } else {
+        turn_context.initial_environments.has_full_access(
             turn_context.approval_policy(),
             &turn_context
                 .config
                 .permissions
                 .effective_permission_profile(),
-        ))
+        )
+    };
+    // Full Access skips inference, not the active-turn and cancellation checks.
+    if (user_cua_execution || full_access)
         && matches!(
             &request.elicitation,
             Elicitation::Mcp(rmcp::model::ElicitRequestParams::FormElicitationParams {
@@ -1046,16 +1094,6 @@ async fn review_guardian_mcp_elicitation(
 
     // The invocation identifies the tool event, but a nested elicitation can
     // review a different action and connector than the enclosing JavaScript.
-    let call_id = request
-        .elicitation
-        .meta()
-        .and_then(|meta| match request.server_name.as_str() {
-            CODEX_APPS_MCP_SERVER_NAME => meta.get(MCP_TOOL_CODEX_APPS_META_KEY)?.get("call_id"),
-            _ => meta.get("callId"),
-        })
-        .and_then(Value::as_str);
-    let approval_context = call_id
-        .and_then(|call_id| session.mcp_tool_approval_metadata(&request.server_name, call_id));
     let (originating_call_id, guardian_scope) = if let Some(call_id) = call_id
         && let Some(McpToolApprovalContext {
             invocation: Some(invocation),
@@ -1174,7 +1212,7 @@ async fn review_guardian_mcp_elicitation(
         match approval_policy {
             AskForApproval::Never => {
                 let Some(permission_profile) =
-                    mcp_config.permission_profile_for_server(&request.server_name)
+                    mcp_config.permission_profile_for_server(&request.server_key)
                 else {
                     return Ok(Some(mcp_elicitation_decline_without_message()));
                 };
@@ -1254,8 +1292,7 @@ async fn review_guardian_mcp_elicitation(
     if let Ok(crate::guardian::GuardianApprovalRequest::McpToolCall {
         prompt_permissions, ..
     }) = &mut guardian_request.request
-        && let Some(permissions) =
-            approval_context.and_then(|context| context.environment_permissions)
+        && let Some(permissions) = environment_permissions
     {
         *prompt_permissions = Some(permissions);
     }

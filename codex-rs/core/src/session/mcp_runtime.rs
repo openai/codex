@@ -12,14 +12,13 @@ use codex_config::McpServerTransportConfig;
 use codex_file_system::WindowsSandboxSelection;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewerHandle;
+use codex_mcp::McpServerKey;
 use codex_mcp::McpServerRegistration;
-use codex_mcp::McpServerSource;
 use codex_mcp::McpStartupPolicy;
 use codex_mcp::PreparedMcpCall;
 use codex_mcp::ToolInfo;
 use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
-use std::collections::HashSet;
 
 pub(super) struct McpDesiredState {
     pub(super) config: Arc<Config>,
@@ -48,7 +47,7 @@ impl Session {
     }
 
     /// Waits on this session's refreshed server before tool execution is admitted.
-    pub(crate) async fn wait_for_mcp_server(self: &Arc<Self>, server: &str) {
+    pub(crate) async fn wait_for_mcp_server(self: &Arc<Self>, server: &McpServerKey) {
         self.refresh_mcp_if_dirty().await;
         self.services
             .mcp_runtime
@@ -64,7 +63,7 @@ impl Session {
         self.refresh_mcp_if_dirty().await;
         // Apps refreshes fetch tools outside the MCP runtime lock. Wait for any
         // in-flight refresh before capturing the catalog for this call.
-        if advertised_tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
+        if advertised_tool.server_name() == CODEX_APPS_MCP_SERVER_NAME {
             self.wait_for_apps_tool_refresh().await;
         }
         self.services
@@ -157,7 +156,6 @@ impl Session {
             }
 
             let mut catalog = None;
-            let mut registered = HashSet::new();
             for selected in environments.turn_environments() {
                 let environment = selected.environment();
                 if !environment.is_remote() {
@@ -202,22 +200,7 @@ impl Session {
                         /*inc*/ 1,
                         &[("server_name", name.as_str()), ("outcome", outcome)],
                     );
-                    if name == CODEX_APPS_MCP_SERVER_NAME
-                        || !server.is_local_environment()
-                        || projection
-                            .config
-                            .mcp_server_catalog
-                            .server(&name)
-                            .is_some_and(|existing| {
-                                existing.config().environment_id != *environment_id
-                                    || !matches!(
-                                        existing.source(),
-                                        McpServerSource::Plugin(_)
-                                            | McpServerSource::SelectedPlugin(_)
-                                    )
-                            })
-                        || registered.contains(&name)
-                    {
+                    if name == CODEX_APPS_MCP_SERVER_NAME || !server.is_local_environment() {
                         continue;
                     }
                     let McpServerTransportConfig::StreamableHttp {
@@ -256,10 +239,10 @@ impl Session {
                             source: requirements.source.clone(),
                         });
                     }
-                    registered.insert(name.clone());
+                    let registration = McpServerRegistration::from_executor_config(name, server);
                     catalog
                         .get_or_insert_with(|| projection.config.mcp_server_catalog.to_builder())
-                        .register(McpServerRegistration::from_executor_config(name, server));
+                        .register(registration);
                 }
             }
 

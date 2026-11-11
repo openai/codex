@@ -1,3 +1,4 @@
+use crate::McpServerKey;
 use std::collections::HashMap;
 
 use pretty_assertions::assert_eq;
@@ -147,7 +148,7 @@ fn user_verification_is_projected_only_to_the_host_owned_plugin_service() {
             server_mcp_extensions(
                 &extensions,
                 name,
-                catalog.server(name),
+                catalog.server(&McpServerKey::unscoped(name)),
                 /*advertise_network_policy*/ false,
                 "https://chatgpt.com",
             ),

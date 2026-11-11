@@ -31,13 +31,13 @@ pub(crate) fn build_plugin_injections(
             let available_mcp_servers = mcp_tools
                 .iter()
                 .filter(|tool| {
-                    tool.server_name != CODEX_APPS_MCP_SERVER_NAME
+                    tool.server_name() != CODEX_APPS_MCP_SERVER_NAME
                         && tool
                             .plugin_display_names
                             .iter()
                             .any(|plugin_name| plugin_name == &plugin.display_name)
                 })
-                .map(|tool| tool.server_name.clone())
+                .map(|tool| tool.server_name().to_owned())
                 .collect::<BTreeSet<String>>()
                 .into_iter()
                 .collect::<Vec<_>>();

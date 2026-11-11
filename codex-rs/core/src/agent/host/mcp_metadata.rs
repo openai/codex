@@ -1,6 +1,7 @@
 //! Bind private agent attribution to one host-selected MCP plugin registration.
 
 use codex_config::McpServerTransportConfig;
+use codex_mcp::McpServerKey;
 use codex_mcp::McpServerSource;
 use codex_mcp::ResolvedMcpCatalog;
 use codex_utils_path_uri::PathUri;
@@ -23,11 +24,11 @@ pub struct AgentMcpMetadataRecipient {
 }
 
 impl AgentMcpMetadataRecipient {
-    pub(crate) fn matches(&self, server_name: &str, catalog: &ResolvedMcpCatalog) -> bool {
-        let Some(registration) = catalog.server(server_name) else {
+    pub(crate) fn matches(&self, server_key: &McpServerKey, catalog: &ResolvedMcpCatalog) -> bool {
+        let Some(registration) = catalog.server(server_key) else {
             return false;
         };
-        server_name == self.server_name
+        registration.name() == self.server_name
             && registration.config().is_local_environment()
             && registration.config().transport == self.transport
             && matches!(registration.source(), McpServerSource::Plugin(plugin)

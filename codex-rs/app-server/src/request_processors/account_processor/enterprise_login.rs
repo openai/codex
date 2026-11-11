@@ -15,7 +15,7 @@ use tokio::sync::watch;
 
 pub(crate) struct EnterpriseLoginTarget {
     pub(crate) thread_id: String,
-    pub(crate) server_name: String,
+    pub(crate) server_key: codex_mcp::McpServerKey,
     pub(crate) registration: McpEmaRegistration,
 }
 
@@ -148,7 +148,7 @@ impl EnterpriseLoginState {
         let servers = codex_mcp::effective_mcp_servers(&config, auth.as_ref());
         config.xaa_enabled
             && config.auth_keyring_backend_kind == keyring_backend
-            && servers.get(&target.server_name).is_some_and(|server| {
+            && servers.get(&target.server_key).is_some_and(|server| {
                 server.config().enabled
                     && server.config().ema_registration() == Some(&target.registration)
             })

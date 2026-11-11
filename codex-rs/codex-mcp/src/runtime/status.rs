@@ -36,10 +36,14 @@ impl McpRuntime {
         );
         let mut servers = effective_mcp_servers(&config, current.auth.as_ref());
         servers.retain(|name, _| {
-            name == server
+            Some(name) == config.mcp_server_catalog.resolve_server_name(server)
                 && expected_registration
                     .is_none_or(|expected| config.mcp_server_catalog.server(name) == Some(expected))
         });
+        let servers = servers
+            .into_values()
+            .map(|value| (server.to_owned(), value))
+            .collect::<std::collections::HashMap<_, _>>();
         if config.xaa_enabled
             && servers
                 .values()

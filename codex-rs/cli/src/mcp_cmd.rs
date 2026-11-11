@@ -706,7 +706,13 @@ async fn run_list(config: &Config, list_args: ListArgs) -> Result<()> {
         config.cwd.to_path_buf(),
     );
     let auth_statuses = compute_auth_statuses(
-        effective_mcp_servers.iter(),
+        mcp_servers.keys().filter_map(|name| {
+            runtime_config
+                .mcp_server_catalog
+                .resolve_server_name(name)
+                .and_then(|key| effective_mcp_servers.get(key))
+                .map(|server| (name, server))
+        }),
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         auth.as_ref(),

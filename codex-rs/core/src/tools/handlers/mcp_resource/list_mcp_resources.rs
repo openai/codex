@@ -43,9 +43,9 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
 }
 
 impl ListMcpResourcesHandler {
-    pub fn new(messages: Option<&ToolMessage>) -> Self {
+    pub fn new(messages: Option<&ToolMessage>, include_environment_id: bool) -> Self {
         Self {
-            spec: create_list_mcp_resources_tool(messages),
+            spec: create_list_mcp_resources_tool(messages, include_environment_id),
         }
     }
 
@@ -62,6 +62,7 @@ impl ListMcpResourcesHandler {
         } = invocation;
         let turn = std::sync::Arc::clone(&step_context.turn);
         let mcp = &step_context.mcp;
+        let exposure = mcp.config().mcp_server_catalog.exposure();
 
         let arguments = resource_arguments(&payload)?;
         let args = ListResourceArgs::parse(arguments.clone())?;
@@ -73,24 +74,23 @@ impl ListMcpResourcesHandler {
         };
 
         run_resource_operation(&session, &step_context, &call_id, invocation, async {
-            if let Some((server_name, params)) = args.target(turn.as_ref())? {
+            if let Some((server_key, params)) = args.target(&step_context)? {
                 let result = mcp
-                    .list_resources(&server_name, params)
+                    .list_resources(server_key, params)
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!("resources/list failed: {err:#}"))
                     })?;
                 Ok(ListResourcesPayload::from_single_server(
-                    server_name,
-                    result,
+                    server_key, result, exposure,
                 ))
             } else {
                 let resources = mcp
-                    .list_all_resources(|server_name| {
-                        model_can_access_mcp_server(turn.as_ref(), server_name)
+                    .list_all_resources(|server_key| {
+                        model_can_access_mcp_server(turn.as_ref(), server_key.name())
                     })
                     .await;
-                Ok(ListResourcesPayload::from_all_servers(resources))
+                Ok(ListResourcesPayload::from_all_servers(resources, exposure))
             }
         })
         .await

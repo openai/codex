@@ -283,11 +283,11 @@ impl McpResourceClient {
     ) -> Result<McpResourcePage> {
         let params =
             cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
-        let result = self
-            .runtime
-            .latest_connections()
-            .list_resources(server, params)
-            .await?;
+        let connections = self.runtime.latest_connections();
+        let key = connections
+            .resolve_server_name(server)
+            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let result = connections.list_resources(key, params).await?;
         let resources = result
             .resources
             .into_iter()
@@ -346,11 +346,7 @@ impl McpResourceClient {
     /// Reads one resource from the named server.
     pub async fn read_resource(&self, server: &str, uri: &str) -> Result<McpResourceReadResult> {
         let params = ReadResourceRequestParams::new(uri.to_string());
-        let result = self
-            .runtime
-            .latest_connections()
-            .read_resource(server, params)
-            .await?;
+        let result = self.runtime.latest_read_resource(server, params).await?;
         let contents = result
             .contents
             .into_iter()

@@ -537,7 +537,8 @@ impl McpManager {
         });
         for conflict in catalog.conflicts() {
             tracing::warn!(
-                server = conflict.name,
+                server = conflict.server_key.name(),
+                environment_id = conflict.server_key.scoped_environment_id(),
                 outcome = ?conflict.outcome,
                 contenders = ?conflict.contenders,
                 "conflicting MCP server actions; using resolved catalog outcome"
@@ -573,7 +574,7 @@ impl McpManager {
         &self,
         config: &Config,
         auth: Option<&CodexAuth>,
-    ) -> HashMap<String, EffectiveMcpServer> {
+    ) -> HashMap<codex_mcp::McpServerKey, EffectiveMcpServer> {
         let mcp_config = self.runtime_config(config).await;
         effective_mcp_servers(&mcp_config, auth)
     }

@@ -80,7 +80,7 @@ impl McpEventStreamOpener {
                     .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
                 let client = Arc::new(tokio::time::timeout(startup_timeout, make_rmcp_client(
                     /*ema_auth*/ None,
-                    CODEX_APPS_MCP_SERVER_NAME,
+                    &crate::McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
                     connection.server.clone(),
                     connection.store_mode,
                     connection.keyring_backend_kind,

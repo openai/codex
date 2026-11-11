@@ -14,7 +14,7 @@ use rmcp::model::ReadResourceRequestParams;
 use super::ReadResourceArgs;
 use super::ReadResourcePayload;
 use super::ResourceOperation;
-use super::ensure_model_can_access_mcp_server;
+use super::resolve_resource_server;
 use super::resource_arguments;
 use super::resource_environments;
 use super::run_resource_operation;
@@ -45,9 +45,9 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
 }
 
 impl ReadMcpResourceHandler {
-    pub fn new(messages: Option<&ToolMessage>) -> Self {
+    pub fn new(messages: Option<&ToolMessage>, include_environment_id: bool) -> Self {
         Self {
-            spec: create_read_mcp_resource_tool(messages),
+            spec: create_read_mcp_resource_tool(messages, include_environment_id),
         }
     }
 
@@ -62,11 +62,14 @@ impl ReadMcpResourceHandler {
             payload,
             ..
         } = invocation;
-        let turn = std::sync::Arc::clone(&step_context.turn);
         let mcp = &step_context.mcp;
 
         let arguments = resource_arguments(&payload)?;
-        let ReadResourceArgs { server, uri } = ReadResourceArgs::parse(arguments.clone())?;
+        let ReadResourceArgs {
+            server,
+            uri,
+            environment_id,
+        } = ReadResourceArgs::parse(arguments.clone())?;
 
         let invocation = McpInvocation {
             server: server.clone(),
@@ -75,16 +78,22 @@ impl ReadMcpResourceHandler {
         };
 
         run_resource_operation(&session, &step_context, &call_id, invocation, async {
-            ensure_model_can_access_mcp_server(turn.as_ref(), &server)?;
+            let server_key =
+                resolve_resource_server(&step_context, &server, environment_id.as_deref())?;
             let result = mcp
-                .read_resource(&server, ReadResourceRequestParams::new(uri.clone()))
+                .read_resource(server_key, ReadResourceRequestParams::new(uri.clone()))
                 .await
                 .map_err(|err| {
                     FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))
                 })?;
-
             Ok(ReadResourcePayload {
-                server,
+                server: server_key.name().to_owned(),
+                environment_id: mcp
+                    .config()
+                    .mcp_server_catalog
+                    .exposure()
+                    .environment_id(server_key)
+                    .map(str::to_owned),
                 uri,
                 result,
             })

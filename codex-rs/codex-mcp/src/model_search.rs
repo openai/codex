@@ -14,7 +14,7 @@ use std::time::Duration;
 pub const SEARCH_CONNECTOR: &str = "connector_openai_search_service";
 
 pub fn is_model_search_tool(tool: &crate::ToolInfo) -> bool {
-    tool.server_name == CODEX_APPS_MCP_SERVER_NAME
+    tool.server_name() == CODEX_APPS_MCP_SERVER_NAME
         && tool.connector_id.as_deref() == Some(SEARCH_CONNECTOR)
         && tool.tool.name.rsplit('.').next() == Some("web_run")
 }
@@ -35,7 +35,7 @@ impl McpBinding {
         let tool = live.tool_info();
         let scoped = self
             .calls
-            .get(&(tool.server_name.clone(), tool.tool.name.to_string()))?;
+            .get(&(tool.server_key().clone(), tool.tool.name.to_string()))?;
         if !Arc::ptr_eq(&scoped.client.client, &live.client.client) {
             return None;
         }
@@ -52,7 +52,10 @@ impl McpBinding {
         else {
             return SearchDiscovery::Unavailable;
         };
-        let key = (original.server_name.clone(), original.tool.name.to_string());
+        let key = (
+            original.server_key().clone(),
+            original.tool.name.to_string(),
+        );
         let Some(call) = self
             .calls
             .get(&key)

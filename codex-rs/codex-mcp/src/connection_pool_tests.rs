@@ -1,6 +1,7 @@
 //! Tests for shared MCP connection ownership and protocol negotiation.
 
 use super::*;
+use crate::McpServerKey;
 use crate::McpServerPermissions;
 use crate::binding_clients::McpBindingClients;
 use crate::connection_manager::tests::create_ready_async_managed_client;
@@ -491,9 +492,10 @@ async fn shared_startup_survives_first_chat_cancellation_and_rejects_released_bi
         .await
         .unwrap();
     let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
-    config
-        .server_permissions
-        .insert("test_server".to_string(), McpServerPermissions::Thread);
+    config.server_permissions.insert(
+        McpServerKey::unscoped("test_server"),
+        McpServerPermissions::Thread,
+    );
     let prepared = crate::binding::PreparedMcpCall::new(
         Arc::new(crate::connection_manager::McpConnectionSet::empty(
             /*prefix_mcp_tool_names*/ true,
@@ -504,6 +506,7 @@ async fn shared_startup_survives_first_chat_cancellation_and_rejects_released_bi
         create_test_tool("test_server", "test"),
         crate::server::McpServerMetadata {
             environment_id: "local".to_string(),
+            server_key: McpServerKey::unscoped("test_server"),
             pollutes_memory: false,
             origin: None,
             supports_parallel_tool_calls: true,
@@ -515,14 +518,18 @@ async fn shared_startup_survives_first_chat_cancellation_and_rejects_released_bi
     )
     .unwrap();
     let bindings = McpBindingClients::new(
-        HashMap::from([("test_server".to_string(), Arc::new(client.clone()))]),
+        HashMap::from([(
+            McpServerKey::unscoped("test_server"),
+            Arc::new(client.clone()),
+        )]),
         Vec::new(),
     );
     server.block_listing.store(true, Ordering::Release);
     let waiting = async {
+        let server = McpServerKey::unscoped("test_server");
         tokio::join!(
-            bindings.list_resources("test_server", /*params*/ None),
-            bindings.list_resource_templates("test_server", /*params*/ None),
+            bindings.list_resources(&server, /*params*/ None),
+            bindings.list_resource_templates(&server, /*params*/ None),
         )
     };
     tokio::pin!(waiting);

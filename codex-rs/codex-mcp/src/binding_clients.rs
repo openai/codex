@@ -14,26 +14,27 @@ use rmcp::model::ResourceTemplate;
 use tokio::task::JoinSet;
 use tracing::warn;
 
+use crate::McpServerKey;
 use crate::pagination::collect_paginated;
 use crate::rmcp_client::ManagedClient;
 
-/// Items listed by ready servers and names of deferred servers available to query explicitly.
+/// Items listed by ready servers and exact keys of deferred servers available to query explicitly.
 pub struct McpResourceListing<T> {
-    pub by_server: HashMap<String, Vec<T>>,
-    pub deferred_servers: Vec<String>,
+    pub by_server: HashMap<McpServerKey, Vec<T>>,
+    pub deferred_servers: Vec<McpServerKey>,
 }
 
-/// The ready clients and dormant server names captured for one model step.
+/// The ready clients and dormant server keys captured for one model step.
 #[derive(Default)]
 pub(crate) struct McpBindingClients {
-    clients: HashMap<String, Arc<ManagedClient>>,
-    deferred_servers: Vec<String>,
+    clients: HashMap<McpServerKey, Arc<ManagedClient>>,
+    deferred_servers: Vec<McpServerKey>,
 }
 
 impl McpBindingClients {
     pub(crate) fn new(
-        clients: HashMap<String, Arc<ManagedClient>>,
-        mut deferred_servers: Vec<String>,
+        clients: HashMap<McpServerKey, Arc<ManagedClient>>,
+        mut deferred_servers: Vec<McpServerKey>,
     ) -> Self {
         deferred_servers.sort_unstable();
         Self {
@@ -42,7 +43,10 @@ impl McpBindingClients {
         }
     }
 
-    fn deferred_servers(&self, include_server: impl Fn(&str) -> bool) -> Vec<String> {
+    fn deferred_servers(
+        &self,
+        include_server: impl Fn(&McpServerKey) -> bool,
+    ) -> Vec<McpServerKey> {
         self.deferred_servers
             .iter()
             .filter(|name| include_server(name))
@@ -50,13 +54,13 @@ impl McpBindingClients {
             .collect()
     }
 
-    pub(crate) fn client(&self, server: &str) -> Option<Arc<ManagedClient>> {
+    pub(crate) fn client(&self, server: &McpServerKey) -> Option<Arc<ManagedClient>> {
         self.clients.get(server).cloned()
     }
 
     pub(crate) async fn list_resources(
         &self,
-        server: &str,
+        server: &McpServerKey,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
         let managed = self
@@ -70,7 +74,7 @@ impl McpBindingClients {
 
     pub(crate) async fn list_resource_templates(
         &self,
-        server: &str,
+        server: &McpServerKey,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
         let managed = self
@@ -84,7 +88,7 @@ impl McpBindingClients {
 
     pub(crate) async fn read_resource(
         &self,
-        server: &str,
+        server: &McpServerKey,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
         let managed = self
@@ -99,7 +103,7 @@ impl McpBindingClients {
 
     pub(crate) async fn list_all_resources(
         &self,
-        include_server: impl Fn(&str) -> bool,
+        include_server: impl Fn(&McpServerKey) -> bool,
     ) -> McpResourceListing<Resource> {
         let mut join_set = JoinSet::new();
         for (server_name, managed) in self
@@ -130,7 +134,7 @@ impl McpBindingClients {
 
     pub(crate) async fn list_all_resource_templates(
         &self,
-        include_server: impl Fn(&str) -> bool,
+        include_server: impl Fn(&McpServerKey) -> bool,
     ) -> McpResourceListing<ResourceTemplate> {
         let mut join_set = JoinSet::new();
         for (server_name, managed) in self
@@ -161,9 +165,9 @@ impl McpBindingClients {
 }
 
 async fn collect_resource_results<T: Send + 'static>(
-    join_set: &mut JoinSet<(String, Result<Vec<T>>)>,
+    join_set: &mut JoinSet<(McpServerKey, Result<Vec<T>>)>,
     kind: &str,
-) -> HashMap<String, Vec<T>> {
+) -> HashMap<McpServerKey, Vec<T>> {
     let mut resources = HashMap::new();
     while let Some(result) = join_set.join_next().await {
         match result {

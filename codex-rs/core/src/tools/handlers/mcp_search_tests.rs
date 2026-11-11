@@ -1,4 +1,5 @@
 use super::*;
+use codex_mcp::McpServerKey;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolSearchSourceInfo;
 use pretty_assertions::assert_eq;
@@ -17,6 +18,21 @@ fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
         search_info.source_info,
         Some(ToolSearchSourceInfo {
             name: "Calendar".to_string(),
+            description: Some("Plan events.".to_string()),
+        })
+    );
+
+    let mut scoped = tool_info();
+    scoped.server_key = McpServerKey::in_environment("env-b", scoped.server_name());
+    scoped.callable_namespace = "mcp__123456789abc__calendar".to_string();
+    let handler = McpHandler::new(scoped).expect("scoped MCP tool spec should build");
+    assert_eq!(
+        handler
+            .search_info()
+            .expect("scoped MCP search info")
+            .source_info,
+        Some(ToolSearchSourceInfo {
+            name: "mcp__123456789abc__calendar".to_string(),
             description: Some("Plan events.".to_string()),
         })
     );
@@ -117,7 +133,7 @@ fn agent_plugin_namespace_descriptions_use_the_stricter_bound() {
 
 fn tool_info() -> ToolInfo {
     ToolInfo {
-        server_name: "codex-apps".to_string(),
+        server_key: McpServerKey::unscoped("codex-apps"),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: "_create_event".to_string(),

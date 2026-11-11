@@ -9,6 +9,7 @@ use anyhow::Context;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpBinding;
+use codex_mcp::McpServerKey;
 use codex_tools::FunctionCallError;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -43,7 +44,10 @@ pub async fn conversation_history_tools(
     let mut tools = Vec::new();
     for name in ["search_messages", "read_messages"] {
         let raw_name = format!("user_message.{name}");
-        let Some(prepared) = binding.prepare_call(CODEX_APPS_MCP_SERVER_NAME, &raw_name) else {
+        let Some(prepared) = binding.prepare_call(
+            &McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
+            &raw_name,
+        ) else {
             continue;
         };
         if !prepared.is_host_owned_apps() {
@@ -78,7 +82,7 @@ async fn history_binding(parent: &Arc<Session>) -> anyhow::Result<Arc<McpBinding
     parent
         .services
         .mcp_runtime
-        .current_binding_for_call(CODEX_APPS_MCP_SERVER_NAME)
+        .current_binding_for_call(&McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME))
         .await
         .context("Parent conversation history is unavailable")
 }
@@ -120,7 +124,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
                 let binding = history_binding(&parent).await?;
                 let raw_name = format!("user_message.{}", self.function.name);
                 let prepared = binding
-                    .prepare_call(CODEX_APPS_MCP_SERVER_NAME, &raw_name)
+                    .prepare_call(
+                        &McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
+                        &raw_name,
+                    )
                     .context("History tool is disabled or unavailable on the parent")?;
                 anyhow::ensure!(
                     prepared.is_host_owned_apps(),

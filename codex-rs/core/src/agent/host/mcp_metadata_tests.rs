@@ -3,6 +3,7 @@
 use super::AgentMcpMetadataRecipient;
 use codex_config::McpServerConfig;
 use codex_mcp::McpPluginAttribution;
+use codex_mcp::McpServerKey;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::ResolvedMcpCatalog;
 use codex_utils_path_uri::PathUri;
@@ -44,11 +45,16 @@ fn agent_context_requires_the_exact_captured_recipient(mismatch: &str, expected:
         "exact" | "config_source" => {}
         _ => panic!("unknown mismatch"),
     }
+    let key = if mismatch == "config_source" {
+        McpServerKey::unscoped(&name)
+    } else {
+        McpServerKey::in_environment(&config.environment_id, &name)
+    };
     let registration = if mismatch == "config_source" {
-        McpServerRegistration::from_config(name.clone(), config)
+        McpServerRegistration::from_config(name, config)
     } else {
         McpServerRegistration::from_plugin(
-            name.clone(),
+            name,
             McpPluginAttribution::new(plugin_id, "Agents".into()).with_host_root(root),
             /*plugin_order*/ 0,
             config,
@@ -56,5 +62,5 @@ fn agent_context_requires_the_exact_captured_recipient(mismatch: &str, expected:
     };
     let mut builder = ResolvedMcpCatalog::builder();
     builder.register(registration);
-    assert_eq!(recipient.matches(&name, &builder.build()), expected);
+    assert_eq!(recipient.matches(&key, &builder.build()), expected);
 }

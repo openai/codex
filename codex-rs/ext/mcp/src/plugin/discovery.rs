@@ -9,6 +9,8 @@ use codex_core_plugins::manifest::parse_plugin_manifest_uri;
 use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::DiscoveredPluginFiles;
 use codex_extension_api::SelectedPluginContribution;
+use codex_features::Feature;
+use codex_features::Features;
 use codex_mcp::PluginMcpConfigParseOutcome;
 use codex_mcp::normalize_executor_plugin_mcp_declarations;
 use codex_mcp::parse_executor_plugin_mcp_config;
@@ -144,6 +146,7 @@ pub(super) fn metadata_from_discovery(
 
 pub(super) fn v2_metadata_from_catalog(
     entry: &PluginCatalogEntry,
+    features: &Features,
 ) -> Vec<(String, SelectedPluginMetadata)> {
     let plugin_display_name: String = entry
         .display_name
@@ -172,8 +175,8 @@ pub(super) fn v2_metadata_from_catalog(
     let mut projections = Vec::new();
     for (index, (environment_id, plugin_id, root)) in installations.enumerate() {
         let root_id = format!("{environment_id}:{plugin_id}");
-        // Only the first retained installation supplies MCPs; the others retain package attribution.
-        let servers = if index == 0 {
+        // Keep only the first installation's servers until environment-qualified names are enabled.
+        let servers = if index == 0 || features.enabled(Feature::MultiEnvironmentMcp) {
             let parsed = normalize_executor_plugin_mcp_declarations(
                 root,
                 entry.mcp_servers.clone(),

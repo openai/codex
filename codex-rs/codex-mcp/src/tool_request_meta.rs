@@ -48,7 +48,7 @@ impl McpToolRequestMetaHook {
         if call.server_name() == self.server_name
             && call.tool_info().tool.name.as_ref() == self.tool_name
             && call.server_environment_id() == DEFAULT_MCP_SERVER_ENVIRONMENT_ID
-            && let Some(server) = call.config().mcp_server_catalog.server(call.server_name())
+            && let Some(server) = call.config().mcp_server_catalog.server(call.server_key())
             && server.config().is_local_environment()
             && server.source() == &self.source
             && server.config().transport == self.transport

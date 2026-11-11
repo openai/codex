@@ -11,6 +11,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpServerKey;
 use codex_mcp::ToolInfo;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
@@ -40,7 +41,7 @@ fn codex_app_tool(
         .unwrap_or_else(|| CODEX_APPS_MCP_SERVER_NAME.to_string());
 
     ToolInfo {
-        server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        server_key: McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: tool_name.to_string(),
@@ -85,7 +86,7 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
             &["beta", "sample"],
         ),
         ToolInfo {
-            server_name: "sample".to_string(),
+            server_key: McpServerKey::unscoped("sample"),
             supports_parallel_tool_calls: false,
             server_origin: None,
             callable_name: "echo".to_string(),
@@ -264,7 +265,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
 #[test]
 fn accessible_connectors_from_mcp_tools_preserves_description() {
     let mcp_tools = vec![ToolInfo {
-        server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        server_key: McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: "calendar_create_event".to_string(),

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::MCP_NETWORK_POLICY_META_CAPABILITY;
+use crate::McpServerKey;
 use crate::McpServerPermissions;
 use crate::NetworkPolicyMetadata;
 use crate::NetworkPolicyMetadataProvider;
@@ -104,6 +105,7 @@ async fn tool_calls_deliver_only_negotiated_trusted_network_policy() -> anyhow::
         (None, true, true, false),
     ] {
         let mut server_config = reusable_server_config(url.unwrap_or("https://chatgpt.com/mcp"));
+        server_config.environment_id = "owner-environment".to_string();
         if url.is_none() {
             server_config.transport = McpServerTransportConfig::Stdio {
                 command: "metadata-echo".to_string(),
@@ -125,7 +127,7 @@ async fn tool_calls_deliver_only_negotiated_trusted_network_policy() -> anyhow::
                 json!({"forged": true}),
             )]),
             "docs",
-            catalog.server("docs"),
+            catalog.server(&McpServerKey::unscoped("docs")),
             provider_available,
             "https://chatgpt.com",
         );
@@ -153,13 +155,14 @@ async fn tool_calls_deliver_only_negotiated_trusted_network_policy() -> anyhow::
         release.send(()).expect("release initialized client");
         let policy = Arc::new(CapturedPolicy::default());
         let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
+        config.mcp_server_catalog = catalog;
         config.permission_profile = PermissionProfile::Disabled;
         let sandbox = FileSystemSandboxContext::from_permission_profile(
             PermissionProfile::read_only(),
             PathUri::from_host_native_path(std::env::temp_dir())?,
         );
         config.server_permissions.insert(
-            "docs".to_string(),
+            McpServerKey::unscoped("docs"),
             McpServerPermissions::Environment(Arc::new(sandbox)),
         );
         let config = Arc::new(config);
@@ -168,7 +171,10 @@ async fn tool_calls_deliver_only_negotiated_trusted_network_policy() -> anyhow::
         manager.network_policy_metadata =
             provider_available.then(|| policy.clone() as Arc<dyn NetworkPolicyMetadataProvider>);
         manager.insert_test_client("docs", managed);
-        let view = manager.servers.get_mut("docs").expect("docs server");
+        let view = manager
+            .servers
+            .get_mut(&McpServerKey::unscoped("docs"))
+            .expect("docs server");
         view.metadata.environment_id = "owner-environment".to_string();
         let manager = Arc::new(manager);
         let binding = manager
@@ -180,7 +186,7 @@ async fn tool_calls_deliver_only_negotiated_trusted_network_policy() -> anyhow::
             )
             .await;
         let prepared = binding
-            .prepare_call("docs", "echo")
+            .prepare_call(&McpServerKey::unscoped("docs"), "echo")
             .expect("prepare advertised tool");
         let forged_meta = || {
             Some(json!({
@@ -208,9 +214,8 @@ async fn tool_calls_deliver_only_negotiated_trusted_network_policy() -> anyhow::
                 .await?,
             manager
                 .call_tool(
-                    "docs",
+                    &McpServerKey::unscoped("docs"),
                     "echo",
-                    /*environment_id*/ None,
                     /*arguments*/ None,
                     forged_meta(),
                     /*requested_timeout*/ None,

@@ -111,7 +111,7 @@ impl ToolLifecycleContributor for ConversationHistoryRecorder {
                     items: input.conversation_history.items().cloned().collect(),
                     mcp_tool: input.mcp_tool.map(|tool| {
                         (
-                            tool.tool_info().server_name.clone(),
+                            tool.tool_info().server_name().to_owned(),
                             tool.tool_info().connector_id.clone(),
                             tool.source().clone(),
                         )

@@ -1,4 +1,4 @@
-//! Verifies merged MCPs use the first retained installation while preserving all package identities.
+//! Verifies merged MCPs follow the enabled environment scope while preserving all package identities.
 
 use super::*;
 use codex_config::McpServerTransportConfig;
@@ -12,7 +12,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn merged_mcp_declarations_require_an_executor_location() -> anyhow::Result<()> {
     let codex_home = tempfile::tempdir()?;
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cli_overrides(vec![("features.plugins".to_string(), true.into())])
@@ -35,7 +35,7 @@ async fn merged_mcp_declarations_require_an_executor_location() -> anyhow::Resul
             bundle_uri: None,
         }],
     };
-    let projections = v2_metadata_from_catalog(&entry);
+    let projections = v2_metadata_from_catalog(&entry, &config.features);
     let [(root_id, metadata)] = projections.as_slice() else {
         panic!("one cloud projection expected");
     };
@@ -56,10 +56,21 @@ async fn merged_mcp_declarations_require_an_executor_location() -> anyhow::Resul
             root: PathUri::parse(&format!("file://{root}"))?,
         });
     }
-    let projections = v2_metadata_from_catalog(&entry);
+    let projections = v2_metadata_from_catalog(&entry, &config.features);
+    assert_eq!(
+        projections
+            .iter()
+            .map(|(_, metadata)| metadata.servers.len())
+            .collect::<Vec<_>>(),
+        vec![1, 0, 0]
+    );
+
+    // Qualified server names let both installations contribute their own executor paths.
+    config.features.enable(Feature::MultiEnvironmentMcp)?;
+    let projections = v2_metadata_from_catalog(&entry, &config.features);
     assert_eq!(projections.len(), installations.len() + 1);
-    for (index, ((root_id, metadata), (environment_id, plugin_id, root))) in
-        projections.iter().zip(installations).enumerate()
+    for ((root_id, metadata), (environment_id, plugin_id, root)) in
+        projections.iter().zip(installations)
     {
         assert_eq!(root_id, &format!("{environment_id}:{plugin_id}"));
         let contribution = super::super::project_metadata(
@@ -74,10 +85,6 @@ async fn merged_mcp_declarations_require_an_executor_location() -> anyhow::Resul
             },
         );
         assert_eq!(contribution.connector_ids, entry.connector_ids);
-        if index != 0 {
-            assert!(contribution.servers.is_empty());
-            continue;
-        }
         let [(name, mcp_config)] = contribution.servers.as_slice() else {
             panic!("one MCP contribution expected");
         };
@@ -108,7 +115,7 @@ async fn merged_mcp_declarations_require_an_executor_location() -> anyhow::Resul
         .map(|index| format!("connector_{index}"))
         .collect::<Vec<_>>();
     entry.mcp_servers.clear();
-    let projections = v2_metadata_from_catalog(&entry);
+    let projections = v2_metadata_from_catalog(&entry, &config.features);
     assert_eq!(projections.len(), installations.len() + 1);
     assert!(
         projections

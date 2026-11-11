@@ -165,7 +165,11 @@ impl McpRequestProcessor {
             }
         };
         let effective_servers = codex_mcp::effective_mcp_servers(&mcp_config, auth.as_ref());
-        let Some(server) = effective_servers.get(&name) else {
+        let Some((key, server)) = mcp_config
+            .mcp_server_catalog
+            .resolve_server_name(&name)
+            .and_then(|key| effective_servers.get(key).map(|server| (key, server)))
+        else {
             return Err(invalid_request(format!(
                 "No MCP server named '{name}' found."
             )));
@@ -244,7 +248,7 @@ impl McpRequestProcessor {
                     scope,
                     EnterpriseLoginTarget {
                         thread_id,
-                        server_name: name.clone(),
+                        server_key: key.clone(),
                         registration,
                     },
                 )
@@ -472,19 +476,17 @@ impl McpRequestProcessor {
                     if !matches!(server.auth, McpServerAuth::EmaAuth) {
                         continue;
                     }
+                    let Some(key) = mcp_config.mcp_server_catalog.resolve_server_name(&name) else {
+                        continue;
+                    };
+                    let registration = mcp_config.mcp_server_catalog.server(key);
                     let (selected_config, mut selected) = thread
-                        .mcp_server_status_snapshot(
-                            &name,
-                            detail,
-                            mcp_config.mcp_server_catalog.server(&name),
-                        )
+                        .mcp_server_status_snapshot(&name, detail, registration)
                         .await
                         .map_err(|error| {
                             internal_error(format!("failed to read MCP server status: {error:#}"))
                         })?;
-                    if selected_config.mcp_server_catalog.server(&name)
-                        != mcp_config.mcp_server_catalog.server(&name)
-                    {
+                    if selected_config.mcp_server_catalog.server(key) != registration {
                         continue;
                     }
                     snapshot.server_infos.remove(&name);
@@ -570,8 +572,10 @@ impl McpRequestProcessor {
             .map(|name| McpServerStatus {
                 name: name.clone(),
                 runtime_status: runtime_statuses.get(name).copied().map(Into::into),
-                plugin_id: mcp_config.mcp_server_catalog.server(name).and_then(
-                    |server| match server.source() {
+                plugin_id: mcp_config
+                    .mcp_server_catalog
+                    .server_by_name(name)
+                    .and_then(|server| match server.source() {
                         McpServerSource::Plugin(plugin)
                         | McpServerSource::SelectedPlugin(plugin) => {
                             Some(plugin.plugin_id().to_owned())
@@ -579,12 +583,9 @@ impl McpRequestProcessor {
                         McpServerSource::Config
                         | McpServerSource::Compatibility { .. }
                         | McpServerSource::Extension { .. } => None,
-                    },
-                ),
-                http_origin: mcp_config
-                    .mcp_server_catalog
-                    .server(name)
-                    .and_then(|server| match &server.config().transport {
+                    }),
+                http_origin: mcp_config.mcp_server_catalog.server_by_name(name).and_then(
+                    |server| match &server.config().transport {
                         McpServerTransportConfig::StreamableHttp { url, .. } => {
                             url::Url::parse(url).ok().and_then(|url| {
                                 matches!(url.scheme(), "http" | "https")
@@ -592,7 +593,8 @@ impl McpRequestProcessor {
                             })
                         }
                         McpServerTransportConfig::Stdio { .. } => None,
-                    }),
+                    },
+                ),
                 server_info: server_infos.remove(name),
                 server_capabilities: server_capabilities.remove(name),
                 tool_list_meta: tool_list_meta.remove(name).map(Arc::unwrap_or_clone),

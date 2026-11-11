@@ -39,6 +39,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::McpProtocolMode;
+use crate::McpServerKey;
 use crate::binding::call_tool_result_from_rmcp;
 use crate::catalog::McpServerSource;
 use crate::connection_pool::ConnectionKey;
@@ -309,6 +310,7 @@ impl McpServerView {
         &self,
         server_name: &str,
         tool_plugin_context: &ToolPluginContext,
+        exposure: crate::McpServerExposure,
     ) -> Result<(Vec<ToolInfo>, Option<Arc<serde_json::Value>>), StartupOutcomeError> {
         let (tools, meta) = if let Some(client) = self.connection.client.ready_client() {
             self.refresh_notified_catalog(server_name, &client).await;
@@ -316,13 +318,46 @@ impl McpServerView {
         } else {
             self.connection.client.listed_catalog().await?
         };
-        let tools = filter_tools(tools, &self.tool_filter);
-        let tools = if self.connection.client.is_codex_apps_mcp_server {
+        Ok((
+            self.prepare_tools_for_model(tools, tool_plugin_context, exposure),
+            meta,
+        ))
+    }
+
+    /// Publishes raw client tools with this view's policy, owner, and plugin attribution.
+    /// Shared client catalogs stay unannotated so later views can reuse them safely.
+    fn prepare_tools_for_model(
+        &self,
+        tools: Vec<ToolInfo>,
+        tool_plugin_context: &ToolPluginContext,
+        exposure: crate::McpServerExposure,
+    ) -> Vec<ToolInfo> {
+        let tools = filter_tools(tools, &self.tool_filter)
+            .into_iter()
+            .map(|mut tool| {
+                tool.server_key = self.metadata.server_key.clone();
+                if exposure.environment_id(tool.server_key()).is_some() {
+                    let environment = &self.metadata.environment_id;
+                    let owner = format!("Runs in environment {environment}.");
+                    tool.namespace_description = Some(match tool.namespace_description {
+                        Some(description) => format!("{owner}\n{description}"),
+                        None => owner,
+                    });
+                }
+                tool.supports_parallel_tool_calls = self.metadata.supports_parallel_tool_calls;
+                tool.server_origin = self
+                    .metadata
+                    .origin
+                    .as_ref()
+                    .map(|origin| origin.as_str().to_string());
+                tool
+            })
+            .collect();
+        if self.connection.client.is_codex_apps_mcp_server {
             prepare_codex_apps_tools_for_model(tools, tool_plugin_context)
         } else {
             prepare_regular_mcp_tools_for_model(tools, tool_plugin_context)
-        };
-        Ok((tools, meta))
+        }
     }
 }
 
@@ -335,10 +370,10 @@ pub(crate) struct PreviousMcpConnections<'a> {
 pub(crate) struct McpConnectionSet {
     config: Option<Arc<crate::McpConfig>>,
     network_policy_metadata: Option<Arc<dyn NetworkPolicyMetadataProvider>>,
-    servers: HashMap<String, McpServerView>,
+    servers: HashMap<McpServerKey, McpServerView>,
     pub(crate) event_stream_connection: Option<Arc<EventStreamConnectionSettings>>,
     disabled_servers: Vec<String>,
-    required_servers: Vec<String>,
+    required_servers: Vec<McpServerKey>,
     optional_startup_deadline: OnceLock<tokio::time::Instant>,
     tool_plugin_context: Arc<ToolPluginContext>,
     prefix_mcp_tool_names: bool,
@@ -348,6 +383,39 @@ pub(crate) struct McpConnectionSet {
 }
 
 impl McpConnectionSet {
+    fn server(&self, key: &McpServerKey) -> Option<&McpServerView> {
+        self.servers.get(key)
+    }
+
+    pub(crate) fn resolve_server_name(&self, name: &str) -> Option<&McpServerKey> {
+        self.config
+            .as_ref()
+            .and_then(|config| config.mcp_server_catalog.resolve_server_name(name))
+            .or_else(|| {
+                self.servers
+                    .get_key_value(&McpServerKey::unscoped(name))
+                    .map(|(key, _)| key)
+            })
+    }
+
+    fn server_by_name(&self, name: &str) -> Option<&McpServerView> {
+        self.server(self.resolve_server_name(name)?)
+    }
+
+    /// Name-only status and resource APIs still describe the original first server.
+    fn legacy_servers(&self) -> impl Iterator<Item = (&str, &McpServerView)> {
+        self.servers
+            .iter()
+            .filter_map(|(key, view)| self.legacy_server_name(key).map(|name| (name, view)))
+    }
+
+    pub(crate) fn legacy_server_name<'a>(&'a self, key: &'a McpServerKey) -> Option<&'a str> {
+        match &self.config {
+            Some(config) => config.mcp_server_catalog.legacy_server_name(key),
+            None => Some(key.name()),
+        }
+    }
+
     /// Creates an MCP connection manager. Threadless callers can pass no `tx_event`; startup
     /// notifications are then skipped and interactive elicitations are declined.
     pub async fn new(
@@ -398,7 +466,12 @@ impl McpConnectionSet {
         let disabled_servers = mcp_servers
             .iter()
             .filter(|(_, server)| !server.enabled())
-            .map(|(name, _)| name.clone())
+            .filter_map(|(key, _)| {
+                config
+                    .mcp_server_catalog
+                    .legacy_server_name(key)
+                    .map(str::to_owned)
+            })
             .collect();
         let mut required_servers = mcp_servers
             .iter()
@@ -453,12 +526,19 @@ impl McpConnectionSet {
                 )
             })
         });
-        for (server_name, server) in mcp_servers
+        for (server_key, server) in mcp_servers
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
             let server = server.with_read_only_mcp_tools(config.requires_read_only_mcp_tools);
-            let registration = config.mcp_server_catalog.server(&server_name);
+            let registration = config.mcp_server_catalog.server(&server_key);
+            let server_name = registration
+                .map_or(server_key.name(), |server| server.name())
+                .to_owned();
+            let report_startup = config
+                .mcp_server_catalog
+                .resolve_server_name(&server_name)
+                .is_none_or(|key| key == &server_key);
             let client_mcp_extensions = crate::client_capabilities::server_mcp_extensions(
                 &client_mcp_extensions,
                 &server_name,
@@ -483,7 +563,7 @@ impl McpConnectionSet {
             } else {
                 MAX_MCP_CATALOG_ITEMS
             };
-            let metadata = McpServerMetadata::from(&server);
+            let metadata = McpServerMetadata::new(server_key.clone(), &server);
             let configured_config = server.config().clone();
             let protocol_mode = if matches!(
                 &configured_config.transport,
@@ -650,7 +730,7 @@ impl McpConnectionSet {
                 client_elicitation_capability.clone(),
                 client_mcp_extensions.clone(),
                 previous
-                    .and_then(|previous| previous.servers.get(&server_name))
+                    .and_then(|previous| previous.servers.get(&server_key))
                     .and_then(|view| view.connection.identity.as_ref()),
             );
             let expected_protocol_mode = match &configured_config.transport {
@@ -692,7 +772,7 @@ impl McpConnectionSet {
             // Explicit reconnects have no previous set and must replace their clients eagerly.
             let defer_startup = previous.is_some()
                 && allow_deferred_startup
-                && !tool_plugin_context.is_selected_plugin_mcp_server(&server_name)
+                && !tool_plugin_context.is_selected_plugin_server(&server_key)
                 && tool_catalog_cache_context
                     .as_ref()
                     .and_then(|context| {
@@ -713,7 +793,7 @@ impl McpConnectionSet {
             if matches!(configured_config.auth, McpServerAuth::EmaAuth) && existing_ema.is_some() {
                 if let Some(previous_view) = existing_ema
                     .filter(|_| elicitation_previous.is_some())
-                    .and_then(|previous| previous.servers.get(&server_name))
+                    .and_then(|previous| previous.servers.get(&server_key))
                 {
                     let connection = &previous_view.connection;
                     let authority_is_current = || {
@@ -741,7 +821,7 @@ impl McpConnectionSet {
                             });
                     if authority_is_current() && (pending || ready) {
                         servers.insert(
-                            server_name.clone(),
+                            server_key.clone(),
                             McpServerView {
                                 connection: Arc::clone(connection),
                                 protocol_mode,
@@ -757,9 +837,9 @@ impl McpConnectionSet {
                         if pending {
                             let client = connection.client.clone();
                             eager_workers
-                                .push(async move { (server_name, client.client().await) }.boxed());
+                                .push(async move { (server_key, client.client().await) }.boxed());
                         } else {
-                            reused_ready.push(server_name);
+                            reused_ready.push(server_key);
                         }
                     }
                 }
@@ -768,7 +848,7 @@ impl McpConnectionSet {
             }
             let mut legacy_to_upgrade = None;
             if let Some(previous_view) =
-                reusable_previous.and_then(|previous| previous.servers.get(&server_name))
+                reusable_previous.and_then(|previous| previous.servers.get(&server_key))
                 && previous_view.refresh_tool_list == config.mcp_tool_list_changed
                 && (same_owner || !previous_view.connection.may_use_legacy_fallback())
             {
@@ -817,7 +897,7 @@ impl McpConnectionSet {
                     let pending_client =
                         reusable_pending_startup.then(|| connection.client.clone());
                     servers.insert(
-                        server_name.clone(),
+                        server_key.clone(),
                         McpServerView {
                             connection,
                             protocol_mode,
@@ -831,7 +911,9 @@ impl McpConnectionSet {
                         },
                     );
                     if let Some(error) = unchanged_auth_failure {
-                        eager_starts.push(server_name.clone());
+                        if report_startup {
+                            eager_starts.push(server_name.clone());
+                        }
                         let reason = connection_identity
                             .oauth_credentials()
                             .ok()
@@ -846,7 +928,7 @@ impl McpConnectionSet {
                             ),
                             reason,
                         };
-                        let tx_event = tx_event.clone();
+                        let tx_event = tx_event.clone().filter(|_| report_startup);
                         let submit_id = startup_submit_id.clone();
                         eager_workers.push(
                             async move {
@@ -861,15 +943,15 @@ impl McpConnectionSet {
                                     )
                                     .await;
                                 }
-                                (server_name, Err(error))
+                                (server_key, Err(error))
                             }
                             .boxed(),
                         );
                     } else if let Some(client) = pending_client {
                         eager_workers
-                            .push(async move { (server_name, client.client().await) }.boxed());
+                            .push(async move { (server_key, client.client().await) }.boxed());
                     } else {
-                        reused_ready.push(server_name);
+                        reused_ready.push(server_key);
                     }
                     continue;
                 }
@@ -916,7 +998,7 @@ impl McpConnectionSet {
                 };
             let mut async_managed_client = AsyncManagedClient::new(
                 ema_auth.clone(),
-                server_name.clone(),
+                server_key.clone(),
                 startup_submit_id.clone(),
                 server,
                 store_mode,
@@ -948,7 +1030,7 @@ impl McpConnectionSet {
                 publish_apps,
             );
             // A forced reconnect must also wait for the previously published helper to exit.
-            if let Some(previous) = existing_ema.and_then(|set| set.servers.get(&server_name)) {
+            if let Some(previous) = existing_ema.and_then(|set| set.servers.get(&server_key)) {
                 async_managed_client.wait_for_failed_predecessor(&previous.connection.client);
             }
             let legacy_fallback = legacy_to_upgrade
@@ -960,7 +1042,7 @@ impl McpConnectionSet {
                 (None, None)
             };
             servers.insert(
-                server_name.clone(),
+                server_key.clone(),
                 McpServerView {
                     connection: Arc::new(McpServerConnection {
                         identity: Some(connection_identity),
@@ -981,10 +1063,10 @@ impl McpConnectionSet {
                     catalog_item_limit,
                 },
             );
-            let tx_event = tx_event.clone();
+            let tx_event = tx_event.clone().filter(|_| report_startup);
             let submit_id = startup_submit_id.clone();
 
-            if !defer_startup {
+            if !defer_startup && report_startup {
                 eager_starts.push(server_name.clone());
             }
             let startup = async move {
@@ -994,7 +1076,7 @@ impl McpConnectionSet {
                         () = cancel_token.cancelled() => true,
                     }
                 {
-                    return (server_name, Err(StartupOutcomeError::Cancelled));
+                    return (server_key, Err(StartupOutcomeError::Cancelled));
                 }
                 if defer_startup && let Some(tx_event) = tx_event.as_ref() {
                     let _ = emit_update(
@@ -1090,7 +1172,7 @@ impl McpConnectionSet {
                     async_managed_client.reconnect_failed_startup().await;
                 }
 
-                (server_name, outcome)
+                (server_key, outcome)
             };
             let startup = AuthStorageOriginator::current().scope(startup);
             if defer_startup {
@@ -1101,6 +1183,7 @@ impl McpConnectionSet {
                 eager_workers.push(trace.scope(startup).boxed());
             }
         }
+        let summary_config = Arc::clone(&config);
         let manager = Self {
             config: Some(config),
             network_policy_metadata,
@@ -1138,9 +1221,15 @@ impl McpConnectionSet {
                 tokio::spawn(worker);
             }
             let outcomes = JoinSet::from_iter(eager_workers).join_all().await;
+            let legacy_name = |key: McpServerKey| {
+                summary_config
+                    .mcp_server_catalog
+                    .legacy_server_name(&key)
+                    .map(str::to_owned)
+            };
             if let Some(tx_event) = tx_event {
                 let mut summary = McpStartupCompleteEvent {
-                    ready: reused_ready,
+                    ready: reused_ready.into_iter().filter_map(&legacy_name).collect(),
                     ..Default::default()
                 };
                 for server_name in &summary.ready {
@@ -1154,7 +1243,10 @@ impl McpConnectionSet {
                     )
                     .await;
                 }
-                for (server_name, outcome) in outcomes {
+                for (key, outcome) in outcomes {
+                    let Some(server_name) = legacy_name(key) else {
+                        continue;
+                    };
                     match outcome {
                         Ok(_) => summary.ready.push(server_name),
                         Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
@@ -1199,17 +1291,17 @@ impl McpConnectionSet {
     }
 
     pub(crate) fn contains_server(&self, server_name: &str) -> bool {
-        self.servers.contains_key(server_name)
+        self.server_by_name(server_name).is_some()
     }
 
-    pub(crate) fn shares_server_connection(&self, other: &Self, server: &str) -> bool {
+    pub(crate) fn shares_server_connection(&self, other: &Self, server: &McpServerKey) -> bool {
         self.servers
             .get(server)
             .zip(other.servers.get(server))
             .is_some_and(|(left, right)| Arc::ptr_eq(&left.connection, &right.connection))
     }
 
-    pub(crate) async fn authentication_failed_servers(&self) -> Vec<String> {
+    pub(crate) async fn authentication_failed_servers(&self) -> Vec<McpServerKey> {
         let mut failed_servers = Vec::new();
         for (server_name, view) in &self.servers {
             if view
@@ -1229,14 +1321,19 @@ impl McpConnectionSet {
     pub(crate) async fn updated_oauth_credentials_after_auth_failure(
         &self,
         config: &crate::McpConfig,
-    ) -> Vec<String> {
+    ) -> Vec<McpServerKey> {
         let mut candidates = Vec::new();
         for server_name in self.authentication_failed_servers().await {
             if let Some(view) = self.servers.get(&server_name)
                 && let Some(identity) = view.connection.identity.as_ref()
                 && let Some(server) = config.mcp_server_catalog.server(&server_name)
             {
-                candidates.push((server_name, identity.clone(), server.config().clone()));
+                candidates.push((
+                    server_name,
+                    server.name().to_owned(),
+                    identity.clone(),
+                    server.config().clone(),
+                ));
             }
         }
         if candidates.is_empty() {
@@ -1248,10 +1345,10 @@ impl McpConnectionSet {
             originator.sync_scope(|| {
                 candidates
                     .into_iter()
-                    .filter_map(|(server_name, identity, config)| {
+                    .filter_map(|(server_key, server_name, identity, config)| {
                         identity
                             .oauth_credentials_changed(&server_name, &config)
-                            .then_some(server_name)
+                            .then_some(server_key)
                     })
                     .collect()
             })
@@ -1266,8 +1363,8 @@ impl McpConnectionSet {
         }
     }
 
-    pub(crate) async fn wait_for_server_startup(&self, server_name: &str) -> bool {
-        let Some(view) = self.servers.get(server_name) else {
+    pub(crate) async fn wait_for_server_startup(&self, server_name: &McpServerKey) -> bool {
+        let Some(view) = self.server(server_name) else {
             return false;
         };
         view.connection.client.ready_transport().is_some()
@@ -1319,18 +1416,21 @@ impl McpConnectionSet {
         }
     }
 
-    pub fn plugin_id_for_mcp_server_name(&self, server_name: &str) -> Option<&str> {
-        self.tool_plugin_context
-            .plugin_id_for_mcp_server_name(server_name)
+    pub fn plugin_id_for_server(&self, server_name: &McpServerKey) -> Option<&str> {
+        self.tool_plugin_context.plugin_id_for_server(server_name)
     }
 
-    pub fn is_selected_plugin_mcp_server(&self, server_name: &str) -> bool {
+    pub fn is_selected_plugin_server(&self, server_name: &McpServerKey) -> bool {
         self.tool_plugin_context
-            .is_selected_plugin_mcp_server(server_name)
+            .is_selected_plugin_server(server_name)
     }
 
-    pub async fn wait_for_server_ready(&self, server_name: &str, timeout: Duration) -> bool {
-        let Some(view) = self.servers.get(server_name) else {
+    pub async fn wait_for_server_ready(
+        &self,
+        server_name: &McpServerKey,
+        timeout: Duration,
+    ) -> bool {
+        let Some(view) = self.server(server_name) else {
             return false;
         };
 
@@ -1340,17 +1440,26 @@ impl McpConnectionSet {
         }
     }
 
-    /// Rejects invalid host calls before they can start a server or capture attribution.
-    pub(crate) fn validate_tool_call(
+    /// Selects the host call's server and validates it before startup or attribution.
+    /// Returns its exact key so waiting, execution, and attribution use the same server.
+    pub(crate) fn resolve_tool_call_server(
         &self,
         server: &str,
         tool: &str,
         environment_id: Option<&str>,
-    ) -> Result<()> {
-        let view = self
-            .servers
-            .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+    ) -> Result<&McpServerKey> {
+        let (server_key, view) = match environment_id {
+            // Hooks name their environment; a thread-wide registration is the only fallback.
+            Some(id) => self
+                .servers
+                .get_key_value(&McpServerKey::in_environment(id, server))
+                .or_else(|| self.servers.get_key_value(&McpServerKey::unscoped(server))),
+            // Name-only callers still select the catalog's legacy winner.
+            None => self
+                .resolve_server_name(server)
+                .and_then(|key| self.servers.get_key_value(key)),
+        }
+        .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
         if let Some(environment_id) = environment_id
             && view.metadata.environment_id != environment_id
         {
@@ -1364,23 +1473,26 @@ impl McpConnectionSet {
                 "tool '{tool}' is disabled for MCP server '{server}'"
             ));
         }
-        Ok(())
+        Ok(server_key)
     }
 
     /// Invoke the tool indicated by the (server, tool) pair.
     #[allow(clippy::too_many_arguments)]
     pub async fn call_tool(
         &self,
-        server: &str,
+        server_key: &McpServerKey,
         tool: &str,
-        environment_id: Option<&str>,
         arguments: Option<serde_json::Value>,
         mut meta: Option<serde_json::Value>,
         requested_timeout: Option<Duration>,
         wait_for_server: bool,
     ) -> Result<CallToolResult> {
-        self.validate_tool_call(server, tool, environment_id)?;
-        let view = &self.servers[server];
+        let view = self
+            .server(server_key)
+            .ok_or_else(|| anyhow!("unknown MCP server '{server_key}'"))?;
+        if !view.tool_filter.allows(tool) {
+            bail!("tool '{tool}' is disabled for MCP server '{server_key}'");
+        }
         let client = if wait_for_server {
             view.connection
                 .client()
@@ -1391,9 +1503,9 @@ impl McpConnectionSet {
                 .connection
                 .client
                 .ready_client()
-                .ok_or_else(|| anyhow!("MCP server '{server}' is not connected"))?;
+                .ok_or_else(|| anyhow!("MCP server '{server_key}' is not connected"))?;
             if client.client.is_closed().await {
-                bail!("MCP server '{server}' is not connected");
+                bail!("MCP server '{server_key}' is not connected");
             }
             client
         };
@@ -1416,14 +1528,14 @@ impl McpConnectionSet {
                     &client,
                     self.config
                         .as_ref()
-                        .and_then(|config| config.permission_profile_for_server(server)),
+                        .and_then(|config| config.permission_profile_for_server(server_key)),
                     &view.metadata.environment_id,
                     meta,
                 ),
                 effective_timeout,
             )
             .await
-            .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
+            .with_context(|| format!("tool call failed for `{server_key}/{tool}`"))?;
 
         Ok(call_tool_result_from_rmcp(result))
     }
@@ -1433,8 +1545,7 @@ impl McpConnectionSet {
         &self,
         include_server: impl Fn(&str) -> bool,
     ) -> HashMap<String, serde_json::Value> {
-        self.servers
-            .iter()
+        self.legacy_servers()
             .filter(|(name, _)| include_server(name))
             .filter_map(|(name, view)| {
                 view.connection
@@ -1445,7 +1556,7 @@ impl McpConnectionSet {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone()
-                    .map(|capabilities| (name.clone(), capabilities))
+                    .map(|capabilities| (name.to_owned(), capabilities))
             })
             .collect()
     }
@@ -1458,7 +1569,11 @@ impl McpConnectionSet {
         include_server: impl Fn(&str) -> bool,
     ) -> HashMap<String, McpServerInfo> {
         let mut server_infos = HashMap::new();
-        for (server_name, view) in self.servers.iter().filter(|(name, _)| include_server(name)) {
+        for (server_name, view) in self
+            .legacy_servers()
+            .filter(|(name, _)| include_server(name))
+        {
+            let server_name = server_name.to_owned();
             let client = &view.connection.client;
             if !client.startup_complete.load(Ordering::Acquire)
                 && let Some(server_info) = client.cached_server_info.clone()

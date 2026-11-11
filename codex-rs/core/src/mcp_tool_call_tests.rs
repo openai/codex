@@ -28,6 +28,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
 use codex_features::Features;
 use codex_hooks::HooksConfig;
+use codex_mcp::McpServerKey;
 use codex_model_provider::create_model_provider;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::PermissionProfile;
@@ -990,7 +991,7 @@ fn custom_servers_support_session_and_persistent_approval() {
         arguments: None,
     };
     let expected = McpToolApprovalKey {
-        server: "custom_server".to_string(),
+        server: McpServerKey::unscoped("custom_server"),
         plugin_id: None,
         connector_id: None,
         link_id: None,
@@ -998,7 +999,12 @@ fn custom_servers_support_session_and_persistent_approval() {
     };
 
     assert_eq!(
-        session_mcp_tool_approval_key(&invocation, /*metadata*/ None, AppToolApproval::Auto),
+        session_mcp_tool_approval_key(
+            &McpServerKey::unscoped(&invocation.server),
+            &invocation,
+            /*metadata*/ None,
+            AppToolApproval::Auto
+        ),
         Some(expected.clone())
     );
     assert_eq!(
@@ -1021,7 +1027,12 @@ fn custom_servers_support_session_and_persistent_approval() {
             ..expected.clone()
         };
         assert_eq!(
-            session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
+            session_mcp_tool_approval_key(
+                &McpServerKey::unscoped(&invocation.server),
+                &invocation,
+                Some(&metadata),
+                AppToolApproval::Auto
+            ),
             Some(plugin_key)
         );
     }
@@ -1043,7 +1054,7 @@ fn codex_apps_connectors_support_persistent_approval() {
     );
     metadata.link_id = Some("link_a".to_string());
     let expected = McpToolApprovalKey {
-        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        server: McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
         plugin_id: None,
         connector_id: Some("calendar".to_string()),
         link_id: Some("link_a".to_string()),
@@ -1051,7 +1062,12 @@ fn codex_apps_connectors_support_persistent_approval() {
     };
 
     assert_eq!(
-        session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto),
+        session_mcp_tool_approval_key(
+            &McpServerKey::unscoped(&invocation.server),
+            &invocation,
+            Some(&metadata),
+            AppToolApproval::Auto
+        ),
         Some(expected.clone())
     );
     assert_eq!(
@@ -2426,6 +2442,7 @@ async fn dispatched_mcp_approval_with_closed_response_is_classified_as_approval(
         id: call_id.to_string(),
         environment_id: test_environment_id(&turn_context).to_owned(),
         server: "calendar".to_string(),
+        server_key: McpServerKey::unscoped("calendar"),
         tool_name: "send".to_string(),
         arguments: None,
         connector_id: Some("calendar".to_string()),
@@ -2717,14 +2734,14 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home).expect("create codex home");
     let key = McpToolApprovalKey {
-        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        server: McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
         plugin_id: None,
         connector_id: Some("calendar".to_string()),
         link_id: None,
         tool_name: "calendar/list_events".to_string(),
     };
 
-    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+    maybe_persist_mcp_tool_approval(&session, &turn_context, key).await;
 
     let config = session.get_config().await;
     let apps_toml = config
@@ -2749,11 +2766,15 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
             approval_mode: Some(AppToolApproval::Approve),
         }
     );
-    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
 }
 
+#[test_case::test_case("docs", Some(AppToolApproval::Approve); "configured server")]
+#[test_case::test_case("executor_docs", None; "executor-only server")]
 #[tokio::test]
-async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_server() {
+async fn persistent_mcp_tool_approval_remembers_scoped_session_key(
+    server_name: &str,
+    expected_approval: Option<AppToolApproval>,
+) {
     let (session, mut turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home).expect("create codex home");
@@ -2762,6 +2783,7 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
         "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
     )
     .expect("seed config");
+    session.reload_user_config_layer().await;
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.clone().to_path_buf())
         .build()
@@ -2769,14 +2791,24 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
         .expect("load config");
     turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
-        server: "docs".to_string(),
+        server: McpServerKey::in_environment("env-a", server_name),
         plugin_id: None,
         connector_id: None,
         link_id: None,
         tool_name: "search".to_string(),
     };
 
-    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+    apply_mcp_tool_approval_decision(
+        &session,
+        &turn_context,
+        &ReviewDecision::ApprovedMcpPolicyAmendment,
+        Some(key.clone()),
+        Some(McpToolApprovalKey {
+            server: McpServerKey::unscoped(server_name),
+            ..key.clone()
+        }),
+    )
+    .await;
 
     let config = session.get_config().await;
     let mcp_servers_toml = config
@@ -2789,16 +2821,15 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
     let mcp_servers = HashMap::<String, McpServerConfig>::deserialize(mcp_servers_toml)
         .expect("deserialize MCP servers");
     let tool = mcp_servers
-        .get("docs")
-        .and_then(|server| server.tools.get("search"))
-        .expect("docs/search tool config exists");
+        .get(server_name)
+        .and_then(|server| server.tools.get("search"));
 
     assert_eq!(
-        tool,
-        &McpServerToolConfig {
-            approval_mode: Some(AppToolApproval::Approve),
+        tool.cloned(),
+        expected_approval.map(|approval_mode| McpServerToolConfig {
+            approval_mode: Some(approval_mode),
             ..Default::default()
-        }
+        })
     );
     assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
 }
@@ -2814,14 +2845,14 @@ async fn maybe_persist_mcp_tool_approval_preserves_plugin_default_activation() {
     )
     .expect("seed config");
     let key = McpToolApprovalKey {
-        server: "sample".to_string(),
+        server: McpServerKey::unscoped("sample"),
         plugin_id: Some("sample@test".to_string()),
         connector_id: None,
         link_id: None,
         tool_name: "search".to_string(),
     };
 
-    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+    maybe_persist_mcp_tool_approval(&session, &turn_context, key).await;
 
     let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
     let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
@@ -2842,7 +2873,6 @@ async fn maybe_persist_mcp_tool_approval_preserves_plugin_default_activation() {
     );
     assert!(contents.contains(r#"[plugins."sample@test".mcp_servers.sample.tools.search]"#));
     assert_eq!(parsed.plugins.plugins["sample@test"].enabled, None);
-    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
 
     let config = session.get_config().await;
     let servers = codex_mcp::configured_mcp_servers(
@@ -2907,14 +2937,14 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
         .expect("load project config");
     turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
-        server: "docs".to_string(),
+        server: McpServerKey::unscoped("docs"),
         plugin_id: None,
         connector_id: None,
         link_id: None,
         tool_name: "search".to_string(),
     };
 
-    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+    maybe_persist_mcp_tool_approval(&session, &turn_context, key).await;
 
     let contents = std::fs::read_to_string(project_codex_dir.join(CONFIG_TOML_FILE))
         .expect("read project config");
@@ -2933,7 +2963,6 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
         }
     );
     assert!(contents.contains("[mcp_servers.docs.tools.search]"));
-    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
 }
 
 #[tokio::test]
@@ -2978,6 +3007,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         &approval_config(&turn_context),
         thread_permission_source(&turn_context),
         test_environment_id(&turn_context),
+        &McpServerKey::unscoped(&invocation.server),
         McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
     )
     .await;
@@ -3061,6 +3091,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         &approval_config(&turn_context),
         thread_permission_source(&turn_context),
         test_environment_id(&turn_context),
+        &McpServerKey::unscoped(&invocation.server),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
     )
     .await;
@@ -3126,6 +3157,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         &approval_config(&turn_context),
         thread_permission_source(&turn_context),
         test_environment_id(&turn_context),
+        &McpServerKey::unscoped(&invocation.server),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
     )
     .await;
@@ -3205,6 +3237,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
         &approval_config(&turn_context),
         thread_permission_source(&turn_context),
         test_environment_id(&turn_context),
+        &McpServerKey::unscoped(&invocation.server),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
     )
     .await;
@@ -3281,9 +3314,13 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };
-    let remembered_key =
-        session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto)
-            .expect("memory MCP tool should support session approval");
+    let remembered_key = session_mcp_tool_approval_key(
+        &McpServerKey::unscoped(&invocation.server),
+        &invocation,
+        Some(&metadata),
+        AppToolApproval::Auto,
+    )
+    .expect("memory MCP tool should support session approval");
     remember_mcp_tool_approval(&session, remembered_key).await;
 
     let session = Arc::new(session);
@@ -3300,6 +3337,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         &approval_config(&turn_context),
         thread_permission_source(&turn_context),
         test_environment_id(&turn_context),
+        &McpServerKey::unscoped(&invocation.server),
         McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
     )
     .await;
@@ -3416,6 +3454,7 @@ async fn strict_auto_review_forces_guardian_for_mcp_policy_skip(
             host_cwd: &captured_mcp_config.host_cwd,
         },
         test_environment_id(&turn_context),
+        &McpServerKey::unscoped(&invocation.server),
         McpToolApprovalPolicy::for_server(approval_mode),
     )
     .await;
@@ -3501,6 +3540,7 @@ async fn assert_mcp_user_approval_persistence(
                 &approval_config(&turn_context),
                 thread_permission_source(&turn_context),
                 test_environment_id(&turn_context),
+                &McpServerKey::unscoped(&invocation.server),
                 McpToolApprovalPolicy::for_server(AppToolApproval::Auto),
             )
             .await
@@ -3589,6 +3629,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
                 &approval_config(&turn_context),
                 thread_permission_source(&turn_context),
                 test_environment_id(&turn_context),
+                &McpServerKey::unscoped(&invocation.server),
                 McpToolApprovalPolicy::for_server(AppToolApproval::Prompt),
             )
             .await
@@ -3657,6 +3698,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
             &approval_config(&turn_context),
             thread_permission_source(&turn_context),
             test_environment_id(&turn_context),
+            &McpServerKey::unscoped(&invocation.server),
             McpToolApprovalPolicy::for_server(approval_mode),
         )
         .await;
@@ -3753,6 +3795,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
             &approval_config(&turn_context),
             thread_permission_source(&turn_context),
             test_environment_id(&turn_context),
+            &McpServerKey::unscoped(&invocation.server),
             McpToolApprovalPolicy::for_server(AppToolApproval::Approve),
         )
         .await;
@@ -3780,6 +3823,7 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
     let mut call = Box::pin(async {
         let _approval_metadata = session.register_mcp_tool_approval_metadata(
             "call",
+            &McpServerKey::unscoped(&invocation.server),
             &invocation,
             metadata.clone(),
             review_context.clone(),
@@ -3790,6 +3834,7 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
     assert!(futures::poll!(call.as_mut()).is_pending());
     let _other_metadata = session.register_mcp_tool_approval_metadata(
         "other-call",
+        &McpServerKey::unscoped(&invocation.server),
         &invocation,
         metadata.clone(),
         review_context.clone(),
@@ -3797,23 +3842,24 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
     );
     assert_eq!(
         session
-            .mcp_tool_approval_metadata(CODEX_APPS_MCP_SERVER_NAME, "call")
+            .mcp_tool_approval_metadata(&McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME), "call")
             .map(|context| (context.invocation, context.metadata.connector_id)),
         Some((Some(invocation.clone()), Some("connector".to_string()))),
     );
     assert!(
         session
-            .mcp_tool_approval_metadata("another-server", "call")
+            .mcp_tool_approval_metadata(&McpServerKey::unscoped("another-server"), "call")
             .is_none()
     );
     drop(call);
     assert!(
         session
-            .mcp_tool_approval_metadata(CODEX_APPS_MCP_SERVER_NAME, "call")
+            .mcp_tool_approval_metadata(&McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME), "call")
             .is_none()
     );
     let _next_metadata = session.register_mcp_tool_approval_metadata(
         "next-call",
+        &McpServerKey::unscoped(&invocation.server),
         &invocation,
         metadata,
         review_context,
@@ -3826,11 +3872,11 @@ async fn approval_metadata_is_released_when_the_invocation_future_is_dropped() {
         keys,
         vec![
             (
-                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
                 "next-call".to_string()
             ),
             (
-                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
                 "other-call".to_string()
             ),
         ],

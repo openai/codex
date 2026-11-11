@@ -1199,6 +1199,9 @@
             "multi_env_copy_file": {
               "type": "boolean"
             },
+            "multi_environment_mcp": {
+              "type": "boolean"
+            },
             "network_proxy": {
               "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
             },
@@ -8267,6 +8270,9 @@
           "type": "boolean"
         },
         "multi_env_copy_file": {
+          "type": "boolean"
+        },
+        "multi_environment_mcp": {
           "type": "boolean"
         },
         "network_proxy": {

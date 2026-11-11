@@ -60,7 +60,7 @@ use tokio::sync::Semaphore;
 use tokio_util::task::TaskTracker;
 
 type McpToolApprovalMetadataMap =
-    HashMap<(String, String), std::sync::Weak<McpToolApprovalContext>>;
+    HashMap<(codex_mcp::McpServerKey, String), std::sync::Weak<McpToolApprovalContext>>;
 
 /// A thread's installed reporter and the tasks that may still hand it an outcome.
 pub(crate) struct AgentOutcomeReporting {
@@ -1550,7 +1550,7 @@ impl Session {
             let mcp_server_names =
                 codex_mcp::effective_mcp_servers(&mcp_projection.config, auth.as_ref())
                     .into_iter()
-                    .filter_map(|(name, server)| server.enabled().then_some(name))
+                    .filter_map(|(key, server)| server.enabled().then(|| key.name().to_owned()))
                     .collect::<Vec<_>>();
             session_telemetry.conversation_starts(
                 config.model_provider.name.as_str(),

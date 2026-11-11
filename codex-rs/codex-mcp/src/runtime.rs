@@ -56,6 +56,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::McpConfig;
+use crate::McpServerKey;
 use crate::binding::McpBinding;
 use crate::binding::PreparedMcpCall;
 use crate::client_tool_catalog::CodexAppsToolSnapshot;
@@ -101,7 +102,7 @@ pub struct McpRuntimeInput {
     pub config: Arc<McpConfig>,
     pub plugins_available: bool,
     pub ready_selected_capability_roots: Vec<SelectedCapabilityRoot>,
-    pub mcp_servers: HashMap<String, EffectiveMcpServer>,
+    pub mcp_servers: HashMap<McpServerKey, EffectiveMcpServer>,
     pub submit_id: String,
     /// Unbounded sources receive abandonment notifications; bounded sources retain request-only behavior.
     pub tx_event: Option<Sender<Event>>,
@@ -184,7 +185,7 @@ fn ensure_host_owned_apps_registration(
     if !current
         .config
         .as_ref()
-        .and_then(|config| config.mcp_server_catalog.server(server))
+        .and_then(|config| config.mcp_server_catalog.server_by_name(server))
         .is_some_and(|registration| {
             registration
                 .source()
@@ -214,7 +215,7 @@ impl PublishedMcpRuntime {
 }
 
 struct CachedMcpBinding {
-    catalog_revisions: HashMap<String, BindingCatalogRevision>,
+    catalog_revisions: HashMap<McpServerKey, BindingCatalogRevision>,
     // Reuse a frozen binding while a model step or caller still needs it.
     binding: Weak<McpBinding>,
 }
@@ -358,7 +359,7 @@ impl McpRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .find(call_id)?;
         let binding = self
-            .current_binding_for_call(crate::CODEX_APPS_MCP_SERVER_NAME)
+            .current_binding_for_call(&McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME))
             .await
             .ok_or_else(|| anyhow::anyhow!("codex_apps MCP server is unavailable"))?;
 
@@ -474,7 +475,7 @@ impl McpRuntime {
         let hosted_event_server_retained = connections.contains_server(CODEX_APPS_MCP_SERVER_NAME)
             && config
                 .mcp_server_catalog
-                .server(CODEX_APPS_MCP_SERVER_NAME)
+                .server(&McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME))
                 .is_some_and(|registration| {
                     registration
                         .source()
@@ -542,29 +543,38 @@ impl McpRuntime {
 
     /// Captures the latest published configuration and live client handles.
     pub async fn current_binding(&self) -> Option<Arc<McpBinding>> {
-        self.current_binding_with_requirements(&[], &HashSet::new())
+        self.current_binding_with_requirements(&[], &[], &HashSet::new())
             .await
     }
 
     /// Captures one runtime, waiting for explicitly required servers and selected plugins.
+    /// Names come from mentions and skill requirements; keys identify exact servers after OAuth recovery.
+    /// Resolve names here so they refer to the same runtime that the binding captures.
     /// Plugin IDs are resolved by the captured connection set, even if a refresh publishes later.
     pub async fn current_binding_with_requirements(
         &self,
-        required_servers: &[String],
+        required_server_names: &[String],
+        required_server_keys: &[McpServerKey],
         required_plugins: &HashSet<String>,
     ) -> Option<Arc<McpBinding>> {
         let current = self.current.load_full();
+        let required_servers = required_server_names
+            .iter()
+            .filter_map(|name| current.connections.resolve_server_name(name))
+            .chain(required_server_keys)
+            .cloned()
+            .collect::<Vec<_>>();
         current.connections.record_startup_readiness(
             "model_binding",
-            required_servers,
+            &required_servers,
             required_plugins,
         );
-        Self::binding_from_published_runtime(current, required_servers, required_plugins).await
+        Self::binding_from_published_runtime(current, &required_servers, required_plugins).await
     }
 
     async fn binding_from_published_runtime(
         current: Arc<PublishedMcpRuntime>,
-        required_servers: &[String],
+        required_servers: &[McpServerKey],
         required_plugins: &HashSet<String>,
     ) -> Option<Arc<McpBinding>> {
         let config = Arc::clone(current.config.as_ref()?);
@@ -640,7 +650,7 @@ impl McpRuntime {
     }
 
     /// Detects newly saved credentials for servers whose startup failed authentication.
-    pub async fn updated_oauth_credentials_after_auth_failure(&self) -> Vec<String> {
+    pub async fn updated_oauth_credentials_after_auth_failure(&self) -> Vec<McpServerKey> {
         let current = self.current.load_full();
         let Some(config) = current.config.as_ref() else {
             return Vec::new();
@@ -652,7 +662,7 @@ impl McpRuntime {
     }
 
     /// Checks the current generation before retrying servers detected outside the refresh gate.
-    pub async fn has_authentication_failed_servers(&self, server_names: &[String]) -> bool {
+    pub async fn has_authentication_failed_servers(&self, server_names: &[McpServerKey]) -> bool {
         self.current
             .load_full()
             .connections
@@ -663,7 +673,7 @@ impl McpRuntime {
     }
 
     /// Waits for the selected server without capturing an execution binding.
-    pub async fn wait_for_server_startup(&self, server: &str) {
+    pub async fn wait_for_server_startup(&self, server: &McpServerKey) {
         self.current
             .load_full()
             .connections
@@ -690,7 +700,7 @@ impl McpRuntime {
     }
 
     /// Captures the current runtime after its selected server has finished startup.
-    pub async fn current_binding_for_call(&self, server: &str) -> Option<Arc<McpBinding>> {
+    pub async fn current_binding_for_call(&self, server: &McpServerKey) -> Option<Arc<McpBinding>> {
         let current = self.current.load_full();
         current.config.as_ref()?;
         if !current.connections.wait_for_server_startup(server).await {
@@ -821,9 +831,11 @@ impl McpRuntime {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> anyhow::Result<ReadResourceResult> {
-        self.latest_connections()
-            .read_resource(server, params)
-            .await
+        let connections = self.latest_connections();
+        let key = connections
+            .resolve_server_name(server)
+            .ok_or_else(|| anyhow::anyhow!("unknown MCP server '{server}'"))?;
+        connections.read_resource(key, params).await
     }
 
     pub async fn latest_call_tool_without_attribution(
@@ -834,12 +846,13 @@ impl McpRuntime {
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
         let connections = self.latest_connections();
-        connections.validate_tool_call(server, tool, /*environment_id*/ None)?;
-        connections.wait_for_server_startup(server).await;
+        let server_key =
+            connections.resolve_tool_call_server(server, tool, /*environment_id*/ None)?;
+        connections.wait_for_server_startup(server_key).await;
         connections
             .call_tool(
-                server, tool, /*environment_id*/ None, arguments, meta,
-                /*requested_timeout*/ None, /*wait_for_server*/ true,
+                server_key, tool, arguments, meta, /*requested_timeout*/ None,
+                /*wait_for_server*/ true,
             )
             .await
     }
@@ -859,11 +872,15 @@ impl McpRuntime {
         wait_for_server: bool,
     ) -> anyhow::Result<McpToolCallResult> {
         let current = self.current.load_full();
-        current
-            .connections
-            .validate_tool_call(server, tool, environment_id)?;
+        let server_key =
+            current
+                .connections
+                .resolve_tool_call_server(server, tool, environment_id)?;
         let attribution = if wait_for_server
-            && current.connections.wait_for_server_startup(server).await
+            && current
+                .connections
+                .wait_for_server_startup(server_key)
+                .await
             && let Some(revisions) = current
                 .connections
                 .stable_catalog_revisions(
@@ -892,9 +909,8 @@ impl McpRuntime {
         let result = current
             .connections
             .call_tool(
-                server,
+                server_key,
                 tool,
-                environment_id,
                 arguments,
                 meta,
                 requested_timeout,
@@ -917,7 +933,7 @@ impl McpRuntime {
                 == Some(&revisions)
         {
             binding
-                .tool_info(server, tool)
+                .tool_info(server_key, tool)
                 .map(|info| info.callable_namespace.clone())
         } else {
             None
@@ -929,8 +945,13 @@ impl McpRuntime {
     }
 
     pub async fn latest_wait_for_server_ready(&self, server: &str, timeout: Duration) -> bool {
-        self.latest_connections()
-            .wait_for_server_ready(server, timeout)
+        let current = self.current.load_full();
+        let Some(server_key) = current.connections.resolve_server_name(server) else {
+            return false;
+        };
+        current
+            .connections
+            .wait_for_server_ready(server_key, timeout)
             .await
     }
 
@@ -955,8 +976,10 @@ impl McpRuntime {
         statuses.retain(|name, _| {
             published_config
                 .mcp_server_catalog
-                .server(name)
-                .is_some_and(|server| config.mcp_server_catalog.server(name) == Some(server))
+                .server_by_name(name)
+                .is_some_and(|server| {
+                    config.mcp_server_catalog.server_by_name(name) == Some(server)
+                })
         });
         statuses
     }
@@ -1297,7 +1320,7 @@ mod tests {
         connections.list_all_tools().await;
         let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
         config.server_permissions.insert(
-            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            crate::McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
             McpServerPermissions::Thread,
         );
         let published = Arc::new(PublishedMcpRuntime {
@@ -1352,7 +1375,10 @@ mod tests {
         .expect("refreshed binding");
         assert!(!Arc::ptr_eq(&before, &refreshed));
         let call = refreshed
-            .prepare_call(CODEX_APPS_MCP_SERVER_NAME, "search")
+            .prepare_call(
+                &crate::McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
+                "search",
+            )
             .expect("refreshed call");
         let error = call
             .call_with_preparation(/*requested_timeout*/ None, || async {

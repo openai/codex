@@ -3,6 +3,9 @@
 #[path = "scenarios_turn_input_agent_message.rs"]
 mod turn_input_agent_message;
 
+#[path = "scenarios_multi_environment_mcp.rs"]
+mod multi_environment_mcp;
+
 use super::image_rollout::RecordingFileAttachmentStore;
 use super::permissions_messages::PermissionPathScenario;
 use codex_attachment_store::AttachmentStoreErrorKind;

@@ -63,10 +63,15 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use test_case::test_case;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
 use tokio::net::TcpListener;
+use tokio::process::Command;
 use tokio::sync::Notify;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -214,6 +219,174 @@ async fn mcp_resource_hooks_follow_server_ownership(
             "{id}: expected {expected:?} in {output}"
         );
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_hooks_preserve_ownership_with_same_named_servers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let first_endpoint = start_mock_server().await;
+    let second_endpoint = start_mock_server().await;
+    let test = test_codex()
+        .with_exec_server_url("none")
+        .with_config(|config| {
+            for feature in [
+                Feature::CodexHooks,
+                Feature::MultiEnvironmentMcp,
+                Feature::ExecutorCapabilityDiscovery,
+            ] {
+                config.features.enable(feature).unwrap();
+            }
+        })
+        .build(&server)
+        .await?;
+
+    // Each executor discovers its own docs server from its own configuration.
+    let mut executors = Vec::new();
+    let mut selections = Vec::new();
+    for (id, endpoint) in [("env-a", &first_endpoint), ("env-b", &second_endpoint)] {
+        AppsTestServer::mount_with_tools(
+            endpoint,
+            Arc::new(Mutex::new(vec![json!({
+                "name": "save", "inputSchema": {"type": "object"}
+            })])),
+        )
+        .await?;
+        Mock::given(method("POST"))
+            .and(path("/api/codex/ps/mcp"))
+            .and(|request: &Request| {
+                let body: Value = request.body_json().unwrap();
+                matches!(
+                    body["method"].as_str(),
+                    Some("tools/call" | "resources/read")
+                )
+            })
+            .respond_with(move |request: &Request| {
+                let body: Value = request.body_json().unwrap();
+                let result = if body["method"] == "resources/read" {
+                    json!({"contents": [{
+                        "uri": body["params"]["uri"], "text": format!("Note from {id}")
+                    }]})
+                } else {
+                    json!({"content": [{"type": "text", "text": "{}"}]})
+                };
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0", "id": body["id"], "result": result
+                }))
+            })
+            .with_priority(1)
+            .mount(endpoint)
+            .await;
+        let home = tempfile::tempdir()?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            format!(
+                "[mcp_servers.docs]\nurl = \"{}/api/codex/ps/mcp\"\nrequired = true\n",
+                endpoint.uri(),
+            ),
+        )?;
+        let mut executor = Command::from(codex_utils_process::background_command(
+            codex_utils_cargo_bin::cargo_bin("codex")?,
+        ))
+        .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
+        .env("CODEX_HOME", home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+        let mut stdout = BufReader::new(executor.stdout.take().context("executor stdout")?).lines();
+        let url = stdout.next_line().await?.context("executor listen URL")?;
+        test.thread_manager
+            .environment_manager()
+            .upsert_environment(id.to_string(), url, /*connect_timeout*/ None)?;
+        let cwd = PathUri::from_host_native_path(home.path())?;
+        let mut selection = TurnEnvironmentSelection::new(
+            TurnEnvironmentRequest {
+                environment_id: id.to_string(),
+                cwd: cwd.clone(),
+                workspace_roots: vec![cwd],
+                config: EnvironmentConfigState::FromThread,
+            },
+            &[],
+        );
+        let mut config = environment_config_for_selection(&test.config, &selection);
+        let mut updated_input = json!({"uri": "memo://rewritten"});
+        if id == "env-a" {
+            updated_input["environment_id"] = json!("env-b");
+        }
+        let output = json!({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "allow",
+            "updatedInput": updated_input
+        }});
+        // Both executors run on this host, including in remote-executor test runs.
+        let command = if cfg!(target_os = "windows") {
+            format!("ForEach-Object {{ '{output}' }}")
+        } else {
+            format!("printf '%s' '{output}'")
+        };
+        let mut hooks = json!({"PreToolUse": [{
+            "matcher": "^read_mcp_resource$",
+            "hooks": [{"type": "command", "command": command}]
+        }]});
+        if id == "env-b" {
+            hooks["Stop"] = json!([{"hooks": [{
+                "type": "mcp_tool", "server": "docs", "tool": "save",
+                "input": {"title": "cleanup"}
+            }]}]);
+        }
+        config.environment_hooks = serde_json::from_value(hooks)?;
+        selection.config = EnvironmentConfigState::Ready(config);
+        selections.push(selection);
+        executors.push((home, executor, stdout));
+    }
+
+    let mut events = Vec::new();
+    for id in ["env-a", "env-b"] {
+        events.push(ev_function_call(
+            id,
+            "read_mcp_resource",
+            &json!({"server": "docs", "environment_id": id, "uri": "memo://original"}).to_string(),
+        ));
+    }
+    events.push(ev_completed("resources"));
+    let responses = mount_response_sequence(
+        &server,
+        vec![sse_response(sse(events)), completed_turn_response("done")],
+    )
+    .await;
+    test.submit_turn_with_environments("read both resources and finish", Some(selections))
+        .await?;
+
+    let rejected = responses
+        .function_call_output_text("env-a")
+        .context("expected rejected resource rewrite")?;
+    assert!(
+        rejected.contains("PreToolUse hook cannot change the tool environment (environment_id)"),
+        "{rejected}"
+    );
+    let rewritten = responses
+        .function_call_output_text("env-b")
+        .context("expected rewritten resource result")?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&rewritten)?,
+        json!({
+            "server": "docs", "environment_id": "env-b", "uri": "memo://rewritten",
+            "contents": [{"uri": "memo://rewritten", "text": "Note from env-b"}]
+        })
+    );
+
+    // The hook names only docs, but it must reach B rather than A's same-named server.
+    assert!(recorded_apps_tool_calls(&first_endpoint).await.is_empty());
+    let calls = recorded_apps_tool_calls(&second_endpoint).await;
+    assert_eq!(
+        calls
+            .iter()
+            .map(|call| (&call["params"]["name"], &call["params"]["arguments"]))
+            .collect::<Vec<_>>(),
+        vec![(&json!("save"), &json!({"title": "cleanup"}))],
+    );
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 

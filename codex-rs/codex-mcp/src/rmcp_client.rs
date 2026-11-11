@@ -32,6 +32,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::McpServerKey;
 use crate::auth::McpAuthProvider;
 use crate::client_tool_catalog::ClientToolCatalog;
 use crate::codex_apps::normalize_codex_apps_callable_name;
@@ -273,7 +274,7 @@ fn codex_apps_reconnect_backoff(consecutive_failures: u32) -> Duration {
 struct ManagedClientStartup {
     ema_auth: Option<Result<crate::ema_auth::EmaConnectionAuth, StartupOutcomeError>>,
     originator: AuthStorageOriginator,
-    server_name: String,
+    server_key: McpServerKey,
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
@@ -309,7 +310,7 @@ impl ManagedClientStartup {
         let Self {
             ema_auth,
             originator,
-            server_name,
+            server_key,
             server,
             store_mode,
             keyring_backend_kind,
@@ -330,6 +331,7 @@ impl ManagedClientStartup {
             startup_complete,
             server_capabilities,
         } = self.clone();
+        let server_name = server_key.name().to_owned();
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
         let startup_timeout = server
             .config()
@@ -351,7 +353,7 @@ impl ManagedClientStartup {
                     startup_timeout,
                     make_rmcp_client(
                         ema_auth,
-                        &server_name,
+                        &server_key,
                         server.clone(),
                         store_mode,
                         keyring_backend_kind,
@@ -380,6 +382,7 @@ impl ManagedClientStartup {
                     server_name.clone(),
                     client,
                     StartServerTaskParams {
+                        server_key: server_key.clone(),
                         sharing_declined,
                         publish_apps,
                         is_codex_apps_mcp_server,
@@ -471,11 +474,11 @@ pub(crate) struct AsyncManagedClient {
 impl AsyncManagedClient {
     // Keep this constructor flat so the startup inputs remain readable at the
     // single call site instead of introducing a one-off params wrapper.
-    #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
+    #[instrument(level = "trace", skip_all, fields(server_name = %server_key.name()))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         ema_auth: Option<crate::ema_auth::EmaAuthContext>,
-        server_name: String,
+        server_key: McpServerKey,
         startup_submit_id: String,
         server: EffectiveMcpServer,
         store_mode: OAuthCredentialsStoreMode,
@@ -498,8 +501,9 @@ impl AsyncManagedClient {
         connection_pool: Option<(crate::McpConnectionPool, ConnectionKey)>,
         publish_apps: Option<watch::Sender<Option<std::sync::Weak<RmcpClient>>>>,
     ) -> Self {
+        let server_name = server_key.name().to_owned();
         let is_codex_apps_mcp_server = server_name == CODEX_APPS_MCP_SERVER_NAME;
-        let reconnect_server_name = server_name.clone();
+        let reconnect_server_name = server_name;
         let reconnect_tx_event = tx_event.clone();
         let cached_server_info = if is_codex_apps_mcp_server {
             codex_apps_tools_cache_context
@@ -536,7 +540,7 @@ impl AsyncManagedClient {
         let startup = Arc::new(ManagedClientStartup {
             ema_auth,
             originator: AuthStorageOriginator::current(),
-            server_name,
+            server_key,
             server,
             store_mode,
             keyring_backend_kind,
@@ -583,7 +587,8 @@ impl AsyncManagedClient {
                         if matches!(client.connection_sharing, ConnectionSharing::Shared(_)) {
                             client.shared_elicitation =
                                 Some(Arc::new(startup.elicitation_requests.make_sender(
-                                    startup.server_name.clone(),
+                                    startup.server_key.clone(),
+                                    startup.server_key.name().to_owned(),
                                     startup.tx_event.clone(),
                                     &startup.client_mcp_extensions,
                                 )));
@@ -904,8 +909,7 @@ pub(crate) fn prepare_codex_apps_tools_for_model(
             Some(connector_id) => {
                 tool_plugin_context.plugin_display_names_for_connector_id(connector_id)
             }
-            None => tool_plugin_context
-                .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
+            None => tool_plugin_context.plugin_display_names_for_server(tool.server_key()),
         };
         add_plugin_provenance_to_tool(tool, plugin_names);
     }
@@ -974,8 +978,7 @@ pub(crate) fn prepare_regular_mcp_tools_for_model(
     tool_plugin_context: &ToolPluginContext,
 ) -> Vec<ToolInfo> {
     for tool in &mut tools {
-        let plugin_names =
-            tool_plugin_context.plugin_display_names_for_mcp_server_name(tool.server_name.as_str());
+        let plugin_names = tool_plugin_context.plugin_display_names_for_server(tool.server_key());
         add_plugin_provenance_to_tool(tool, plugin_names);
     }
     tools
@@ -1026,7 +1029,7 @@ fn codex_apps_tool_info_from_listed_tool(
         server_instructions.map(str::to_string)
     };
     ToolInfo {
-        server_name: server_name.to_owned(),
+        server_key: McpServerKey::unscoped(server_name),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name,
@@ -1050,7 +1053,7 @@ fn regular_mcp_tool_info_from_listed_tool(
     let mut tool_def = tool.tool;
     strip_untrusted_connector_meta(&mut tool_def);
     ToolInfo {
-        server_name: server_name.to_owned(),
+        server_key: McpServerKey::unscoped(server_name),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: tool_def.name.to_string(),
@@ -1126,6 +1129,7 @@ async fn start_server_task(
     params: StartServerTaskParams,
 ) -> Result<ManagedClient, StartupOutcomeError> {
     let StartServerTaskParams {
+        server_key,
         sharing_declined,
         publish_apps,
         is_codex_apps_mcp_server,
@@ -1141,8 +1145,12 @@ async fn start_server_task(
         catalog_item_limit,
         server_capabilities,
     } = params;
-    let send_elicitation =
-        elicitation_requests.make_sender(server_name.clone(), tx_event, &client_mcp_extensions);
+    let send_elicitation = elicitation_requests.make_sender(
+        server_key,
+        server_name.clone(),
+        tx_event,
+        &client_mcp_extensions,
+    );
     let client_supports_network_policy_meta =
         client_mcp_extensions.contains(MCP_NETWORK_POLICY_META_CAPABILITY);
     let (sharing_negotiation, send_elicitation) = if let Some(sharing_declined) = sharing_declined {
@@ -1407,6 +1415,7 @@ fn mcp_server_info_from_implementation(
 }
 
 struct StartServerTaskParams {
+    server_key: McpServerKey,
     publish_apps: Option<watch::Sender<Option<std::sync::Weak<RmcpClient>>>>,
     sharing_declined: Option<CancellationToken>,
     server_capabilities: Arc<StdMutex<Option<serde_json::Value>>>,
@@ -1424,10 +1433,10 @@ struct StartServerTaskParams {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
+#[instrument(level = "trace", skip_all, fields(server_name = %server_key.name()))]
 pub(crate) async fn make_rmcp_client(
     ema_auth: Option<Result<crate::ema_auth::EmaConnectionAuth, StartupOutcomeError>>,
-    server_name: &str,
+    server_key: &McpServerKey,
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
@@ -1437,6 +1446,7 @@ pub(crate) async fn make_rmcp_client(
     runtime_auth_provider: Option<McpAuthProvider>,
     protocol_mode: McpProtocolMode,
 ) -> Result<RmcpClient, StartupOutcomeError> {
+    let server_name = server_key.name();
     let config = server.config().clone();
     if server.credential_policy() == McpCredentialPolicy::ExecutorOnly {
         // Executor HTTP declarations cannot acquire host header helpers through
@@ -1465,7 +1475,7 @@ pub(crate) async fn make_rmcp_client(
             .owner
             .connect(
                 auth.authority,
-                server_name,
+                server_key,
                 &server,
                 runtime_context.local_http_client(),
                 protocol_mode,
@@ -1783,7 +1793,7 @@ mod tests {
         );
 
         let expected = ToolInfo {
-            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            server_key: McpServerKey::unscoped(CODEX_APPS_MCP_SERVER_NAME),
             supports_parallel_tool_calls: false,
             server_origin: None,
             callable_name: "capture_file_upload".to_string(),
@@ -1795,9 +1805,43 @@ mod tests {
             connector_name: Some("Gmail".to_string()),
             plugin_display_names: Vec::new(),
         };
+        assert_eq!(tool_info, expected);
+
+        // Persisted ToolInfo values predate environment-scoped identities. Keep
+        // their field names readable and preserve the flat shape when rewriting.
+        let mut cached = serde_json::json!({
+            "server_name": CODEX_APPS_MCP_SERVER_NAME,
+            "supports_parallel_tool_calls": false,
+            "server_origin": null,
+            "tool_name": "capture_file_upload",
+            "tool_namespace": "codex_apps__gmail",
+            "namespace_description": "Mail connector",
+            "tool": expected.tool,
+            "connector_id": "connector_gmail",
+            "connector_name": "Gmail",
+            "plugin_display_names": [],
+        });
         assert_eq!(
-            serde_json::to_value(tool_info).expect("serialize actual tool info"),
-            serde_json::to_value(expected).expect("serialize expected tool info")
+            serde_json::from_value::<ToolInfo>(cached.clone()).expect("read legacy cached tool"),
+            expected,
+        );
+        assert_eq!(
+            serde_json::to_value(&tool_info).expect("serialize unscoped tool"),
+            cached,
+        );
+
+        cached["scoped_environment_id"] = serde_json::json!("executor-1");
+        let scoped = ToolInfo {
+            server_key: McpServerKey::in_environment("executor-1", CODEX_APPS_MCP_SERVER_NAME),
+            ..expected
+        };
+        assert_eq!(
+            serde_json::from_value::<ToolInfo>(cached.clone()).expect("read scoped cached tool"),
+            scoped,
+        );
+        assert_eq!(
+            serde_json::to_value(scoped).expect("serialize scoped tool"),
+            cached
         );
     }
 }

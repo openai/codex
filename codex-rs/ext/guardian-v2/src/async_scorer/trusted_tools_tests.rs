@@ -40,7 +40,7 @@ fn mcp_tool(server: &str, connector_id: Option<&str>) -> Result<McpToolInfo> {
 
 fn expected_context(tool: &McpToolInfo, source: &Path) -> TrustedTool {
     TrustedTool {
-        server: tool.server_name.clone(),
+        server: tool.server_name().to_owned(),
         connector_id: tool.connector_id.clone(),
         source: TrustedToolSource::UserConfiguration(source.display().to_string()),
     }

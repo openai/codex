@@ -101,7 +101,8 @@ async fn forced_refresh_replaces_pending_connection_without_interrupting_other_c
         elicitation_reviewer: None,
         elicitation_lifecycle: None,
     };
-    let binding = runtime.current_binding_for_call("test_server");
+    let server_key = crate::McpServerKey::unscoped("test_server");
+    let binding = runtime.current_binding_for_call(&server_key);
     tokio::pin!(binding);
     assert!(futures::poll!(&mut binding).is_pending());
     runtime.reconnect_on_next_refresh();
@@ -151,7 +152,7 @@ async fn forced_refresh_replaces_pending_connection_without_interrupting_other_c
     runtime.shutdown().await;
     assert!(
         binding
-            .list_resources("test_server", /*params*/ None)
+            .list_resources(&McpServerKey::unscoped("test_server"), /*params*/ None)
             .await
             .is_err()
     );

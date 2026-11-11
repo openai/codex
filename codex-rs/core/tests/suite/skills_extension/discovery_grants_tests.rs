@@ -338,7 +338,7 @@ async fn executor_discovery_uses_current_environment_grants(
             .await?;
         let published = config
             .mcp_server_catalog
-            .server(plugin_mcp_server)
+            .server_by_name(plugin_mcp_server)
             .is_some();
         let has_echo = status
             .tools_by_server

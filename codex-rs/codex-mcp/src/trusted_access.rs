@@ -47,9 +47,7 @@ impl McpConnectionSet {
                         entitlement.as_str() == Some(CYBER_TRUSTED_ACCESS_ENTITLEMENT)
                     })
             })
-            && self
-                .plugin_id_for_mcp_server_name(&tool.server_name)
-                .is_some()
+            && self.plugin_id_for_server(tool.server_key()).is_some()
             && arguments.is_none_or(|arguments| arguments.as_object().is_some_and(Map::is_empty))
             && server.environment_id == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID
             && matches!(server.origin, Some(McpServerOrigin::Stdio))

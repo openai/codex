@@ -301,11 +301,14 @@ impl McpServerContributor<Config> for PluginContributor {
                             identity: entry.id.clone(),
                             enabled: entry.is_enabled(&configured),
                             mcp: Box::pin(async move {
-                                let metadata = discovery::v2_metadata_from_catalog(&captured)
-                                    .into_iter()
-                                    .find(|(id, _)| id == &root_id)
-                                    .map(|(_, metadata)| metadata)
-                                    .unwrap_or_default();
+                                let metadata = discovery::v2_metadata_from_catalog(
+                                    &captured,
+                                    &context.config().features,
+                                )
+                                .into_iter()
+                                .find(|(id, _)| id == &root_id)
+                                .map(|(_, metadata)| metadata)
+                                .unwrap_or_default();
                                 let contribution = SelectedPluginContribution {
                                     plugin_display_name: metadata.plugin_display_name,
                                     source_environment_id: environment_id,

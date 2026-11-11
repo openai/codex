@@ -13,19 +13,28 @@ fn template(uri_template: &str, name: &str) -> ResourceTemplate {
 
 #[test]
 fn resource_with_server_serializes_server_field() {
-    let entry = ResourceWithServer::new("test".to_string(), resource("memo://id", "memo"));
+    let entry = ResourceWithServer::new(
+        &McpServerKey::in_environment("remote", "test"),
+        resource("memo://id", "memo"),
+        McpServerExposure::Legacy,
+    );
     let value = serde_json::to_value(&entry).expect("serialize resource");
 
-    assert_eq!(value["server"], json!("test"));
-    assert_eq!(value["uri"], json!("memo://id"));
-    assert_eq!(value["name"], json!("memo"));
+    assert_eq!(
+        value,
+        json!({"server": "test", "uri": "memo://id", "name": "memo"})
+    );
 }
 
 #[test]
 fn list_resources_payload_from_single_server_copies_next_cursor() {
     let mut result = ListResourcesResult::with_all_items(vec![resource("memo://id", "memo")]);
     result.next_cursor = Some("cursor-1".to_string());
-    let payload = ListResourcesPayload::from_single_server("srv".to_string(), result);
+    let payload = ListResourcesPayload::from_single_server(
+        &McpServerKey::unscoped("srv"),
+        result,
+        McpServerExposure::Legacy,
+    );
     let value = serde_json::to_value(&payload).expect("serialize payload");
 
     assert_eq!(value["server"], json!("srv"));
@@ -38,16 +47,22 @@ fn list_resources_payload_from_single_server_copies_next_cursor() {
 #[test]
 fn list_resources_payload_from_all_servers_is_sorted() {
     let mut map = HashMap::new();
-    map.insert("beta".to_string(), vec![resource("memo://b-1", "b-1")]);
     map.insert(
-        "alpha".to_string(),
+        McpServerKey::unscoped("beta"),
+        vec![resource("memo://b-1", "b-1")],
+    );
+    map.insert(
+        McpServerKey::unscoped("alpha"),
         vec![resource("memo://a-1", "a-1"), resource("memo://a-2", "a-2")],
     );
 
-    let payload = ListResourcesPayload::from_all_servers(McpResourceListing {
-        by_server: map,
-        deferred_servers: Vec::new(),
-    });
+    let payload = ListResourcesPayload::from_all_servers(
+        McpResourceListing {
+            by_server: map,
+            deferred_servers: Vec::new(),
+        },
+        McpServerExposure::Legacy,
+    );
     let value = serde_json::to_value(&payload).expect("serialize payload");
     let uris: Vec<String> = value["resources"]
         .as_array()
@@ -104,13 +119,18 @@ fn list_resource_args_normalizes_server_and_cursor() {
         ListResourceArgs {
             server: Some("hosted".to_string()),
             cursor: Some("next-page".to_string()),
+            environment_id: None,
         }
     );
 }
 
 #[test]
 fn template_with_server_serializes_server_field() {
-    let entry = ResourceWithServer::new("srv".to_string(), template("memo://{id}", "memo"));
+    let entry = ResourceWithServer::new(
+        &McpServerKey::unscoped("srv"),
+        template("memo://{id}", "memo"),
+        McpServerExposure::Legacy,
+    );
     let value = serde_json::to_value(&entry).expect("serialize template");
 
     assert_eq!(
@@ -127,18 +147,25 @@ fn template_with_server_serializes_server_field() {
 fn list_resource_templates_payload_from_all_servers_is_sorted() {
     let mut templates_by_server = HashMap::new();
     templates_by_server.insert(
-        "beta".to_string(),
+        McpServerKey::unscoped("beta"),
         vec![template("memo://beta/{id}", "beta")],
     );
     templates_by_server.insert(
-        "alpha".to_string(),
+        McpServerKey::unscoped("alpha"),
         vec![template("memo://alpha/{id}", "alpha")],
     );
 
-    let payload = ListResourceTemplatesPayload::from_all_servers(McpResourceListing {
-        by_server: templates_by_server,
-        deferred_servers: Vec::new(),
-    });
+    let payload = ListResourceTemplatesPayload::from_all_servers(
+        McpResourceListing {
+            by_server: templates_by_server,
+            deferred_servers: vec![
+                McpServerKey::unscoped("shared"),
+                McpServerKey::in_environment("env-a", "docs"),
+                McpServerKey::in_environment("env-b", "docs"),
+            ],
+        },
+        McpServerExposure::EnvironmentQualified,
+    );
 
     assert_eq!(
         serde_json::to_value(payload).expect("serialize resource templates"),
@@ -146,6 +173,11 @@ fn list_resource_templates_payload_from_all_servers_is_sorted() {
             "resourceTemplates": [
                 {"server": "alpha", "uriTemplate": "memo://alpha/{id}", "name": "alpha"},
                 {"server": "beta", "uriTemplate": "memo://beta/{id}", "name": "beta"}
+            ],
+            "deferredServers": [
+                "shared",
+                {"server": "docs", "environment_id": "env-a"},
+                {"server": "docs", "environment_id": "env-b"}
             ]
         })
     );
@@ -168,6 +200,7 @@ fn serialize_function_output_caps_read_resource_payload() {
     let truncation_policy = TruncationPolicy::Bytes(8_000);
     let payload = ReadResourcePayload {
         server: "hosted".to_string(),
+        environment_id: None,
         uri: "skill://large/SKILL.md".to_string(),
         result: ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
             uri: "skill://large/SKILL.md".to_string(),

@@ -77,7 +77,7 @@ impl McpToolContext {
         configured_server: Option<&McpServerConfig>,
     ) -> Self {
         let tool = call.tool_info().clone();
-        let registration = call.config().mcp_server_catalog.server(call.server_name());
+        let registration = call.config().mcp_server_catalog.server(call.server_key());
         let source = if tool.connector_id.is_some() && call.is_host_owned_apps() {
             McpToolSource::Connector
         } else if call.is_selected_plugin_server() {

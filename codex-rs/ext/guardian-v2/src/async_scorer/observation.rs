@@ -67,8 +67,8 @@ impl GuardianV2Extension {
         };
         let is_js_execution = input.mcp_tool.is_some_and(|tool| {
             let info = tool.tool_info();
-            is_node_repl_backed_connector(&info.server_name, info.connector_id.as_deref())
-                && if info.server_name == "codex_apps" {
+            is_node_repl_backed_connector(info.server_name(), info.connector_id.as_deref())
+                && if info.server_name() == "codex_apps" {
                     info.tool
                         .meta
                         .as_ref()
@@ -106,7 +106,7 @@ impl GuardianV2Extension {
             .mcp_tool
             .map(|tool| {
                 let info = tool.tool_info();
-                GuardianScope::for_mcp_connector(&info.server_name, info.connector_id.as_deref())
+                GuardianScope::for_mcp_connector(info.server_name(), info.connector_id.as_deref())
             })
             .or_else(|| {
                 if guardian_config.review_multi_agent_calls {

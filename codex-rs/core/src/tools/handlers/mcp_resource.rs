@@ -6,6 +6,8 @@ use std::time::Instant;
 
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceListing;
+use codex_mcp::McpServerExposure;
+use codex_mcp::McpServerKey;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::McpToolCallStatus;
@@ -68,14 +70,54 @@ enum ResourceOperation {
     Read,
 }
 
+// Hooks and execution must choose the same server from this step's binding.
+fn resolve_resource_server<'a>(
+    step: &'a StepContext,
+    server: &str,
+    environment_id: Option<&str>,
+) -> Result<&'a McpServerKey, FunctionCallError> {
+    let catalog = &step.mcp.config().mcp_server_catalog;
+    let multi_environment = catalog.exposure() == McpServerExposure::EnvironmentQualified;
+    let environment_id = environment_id.filter(|_| multi_environment);
+    let registration = match environment_id {
+        Some(environment_id) => catalog
+            .server(&McpServerKey::in_environment(environment_id, server))
+            .or_else(|| catalog.server_by_name(server))
+            .filter(|registration| registration.config().environment_id == environment_id),
+        None => catalog.server_by_name(server),
+    }
+    .ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!(
+            "unknown MCP server '{server}' for the selected environment"
+        ))
+    })?;
+    let key = registration.key();
+    ensure_model_can_access_mcp_server(&step.turn, key.name())?;
+    if catalog.exposure().environment_id(key).is_some()
+        && environment_id.is_none()
+        && step.environments.environments.len() > 1
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "environment_id is required for MCP server '{server}' when multiple environments are selected"
+        )));
+    }
+    Ok(key)
+}
+
 fn resource_environments(
     invocation: &ToolInvocation,
     operation: ResourceOperation,
 ) -> Result<ToolEnvironments, FunctionCallError> {
     let arguments = resource_arguments(&invocation.payload)?;
-    let server = match operation {
-        ResourceOperation::List => ListResourceArgs::parse(arguments)?.server,
-        ResourceOperation::Read => Some(ReadResourceArgs::parse(arguments)?.server),
+    let (server, environment_id) = match operation {
+        ResourceOperation::List => {
+            let args = ListResourceArgs::parse(arguments)?;
+            (args.server, args.environment_id)
+        }
+        ResourceOperation::Read => {
+            let args = ReadResourceArgs::parse(arguments)?;
+            (Some(args.server), args.environment_id)
+        }
     };
     // Only an aggregate list has no owning server. A named but unknown server is an error.
     let Some(server) = server else {
@@ -85,8 +127,8 @@ fn resource_environments(
         });
     };
     let step = &invocation.step_context;
-    ensure_model_can_access_mcp_server(&step.turn, &server)?;
-    let environment_id = step.mcp.server_environment_id(&server).ok_or_else(|| {
+    let server_key = resolve_resource_server(step, &server, environment_id.as_deref())?;
+    let environment_id = step.mcp.server_environment_id(server_key).ok_or_else(|| {
         FunctionCallError::RespondToModel(format!("unknown MCP server '{server}'"))
     })?;
     Ok(ToolEnvironments::Mcp {
@@ -110,6 +152,7 @@ struct ListResourceArgs {
     server: Option<String>,
     #[serde(default)]
     cursor: Option<String>,
+    environment_id: Option<String>,
 }
 
 impl ListResourceArgs {
@@ -121,25 +164,35 @@ impl ListResourceArgs {
         Self {
             server: normalize_optional_string(self.server),
             cursor: normalize_optional_string(self.cursor),
+            environment_id: normalize_optional_string(self.environment_id),
         }
     }
 
-    fn target(
+    fn target<'a>(
         &self,
-        turn: &TurnContext,
-    ) -> Result<Option<(String, Option<PaginatedRequestParams>)>, FunctionCallError> {
+        step: &'a StepContext,
+    ) -> Result<Option<(&'a McpServerKey, Option<PaginatedRequestParams>)>, FunctionCallError> {
         match &self.server {
             Some(server) => {
-                ensure_model_can_access_mcp_server(turn, server)?;
+                let server_key =
+                    resolve_resource_server(step, server, self.environment_id.as_deref())?;
                 let params = self
                     .cursor
                     .clone()
                     .map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
-                Ok(Some((server.clone(), params)))
+                Ok(Some((server_key, params)))
             }
             None if self.cursor.is_some() => Err(FunctionCallError::RespondToModel(
                 "cursor can only be used when a server is specified".to_string(),
             )),
+            None if self.environment_id.is_some()
+                && step.mcp.config().mcp_server_catalog.exposure()
+                    == McpServerExposure::EnvironmentQualified =>
+            {
+                Err(FunctionCallError::RespondToModel(
+                    "environment_id can only be used when a server is specified".to_string(),
+                ))
+            }
             None => Ok(None),
         }
     }
@@ -149,14 +202,20 @@ impl ListResourceArgs {
 struct ReadResourceArgs {
     server: String,
     uri: String,
+    environment_id: Option<String>,
 }
 
 impl ReadResourceArgs {
     fn parse(arguments: Option<Value>) -> Result<Self, FunctionCallError> {
-        let Self { server, uri } = parse_args(arguments)?;
+        let Self {
+            server,
+            uri,
+            environment_id,
+        } = parse_args(arguments)?;
         Ok(Self {
             server: normalize_required_string("server", server)?,
             uri: normalize_required_string("uri", uri)?,
+            environment_id: normalize_optional_string(environment_id),
         })
     }
 }
@@ -164,29 +223,65 @@ impl ReadResourceArgs {
 #[derive(Debug, Serialize)]
 struct ResourceWithServer<T> {
     server: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment_id: Option<String>,
     #[serde(flatten)]
     resource: T,
 }
 
 impl<T> ResourceWithServer<T> {
-    fn new(server: String, resource: T) -> Self {
-        Self { server, resource }
+    fn new(server: &McpServerKey, resource: T, exposure: McpServerExposure) -> Self {
+        Self {
+            server: server.name().to_owned(),
+            environment_id: exposure.environment_id(server).map(str::to_owned),
+            resource,
+        }
     }
 
-    fn from_server(server: &str, resources: Vec<T>) -> Vec<Self> {
+    fn from_server(
+        server: &McpServerKey,
+        resources: Vec<T>,
+        exposure: McpServerExposure,
+    ) -> Vec<Self> {
         resources
             .into_iter()
-            .map(|resource| Self::new(server.to_string(), resource))
+            .map(|resource| Self::new(server, resource, exposure))
             .collect()
     }
 
-    fn from_all_servers(resources_by_server: HashMap<String, Vec<T>>) -> Vec<Self> {
+    fn from_all_servers(
+        resources_by_server: HashMap<McpServerKey, Vec<T>>,
+        exposure: McpServerExposure,
+    ) -> Vec<Self> {
         let mut entries: Vec<_> = resources_by_server.into_iter().collect();
         entries.sort_by(|(left, _), (right, _)| left.cmp(right));
         entries
             .into_iter()
-            .flat_map(|(server, resources)| Self::from_server(&server, resources))
+            .flat_map(|(server, resources)| Self::from_server(&server, resources, exposure))
             .collect()
+    }
+}
+
+/// Identifies a server that can be started by a targeted resource request.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum DeferredResourceServer {
+    Unscoped(String),
+    Scoped {
+        server: String,
+        environment_id: String,
+    },
+}
+
+impl DeferredResourceServer {
+    fn from_key(key: &McpServerKey, exposure: McpServerExposure) -> Self {
+        match exposure.environment_id(key) {
+            Some(environment_id) => Self::Scoped {
+                server: key.name().to_owned(),
+                environment_id: environment_id.to_owned(),
+            },
+            None => Self::Unscoped(key.name().to_owned()),
+        }
     }
 }
 
@@ -195,29 +290,44 @@ impl<T> ResourceWithServer<T> {
 struct ListResourcesPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     server: Option<String>,
+    #[serde(rename = "environment_id", skip_serializing_if = "Option::is_none")]
+    environment_id: Option<String>,
     resources: Vec<ResourceWithServer<Resource>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    deferred_servers: Vec<String>,
+    deferred_servers: Vec<DeferredResourceServer>,
 }
 
 impl ListResourcesPayload {
-    fn from_single_server(server: String, result: ListResourcesResult) -> Self {
+    fn from_single_server(
+        server: &McpServerKey,
+        result: ListResourcesResult,
+        exposure: McpServerExposure,
+    ) -> Self {
         Self {
-            resources: ResourceWithServer::from_server(&server, result.resources),
-            server: Some(server),
+            resources: ResourceWithServer::from_server(server, result.resources, exposure),
+            server: Some(server.name().to_owned()),
+            environment_id: exposure.environment_id(server).map(str::to_owned),
             next_cursor: result.next_cursor,
             deferred_servers: Vec::new(),
         }
     }
 
-    fn from_all_servers(listing: McpResourceListing<Resource>) -> Self {
+    fn from_all_servers(
+        listing: McpResourceListing<Resource>,
+        exposure: McpServerExposure,
+    ) -> Self {
         Self {
             server: None,
-            resources: ResourceWithServer::from_all_servers(listing.by_server),
+            environment_id: None,
+            resources: ResourceWithServer::from_all_servers(listing.by_server, exposure),
             next_cursor: None,
-            deferred_servers: listing.deferred_servers,
+            deferred_servers: listing
+                .deferred_servers
+                .iter()
+                .map(|key| DeferredResourceServer::from_key(key, exposure))
+                .collect(),
         }
     }
 }
@@ -227,29 +337,48 @@ impl ListResourcesPayload {
 struct ListResourceTemplatesPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     server: Option<String>,
+    #[serde(rename = "environment_id", skip_serializing_if = "Option::is_none")]
+    environment_id: Option<String>,
     resource_templates: Vec<ResourceWithServer<ResourceTemplate>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    deferred_servers: Vec<String>,
+    deferred_servers: Vec<DeferredResourceServer>,
 }
 
 impl ListResourceTemplatesPayload {
-    fn from_single_server(server: String, result: ListResourceTemplatesResult) -> Self {
+    fn from_single_server(
+        server: &McpServerKey,
+        result: ListResourceTemplatesResult,
+        exposure: McpServerExposure,
+    ) -> Self {
         Self {
-            resource_templates: ResourceWithServer::from_server(&server, result.resource_templates),
-            server: Some(server),
+            resource_templates: ResourceWithServer::from_server(
+                server,
+                result.resource_templates,
+                exposure,
+            ),
+            server: Some(server.name().to_owned()),
+            environment_id: exposure.environment_id(server).map(str::to_owned),
             next_cursor: result.next_cursor,
             deferred_servers: Vec::new(),
         }
     }
 
-    fn from_all_servers(listing: McpResourceListing<ResourceTemplate>) -> Self {
+    fn from_all_servers(
+        listing: McpResourceListing<ResourceTemplate>,
+        exposure: McpServerExposure,
+    ) -> Self {
         Self {
             server: None,
-            resource_templates: ResourceWithServer::from_all_servers(listing.by_server),
+            environment_id: None,
+            resource_templates: ResourceWithServer::from_all_servers(listing.by_server, exposure),
             next_cursor: None,
-            deferred_servers: listing.deferred_servers,
+            deferred_servers: listing
+                .deferred_servers
+                .iter()
+                .map(|key| DeferredResourceServer::from_key(key, exposure))
+                .collect(),
         }
     }
 }
@@ -257,6 +386,8 @@ impl ListResourceTemplatesPayload {
 #[derive(Debug, Serialize)]
 struct ReadResourcePayload {
     server: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment_id: Option<String>,
     uri: String,
     #[serde(flatten)]
     result: ReadResourceResult,

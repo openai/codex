@@ -401,7 +401,7 @@ fn resolves_apps_hook_metadata_from_the_registered_connector() {
             |server, tool| {
                 tool_info
                     .as_ref()
-                    .filter(|info| info.server_name == server && info.tool.name == tool)
+                    .filter(|info| info.server_name() == server && info.tool.name == tool)
             },
         );
         let expected = if admitted {

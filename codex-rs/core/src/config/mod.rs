@@ -1952,6 +1952,11 @@ impl Config {
         additional_plugin_registrations: impl IntoIterator<Item = McpServerRegistration>,
     ) -> McpConfig {
         let mut catalog = ResolvedMcpCatalog::builder();
+        catalog.set_exposure(if self.features.enabled(Feature::MultiEnvironmentMcp) {
+            codex_mcp::McpServerExposure::EnvironmentQualified
+        } else {
+            codex_mcp::McpServerExposure::Legacy
+        });
         if self.features.enabled(Feature::UseXaa)
             && let Some(auth) = &self.mcp_enterprise_managed_auth
         {
@@ -1978,12 +1983,13 @@ impl Config {
             }
             .with_host_root(PathUri::from_abs_path(&plugin.root));
             for (name, plugin_server) in plugin_mcp_servers {
-                catalog.register(McpServerRegistration::from_plugin(
+                let registration = McpServerRegistration::from_plugin(
                     name,
                     attribution.clone(),
                     plugin_order,
                     plugin_server,
-                ));
+                );
+                catalog.register(registration);
             }
         }
         for registration in additional_plugin_registrations {

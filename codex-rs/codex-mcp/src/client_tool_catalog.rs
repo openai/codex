@@ -329,7 +329,7 @@ fn catalogs_match(left: &[ToolInfo], right: &[ToolInfo]) -> bool {
     for tools in [&mut left, &mut right] {
         tools.sort_by_key(|tool| {
             (
-                tool.server_name.as_str(),
+                tool.server_key(),
                 tool.tool.name.as_ref(),
                 tool.connector_id.as_deref(),
                 tool.callable_namespace.as_str(),

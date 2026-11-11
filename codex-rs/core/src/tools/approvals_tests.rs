@@ -1,6 +1,7 @@
 use super::*;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::tests::test_environment_id;
+use codex_mcp::McpServerKey;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use pretty_assertions::assert_eq;
@@ -195,6 +196,7 @@ async fn explicit_mcp_reviewer_override_takes_precedence_over_action_context() {
         id: "mcp-override".to_string(),
         environment_id: test_environment_id(&turn).to_owned(),
         server: "example".to_string(),
+        server_key: McpServerKey::unscoped("example"),
         tool_name: "dangerous".to_string(),
         arguments: None,
         connector_id: None,

@@ -6,18 +6,18 @@ pub(super) async fn route(
     router: ElicitationRequestRouter,
     events: Option<Sender<Event>>,
     authority: Option<ElicitationAuthority>,
-    server_name: String,
+    server_key: McpServerKey,
     request: ElicitationRequest,
 ) -> Result<ElicitationResponse> {
     let plugin_service = authority.as_ref().is_some_and(|authority| {
         authority
             .config
             .mcp_server_catalog
-            .server(&server_name)
+            .server(&server_key)
             .is_some_and(|server| {
                 server
                     .source()
-                    .is_host_owned_apps(&server_name, server.config())
+                    .is_host_owned_apps(server_key.name(), server.config())
             })
     });
     let Some((events, authority)) = events.zip(authority).filter(|_| plugin_service) else {
@@ -28,6 +28,11 @@ pub(super) async fn route(
         });
     };
     router
-        .request_user_interaction(Some(events), &authority, server_name, request)
+        .request_user_interaction(
+            Some(events),
+            &authority,
+            server_key.name().to_owned(),
+            request,
+        )
         .await
 }

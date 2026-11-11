@@ -21,7 +21,7 @@ impl McpConnectionSet {
             for server_name in &self.required_servers {
                 let Some(view) = self.servers.get(server_name) else {
                     failures.push(McpStartupFailure {
-                        server: server_name.clone(),
+                        server: server_name.name().to_owned(),
                         error: format!("required MCP server `{server_name}` was not initialized"),
                     });
                     continue;
@@ -35,7 +35,7 @@ impl McpConnectionSet {
                 match view.connection.client().await {
                     Ok(_) => {}
                     Err(error) => failures.push(McpStartupFailure {
-                        server: server_name.clone(),
+                        server: server_name.name().to_owned(),
                         error: startup_outcome_error_message(error),
                     }),
                 }

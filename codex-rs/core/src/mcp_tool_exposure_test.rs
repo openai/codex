@@ -1,3 +1,4 @@
+use codex_mcp::McpServerKey;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -29,7 +30,7 @@ fn make_mcp_tool(
     connector_name: Option<&str>,
 ) -> ToolInfo {
     ToolInfo {
-        server_name: server_name.to_string(),
+        server_key: McpServerKey::unscoped(server_name),
         supports_parallel_tool_calls: false,
         server_origin: None,
         callable_name: callable_name.to_string(),
@@ -177,6 +178,12 @@ async fn agent_plugin_budget_hides_only_overflow_agent_tools() {
         /*connector_name*/ None,
     );
     tools.push(legacy_tool.clone());
+    for tool in &mut tools {
+        tool.server_key = McpServerKey::in_environment(
+            codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
+            tool.server_name(),
+        );
+    }
 
     let runtimes = runtimes_by_name_with_catalog(
         &tools, &config, /*apps_enabled*/ false, &catalog, /*search_tool_enabled*/ false,

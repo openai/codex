@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use codex_mcp::McpServerKey;
 use pretty_assertions::assert_eq;
 use rmcp::model::BooleanSchema;
 use rmcp::model::ElicitationSchema;
@@ -32,6 +33,7 @@ fn guardian_meta(tool_params: Option<Value>) -> Option<RequestMetaObject> {
 fn form_request(meta: Option<RequestMetaObject>) -> ElicitationReviewRequest {
     ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
+        server_key: McpServerKey::unscoped("browser-use"),
         request_id: rmcp::model::NumberOrString::Number(7),
         elicitation: Elicitation::Mcp(rmcp::model::ElicitRequestParams::FormElicitationParams {
             meta,
@@ -110,6 +112,7 @@ fn guardian_elicitation_review_request_requires_opt_in() {
 fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
     let url_request = ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
+        server_key: McpServerKey::unscoped("browser-use"),
         request_id: rmcp::model::NumberOrString::Number(8),
         elicitation: Elicitation::Mcp(rmcp::model::ElicitRequestParams::UrlElicitationParams {
             meta: guardian_meta(Some(json!({}))),
@@ -125,6 +128,7 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
 
     let non_empty_schema_request = ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
+        server_key: McpServerKey::unscoped("browser-use"),
         request_id: rmcp::model::NumberOrString::Number(9),
         elicitation: Elicitation::Mcp(rmcp::model::ElicitRequestParams::FormElicitationParams {
             meta: guardian_meta(Some(json!({}))),

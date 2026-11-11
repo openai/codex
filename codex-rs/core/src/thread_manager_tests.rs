@@ -2402,9 +2402,10 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         (&first_resolved.config, "selected-a", "env-a"),
         (&second_resolved.config, "selected-b", "env-b"),
     ] {
+        let key = codex_mcp::McpServerKey::in_environment(source_environment_id, name);
         let server = config
             .mcp_server_catalog
-            .server(name)
+            .server(&key)
             .expect("selected plugin server should be registered");
         let plugin_id = format!("plugin-{name}");
         let mut expected = codex_mcp::ResolvedMcpCatalog::builder();
@@ -2415,7 +2416,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             source_environment_id,
             server.config().clone(),
         ));
-        assert_eq!(Some(server), expected.build().server(name));
+        assert_eq!(Some(server), expected.build().server(&key));
     }
     let codex_apps_server = codex_mcp::configured_mcp_servers(&first_resolved.config)
         .remove(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
