@@ -61,6 +61,7 @@ use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
 struct WsStream {
+    max_message_bytes: Option<usize>,
     routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
     tx_command: mpsc::Sender<WsCommand>,
     rx_message: mpsc::UnboundedReceiver<Result<Message, WsError>>,
@@ -105,7 +106,7 @@ async fn send_message(
 }
 
 impl WsStream {
-    fn new(inner: WebSocketConnection) -> Self {
+    fn new(inner: WebSocketConnection, max_message_bytes: Option<usize>) -> Self {
         let routing_affinity = inner.routing_affinity().cloned();
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
@@ -164,6 +165,7 @@ impl WsStream {
         });
 
         Self {
+            max_message_bytes,
             routing_affinity,
             tx_command,
             rx_message,
@@ -204,6 +206,7 @@ impl Drop for WsStream {
 }
 
 const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+const X_CODEX_WEBSOCKET_MAX_MESSAGE_BYTES_HEADER: &str = "x-codex-websocket-max-message-bytes";
 const X_MODELS_ETAG_HEADER: &str = "x-models-etag";
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
@@ -649,6 +652,11 @@ async fn connect_websocket(
         }
     };
 
+    let max_message_bytes = response
+        .headers()
+        .get(X_CODEX_WEBSOCKET_MAX_MESSAGE_BYTES_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
     let reasoning_included = response.headers().contains_key(X_REASONING_INCLUDED_HEADER);
     let server_model = response
         .headers()
@@ -664,7 +672,7 @@ async fn connect_websocket(
         let _ = turn_state.set(header_value.to_string());
     }
     Ok((
-        WsStream::new(stream),
+        WsStream::new(stream, max_message_bytes),
         response,
         reasoning_included,
         server_model,
@@ -1101,6 +1109,12 @@ async fn send_websocket_request(
     telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
 ) -> Result<(), ApiError> {
+    if ws_stream
+        .max_message_bytes
+        .is_some_and(|limit| request_text.len() > limit)
+    {
+        return Err(ApiError::WebsocketMessageTooLarge);
+    }
     let request_start = Instant::now();
     let result = tokio::time::timeout(
         idle_timeout,

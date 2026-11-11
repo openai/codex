@@ -19,12 +19,15 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::Request;
+use tokio_tungstenite::tungstenite::handshake::server::Response;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Rejection {
     Oversized,
+    AdvertisedLimit,
     OversizedWarmup,
     AfterModelMetadata,
     AfterRateLimits,
@@ -32,6 +35,7 @@ enum Rejection {
     GoingAway,
 }
 
+#[test_case::test_case(Rejection::AdvertisedLimit, 0, 1; "advertised_limit_skips_websocket_upload")]
 #[test_case::test_case(Rejection::Oversized, 1, 1; "size_rejection_before_any_text")]
 #[test_case::test_case(Rejection::OversizedWarmup, 0, 1; "size_rejection_during_prewarm")]
 #[test_case::test_case(Rejection::AfterModelMetadata, 2, 0; "size_close_after_model_metadata")]
@@ -98,7 +102,17 @@ async fn serve_connection(
         tokio::io::copy_bidirectional(&mut stream, &mut upstream).await?;
         return Ok(());
     }
-    let mut socket = tokio_tungstenite::accept_async(stream).await?;
+    let mut socket =
+        tokio_tungstenite::accept_hdr_async(stream, |_: &Request, mut res: Response| {
+            if rejection == Rejection::AdvertisedLimit {
+                res.headers_mut().insert(
+                    "x-codex-websocket-max-message-bytes",
+                    http::HeaderValue::from_static("1"),
+                );
+            }
+            Ok(res)
+        })
+        .await?;
     while let Some(message) = socket.next().await.transpose()? {
         let Message::Text(text) = message else {
             continue;

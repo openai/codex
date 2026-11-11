@@ -121,8 +121,8 @@ pub enum CodexErrorDetails {
     /// The Session loop treats this as a transient error and will automatically retry the turn.
     #[error("stream disconnected before completion: {0}")]
     Stream(String),
-    /// Retry the rejected request over HTTP instead of sending it on another socket.
-    #[error("websocket request exceeds the peer's message size limit (close code 1009)")]
+    /// The peer's WebSocket message size limit requires sending this request over HTTP.
+    #[error("websocket request exceeds the peer's message size limit")]
     WebsocketMessageTooLarge,
     /// A response stopped by the content filter. Sampling retries need developer guidance.
     #[error(
