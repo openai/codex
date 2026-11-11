@@ -1319,9 +1319,8 @@ impl CodexThread {
         self.session.disable_mcp_enterprise_auth().await;
     }
 
-    /// Refresh MCP configuration, managed requirements, and explicit session plugin overrides.
-    /// Omitted session plugins preserve current overrides; an empty map restores inheritance.
-    /// Other session overrides and user settings remain unchanged.
+    /// Refresh MCP configuration, managed requirements, and session plugin and app overrides.
+    /// An omitted section preserves its current overrides. An empty map restores inheritance.
     /// A stale owner requires reloading from the current config before retrying.
     pub async fn refresh_mcp_config(
         &self,

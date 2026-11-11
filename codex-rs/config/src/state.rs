@@ -13,6 +13,7 @@ use crate::ConfigLayerMetadata;
 use crate::ConfigLayerSource;
 use crate::ProfileV2Name;
 use crate::shell_environment_policy::validate_shell_environment_policy_filter_config;
+use crate::types::AppsConfigToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -576,7 +577,20 @@ impl ConfigLayerStack {
         Ok(self)
     }
 
-    pub fn with_session_plugins(mut self, plugins: TomlValue) -> std::io::Result<Self> {
+    pub fn with_session_plugins(self, plugins: TomlValue) -> std::io::Result<Self> {
+        self.with_session_section("plugins", plugins)
+    }
+
+    /// Replaces the session's connector settings. An empty table restores inheritance.
+    pub fn with_session_apps(self, apps: TomlValue) -> std::io::Result<Self> {
+        // Validate the override but keep its original TOML so omitted fields inherit.
+        apps.clone()
+            .try_into::<AppsConfigToml>()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        self.with_session_section("apps", apps)
+    }
+
+    fn with_session_section(mut self, key: &str, value: TomlValue) -> std::io::Result<Self> {
         let session_index = self.layers.iter().rposition(|layer| {
             layer.name == ConfigLayerSource::SessionFlags && !layer.is_disabled()
         });
@@ -593,15 +607,15 @@ impl ConfigLayerStack {
                     )
                 })?;
                 if index == session_index {
-                    table.insert("plugins".to_owned(), plugins.clone());
-                } else if table.remove("plugins").is_none() {
+                    table.insert(key.to_owned(), value.clone());
+                } else if table.remove(key).is_none() {
                     continue;
                 }
                 *layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, config);
             }
         } else {
             return self.with_session_config(TomlValue::Table(
-                [("plugins".to_owned(), plugins)].into_iter().collect(),
+                [(key.to_owned(), value)].into_iter().collect(),
             ));
         }
         Ok(self)

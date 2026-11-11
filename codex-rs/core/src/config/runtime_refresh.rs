@@ -32,6 +32,8 @@ pub(crate) enum RuntimeConfigRefresh {
 struct McpRefreshToml {
     features: Option<FeaturesToml>,
     plugins: codex_config::types::PluginsConfigToml,
+    #[serde(rename = "apps")]
+    _apps: Option<codex_config::types::AppsConfigToml>,
 }
 
 impl Config {
@@ -51,20 +53,22 @@ impl Config {
             .with_user_layer_from(&self.config_layer_stack),
         };
         if matches!(scope, RuntimeConfigRefresh::Mcp) {
-            let plugins = incoming
-                .config_layer_stack
-                .all_layers_low_to_high()
-                .filter(|layer| {
-                    layer.name == codex_config::ConfigLayerSource::SessionFlags
-                        && !layer.is_disabled()
-                })
-                .filter_map(|layer| layer.config.get("plugins").cloned())
-                .reduce(|mut plugins, overlay| {
-                    codex_config::merge_toml_values(&mut plugins, &overlay);
-                    plugins
-                });
-            if let Some(plugins) = plugins {
+            let session_override = |key: &str| {
+                incoming
+                    .config_layer_stack
+                    .layers_low_to_high()
+                    .filter(|layer| layer.name == codex_config::ConfigLayerSource::SessionFlags)
+                    .filter_map(|layer| layer.config.get(key).cloned())
+                    .reduce(|mut value, overlay| {
+                        codex_config::merge_toml_values(&mut value, &overlay);
+                        value
+                    })
+            };
+            if let Some(plugins) = session_override("plugins") {
                 layers = layers.with_session_plugins(plugins)?;
+            }
+            if let Some(apps) = session_override("apps") {
+                layers = layers.with_session_apps(apps)?;
             }
         }
         // User refreshes retain the session's managed configuration.

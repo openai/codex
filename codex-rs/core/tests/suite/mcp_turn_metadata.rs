@@ -4,6 +4,7 @@
 use anyhow::Result;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::AppToolApproval;
+use codex_core::ConfigRefreshOutcome;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::config::Config;
@@ -988,6 +989,123 @@ approvals_reviewer = "auto_review"
         Some(&json!("Lunch"))
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_refresh_applies_link_approval_on_next_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let args = json!({"title": "Lunch", "starts_at": "2026-03-10T12:00:00Z"});
+    let responses = ["before-refresh", "after-refresh"]
+        .into_iter()
+        .flat_map(|call_id| {
+            [
+                sse(vec![
+                    ev_response_created(call_id),
+                    ev_function_call_with_namespace(
+                        call_id,
+                        SEARCH_CALENDAR_NAMESPACE,
+                        SEARCH_CALENDAR_CREATE_TOOL,
+                        &args.to_string(),
+                    ),
+                    ev_completed(call_id),
+                ]),
+                sse(vec![ev_response_created("done"), ev_completed("done")]),
+            ]
+        })
+        .collect();
+    mount_sse_sequence(&server, responses).await;
+
+    let session_apps = |mode: &str| {
+        toml::from_str(&format!(
+            "[calendar]
+default_tools_approval_mode = 'approve'
+[calendar.links.{LINK_ID}]
+default_tools_approval_mode = '{mode}'"
+        ))
+        .expect("valid Calendar session config")
+    };
+    let test = search_capable_apps_builder(apps_server.chatgpt_base_url)
+        .with_config(move |config| {
+            config.apps_mcp_product_sku = Some("tpp".to_string());
+            config.approvals_reviewer = ApprovalsReviewer::User;
+            config
+                .features
+                .enable(Feature::ToolCallMcpElicitation)
+                .unwrap();
+            config.config_layer_stack = config
+                .config_layer_stack
+                .clone()
+                .with_session_apps(session_apps("approve"))
+                .unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let create_event = || {
+        submit_user_turn(
+            &test,
+            "Use [$calendar](app://calendar) to create a calendar event.",
+            AskForApproval::OnRequest,
+            PermissionProfile::Disabled,
+            /*collaboration_mode*/ None,
+        )
+    };
+    let approval_or_completion = |event: &EventMsg| {
+        matches!(
+            event,
+            EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
+        )
+    };
+
+    create_event().await?;
+    assert!(matches!(
+        wait_for_event(&test.codex, approval_or_completion).await,
+        EventMsg::TurnComplete(_)
+    ));
+    assert_eq!(recorded_apps_tool_calls(&server).await.len(), 1);
+
+    let current = test.codex.config().await;
+    let mut next = (*current).clone();
+    next.config_layer_stack = next
+        .config_layer_stack
+        .with_session_apps(session_apps("prompt"))?;
+    assert_eq!(
+        test.codex.refresh_mcp_config(current, next).await,
+        ConfigRefreshOutcome::Published
+    );
+
+    create_event().await?;
+    let EventMsg::ElicitationRequest(request) =
+        wait_for_event(&test.codex, approval_or_completion).await
+    else {
+        anyhow::bail!("Calendar write completed without requesting approval after refresh");
+    };
+    let ElicitationRequest::Form {
+        meta: Some(meta), ..
+    } = request.request
+    else {
+        anyhow::bail!("expected a native Calendar approval form");
+    };
+    assert_eq!(meta["link_id"], json!(LINK_ID));
+    assert_eq!(recorded_apps_tool_calls(&server).await.len(), 1);
+    test.codex
+        .submit(Op::ResolveElicitation {
+            server_name: request.server_name,
+            request_id: request.id,
+            decision: ElicitationAction::Accept,
+            content: None,
+            meta: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let call = recorded_apps_tool_call_by_call_id(&server, "after-refresh").await;
+    assert_eq!(call["params"]["arguments"], args);
     Ok(())
 }
 
