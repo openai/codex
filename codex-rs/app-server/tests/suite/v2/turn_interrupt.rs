@@ -146,6 +146,23 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     assert_eq!(completed.thread_id, thread_id);
     assert_eq!(completed.turn.status, TurnStatus::Interrupted);
 
+    let repeat_id = mcp
+        .send_turn_interrupt_request(TurnInterruptParams { thread_id, turn_id })
+        .await?;
+    let repeat_err = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(repeat_id)),
+    )
+    .await??;
+    assert_eq!(
+        repeat_err.error,
+        JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: "no active turn to interrupt".to_string(),
+            data: None,
+        }
+    );
+
     Ok(())
 }
 
