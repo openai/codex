@@ -465,12 +465,16 @@ async fn final_answer_carries_its_moderation_decision() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut answer = responses::ev_assistant_message("msg-42", "Answer");
     answer["item"]["phase"] = json!("final_answer");
+    let display = json!({
+        "version": 1, "mode": "show", "trustedContacts": "skip",
+        "annotation": {"kind": "wellbeingHelpline", "subject": "answer"}
+    });
     responses::mount_sse_once(
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
             json!({"type":"response.metadata","metadata":{"openai_chatgpt_moderation_metadata":{
-                "final_answer_moderation":{"item_id":"msg-42","moderated":true,"display":{"action":"answerHelpline"}},
+                "final_answer_moderation":{"item_id":"msg-42","moderated":true,"display":display},
                 "generation":{"private":"classifier details"}
             }}}),
             answer,
@@ -496,14 +500,14 @@ async fn final_answer_carries_its_moderation_decision() -> Result<()> {
     let public = serde_json::to_value(&message)?;
     assert_eq!(
         public["moderation"],
-        json!({"moderated": true,"display":{"action":"answerHelpline"}})
+        json!({"moderated": true,"display":display})
     );
     let [EventMsg::AgentMessage(legacy)] = &message.as_legacy_events()[..] else {
         panic!("expected one legacy answer");
     };
     assert_eq!(
         serde_json::to_value(&legacy.moderation)?,
-        json!({"item_id":"msg-42","moderated":true,"display":{"action":"answerHelpline"}})
+        json!({"item_id":"msg-42","moderated":true,"display":display})
     );
     Ok(())
 }

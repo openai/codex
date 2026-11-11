@@ -2,7 +2,7 @@
 #   filename:  codex_app_server_protocol.v2.schemas.json
 
 from __future__ import annotations
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import ValidationError, model_validator, BaseModel, ConfigDict, Field, RootModel
 from typing import Annotated, Any, Literal
 from enum import Enum
 
@@ -149,18 +149,6 @@ class AgentMessageDeltaNotification(BaseModel):
     turn_id: Annotated[str, Field(alias="turnId")]
 
 
-class AgentMessageDisplay(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    action: Annotated[
-        str, Field(description="Unknown actions must be left for the producing client to handle.")
-    ]
-    block_type: Annotated[str | None, Field(alias="blockType")] = None
-    check_trusted_contacts: Annotated[bool | None, Field(alias="checkTrustedContacts")] = None
-    cyber_trusted_access: Annotated[bool | None, Field(alias="cyberTrustedAccess")] = None
-
-
 class InputTextAgentMessageInputContent(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -185,14 +173,6 @@ class AgentMessageInputContent(
     root: InputTextAgentMessageInputContent | EncryptedContentAgentMessageInputContent
 
 
-class AgentMessageModeration(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    display: AgentMessageDisplay | None = None
-    moderated: bool
-
-
 class AgentPath(RootModel[str]):
     root: str
 
@@ -208,6 +188,17 @@ class AnalyticsConfig(BaseModel):
         populate_by_name=True,
     )
     enabled: bool | None = None
+
+
+class WellbeingPromptHelplineAnswerReplacement(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["wellbeingPromptHelpline"]
+
+
+class AnswerReplacement(RootModel[WellbeingPromptHelplineAnswerReplacement]):
+    root: WellbeingPromptHelplineAnswerReplacement
 
 
 class AppBranding(BaseModel):
@@ -468,6 +459,32 @@ class AutoReviewRequirements(BaseModel):
 class BedrockProviderId(Enum):
     amazon_bedrock = "amazon-bedrock"
     amazon_bedrock_runtime = "amazon-bedrock-runtime"
+
+
+class BlockReason1(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["protection"]
+    protection_type: Annotated[
+        str,
+        Field(
+            alias="protectionType",
+            description="Identifies the same moderation row that Chat writes on the live path.",
+        ),
+    ]
+
+
+class KindBlockReason(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["cyber"]
+    trusted_access: Annotated[bool | None, Field(alias="trustedAccess")] = None
+
+
+class BlockReason(RootModel[BlockReason1 | KindBlockReason]):
+    root: BlockReason1 | KindBlockReason
 
 
 class BrowserUseAccessApprovalLifetime(Enum):
@@ -2060,6 +2077,11 @@ class GuardianWarningNotification(BaseModel):
     thread_id: Annotated[
         str, Field(alias="threadId", description="Thread target for the guardian warning.")
     ]
+
+
+class HelplineSubject(Enum):
+    answer = "answer"
+    prompt = "prompt"
 
 
 class HookErrorInfo(BaseModel):
@@ -6919,6 +6941,11 @@ class ToolExposureSurface(Enum):
     direct = "direct"
 
 
+class TrustedContacts(Enum):
+    check = "check"
+    skip = "skip"
+
+
 class TurnDiffUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -7340,6 +7367,36 @@ class AdditionalContextEntry(BaseModel):
         Field(description="Optional name for untrusted context, used to label its tool output."),
     ] = None
     value: str
+
+
+class HideAgentMessageDisplay(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mode: Annotated[Literal["hide"], Field(title="HideAgentMessageDisplayMode")]
+    replacement: AnswerReplacement
+    version: Literal[1]
+
+
+class BlockAgentMessageDisplay(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mode: Annotated[Literal["block"], Field(title="BlockAgentMessageDisplayMode")]
+    reason: BlockReason
+    version: Literal[1]
+
+
+class AnswerAnnotation1(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: Literal["wellbeingHelpline"]
+    subject: HelplineSubject
+
+
+class AnswerAnnotation(RootModel[AnswerAnnotation1]):
+    root: AnswerAnnotation1
 
 
 class AppConfig(BaseModel):
@@ -10808,34 +10865,6 @@ class UserMessageThreadItem(BaseModel):
     type: Annotated[Literal["userMessage"], Field(title="UserMessageThreadItemType")]
 
 
-class AgentMessageThreadItem(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    completed_at_ms: Annotated[
-        int | None,
-        Field(
-            alias="completedAtMs",
-            description="Unix timestamp in milliseconds when the item completed, if recorded.",
-        ),
-    ] = None
-    delivery: AgentMessageDelivery | None = None
-    id: str
-    memory_citation: Annotated[MemoryCitation | None, Field(alias="memoryCitation")] = None
-    moderation: AgentMessageModeration | None = None
-    phase: MessagePhase | None = None
-    questions: list[AsyncUserInputQuestion] | None = None
-    started_at_ms: Annotated[
-        int | None,
-        Field(
-            alias="startedAtMs",
-            description="Unix timestamp in milliseconds when the item started, if recorded.",
-        ),
-    ] = None
-    text: str
-    type: Annotated[Literal["agentMessage"], Field(title="AgentMessageThreadItemType")]
-
-
 class CommandExecutionThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11522,6 +11551,44 @@ class AccountSession(BaseModel):
     session_id: Annotated[str, Field(alias="sessionId")]
     user_id: Annotated[str | None, Field(alias="userId")] = None
     workspaces: list[AccountSessionWorkspace]
+
+
+class ShowAgentMessageDisplay(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    annotation: AnswerAnnotation | None = None
+    mode: Annotated[Literal["show"], Field(title="ShowAgentMessageDisplayMode")]
+    trusted_contacts: Annotated[TrustedContacts, Field(alias="trustedContacts")]
+    version: Literal[1]
+
+
+class AgentMessageDisplay(
+    RootModel[ShowAgentMessageDisplay | HideAgentMessageDisplay | BlockAgentMessageDisplay]
+):
+    root: Annotated[
+        ShowAgentMessageDisplay | HideAgentMessageDisplay | BlockAgentMessageDisplay,
+        Field(description="How Chat should present a recovered answer."),
+    ]
+
+
+class AgentMessageModeration(BaseModel):
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_display(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "moderated" not in data or data.get("display") is None:
+            return data
+        try:
+            return {**data, "display": AgentMessageDisplay.model_validate(data["display"])}
+        except ValidationError:
+            return {**data, "moderated": True, "display": None}
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    display: AgentMessageDisplay | None = None
+    moderated: bool
 
 
 class AppInfo(BaseModel):
@@ -12515,6 +12582,34 @@ class SubAgentSessionSource(BaseModel):
 
 class SessionSource(RootModel[SessionSourceValue | CustomSessionSource | SubAgentSessionSource]):
     root: SessionSourceValue | CustomSessionSource | SubAgentSessionSource
+
+
+class AgentMessageThreadItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    completed_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="completedAtMs",
+            description="Unix timestamp in milliseconds when the item completed, if recorded.",
+        ),
+    ] = None
+    delivery: AgentMessageDelivery | None = None
+    id: str
+    memory_citation: Annotated[MemoryCitation | None, Field(alias="memoryCitation")] = None
+    moderation: AgentMessageModeration | None = None
+    phase: MessagePhase | None = None
+    questions: list[AsyncUserInputQuestion] | None = None
+    started_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="startedAtMs",
+            description="Unix timestamp in milliseconds when the item started, if recorded.",
+        ),
+    ] = None
+    text: str
+    type: Annotated[Literal["agentMessage"], Field(title="AgentMessageThreadItemType")]
 
 
 class FunctionCallOutputThreadItem(BaseModel):

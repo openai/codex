@@ -612,6 +612,30 @@ def generate_v2_all(schema_dir: Path, *, format_output: bool = True) -> None:
     _preserve_thread_source_enum(out_path)
     _preserve_open_enum(out_path, "PlanType")
     _normalize_generated_timestamps(out_path)
+    _add_answer_display_fallback(out_path)
+
+
+def _add_answer_display_fallback(out_path: Path) -> None:
+    """Keep items readable and restricted when their display instruction is unsupported."""
+    source = out_path.read_text()
+    header = "class AgentMessageModeration(BaseModel):"
+    if source.count(header) != 1:
+        raise RuntimeError("Generated SDK is missing a unique AgentMessageModeration class")
+    source = source.replace(
+        "from pydantic import ", "from pydantic import ValidationError, model_validator, ", 1
+    )
+    validator = """
+    @model_validator(mode="before")
+    @classmethod
+    def _read_display(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "moderated" not in data or data.get("display") is None:
+            return data
+        try:
+            return {**data, "display": AgentMessageDisplay.model_validate(data["display"])}
+        except ValidationError:
+            return {**data, "moderated": True, "display": None}
+"""
+    out_path.write_text(source.replace(header, header + "\n" + validator, 1))
 
 
 def _preserve_inline_media_class_names(out_path: Path) -> None:

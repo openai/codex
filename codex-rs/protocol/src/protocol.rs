@@ -2416,12 +2416,30 @@ pub struct ModelVerificationEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(from = "StoredTargetedModeration")]
 pub struct TargetedAnswerModeration {
     pub item_id: String,
     pub moderated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub display: Option<crate::items::AgentMessageDisplay>,
+}
+
+#[derive(Deserialize)]
+struct StoredTargetedModeration {
+    item_id: String,
+    #[serde(flatten)]
+    decision: crate::items::AgentMessageModeration,
+}
+
+impl From<StoredTargetedModeration> for TargetedAnswerModeration {
+    fn from(value: StoredTargetedModeration) -> Self {
+        Self {
+            item_id: value.item_id,
+            moderated: value.decision.moderated,
+            display: value.decision.display,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

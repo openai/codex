@@ -3172,30 +3172,27 @@ fn audio_references_round_trip_through_core_and_json() {
 }
 
 #[test]
-fn answer_moderation_exposes_nullable_display_fields() {
-    for (stored, expected) in [
-        (
-            json!({"moderated": false}),
-            json!({"moderated": false, "display": null}),
-        ),
-        (
-            json!({"moderated": true, "display": {
-                "action": "answerHelpline",
-                "checkTrustedContacts": false,
-            }}),
-            json!({"moderated": true, "display": {
-                "action": "answerHelpline",
-                "blockType": null,
-                "cyberTrustedAccess": null,
-                "checkTrustedContacts": false,
-            }}),
-        ),
+fn answer_moderation_preserves_the_display_instruction() {
+    for display in [
+        JsonValue::Null,
+        json!({"version":1, "mode":"show", "trustedContacts":"check",
+            "annotation":{"kind":"wellbeingHelpline", "subject":"prompt"}}),
+        json!({"version":1, "mode":"hide", "replacement":{"kind":"wellbeingPromptHelpline"}}),
+        json!({"version":1, "mode":"block", "reason":{"kind":"protection","protectionType":"omnimod"}}),
+        json!({"version":1, "mode":"block", "reason":{"kind":"cyber","trustedAccess":false}}),
     ] {
-        let core: codex_protocol::items::AgentMessageModeration =
-            serde_json::from_value(stored).unwrap();
+        let stored = json!({"moderated": !display.is_null(), "display": display});
+        let mut with_extra_fields = stored.clone();
+        if let Some(object) = with_extra_fields["display"].as_object_mut() {
+            object.insert("additionalV1Field".into(), json!(true));
+        }
+        let core = serde_json::from_value::<codex_protocol::items::AgentMessageModeration>(
+            with_extra_fields,
+        )
+        .unwrap();
         assert_eq!(
             serde_json::to_value(AgentMessageModeration::from(core)).unwrap(),
-            expected
+            stored
         );
     }
 }
@@ -3775,6 +3772,19 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             duration_ms: Some(42),
         }
     );
+}
+
+#[test]
+fn unsupported_answer_display_leaves_the_answer_restricted() {
+    for display in [
+        json!({"version": 2, "mode": "show", "trustedContacts": "skip"}),
+        json!({"version": 1, "mode": "unknown"}),
+    ] {
+        let parsed: AgentMessageModeration =
+            serde_json::from_value(json!({"moderated": false, "display": display})).unwrap();
+        assert!(parsed.moderated);
+        assert!(parsed.display.is_none());
+    }
 }
 
 #[test]
