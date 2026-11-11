@@ -253,11 +253,13 @@ impl<K: KeyringStore + Clone + 'static> CredentialStore for OAuthCredentialStore
                 .upgrade()
                 .context("OAuth credential mutation requires an active refresh guard")
                 .map_err(credential_store_error)?;
+            let expected = self.inner.last_credentials.lock().await.clone();
             let tokens = tokio::task::spawn_blocking(move || -> Result<StoredOAuthTokens> {
                 let _guard = guard;
                 inner.store.save_with_refresh_telemetry(
                     &inner.keyring,
                     &inner.server_name,
+                    expected.as_ref(),
                     &tokens,
                 )?;
                 Ok(tokens)

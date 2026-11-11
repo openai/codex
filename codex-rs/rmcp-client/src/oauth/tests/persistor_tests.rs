@@ -44,6 +44,7 @@ use super::assert_tokens_match_without_expiry;
 use super::sample_tokens;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpRedirectMode;
+use crate::oauth::FallbackTokenEntry;
 use crate::oauth::OAuthCredentialStore;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::OAuthRuntime;
@@ -55,10 +56,12 @@ use crate::oauth::compute_store_key;
 use crate::oauth::delete_oauth_tokens;
 use crate::oauth::load_oauth_tokens_from_file;
 use crate::oauth::normalized_oauth_credentials;
+use crate::oauth::read_fallback_file_unlocked;
 use crate::oauth::refresh_lock::RefreshCredentialLock;
 use crate::oauth::save_oauth_tokens;
 use crate::oauth::save_oauth_tokens_to_file;
 use crate::oauth::stored_oauth_credentials;
+use crate::oauth::write_fallback_file;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::oauth_http_client::PROACTIVE_REFRESH_TIMEOUT;
 use crate::startup_error::is_authentication_required_error;
@@ -1034,4 +1037,141 @@ fn expired_tokens(url: &str) -> StoredOAuthTokens {
         .0
         .set_expires_in(Some(&Duration::ZERO));
     tokens
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "exercise the existing manager-locked refresh before the persistence hook"
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_persistence_preserves_new_login_and_logout() -> Result<()> {
+    for logout in [false, true] {
+        let (_env, server, initial) = test_context().await?;
+        write_fallback_file(&[("!older-build".into(), FallbackTokenEntry::from(&initial))].into())?;
+        let persistor = persistor_for(&initial).await?;
+        // Simulate credentials changed by the existing AuthClient before its persistence hook.
+        let refresh = Mock::given(method("POST")).and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "refreshed", "refresh_token": "rotated", "token_type": "Bearer", "expires_in": 3600
+            }))).expect(1).mount_as_scoped(&server).await;
+        persistor
+            .inner
+            .authorization_manager
+            .lock()
+            .await
+            .refresh_token()
+            .await?;
+        drop(refresh);
+        let replacement = if logout {
+            None
+        } else {
+            let mut next = initial.clone();
+            next.client_id = "new-login".to_string();
+            Some(next)
+        };
+        match &replacement {
+            Some(next) => {
+                save_oauth_tokens(
+                    &next.server_name,
+                    next,
+                    OAuthCredentialsStoreMode::File,
+                    AuthKeyringBackendKind::Direct,
+                )
+                .await?
+            }
+            None => {
+                delete_oauth_tokens(
+                    &initial.server_name,
+                    &initial.url,
+                    OAuthCredentialsStoreMode::File,
+                    AuthKeyringBackendKind::Direct,
+                )
+                .await?;
+            }
+        }
+        assert!(matches!(
+            persistor
+                .persist_if_needed()
+                .await
+                .unwrap_err()
+                .downcast_ref::<AuthError>(),
+            Some(AuthError::AuthorizationRequired)
+        ));
+        assert_eq!(
+            load_oauth_tokens_from_file(&initial.server_name, &initial.url)?,
+            replacement
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_file_refreshes_preserve_the_matched_credential() -> Result<()> {
+    assert_legacy_file_refreshes("server", "server").await?;
+    assert_legacy_file_refreshes("local:ema-idp:demo", "ema-idp:demo").await
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "exercise the existing manager-locked refresh before the persistence hook"
+)]
+async fn assert_legacy_file_refreshes(requested_name: &str, stored_name: &str) -> Result<()> {
+    let (_env, server, mut initial) = test_context().await?;
+    initial.server_name = stored_name.to_string();
+    let legacy_key = if requested_name == stored_name {
+        "!legacy-oauth-key".to_string()
+    } else {
+        // An escaped local name can read its old unescaped row only under its own key.
+        compute_store_key(requested_name, &initial.url)?
+    };
+    write_fallback_file(&[(legacy_key.clone(), FallbackTokenEntry::from(&initial))].into())?;
+    let persistor = OAuthPersistor::new(
+        requested_name.to_string(),
+        initial.url.clone(),
+        Arc::new(TokioMutex::new(authorization_manager_for(&initial).await?)),
+        ResolvedOAuthCredentialStore::file(),
+        Some(initial.clone()),
+        /*oauth_config*/ None,
+    );
+    for generation in 1..=2 {
+        let access = format!("access-{generation}");
+        let refresh = format!("refresh-{generation}");
+        let mock = Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": access,
+                "refresh_token": refresh,
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "id_token": "vendor-id-token",
+            })))
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        if generation == 1 {
+            persistor.refresh_if_needed().await?;
+        } else {
+            persistor
+                .inner
+                .authorization_manager
+                .lock()
+                .await
+                .refresh_token()
+                .await?;
+            persistor.persist_if_needed().await?;
+        }
+        let entries = read_fallback_file_unlocked()?.expect("File credentials");
+        assert_eq!(entries.len(), 1);
+        let saved = entries.get(&legacy_key).expect("original File entry");
+        assert_eq!(saved.server_name, stored_name);
+        assert_eq!(saved.access_token, access);
+        assert_eq!(saved.refresh_token.as_ref(), Some(&refresh));
+        let cached = persistor
+            .stored_credentials()
+            .await
+            .expect("cached credentials");
+        assert_eq!(cached.server_name, stored_name);
+        drop(mock);
+    }
+    Ok(())
 }

@@ -584,11 +584,13 @@ fn file_store_load_and_delete_observe_aggregate_lock() -> Result<()> {
     assert_tokens_match_without_expiry(&loaded, &tokens);
 
     let key = crate::oauth::compute_store_key(&tokens.server_name, &tokens.url)?;
+    let server_name = tokens.server_name.clone();
+    let url = tokens.url.clone();
     let removed = complete_after_store_lock_contention(
         env.path(),
         OAuthStore::File,
         || Ok(()),
-        move || crate::oauth::delete_oauth_tokens_from_file(&key),
+        move || crate::oauth::delete_oauth_tokens_from_file(&server_name, &url, &key),
     )?;
     assert!(removed);
     assert!(load_oauth_tokens_from_file(&tokens.server_name, &tokens.url)?.is_none());

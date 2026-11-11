@@ -420,10 +420,10 @@ async fn legacy_refresh_persistence_records_each_write_once() -> Result<()> {
             };
             assert_eq!(result.is_err(), fail_save);
             let mut expected = Vec::new();
-            for operation in if proactive {
-                vec!["load", "save", "refresh_persist"]
+            for operation in if !proactive && fail_save {
+                vec!["load"]
             } else {
-                vec!["save", "refresh_persist"]
+                vec!["load", "save", "refresh_persist"]
             } {
                 expected.push(expected_metric(
                     /*count*/ 1,
@@ -435,7 +435,7 @@ async fn legacy_refresh_persistence_records_each_write_once() -> Result<()> {
                         ("secure_outcome", "not_attempted"),
                         (
                             "outcome",
-                            if fail_save && operation != "load" {
+                            if fail_save && (!proactive || operation != "load") {
                                 "error"
                             } else {
                                 "success"
