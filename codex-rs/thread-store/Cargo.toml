@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+caseless = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-app-server-protocol = { workspace = true }
 codex-extension-items = { workspace = true }

@@ -623,6 +623,7 @@ async fn thread_turns_list_supports_requested_items_view() -> Result<()> {
 
 #[tokio::test]
 async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
+    let partial_answer = "😀 ΟΣ ß partial ꟒";
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
@@ -727,7 +728,7 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
                         moderation: None,
                         id: "partial-1".to_string(),
                         content: vec![AgentMessageContent::Text {
-                            text: "stable partial answer".to_string(),
+                            text: partial_answer.to_string(),
                         }],
                         phase: Some(MessagePhase::PartialAnswer),
                         memory_citation: None,
@@ -828,23 +829,34 @@ async fn thread_search_occurrences_reads_paginated_projection() -> Result<()> {
     assert_eq!(data[2].snippet_match_range.end, 15);
     assert_eq!(next_cursor, None);
 
-    let request_id = mcp
-        .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
-            thread_id: thread_id.to_string(),
-            search_term: "partial".to_string(),
-            cursor: None,
-            limit: Some(3),
-        })
-        .await?;
-    let ThreadSearchOccurrencesResponse { data, next_cursor } =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
-    assert_eq!(
-        data.iter()
-            .map(|occurrence| (occurrence.item_id.as_str(), occurrence.snippet.as_str()))
-            .collect::<Vec<_>>(),
-        vec![("partial-1", "stable partial answer")]
-    );
-    assert_eq!(next_cursor, None);
+    for (term, expected_range) in [
+        ("partial", 8..15),
+        ("Σ", 4..5),
+        ("σ", 4..5),
+        ("ς", 4..5),
+        ("ΟΣ", 3..5),
+        ("ss", 6..7),
+        ("ꟓ", 16..17),
+    ] {
+        let request_id = mcp
+            .send_thread_search_occurrences_request(ThreadSearchOccurrencesParams {
+                thread_id: thread_id.to_string(),
+                search_term: term.to_string(),
+                cursor: None,
+                limit: Some(3),
+            })
+            .await?;
+        let ThreadSearchOccurrencesResponse { data, next_cursor } =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+        let [hit] = data.as_slice() else {
+            panic!("expected one match for {term}, got {data:?}");
+        };
+        assert_eq!(hit.item_id, "partial-1");
+        assert_eq!(hit.snippet, partial_answer);
+        let range = &hit.snippet_match_range;
+        assert_eq!(range.start..range.end, expected_range, "search term {term}");
+        assert_eq!(next_cursor, None);
+    }
 
     let fork_request_id = mcp
         .send_thread_fork_request(ThreadForkParams {
