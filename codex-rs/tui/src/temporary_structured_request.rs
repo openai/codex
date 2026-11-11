@@ -5,7 +5,6 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
-use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadSource;
@@ -20,6 +19,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use color_eyre::eyre::eyre;
 use serde_json::Value;
@@ -163,11 +163,21 @@ pub(crate) async fn start_temporary_thread(
                 "temporary structured thread did not preserve permission profile {expected_profile}"
             ));
         }
-    } else if !matches!(response.sandbox, SandboxPolicy::ReadOnly { .. }) {
-        unsubscribe_temporary_thread(request_handle, response.thread.id).await;
-        return Err(eyre!(
-            "temporary structured thread did not start with read-only permissions"
-        ));
+    } else {
+        let profile =
+            PermissionProfile::from_legacy_sandbox_policy_template(&response.sandbox.to_core());
+        if !matches!(profile, PermissionProfile::Managed { .. })
+            || profile
+                .file_system_sandbox_policy()
+                .entries
+                .iter()
+                .any(|entry| entry.access.can_write())
+        {
+            unsubscribe_temporary_thread(request_handle, response.thread.id).await;
+            return Err(eyre!(
+                "temporary structured thread did not start with read-only permissions"
+            ));
+        }
     }
 
     Ok(response)

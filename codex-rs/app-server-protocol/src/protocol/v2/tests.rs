@@ -2876,8 +2876,11 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
 
 #[test]
 fn sandbox_policy_round_trips_workspace_write_access() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
+    std::fs::create_dir(root.join(".git")).expect("git metadata");
     let v2_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
+        writable_roots: vec![root.clone(), root.clone()],
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -2887,11 +2890,37 @@ fn sandbox_policy_round_trips_workspace_write_access() {
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
+            writable_roots: vec![root.clone(), root],
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
+    );
+
+    let profile = codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy_template(
+        &v2_policy.to_core(),
+    );
+    assert!(
+        !profile
+            .file_system_sandbox_policy()
+            .entries
+            .iter()
+            .any(|entry| {
+                entry.access == codex_protocol::permissions::FileSystemAccessMode::Read
+                    && matches!(
+                        entry.path,
+                        codex_protocol::permissions::FileSystemPath::Path { .. }
+                    )
+            })
+    );
+
+    assert_eq!(
+        SandboxPolicy::from(
+            profile
+                .to_legacy_sandbox_policy_template()
+                .expect("portable legacy template")
+        ),
+        v2_policy,
     );
 
     let back_to_v2 = SandboxPolicy::from(core_policy);

@@ -4115,6 +4115,12 @@ mod tests {
                 missing_path_behavior: None,
             });
 
+            assert!(
+                permission_profile
+                    .to_legacy_sandbox_policy_template()
+                    .is_err()
+            );
+
             let error = turn_permissions_overrides(
                 TurnPermissionsOverride::LegacySandbox(permission_profile),
                 cwd.as_path(),

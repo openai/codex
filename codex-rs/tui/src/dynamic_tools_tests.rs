@@ -5,6 +5,8 @@ use crate::legacy_core::config::ConfigBuilder;
 use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout;
 use app_test_support::rollout_path;
+use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::ServerNotification;
 use codex_protocol::ThreadId;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -707,7 +709,7 @@ async fn wait_threads_preserves_snapshots_and_rejects_self_wait() -> color_eyre:
 
 #[tokio::test]
 async fn task_creation_and_followup_start_background_turns() -> color_eyre::Result<()> {
-    let (_codex_home, server, source, target) = test_server(json!({})).await?;
+    let (codex_home, mut server, source, target) = test_server(json!({})).await?;
 
     for (tool, arguments) in [
         (
@@ -753,6 +755,36 @@ async fn task_creation_and_followup_start_background_turns() -> color_eyre::Resu
     .await;
     assert!(!rejected.success);
 
+    let inherited_sandbox = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![
+            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(codex_home.path())?,
+        ],
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    request::<codex_app_server_protocol::ThreadSettingsUpdateResponse>(
+        &server.request_handle(),
+        |request_id| ClientRequest::ThreadSettingsUpdate {
+            request_id,
+            params: codex_app_server_protocol::ThreadSettingsUpdateParams {
+                thread_id: target.clone(),
+                sandbox_policy: Some(inherited_sandbox.clone()),
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .map_err(color_eyre::eyre::Error::msg)?;
+    while let Some(event) = server.next_event().await {
+        if let AppServerEvent::ServerNotification(notification) = event.event
+            && matches!(*notification, ServerNotification::ThreadSettingsUpdated(ref update)
+                if update.thread_id == target && update.thread_settings.sandbox_policy == inherited_sandbox)
+        {
+            break;
+        }
+    }
+
     let created = response_json(
         call_tool(
             &server,
@@ -763,6 +795,21 @@ async fn task_creation_and_followup_start_background_turns() -> color_eyre::Resu
         .await,
     );
     assert!(created["threadId"].is_string());
+    let child: ThreadResumeResponse = request(&server.request_handle(), |request_id| {
+        ClientRequest::ThreadResume {
+            request_id,
+            params: ThreadResumeParams {
+                thread_id: created["threadId"]
+                    .as_str()
+                    .expect("created thread id")
+                    .to_string(),
+                ..Default::default()
+            },
+        }
+    })
+    .await
+    .map_err(color_eyre::eyre::Error::msg)?;
+    assert_eq!(child.sandbox, inherited_sandbox);
 
     let continued = response_json(
         call_tool(

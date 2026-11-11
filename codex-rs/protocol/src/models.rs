@@ -21,6 +21,7 @@ use crate::permissions::FileSystemSandboxEntry;
 use crate::permissions::FileSystemSandboxKind;
 use crate::permissions::FileSystemSandboxPolicy;
 use crate::permissions::FileSystemSpecialPath;
+use crate::permissions::LegacySandboxPolicyProjection;
 use crate::permissions::NetworkSandboxPolicy;
 use crate::permissions::RawFileSystemSandboxEntry;
 use crate::protocol::SandboxPolicy;
@@ -662,6 +663,28 @@ impl PermissionProfile {
         )
     }
 
+    /// Decodes a portable legacy template without probing workspace metadata.
+    pub fn from_legacy_sandbox_policy_template(sandbox_policy: &SandboxPolicy) -> Self {
+        if let SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+            ..
+        } = sandbox_policy
+        {
+            Self::from_runtime_permissions(
+                &FileSystemSandboxPolicy::workspace_write_template(
+                    writable_roots,
+                    *exclude_tmpdir_env_var,
+                    *exclude_slash_tmp,
+                ),
+                NetworkSandboxPolicy::from(sandbox_policy),
+            )
+        } else {
+            Self::from_legacy_sandbox_policy(sandbox_policy)
+        }
+    }
+
     pub fn from_legacy_sandbox_policy_for_cwd(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
         Self::from_runtime_permissions_with_enforcement(
             SandboxEnforcement::from_legacy_sandbox_policy(sandbox_policy),
@@ -734,6 +757,23 @@ impl PermissionProfile {
                 },
             }),
         }
+    }
+
+    /// Encodes an unresolved template without collapsing fixed roots into cwd access.
+    pub fn to_legacy_sandbox_policy_template(&self) -> io::Result<SandboxPolicy> {
+        let policy = self
+            .file_system_sandbox_policy()
+            .to_legacy_sandbox_policy_with_projection(
+                self.network_sandbox_policy(),
+                LegacySandboxPolicyProjection::Template,
+            )?;
+        if Self::from_legacy_sandbox_policy_template(&policy) != *self {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "permission profile cannot be represented by a legacy sandbox template",
+            ));
+        }
+        Ok(policy)
     }
 
     pub fn to_runtime_permissions(&self) -> (FileSystemSandboxPolicy, NetworkSandboxPolicy) {
