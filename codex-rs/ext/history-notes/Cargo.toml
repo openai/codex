@@ -24,6 +24,8 @@ codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 http = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

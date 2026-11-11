@@ -3876,6 +3876,8 @@ dependencies = [
  "http 1.4.0",
  "insta",
  "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
