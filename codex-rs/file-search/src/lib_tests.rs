@@ -92,6 +92,42 @@ fn matching_filenames_survive_the_path_result_limit() {
 }
 
 #[test]
+fn overlapping_roots_share_result_slots_by_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().to_path_buf();
+    let child = parent.join("sub");
+    fs::create_dir(&child).unwrap();
+    let expected = [parent.clone(), child.clone()].map(|root| (root, PathBuf::from("target.txt")));
+    for (root, path) in &expected {
+        fs::write(root.join(path), "").unwrap();
+    }
+
+    for roots in [
+        vec![parent.clone(), child.clone(), parent.clone()],
+        vec![child.clone(), parent, child],
+    ] {
+        let result = run(
+            "target",
+            roots,
+            FileSearchOptions {
+                limit: NonZero::new(2).unwrap(),
+                ..Default::default()
+            },
+            /*cancel_flag*/ None,
+        )
+        .unwrap();
+        let mut paths: Vec<_> = result
+            .matches
+            .into_iter()
+            .map(|m| (m.root, m.path))
+            .collect();
+        paths.sort();
+        assert_eq!(result.total_match_count, expected.len());
+        assert_eq!(paths, expected);
+    }
+}
+
+#[test]
 fn file_name_from_path_uses_basename() {
     assert_eq!(file_name_from_path("foo/bar.txt"), "bar.txt");
 }
