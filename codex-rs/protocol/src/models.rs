@@ -1368,6 +1368,31 @@ pub enum ResponseItem {
 }
 
 impl ResponseItem {
+    /// File-backed audio in messages and tool results, in request order.
+    pub fn file_audio_ids(&self) -> impl Iterator<Item = &String> + Clone {
+        let (message, tool): (&[ContentItem], &[FunctionCallOutputContentItem]) = match self {
+            Self::Message { content, .. } => (content, &[]),
+            Self::FunctionCallOutput { output, .. } | Self::CustomToolCallOutput { output, .. } => {
+                (&[], output.content_items().unwrap_or_default())
+            }
+            _ => (&[], &[]),
+        };
+        message
+            .iter()
+            .filter_map(|part| match part {
+                ContentItem::InputAudio {
+                    audio: AudioReference::File { file_id },
+                } => Some(file_id),
+                _ => None,
+            })
+            .chain(tool.iter().filter_map(|part| match part {
+                FunctionCallOutputContentItem::InputAudio {
+                    audio: AudioReference::File { file_id },
+                } => Some(file_id),
+                _ => None,
+            }))
+    }
+
     /// Clears the top-level `encrypted_content` fields.
     pub fn clear_encrypted_content(&mut self) {
         match self {
@@ -2329,11 +2354,21 @@ pub enum FunctionCallOutputContentItem {
     },
     // Do not rename, these are serialized and used directly in the responses API.
     InputAudio {
-        audio_url: String,
+        #[serde(flatten)]
+        audio: AudioReference,
     },
     EncryptedContent {
         encrypted_content: String,
     },
+}
+
+impl FunctionCallOutputContentItem {
+    /// Audio supplied by an MCP server or Code Mode, before host attachment preparation.
+    pub fn inline_audio(audio_url: String) -> Self {
+        Self::InputAudio {
+            audio: AudioReference::Inline { audio_url },
+        }
+    }
 }
 
 /// Converts message content to tool output, preserving media and image detail.
@@ -2345,12 +2380,7 @@ impl From<ContentItem> for FunctionCallOutputContentItem {
                 Self::InputText { text }
             }
             ContentItem::InputImage { image, detail } => Self::InputImage { image, detail },
-            ContentItem::InputAudio {
-                audio: AudioReference::Inline { audio_url },
-            } => Self::InputAudio { audio_url },
-            ContentItem::InputAudio {
-                audio: AudioReference::File { file_id, .. },
-            } => Self::InputText { text: file_id },
+            ContentItem::InputAudio { audio } => Self::InputAudio { audio },
         }
     }
 }
@@ -2404,7 +2434,7 @@ impl From<crate::dynamic_tools::DynamicToolCallOutputContentItem>
                 }
             }
             crate::dynamic_tools::DynamicToolCallOutputContentItem::InputAudio { audio_url } => {
-                Self::InputAudio { audio_url }
+                Self::inline_audio(audio_url)
             }
         }
     }
@@ -3236,6 +3266,17 @@ mod tests {
     }
 
     #[test]
+    fn tool_audio_references_round_trip_in_the_responses_wire_shape() {
+        for wire in [
+            serde_json::json!({"type":"input_audio","audio_url":"data:audio/wav;base64,QQ=="}),
+            serde_json::json!({"type":"input_audio","file_id":"file-clip"}),
+        ] {
+            let part: FunctionCallOutputContentItem = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(part).unwrap(), wire);
+        }
+    }
+
+    #[test]
     fn convert_mcp_audio_content_builds_data_urls_and_preserves_existing_data_urls() {
         let contents = vec![
             serde_json::json!({
@@ -3254,12 +3295,12 @@ mod tests {
         assert_eq!(
             convert_mcp_content_to_items(&contents),
             vec![
-                FunctionCallOutputContentItem::InputAudio {
-                    audio_url: "data:audio/wav;base64,Zm9v".to_string(),
-                },
-                FunctionCallOutputContentItem::InputAudio {
-                    audio_url: "data:audio/ogg;base64,YmFy".to_string(),
-                },
+                FunctionCallOutputContentItem::inline_audio(
+                    "data:audio/wav;base64,Zm9v".to_string()
+                ),
+                FunctionCallOutputContentItem::inline_audio(
+                    "data:audio/ogg;base64,YmFy".to_string()
+                ),
             ]
         );
     }
@@ -3312,9 +3353,7 @@ mod tests {
                 },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
-            FunctionCallOutputContentItem::InputAudio {
-                audio_url: "data:audio/wav;base64,AAA".to_string(),
-            },
+            FunctionCallOutputContentItem::inline_audio("data:audio/wav;base64,AAA".to_string()),
             FunctionCallOutputContentItem::EncryptedContent {
                 encrypted_content: "enc_opaque".to_string(),
             },
@@ -3659,9 +3698,9 @@ mod tests {
                     FunctionCallOutputContentItem::InputText {
                         text: "caption".into(),
                     },
-                    FunctionCallOutputContentItem::InputAudio {
-                        audio_url: "data:audio/wav;base64,BASE64".into(),
-                    },
+                    FunctionCallOutputContentItem::inline_audio(
+                        "data:audio/wav;base64,BASE64".into()
+                    ),
                 ]),
                 success: Some(true),
             }

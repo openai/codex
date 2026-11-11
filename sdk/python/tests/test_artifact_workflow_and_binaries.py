@@ -562,11 +562,13 @@ def test_generated_audio_inputs_preserve_inline_and_file_shapes() -> None:
         ContentItem,
         FileIdUserInput1,
         InputAudioContentItem,
+        InputAudioFunctionCallOutputContentItem,
         UserInput,
     )
 
     audio_url = "data:audio/wav;base64,YXVkaW8="
     for model, wire in [
+        (InputAudioFunctionCallOutputContentItem, {"type": "input_audio", "audio_url": audio_url}),
         (AudioUserInput, {"type": "audio", "url": audio_url}),
         (InputAudioContentItem, {"type": "input_audio", "audio_url": audio_url}),
         (UserInput, {"type": "audio", "fileId": "file_audio"}),

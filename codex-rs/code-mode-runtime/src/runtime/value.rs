@@ -3,6 +3,7 @@ use serde_json::Value as JsonValue;
 use crate::session_runtime::OutputItem;
 use codex_code_mode_protocol::DEFAULT_IMAGE_DETAIL;
 use codex_code_mode_protocol::ImageDetail;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageReference;
 
@@ -58,7 +59,12 @@ fn mcp_output_item(block: &JsonValue) -> Result<OutputItem, String> {
             image: ImageReference::Inline { image_url },
             detail,
         } => Ok(OutputItem::InputImage { image_url, detail }),
-        FunctionCallOutputContentItem::InputAudio { audio_url } => Ok(output_audio_item(audio_url)),
+        FunctionCallOutputContentItem::InputAudio {
+            audio: AudioReference::Inline { audio_url },
+        } => Ok(output_audio_item(audio_url)),
+        FunctionCallOutputContentItem::InputAudio {
+            audio: AudioReference::File { .. },
+        } => Err("content expects inline MCP audio data".to_string()),
         FunctionCallOutputContentItem::EncryptedContent { .. } => {
             Err("content cannot emit encrypted MCP text".to_string())
         }

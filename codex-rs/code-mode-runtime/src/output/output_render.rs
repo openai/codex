@@ -3,10 +3,11 @@
 use codex_code_mode_protocol::DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL;
 use codex_code_mode_protocol::FunctionCallOutputContentItem as OutputItem;
 use codex_code_mode_protocol::ImageDetail;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail as ProtocolImageDetail;
 use codex_protocol::models::ImageReference;
-use codex_utils_audio::estimate_audio_token_count_without_cache;
+use codex_utils_audio::estimate_tool_audio_tokens_without_cache;
 use codex_utils_output_truncation::OutputBoundary;
 use codex_utils_output_truncation::formatted_output_at_token_boundaries;
 use codex_utils_output_truncation::mixed_output_at_token_boundaries;
@@ -54,7 +55,7 @@ pub(crate) fn render_output(
                 });
             }
             OutputItem::InputAudio { audio_url } => {
-                content.push(FunctionCallOutputContentItem::InputAudio { audio_url });
+                content.push(FunctionCallOutputContentItem::inline_audio(audio_url));
             }
         }
     }
@@ -68,14 +69,14 @@ pub(crate) fn render_output(
         mixed_output_at_token_boundaries(
             content,
             max_tokens,
-            estimate_audio_token_count_without_cache,
+            estimate_tool_audio_tokens_without_cache,
             &mut boundaries,
         )
     } else {
         formatted_output_at_token_boundaries(
             content,
             max_tokens,
-            estimate_audio_token_count_without_cache,
+            estimate_tool_audio_tokens_without_cache,
             &mut boundaries,
         )
     };
@@ -180,10 +181,13 @@ fn into_code_mode_output(item: FunctionCallOutputContentItem) -> OutputItem {
                 ProtocolImageDetail::Original => ImageDetail::Original,
             }),
         },
-        FunctionCallOutputContentItem::InputAudio { audio_url } => {
-            OutputItem::InputAudio { audio_url }
-        }
+        FunctionCallOutputContentItem::InputAudio {
+            audio: AudioReference::Inline { audio_url },
+        } => OutputItem::InputAudio { audio_url },
         FunctionCallOutputContentItem::EncryptedContent { .. }
+        | FunctionCallOutputContentItem::InputAudio {
+            audio: AudioReference::File { .. },
+        }
         | FunctionCallOutputContentItem::InputImage {
             image: ImageReference::File { .. },
             ..

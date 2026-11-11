@@ -16,7 +16,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
-use codex_utils_audio::estimate_audio_token_count;
+use codex_utils_audio::estimate_tool_audio_tokens;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_function_output_payload;
 use codex_utils_output_truncation::with_serialization_allowance;
@@ -252,7 +252,7 @@ impl McpToolOutput {
         truncate_function_output_payload(
             &mut payload,
             with_serialization_allowance(self.truncation_policy),
-            estimate_audio_token_count,
+            estimate_tool_audio_tokens,
         );
         payload
     }

@@ -1,3 +1,4 @@
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -268,11 +269,12 @@ fn content_items_to_code_mode_result(items: &[FunctionCallOutputContentItem]) ->
                     image: ImageReference::File { file_id },
                     ..
                 } if !file_id.trim().is_empty() => Some(file_id.clone()),
-                FunctionCallOutputContentItem::InputAudio { audio_url }
-                    if !audio_url.trim().is_empty() =>
-                {
-                    Some(audio_url.clone())
-                }
+                FunctionCallOutputContentItem::InputAudio {
+                    audio: AudioReference::Inline { audio_url },
+                } if !audio_url.trim().is_empty() => Some(audio_url.clone()),
+                FunctionCallOutputContentItem::InputAudio {
+                    audio: AudioReference::File { file_id },
+                } if !file_id.trim().is_empty() => Some(file_id.clone()),
                 FunctionCallOutputContentItem::InputText { .. }
                 | FunctionCallOutputContentItem::InputImage { .. }
                 | FunctionCallOutputContentItem::InputAudio { .. }

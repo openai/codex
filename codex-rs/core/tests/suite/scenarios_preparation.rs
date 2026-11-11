@@ -1,22 +1,28 @@
 //! Verifies prepared context reaches both the first model request and a follow-up.
 
 use super::*;
+use anyhow::Context as _;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::turn_input::AnnotatedResponseItem;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 
+#[test_case("message")]
+#[test_case("function_call_output")]
+#[test_case("custom_tool_call_output")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn raw_injection_rejects_uploaded_audio_before_modifying_history() -> Result<()> {
+async fn raw_injection_rejects_uploaded_audio_before_modifying_history(kind: &str) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let test = test_codex().build_with_auto_env(&server).await?;
     let before = test.codex.conversation_history_snapshot().await;
-    let audio: ResponseItem = serde_json::from_value(json!({
-        "type": "message", "role": "developer",
-        "content": [{"type": "input_audio", "file_id": "file_injected"}]
-    }))?;
+    let parts = json!([{"type": "input_audio", "file_id": "file_injected"}]);
+    let audio: ResponseItem = serde_json::from_value(if kind == "message" {
+        json!({"type": kind, "role": "developer", "content": parts})
+    } else {
+        json!({"type": kind, "call_id": "untrusted", "output": parts})
+    })?;
     let batch = vec![
         core_test_support::responses::user_message_item("must not be partially written"),
         audio.clone(),
@@ -26,12 +32,14 @@ async fn raw_injection_rejects_uploaded_audio_before_modifying_history() -> Resu
         .codex
         .inject_response_items(batch.clone())
         .await
-        .unwrap_err();
+        .err()
+        .context("raw history accepted a caller-supplied audio file")?;
     let preparation_error = test
         .codex
         .inject_response_items_for_turn(batch)
         .await
-        .unwrap_err();
+        .err()
+        .context("prepared history accepted a caller-supplied audio file")?;
     for error in [history_error, preparation_error] {
         assert!(matches!(
             error.details(),
@@ -49,7 +57,8 @@ async fn raw_injection_rejects_uploaded_audio_before_modifying_history() -> Resu
             .codex
             .start_or_steer_turn(TurnInputRequest::new(input))
             .await
-            .unwrap_err();
+            .err()
+            .context("turn input accepted an untyped audio file")?;
         assert!(matches!(
             error.details(),
             CodexErrorDetails::InvalidRequest(_)

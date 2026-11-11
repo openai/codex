@@ -78,9 +78,7 @@ impl FunctionCallOutputContentItem {
                         .unwrap_or(DEFAULT_IMAGE_DETAIL),
                 ),
             },
-            McpContent::Audio(media) => Self::InputAudio {
-                audio_url: media.data_url(),
-            },
+            McpContent::Audio(media) => Self::inline_audio(media.data_url()),
             McpContent::ResourceLink { .. } | McpContent::Resource { .. } => Self::InputText {
                 text: serde_json::to_string(block)?,
             },

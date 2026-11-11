@@ -107,7 +107,9 @@ fn prepare_message_content(items: &mut [ContentItem]) {
 
 fn prepare_tool_output_content(items: &mut [FunctionCallOutputContentItem]) {
     for item in items {
-        if let FunctionCallOutputContentItem::InputAudio { audio_url } = item
+        if let FunctionCallOutputContentItem::InputAudio {
+            audio: AudioReference::Inline { audio_url },
+        } = item
             && let Err(error) = prepare_audio(audio_url)
         {
             warn!(%error, "failed to prepare tool output audio");
@@ -160,8 +162,28 @@ pub fn estimate_file_audio_tokens(duration: Option<std::time::Duration>) -> usiz
     usize::try_from(tokens).unwrap_or(usize::MAX)
 }
 
+/// Estimate tool audio on Core's multi-threaded runtime.
+pub fn estimate_tool_audio_tokens(audio: &AudioReference) -> usize {
+    estimate_tool_audio_tokens_with(audio, estimate_audio_token_count)
+}
+
+/// Code Mode can render on a single thread, where blocking cache access is unavailable.
+pub fn estimate_tool_audio_tokens_without_cache(audio: &AudioReference) -> usize {
+    estimate_tool_audio_tokens_with(audio, estimate_audio_token_count_without_cache)
+}
+
+fn estimate_tool_audio_tokens_with(
+    audio: &AudioReference,
+    inline_cost: impl FnOnce(&str) -> usize,
+) -> usize {
+    match audio {
+        AudioReference::Inline { audio_url } => inline_cost(audio_url),
+        AudioReference::File { .. } => estimate_file_audio_tokens(/*duration*/ None),
+    }
+}
+
 /// Estimates audio tokens from decoded duration, falling back to the data URL size.
-pub fn estimate_audio_token_count(audio_url: &str) -> usize {
+fn estimate_audio_token_count(audio_url: &str) -> usize {
     let key = sha1_digest(audio_url.as_bytes());
     AUDIO_TOKEN_ESTIMATE_CACHE
         .get_or_init(key, || estimate_audio_token_count_without_cache(audio_url))
@@ -169,7 +191,7 @@ pub fn estimate_audio_token_count(audio_url: &str) -> usize {
 
 /// The same duration-based estimate without accessing the Tokio-dependent cache.
 /// Suitable for bounded output rendered on a current-thread runtime.
-pub fn estimate_audio_token_count_without_cache(audio_url: &str) -> usize {
+fn estimate_audio_token_count_without_cache(audio_url: &str) -> usize {
     let Some(duration_seconds) = audio_duration_seconds(audio_url) else {
         return approx_token_count(audio_url);
     };

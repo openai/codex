@@ -1216,9 +1216,9 @@ fn transcript_omits_media_payloads_and_keeps_readable_content() {
                     },
                     detail: None,
                 },
-                FunctionCallOutputContentItem::InputAudio {
-                    audio_url: "data:audio/wav;base64,tool-audio".to_string(),
-                },
+                FunctionCallOutputContentItem::inline_audio(
+                    "data:audio/wav;base64,tool-audio".to_string(),
+                ),
             ]),
             internal_chat_message_metadata_passthrough: None,
         },

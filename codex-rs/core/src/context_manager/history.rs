@@ -70,7 +70,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::WorldStateItem;
-use codex_utils_audio::estimate_audio_token_count;
+use codex_utils_audio::estimate_tool_audio_tokens;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -677,7 +677,7 @@ impl ContextManager {
                 .and_then(|metadata| metadata.history_truncation_token_limit)
                 .map(TruncationPolicy::Tokens)
                 .unwrap_or_else(|| with_serialization_allowance(policy));
-            truncate_function_output_payload(output, policy, estimate_audio_token_count);
+            truncate_function_output_payload(output, policy, estimate_tool_audio_tokens);
         }
         if let Some(review_history) = &mut self.review_history
             && !is_guardian_context_message(item)
@@ -1411,7 +1411,7 @@ fn estimate_response_item_model_visible_bytes(
             namespace,
             output,
             ..
-        } => estimate_function_output_bytes(&output.body)
+        } => estimate_function_output_bytes(&output.body, audio_durations)
             .saturating_add(text_bytes(call_id.as_deref().unwrap_or_default()))
             .saturating_add(text_bytes(name.as_deref().unwrap_or_default()))
             .saturating_add(text_bytes(namespace.as_deref().unwrap_or_default())),
@@ -1420,7 +1420,7 @@ fn estimate_response_item_model_visible_bytes(
             name,
             output,
             ..
-        } => estimate_function_output_bytes(&output.body)
+        } => estimate_function_output_bytes(&output.body, audio_durations)
             .saturating_add(text_bytes(call_id))
             .saturating_add(text_bytes(name.as_deref().unwrap_or_default())),
         // These payloads are themselves JSON arguments, rather than transport envelopes
@@ -1562,27 +1562,21 @@ pub(crate) fn estimate_image_reference_bytes(
     }
 }
 
-fn estimate_audio_bytes(audio_url: &str) -> i64 {
-    i64::try_from(approx_bytes_for_tokens(estimate_audio_token_count(
-        audio_url,
-    )))
-    .unwrap_or(i64::MAX)
-}
-
 fn estimate_audio_reference_bytes(
     audio: &AudioReference,
     audio_durations: &FileAudioDurations,
 ) -> i64 {
-    match audio {
-        AudioReference::Inline { audio_url } => estimate_audio_bytes(audio_url),
-        AudioReference::File { file_id } => {
-            i64::try_from(approx_bytes_for_tokens(audio_durations.tokens(file_id)))
-                .unwrap_or(i64::MAX)
-        }
-    }
+    let tokens = match audio {
+        AudioReference::Inline { .. } => estimate_tool_audio_tokens(audio),
+        AudioReference::File { file_id } => audio_durations.tokens(file_id),
+    };
+    i64::try_from(approx_bytes_for_tokens(tokens)).unwrap_or(i64::MAX)
 }
 
-fn estimate_function_output_bytes(output: &FunctionCallOutputBody) -> i64 {
+fn estimate_function_output_bytes(
+    output: &FunctionCallOutputBody,
+    audio_durations: &FileAudioDurations,
+) -> i64 {
     match output {
         FunctionCallOutputBody::Text(text) => text_bytes(text),
         FunctionCallOutputBody::ContentItems(items) => items
@@ -1592,8 +1586,8 @@ fn estimate_function_output_bytes(output: &FunctionCallOutputBody) -> i64 {
                 FunctionCallOutputContentItem::InputImage { image, detail } => {
                     estimate_image_reference_bytes(image, *detail)
                 }
-                FunctionCallOutputContentItem::InputAudio { audio_url } => {
-                    estimate_audio_bytes(audio_url)
+                FunctionCallOutputContentItem::InputAudio { audio } => {
+                    estimate_audio_reference_bytes(audio, audio_durations)
                 }
                 FunctionCallOutputContentItem::EncryptedContent { encrypted_content } => {
                     i64::try_from(estimate_encrypted_function_output_length(

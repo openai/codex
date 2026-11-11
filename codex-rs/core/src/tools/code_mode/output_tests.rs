@@ -16,9 +16,7 @@ fn completed_timing_preserves_content_and_distinguishes_zero_from_unavailable() 
             },
             detail: None,
         },
-        FunctionCallOutputContentItem::InputAudio {
-            audio_url: "data:audio/wav;base64,audio".to_string(),
-        },
+        FunctionCallOutputContentItem::inline_audio("data:audio/wav;base64,audio".to_string()),
     ];
     for (host_duration, expected_timing) in [
         (

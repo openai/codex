@@ -28,7 +28,7 @@ impl IntoProtocol<FunctionCallOutputContentItem>
                 }
             }
             codex_code_mode::FunctionCallOutputContentItem::InputAudio { audio_url } => {
-                FunctionCallOutputContentItem::InputAudio { audio_url }
+                FunctionCallOutputContentItem::inline_audio(audio_url)
             }
         }
     }

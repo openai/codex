@@ -6,23 +6,12 @@ use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::AudioReference;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 
 /// Uploaded files need the admission checks on typed turn input before entering history.
 pub(crate) fn validate_injected_response_item(item: &ResponseItem) -> CodexResult<()> {
-    if let ResponseItem::Message { content, .. } = item
-        && content.iter().any(|part| {
-            matches!(
-                part,
-                ContentItem::InputAudio {
-                    audio: AudioReference::File { .. }
-                }
-            )
-        })
-    {
+    if item.file_audio_ids().next().is_some() {
         return Err(CodexErr::InvalidRequest(
             "Uploaded audio files must be submitted as turn input.".to_string(),
         ));

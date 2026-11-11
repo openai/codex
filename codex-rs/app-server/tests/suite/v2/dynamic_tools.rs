@@ -721,9 +721,7 @@ async fn dynamic_tool_call_round_trip_handles_content_items() -> Result<()> {
             },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         },
-        FunctionCallOutputContentItem::InputAudio {
-            audio_url: INLINE_AUDIO_DATA_URL.to_string(),
-        },
+        FunctionCallOutputContentItem::inline_audio(INLINE_AUDIO_DATA_URL.to_string()),
     ];
     let response = DynamicToolCallResponse {
         content_items: response_content_items,

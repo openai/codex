@@ -131,12 +131,12 @@ fn preparation_replaces_only_failed_tool_audio_and_preserves_metadata() {
                 FunctionCallOutputContentItem::InputText {
                     text: "before".to_string(),
                 },
-                FunctionCallOutputContentItem::InputAudio {
-                    audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
-                },
-                FunctionCallOutputContentItem::InputAudio {
-                    audio_url: "data:audio/wav,not-base64".to_string(),
-                },
+                FunctionCallOutputContentItem::inline_audio(
+                    "data:audio/wav;base64,YXVkaW8=".to_string(),
+                ),
+                FunctionCallOutputContentItem::inline_audio(
+                    "data:audio/wav,not-base64".to_string(),
+                ),
             ]),
             success: Some(true),
         },
@@ -157,9 +157,9 @@ fn preparation_replaces_only_failed_tool_audio_and_preserves_metadata() {
                     FunctionCallOutputContentItem::InputText {
                         text: "before".to_string(),
                     },
-                    FunctionCallOutputContentItem::InputAudio {
-                        audio_url: "data:audio/wav;base64,YXVkaW8=".to_string(),
-                    },
+                    FunctionCallOutputContentItem::inline_audio(
+                        "data:audio/wav;base64,YXVkaW8=".to_string()
+                    ),
                     FunctionCallOutputContentItem::InputText {
                         text: "audio content omitted because it could not be processed".to_string(),
                     },
