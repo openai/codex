@@ -1456,16 +1456,27 @@ fn build_mcp_tool_call_request_meta(
         serde_json::Value::String(call_id.to_string()),
     );
 
-    if let Some(turn_metadata) = step_context
+    if let Some(serde_json::Value::Object(mut turn_metadata)) = step_context
         .turn
         .turn_metadata_state
         .current_meta_value_for_mcp_request(ExecutionMetadata::from_settings(
             &step_context.settings,
         ))
     {
+        // Attribute trusted browser/REPL telemetry from this turn's configuration,
+        // without forwarding internal product identity to unrelated MCP servers.
+        turn_metadata.remove("product_sku");
+        if is_node_repl_backed_connector(
+            server,
+            metadata.and_then(|metadata| metadata.connector_id.as_deref()),
+        ) && let Some(sku) = codex_otel::bounded_product_sku(
+            step_context.turn.config.apps_mcp_product_sku.as_deref(),
+        ) {
+            turn_metadata.insert("product_sku".to_string(), serde_json::json!(sku));
+        }
         request_meta.insert(
             crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
-            turn_metadata,
+            serde_json::Value::Object(turn_metadata),
         );
     }
 

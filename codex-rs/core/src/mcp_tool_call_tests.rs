@@ -1156,6 +1156,65 @@ fn truncate_mcp_tool_result_for_event_bounds_large_error() {
 }
 
 #[tokio::test]
+async fn mcp_tool_call_request_meta_attributes_only_repl_calls_to_configured_product() {
+    for (server, connector, configured, expected) in [
+        ("node_repl", None, Some("codex"), Some("codex")),
+        (
+            "codex_apps",
+            Some("connector_openai_browser"),
+            Some("codex"),
+            Some("codex"),
+        ),
+        ("custom_server", None, Some("codex"), None),
+        (
+            "codex_apps",
+            Some("unrelated_connector"),
+            Some("codex"),
+            None,
+        ),
+        (
+            "node_repl",
+            None,
+            Some("private-unrecognized-product"),
+            Some("other"),
+        ),
+        ("node_repl", None, Some(""), None),
+        ("node_repl", None, None, None),
+    ] {
+        let (_, mut turn_context) = make_session_and_context().await;
+        Arc::make_mut(&mut turn_context.config).apps_mcp_product_sku =
+            configured.map(str::to_owned);
+        turn_context
+            .turn_metadata_state
+            .update_responsesapi_client_metadata(ResponsesApiClientMetadataUpdate {
+                replacement: Some(HashMap::from([(
+                    "product_sku".to_string(),
+                    "spoofed".to_string(),
+                )])),
+                ..Default::default()
+            });
+        let step_context = StepContext::for_test(Arc::new(turn_context));
+        let metadata = approval_metadata(
+            connector, /*connector_name*/ None, /*connector_description*/ None,
+            /*tool_title*/ None, /*tool_description*/ None,
+        );
+        let meta = build_mcp_tool_call_request_meta(
+            &step_context,
+            server,
+            "call-product",
+            Some(&metadata),
+            /*is_host_owned_apps*/ false,
+        )
+        .expect("request metadata");
+        assert_eq!(
+            meta[crate::X_CODEX_TURN_METADATA_HEADER].get("product_sku"),
+            expected.map(serde_json::Value::from).as_ref(),
+            "{server}, {connector:?}, {configured:?}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     let (_, turn_context) = make_session_and_context().await;
     let turn_context = Arc::new(turn_context);
