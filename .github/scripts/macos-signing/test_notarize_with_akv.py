@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import hashlib
 import io
@@ -148,6 +149,73 @@ class NotarizationTest(unittest.TestCase):
             ):
                 notary.create_apple_jwt(CONFIGURATION, issued_at=1)
 
+    def test_signer_service_refreshes_tokens_without_azure(self):
+        environment = {
+            "APPLE_NOTARIZATION_BACKEND": "signer-service",
+            "APPLE_NOTARIZATION_ISSUER_ID": CONFIGURATION.issuer_id,
+            "APPLE_NOTARIZATION_KEY_ID": CONFIGURATION.apple_key_id,
+            "APPLE_NOTARIZATION_SIGNER_ENDPOINT": "https://signer.example.com",
+            "APPLE_NOTARIZATION_SIGNER_PURPOSE": "test-notarization",
+            "APPLE_NOTARIZATION_SIGNER_KEY_ID": "expected-key",
+            "APPLE_NOTARIZATION_SIGNER_PROTO": "/tmp/notarization_signer.proto",
+            "ACTIONS_ID_TOKEN_REQUEST_URL": "https://pipelines.actions.githubusercontent.com/token",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-secret",
+        }
+        with (
+            tempfile.NamedTemporaryFile() as artifact,
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(
+                sys, "argv", ["notarize_with_akv.py", "--file", artifact.name]
+            ),
+            patch.object(notary.time, "time", side_effect=[1, 900, 900]),
+            patch.object(
+                notary,
+                "json_request",
+                side_effect=[
+                    {"data": {"id": "submission-1", "attributes": CREDENTIALS}},
+                    {"data": {"attributes": {"status": "Accepted"}}},
+                ],
+            ) as request,
+            patch.object(notary, "upload_to_apple_s3"),
+            patch.object(
+                notary.urllib.request,
+                "urlopen",
+                side_effect=[
+                    response({"value": "first-oidc"}),
+                    response({"value": "fresh-oidc"}),
+                ],
+            ),
+            patch.object(
+                notary.subprocess,
+                "run",
+                return_value=azure_response(
+                    {
+                        "keyId": "expected-key",
+                        "algorithm": "SIGNING_ALGORITHM_ECDSA_P256_SHA256",
+                        "signature": base64.b64encode(bytes(64)).decode(),
+                    }
+                ),
+            ) as sign,
+        ):
+            self.assertEqual(notary.main(), 0)
+        self.assertEqual(
+            [
+                json.loads(notary.base64url_decode(entry.args[1].split(".")[1]))["iat"]
+                for entry in request.call_args_list
+            ],
+            [1, 900],
+        )
+        self.assertEqual(
+            [entry.args[0][0] for entry in sign.call_args_list], ["grpcurl", "grpcurl"]
+        )
+        self.assertEqual(
+            [
+                entry.kwargs["env"]["NOTARIZATION_OIDC_TOKEN"]
+                for entry in sign.call_args_list
+            ],
+            ["first-oidc", "fresh-oidc"],
+        )
+
     def test_uploads_polls_and_retains_sanitized_apple_diagnostics(self) -> None:
         signature = azure_response(
             {
@@ -224,8 +292,17 @@ class NotarizationWrapperTest(unittest.TestCase):
                     f"#!/usr/bin/env bash\nset -euo pipefail\n{body}\n"
                 )
                 executable.chmod(0o755)
-            for kind in ("binary", "dmg"):
-                with self.subTest(kind=kind):
+            for kind, backend in (
+                ("binary", "akv"),
+                ("dmg", "akv"),
+                ("binary", "signer-service"),
+            ):
+                selected_environment = dict(environment)
+                if backend == "signer-service":
+                    selected_environment["APPLE_NOTARIZATION_BACKEND"] = backend
+                    for name in ENVIRONMENT:
+                        selected_environment.pop(name, None)
+                with self.subTest(kind=kind, backend=backend):
                     artifact = root / ("codex.dmg" if kind == "dmg" else "codex")
                     artifact.write_bytes(b"signed release artifact")
                     subprocess.run(
@@ -238,7 +315,7 @@ class NotarizationWrapperTest(unittest.TestCase):
                             "--report-dir",
                             str(root / "report"),
                         ],
-                        env=environment,
+                        env=selected_environment,
                         check=True,
                         capture_output=True,
                         text=True,

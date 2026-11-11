@@ -68,19 +68,21 @@ for command_name in python3 zip; do
   fi
 done
 
-missing_environment=0
-for variable_name in \
-  APPLE_NOTARIZATION_AKV_KEY_NAME \
-  AZURE_KEYVAULT_NAME
-do
-  if [[ -z "${!variable_name:-}" ]]; then
-    echo "$variable_name must be configured before notarizing a binary." >&2
-    missing_environment=1
-  fi
-done
+if [[ "${APPLE_NOTARIZATION_BACKEND:-akv}" != signer-service ]]; then
+  missing_environment=0
+  for variable_name in \
+    APPLE_NOTARIZATION_AKV_KEY_NAME \
+    AZURE_KEYVAULT_NAME
+  do
+    if [[ -z "${!variable_name:-}" ]]; then
+      echo "$variable_name must be configured before notarizing a binary." >&2
+      missing_environment=1
+    fi
+  done
 
-if [[ "$missing_environment" -ne 0 ]]; then
-  exit 2
+  if [[ "$missing_environment" -ne 0 ]]; then
+    exit 2
+  fi
 fi
 
 mkdir -p "$report_dir"

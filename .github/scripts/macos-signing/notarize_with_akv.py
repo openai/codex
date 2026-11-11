@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -165,14 +166,22 @@ def base64url_decode(value: str) -> bytes:
 
 
 def create_apple_jwt(
-    configuration: NotarizationConfiguration, *, issued_at: int
+    configuration: NotarizationConfiguration | None, *, issued_at: int
 ) -> str:
-    """Create an authentication token for notarization requests."""
+    """Create Apple's JWT; a None configuration selects Signer Service."""
 
-    header = {"alg": "ES256", "kid": configuration.apple_key_id, "typ": "JWT"}
+    header = {
+        "alg": "ES256",
+        "kid": configuration.apple_key_id
+        if configuration
+        else os.environ["APPLE_NOTARIZATION_KEY_ID"],
+        "typ": "JWT",
+    }
     # Restrict the token to notarization requests.
     claims = {
-        "iss": configuration.issuer_id,
+        "iss": configuration.issuer_id
+        if configuration
+        else os.environ["APPLE_NOTARIZATION_ISSUER_ID"],
         "iat": issued_at,
         "exp": issued_at + JWT_LIFETIME_SECONDS,
         "aud": "appstoreconnect-v1",
@@ -186,6 +195,9 @@ def create_apple_jwt(
     )
     signing_input = f"{encoded_header}.{encoded_claims}"
     digest = hashlib.sha256(signing_input.encode("ascii")).digest()
+    if configuration is None:
+        signature = sign_digest_with_signer_service(digest)
+        return f"{signing_input}.{base64url_encode(signature)}"
     key_url = configuration.versioned_key_id
     request_body = json.dumps({"alg": "ES256", "value": base64url_encode(digest)})
 
@@ -238,6 +250,87 @@ def create_apple_jwt(
     if len(signature) != 64:
         raise NotarizationError("ES256 signature must contain 64 JOSE R || S bytes")
     return f"{signing_input}.{base64url_encode(signature)}"
+
+
+def sign_digest_with_signer_service(digest: bytes) -> bytes:
+    """Sign the Apple JWT digest with the configured Signer Service key."""
+
+    endpoint = os.environ["APPLE_NOTARIZATION_SIGNER_ENDPOINT"]
+    url = urllib.parse.urlsplit(os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"])
+    query = dict(urllib.parse.parse_qsl(url.query), audience=endpoint)
+    request = urllib.request.Request(
+        urllib.parse.urlunsplit(url._replace(query=urllib.parse.urlencode(query))),
+        headers={
+            "Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            token = json.load(response)["value"]
+    except urllib.error.HTTPError as error:
+        raise NotarizationError(
+            f"GitHub OIDC request returned HTTP {error.code}"
+        ) from None
+    except OSError:
+        raise NotarizationError(
+            "GitHub OIDC request failed; transport details redacted"
+        ) from None
+    except (ValueError, KeyError, TypeError):
+        raise NotarizationError(
+            "GitHub OIDC returned an invalid token response"
+        ) from None
+    proto = Path(os.environ["APPLE_NOTARIZATION_SIGNER_PROTO"])
+    try:
+        result = subprocess.run(
+            [
+                "grpcurl",
+                "-import-path",
+                str(proto.parent),
+                "-proto",
+                proto.name,
+                "-max-time",
+                "30",
+                "-expand-headers",
+                "-rpc-header",
+                "authorization: Bearer ${NOTARIZATION_OIDC_TOKEN}",
+                "-rpc-header",
+                f"x-openai-route-key: {uuid.uuid4()}",
+                "-d",
+                "@",
+                urllib.parse.urlsplit(endpoint).netloc + ":443",
+                "oaiproto.security.signer.v1.SignerService/Sign",
+            ],
+            input=json.dumps(
+                {
+                    "purpose": os.environ["APPLE_NOTARIZATION_SIGNER_PURPOSE"],
+                    "digest": base64.b64encode(digest).decode(),
+                }
+            ),
+            env={**os.environ, "NOTARIZATION_OIDC_TOKEN": token},
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        # grpcurl errors may contain authorization headers or response bodies.
+        raise NotarizationError(
+            "Signer Service signing request failed; details redacted"
+        ) from None
+    try:
+        result = json.loads(result.stdout)
+        key_id, algorithm = result["keyId"], result["algorithm"]
+        signature = base64.b64decode(result["signature"], validate=True)
+    except (ValueError, KeyError, TypeError):
+        raise NotarizationError(
+            "Signer Service returned an invalid signing response"
+        ) from None
+    if key_id != os.environ["APPLE_NOTARIZATION_SIGNER_KEY_ID"]:
+        raise NotarizationError("Signer Service returned an unexpected signing key")
+    if algorithm != "SIGNING_ALGORITHM_ECDSA_P256_SHA256":
+        raise NotarizationError(
+            "Signer Service returned an unexpected signing algorithm"
+        )
+    return signature
 
 
 def json_request(
@@ -416,12 +509,12 @@ def write_developer_log(
 
 def notarize(
     path: Path,
-    configuration: NotarizationConfiguration,
+    configuration: NotarizationConfiguration | None,
     *,
     max_wait_seconds: int,
     report_log: Path | None,
 ) -> str:
-    """Submit an artifact, upload it to Apple, and wait for a terminal result."""
+    """Submit an artifact and await Apple's result; None selects Signer Service."""
 
     issued_at = int(time.time())
     token = create_apple_jwt(configuration, issued_at=issued_at)
@@ -503,13 +596,24 @@ def main() -> int:
             raise NotarizationError("--max-wait-seconds must be non-negative")
         if arguments.report_log is not None:
             arguments.report_log.parent.mkdir(parents=True, exist_ok=True)
+        backend = os.environ.get("APPLE_NOTARIZATION_BACKEND", "akv")
+        if backend not in {"akv", "signer-service"}:
+            raise NotarizationError(
+                "APPLE_NOTARIZATION_BACKEND must be akv or signer-service"
+            )
+        configuration = (
+            NotarizationConfiguration.from_environment() if backend == "akv" else None
+        )
         notarize(
             arguments.file,
-            NotarizationConfiguration.from_environment(),
+            configuration,
             max_wait_seconds=arguments.max_wait_seconds,
             report_log=arguments.report_log,
         )
-    except NotarizationError as error:
+    except KeyError as error:
+        print(f"Missing notarization configuration: {error.args[0]}", file=sys.stderr)
+        return 1
+    except (NotarizationError, OSError) as error:
         print(f"Notarization failed: {error}", file=sys.stderr)
         return 1
     return 0
