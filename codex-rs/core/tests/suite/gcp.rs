@@ -136,8 +136,12 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search(
             config.base_instructions = Some("Vertex test instructions".to_string());
             config
                 .features
-                .set_enabled(Feature::IncrementalToolsLegacy, incremental_tools)
+                .set_enabled(Feature::IncrementalToolsLegacyGcp, incremental_tools)
                 .expect("configure incremental tools on Vertex");
+            config
+                .features
+                .set_enabled(Feature::IncrementalToolsLegacy, !incremental_tools)
+                .expect("configure independent Bedrock flag");
         })
         .build_with_auto_env(&server)
         .await?;
