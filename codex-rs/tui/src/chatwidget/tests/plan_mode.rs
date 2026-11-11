@@ -138,16 +138,10 @@ async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
-    let AppEvent::ClearUiAndSubmitUserMessage { text } = event else {
-        panic!("expected ClearUiAndSubmitUserMessage, got {event:?}");
+    let AppEvent::ImplementPlanInFreshSession { plan } = event else {
+        panic!("expected ImplementPlanInFreshSession, got {event:?}");
     };
-    assert_eq!(
-        text,
-        "A previous agent produced the plan below to accomplish the user's task. \
-        Implement the plan in a fresh context. Treat the plan as the source of \
-        user intent, re-read files as needed, and carry the work through \
-        implementation and verification.\n\n- Step 1\n- Step 2\n"
-    );
+    assert_eq!(plan, plan_markdown);
 }
 
 #[tokio::test]

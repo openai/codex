@@ -5,6 +5,8 @@ use codex_app_server_protocol::ThreadGuardianAssessment;
 use codex_app_server_protocol::ThreadGuardianReviewParams;
 use codex_app_server_protocol::ThreadGuardianReviewResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadPrepareApprovedPlanParams;
+use codex_app_server_protocol::ThreadPrepareApprovedPlanResponse;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -16,6 +18,7 @@ use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::turn_input::AnnotatedResponseItem;
 use codex_protocol::turn_input::ResponseItemAnnotations;
+use codex_utils_path_uri::PathUri;
 
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
@@ -237,6 +240,33 @@ impl TurnRequestProcessor {
         self.thread_inject_items_response_inner(request_id, params)
             .await
             .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_prepare_approved_plan(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadPrepareApprovedPlanParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        self.ensure_direct_input_allowed(request_id, thread.as_ref())
+            .await?;
+        let actual_chars = params.markdown.chars().count();
+        if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
+            return Err(Self::input_too_large_error(actual_chars));
+        }
+        let attachment_path = params
+            .attachment_path
+            .map(PathUri::from_host_native_path)
+            .transpose()
+            .map_err(|_| invalid_params("`attachmentPath` must be absolute on the app server"))?;
+        let prompt = thread
+            .prepare_approved_plan(attachment_path.as_ref(), &params.markdown)
+            .await
+            .map_err(|err| match err.details() {
+                CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+                _ => internal_error(format!("failed to prepare the approved plan: {err}")),
+            })?;
+        Ok(Some(ThreadPrepareApprovedPlanResponse { prompt }.into()))
     }
 
     pub(crate) async fn thread_settings_update(

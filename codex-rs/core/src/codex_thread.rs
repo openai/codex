@@ -1030,6 +1030,19 @@ impl CodexThread {
         Ok(())
     }
 
+    /// Returns the first prompt for an approved plan, recording untrusted context if needed.
+    pub async fn prepare_approved_plan(
+        &self,
+        path: Option<&PathUri>,
+        markdown: &str,
+    ) -> CodexResult<String> {
+        let (prompt, items) = self.session.prepare_approved_plan(path, markdown).await?;
+        if !items.is_empty() {
+            self.inject_response_items(items).await?;
+        }
+        Ok(prompt)
+    }
+
     /// Record raw Responses API items immediately before admitting a user turn.
     ///
     /// The caller must submit the associated user input while retaining its

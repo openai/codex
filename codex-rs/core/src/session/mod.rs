@@ -253,6 +253,7 @@ pub(crate) mod async_compaction;
 pub(crate) mod file_audio;
 pub(crate) use file_audio::FileAudioDurations;
 
+mod approved_plan;
 mod code_mode_warning;
 mod config_refresh;
 pub(crate) mod context_window;

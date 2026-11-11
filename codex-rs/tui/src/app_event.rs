@@ -772,12 +772,9 @@ pub(crate) enum AppEvent {
         enabled: bool,
     },
 
-    /// Clear the current context, start a fresh session, and submit an initial user message.
-    ///
-    /// This is the Plan Mode handoff path: the previous thread remains resumable, but the model
-    /// sees only the explicit prompt carried in `text` once the new session is configured.
-    ClearUiAndSubmitUserMessage {
-        text: String,
+    /// Start a fresh session with a reference to the approved plan file.
+    ImplementPlanInFreshSession {
+        plan: String,
     },
 
     /// Open the resume picker inside the running TUI session.

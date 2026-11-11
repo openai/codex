@@ -6,6 +6,9 @@ use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::SkillScope;
 use codex_app_server_protocol::SkillsListEntry;
 use codex_config::types::HistoryPersistence;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::responses;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -520,6 +523,207 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         server.shutdown().await?;
         proxy.await??;
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_implementation_reads_approved_plan_file_in_fresh_session() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    // Match the canonical CODEX_HOME used at launch.
+    app.config.codex_home = app.config.codex_home.canonicalize()?;
+    let model = responses::start_mock_server().await;
+    app_test_support::MockResponsesConfig::new(&model.uri())
+        // Exercise the local executor's file read without requiring a platform sandbox helper.
+        .with_sandbox_mode("danger-full-access")
+        .with_root_config("instructions = 'Help the user.'")
+        .write(app.config.codex_home.as_path())?;
+    let workspace = tempdir()?;
+    app.config = app
+        .rebuild_config_for_cwd(workspace.path().canonicalize()?)
+        .await?;
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let plan = format!(
+        "# Plan\n{}\n- Verify the final step.\n",
+        "- Update the parser.\n".repeat(3_000)
+    );
+    let source = server.start_thread(&app.config).await?;
+    let source_id = source.session.thread_id;
+    app.enqueue_primary_thread_session(source.session, source.turns)
+        .await?;
+    Box::pin(app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::ImplementPlanInFreshSession { plan: plan.clone() },
+    ))
+    .await?;
+    let thread_id = app.chat_widget.thread_id().expect("fresh thread");
+    assert_ne!(thread_id, source_id);
+    let attachments = app.config.codex_home.join("attachments");
+    let mut dirs = std::fs::read_dir(&attachments)?;
+    let path = dirs
+        .next()
+        .expect("attachment directory")?
+        .path()
+        .join("approved-plan.md");
+    assert!(dirs.next().is_none());
+    assert_eq!(std::fs::read(&path)?, plan.as_bytes());
+    let path = path.to_str().expect("UTF-8 attachment path");
+    let command = if cfg!(windows) {
+        format!(
+            "Get-Content -LiteralPath '{}' -Tail 1",
+            path.replace("'", "''")
+        )
+    } else {
+        format!("tail -n 1 {}", shlex::try_quote(path)?)
+    };
+    let read_args = serde_json::json!({ "cmd": command });
+    let response = responses::mount_sse_sequence(
+        &model,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("read"),
+                responses::ev_function_call("read_plan", "exec_command", &read_args.to_string()),
+                responses::ev_completed("read"),
+            ]),
+            responses::sse_completed("implemented"),
+        ],
+    )
+    .await;
+
+    let mut user_rows = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) if cell.as_any().is::<UserHistoryCell>() => {
+                user_rows
+                    .push(lines_to_single_string(&cell.raw_lines()).replace(path, "<PLAN_FILE>"));
+            }
+            event @ (AppEvent::SubmitThreadOp { .. } | AppEvent::CodexOp(_)) => {
+                Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+            }
+            _ => {}
+        }
+    }
+    insta::assert_snapshot!(user_rows.join("\n"), @"Read the approved plan at <PLAN_FILE> and implement it.");
+    super::safety_buffering::wait_for_turn_completed(&mut app, &mut server, thread_id).await;
+    let requests = response.requests();
+    let [initial, after_read] = requests.as_slice() else {
+        panic!("expected a plan read and a follow-up request")
+    };
+    let output = after_read
+        .function_call_output_text("read_plan")
+        .expect("plan read result");
+    assert!(output.contains("- Verify the final step."), "{output}");
+    let mut body = initial.body_json();
+    let prompt = body["input"].as_array_mut().unwrap().last_mut().unwrap();
+    assert_eq!(prompt["role"], "user");
+    let text = &mut prompt["content"][0]["text"];
+    *text = text.as_str().unwrap().replace(path, "<PLAN_FILE>").into();
+    insta::assert_snapshot!(
+        "clear_context_plan_request",
+        context_snapshot::format_context_snapshot(
+            "Clear context and implement the approved plan in a fresh thread.",
+            &[context_snapshot::SnapshotEntry::body(&body)],
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plan_implementation_handles_unavailable_attachment() -> Result<()> {
+    for (write_fails, oversized) in [(true, false), (false, false), (false, true)] {
+        crate::boxed_future!(assert_plan_implementation_with_unavailable_attachment(
+            write_fails,
+            oversized,
+        ))
+        .await?;
+    }
+    Ok(())
+}
+
+async fn assert_plan_implementation_with_unavailable_attachment(
+    write_fails: bool,
+    oversized: bool,
+) -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let model = responses::start_mock_server().await;
+    let response = responses::mount_sse_once(&model, responses::sse_completed("implemented")).await;
+    let attachments = app.config.codex_home.join("attachments");
+    let config = app_test_support::MockResponsesConfig::new(&model.uri());
+    let config = if write_fails {
+        std::fs::write(&attachments, "")?;
+        config.with_sandbox_mode("danger-full-access")
+    } else {
+        let denied_path = serde_json::to_string(attachments.as_path())?;
+        config
+            // The embedded test executor has no sandbox helper for AGENTS.md discovery.
+            .with_root_config("default_permissions = 'no-attachments'\nproject_doc_max_bytes = 0")
+            .with_extra_config(&format!(
+                "[permissions.no-attachments.filesystem]\n\":root\" = 'read'\n{denied_path} = 'deny'"
+            ))
+    };
+    config.write(app.config.codex_home.as_path())?;
+    let workspace = tempdir()?;
+    app.config = app
+        .rebuild_config_for_cwd(workspace.path().canonicalize()?)
+        .await?;
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let source = server.start_thread(&app.config).await?;
+    let source_id = source.session.thread_id;
+    app.enqueue_primary_thread_session(source.session, source.turns)
+        .await?;
+    let steps = if oversized { 3_000 } else { 1_000 };
+    let plan = format!(
+        "# Plan\n{}- Verify the final step.",
+        "- Update the parser.\n".repeat(steps)
+    );
+    crate::boxed_future!(app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::ImplementPlanInFreshSession { plan: plan.clone() },
+    ))
+    .await?;
+
+    if !write_fails {
+        let path = std::fs::read_dir(&attachments)?
+            .next()
+            .expect("the app server saved the plan")?
+            .path()
+            .join("approved-plan.md");
+        assert_eq!(std::fs::read_to_string(path)?, plan);
+    }
+    let thread_id = app.chat_widget.thread_id().expect("current thread");
+    if oversized {
+        assert_eq!(thread_id, source_id);
+        assert!(response.requests().is_empty());
+    } else {
+        assert_ne!(thread_id, source_id);
+        while let Ok(event) = events.try_recv() {
+            if matches!(
+                event,
+                AppEvent::SubmitThreadOp { .. } | AppEvent::CodexOp(_)
+            ) {
+                crate::boxed_future!(app.handle_event(&mut tui, &mut server, event)).await?;
+            }
+        }
+        super::safety_buffering::wait_for_turn_completed(&mut app, &mut server, thread_id).await;
+        let request = response.single_request();
+        let messages = request.inputs_of_type("message");
+        let user = messages.last().expect("implementation prompt");
+        assert_eq!(user["role"], "user");
+        assert_eq!(user["content"][0]["text"], "Implement the plan.");
+        let recovered = request
+            .inputs_of_type("function_call_output")
+            .iter()
+            .filter(|item| item["name"] == "proposed_plan")
+            .map(|item| item["output"].as_str().expect("plan chunk"))
+            .collect::<String>();
+        assert_eq!(recovered, plan);
+    }
+    server.shutdown().await?;
     Ok(())
 }
 

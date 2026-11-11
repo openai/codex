@@ -1,0 +1,22 @@
+---
+source: tui/src/app/tests/new_session_tests.rs
+expression: "context_snapshot::format_context_snapshot(\"Clear context and implement the approved plan in a fresh thread.\",\n&[context_snapshot::SnapshotEntry::body(&body)],\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Clear context and implement the approved plan in a fresh thread.
+
+## Window 1
+-- request 1 (request) --
+00:message/developer:
+    Help the user.
+01:message/developer[4]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <COLLABORATION_MODE>
+    [04] <tools>
+        Deferred tool namespaces:
+        - codex_tui: Manage Codex tasks available through the connected app server.
+        </tools>
+02:message/user:
+    <ENVIRONMENT_CONTEXT>
+03:message/user:
+    Read the approved plan at <PLAN_FILE> and implement it.

@@ -4,6 +4,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::app_server_session::AppServerSession;
+use crate::attachment_files::ATTACHMENT_DIR;
+use crate::attachment_files::create_attachment_dir;
+use crate::attachment_files::write_attachment;
 use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::LocalImageAttachment;
 use anyhow::Context;
@@ -14,7 +17,6 @@ use codex_protocol::protocol::MAX_THREAD_GOAL_OBJECTIVE_CHARS;
 use codex_protocol::user_input::TextElement;
 use uuid::Uuid;
 
-const GOAL_ATTACHMENT_DIR: &str = "attachments";
 const GOAL_FILE_PREFIX: &str = "Read the Codex goal objective file at ";
 const GOAL_FILE_SUFFIX: &str = " before continuing.";
 const GOAL_FILE_NAME: &str = "goal-objective.md";
@@ -69,7 +71,7 @@ pub(crate) async fn materialize_goal_draft(
         let path = ensure_goal_output_dir(app_server, codex_home, &mut output_dir)
             .await?
             .join(format!("pasted-text-{}.txt", replacements.len() + 1));
-        write_goal_file(app_server, path.clone(), text.as_bytes().to_vec()).await?;
+        write_attachment(app_server, path.clone(), text.as_bytes().to_vec()).await?;
 
         replacements.push((
             placeholder.clone(),
@@ -94,7 +96,7 @@ pub(crate) async fn materialize_goal_draft(
             .join(format!("image-{}.{}", idx + 1, extension));
         let bytes = fs::read(&image.path)
             .with_context(|| format!("Could not read goal image {}", image.path.display()))?;
-        write_goal_file(app_server, path.clone(), bytes).await?;
+        write_attachment(app_server, path.clone(), bytes).await?;
         if image.placeholder.is_empty() {
             image_lines.push(format!("- [Image #{}]: {path}", idx + 1));
         } else {
@@ -131,7 +133,7 @@ pub(crate) async fn materialize_goal_draft(
                 return Err(err);
             }
         };
-        write_goal_file(app_server, path.clone(), objective.as_bytes().to_vec()).await?;
+        write_attachment(app_server, path.clone(), objective.as_bytes().to_vec()).await?;
         objective = reference;
     }
     Ok((objective, output_dir))
@@ -166,7 +168,7 @@ pub(crate) fn objective_file_path(
     let parts = path.components();
     let attachment_id = parts.get(parts.len().checked_sub(2)?)?;
     let expected = codex_home?
-        .join(GOAL_ATTACHMENT_DIR)
+        .join(ATTACHMENT_DIR)
         .join(attachment_id)
         .join(GOAL_FILE_NAME);
     (path == expected && Uuid::parse_str(attachment_id).is_ok()).then_some(path)
@@ -191,33 +193,11 @@ async fn ensure_goal_output_dir(
     if let Some(output_dir) = output_dir {
         return Ok(output_dir.clone());
     }
-    let codex_home = codex_home
-        .context("App server did not report $CODEX_HOME; cannot materialize goal files")?;
-    let path = codex_home
-        .join(GOAL_ATTACHMENT_DIR)
-        .join(Uuid::new_v4().to_string());
-    app_server
-        .file_system()
-        .fs_create_directory_all_path(&path)
-        .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
-        .with_context(|| format!("Could not create goal attachment directory {path}"))?;
+    let path = create_attachment_dir(app_server, codex_home).await?;
     *output_dir = Some(path.clone());
     Ok(path)
 }
 
-async fn write_goal_file(
-    app_server: &mut AppServerSession,
-    path: GoalFilePath,
-    bytes: Vec<u8>,
-) -> Result<()> {
-    app_server
-        .file_system()
-        .fs_write_file_path(&path, bytes)
-        .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
-        .with_context(|| format!("Could not write goal file {path}"))
-}
 fn append_section(objective: &mut String, heading: &str, lines: Vec<String>) {
     if lines.is_empty() {
         return;

@@ -118,6 +118,8 @@ use codex_app_server_protocol::ThreadMemoryModeSetResponse;
 use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateResponse;
+use codex_app_server_protocol::ThreadPrepareApprovedPlanParams;
+use codex_app_server_protocol::ThreadPrepareApprovedPlanResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -1829,6 +1831,19 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/inject_items failed during TUI side conversation setup")
+    }
+
+    pub(crate) async fn thread_prepare_approved_plan(
+        &mut self,
+        params: ThreadPrepareApprovedPlanParams,
+    ) -> Result<String> {
+        let request_id = self.next_request_id();
+        let response: ThreadPrepareApprovedPlanResponse = self
+            .request_handle
+            .request_typed(ClientRequest::ThreadPrepareApprovedPlan { request_id, params })
+            .await
+            .wrap_err("thread/prepareApprovedPlan failed in TUI")?;
+        Ok(response.prompt)
     }
 
     #[allow(clippy::too_many_arguments)]

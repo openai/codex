@@ -20,6 +20,7 @@ use crate::app_server_session::source_agent_path;
 use crate::app_server_session::thread_blocks_direct_input;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::streaming::commit_tick::CommitTickScope;
+use codex_app_server_protocol::ThreadPrepareApprovedPlanParams;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use std::collections::HashSet;
 
@@ -1242,38 +1243,15 @@ impl App {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
         // until the new session is configured and any replayed turns have been rendered.
-        let (config, local_settings) = match self.load_new_session_config(app_server).await {
-            Ok(config) => config,
-            Err(err) => {
-                if let Some(message) = initial_user_message {
-                    self.chat_widget.restore_user_message_to_composer(message);
-                }
-                self.chat_widget
-                    .add_error_message(format!("Failed to read new session defaults: {err}"));
-                tui.frame_requester().schedule_frame();
-                return;
-            }
-        };
-        match app_server
-            .start_thread_with_session_start_source(
-                &self.local_settings,
-                &config,
-                session_start_source,
-                /*remote_cwd_override*/ None,
-                /*selected_profile*/ None,
-                self.backend_preference_context.local_cwd.as_deref(),
-            )
+        match self
+            .prepare_fresh_session(app_server, session_start_source)
             .await
         {
-            Ok(started) => {
+            Ok(prepared) => {
                 self.adopt_fresh_session(
                     tui,
                     app_server,
-                    PreparedFreshSession {
-                        started,
-                        config,
-                        local_settings,
-                    },
+                    prepared,
                     ThreadAttachPresentation::Fresh,
                     initial_user_message,
                     new_thread_name,
@@ -1281,15 +1259,105 @@ impl App {
                 .await;
             }
             Err(err) => {
-                self.chat_widget.add_error_message(format!(
-                    "Failed to start a fresh session through the app server: {err}"
-                ));
+                self.chat_widget.add_error_message(err.to_string());
                 if let Some(message) = initial_user_message {
                     self.chat_widget.restore_user_message_to_composer(message);
                 }
             }
         }
         tui.frame_requester().schedule_frame();
+    }
+
+    async fn prepare_fresh_session(
+        &mut self,
+        app_server: &mut AppServerSession,
+        session_start_source: Option<ThreadStartSource>,
+    ) -> Result<PreparedFreshSession> {
+        let (config, local_settings) =
+            crate::boxed_future!(self.load_new_session_config(app_server))
+                .await
+                .map_err(|err| {
+                    color_eyre::eyre::eyre!("Failed to read new session defaults: {err}")
+                })?;
+        let started = crate::boxed_future!(app_server.start_thread_with_session_start_source(
+            &self.local_settings,
+            &config,
+            session_start_source,
+            /*remote_cwd_override*/ None,
+            /*selected_profile*/ None,
+            self.backend_preference_context.local_cwd.as_deref(),
+        ))
+        .await
+        .map_err(|err| {
+            color_eyre::eyre::eyre!("Failed to start a fresh session through the app server: {err}")
+        })?;
+        Ok(PreparedFreshSession {
+            started,
+            config,
+            local_settings,
+        })
+    }
+
+    pub(super) async fn implement_plan_in_fresh_session(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        plan: String,
+    ) -> Result<()> {
+        if self.reject_pending_permission_root_switch() {
+            return Ok(());
+        }
+        let prepared = match self
+            .prepare_fresh_session(app_server, Some(ThreadStartSource::Clear))
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                self.chat_widget.add_error_message(err.to_string());
+                tui.frame_requester().schedule_frame();
+                return Ok(());
+            }
+        };
+        let thread_id = prepared.started.session.thread_id;
+        let codex_home = app_server.codex_home_path(&prepared.config.codex_home);
+        let attachment_path = crate::attachment_files::write_approved_plan(
+            app_server,
+            codex_home.as_ref(),
+            plan.clone(),
+        )
+        .await
+        .map(|path| path.to_string())
+        .inspect_err(|err| tracing::debug!(%err, "approved plan attachment unavailable"))
+        .ok();
+        match app_server
+            .thread_prepare_approved_plan(ThreadPrepareApprovedPlanParams {
+                thread_id: thread_id.to_string(),
+                markdown: plan,
+                attachment_path,
+            })
+            .await
+        {
+            Ok(prompt) => {
+                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
+                self.reset_app_ui_state_after_clear();
+                self.adopt_fresh_session(
+                    tui,
+                    app_server,
+                    prepared,
+                    ThreadAttachPresentation::Fresh,
+                    Some(prompt.into()),
+                    /*new_thread_name*/ None,
+                )
+                .await;
+            }
+            Err(err) => {
+                let _ = app_server.thread_unsubscribe(thread_id).await;
+                self.chat_widget
+                    .add_error_message(format!("Failed to hand off the approved plan: {err:#}"));
+            }
+        }
+        tui.frame_requester().schedule_frame();
+        Ok(())
     }
 
     pub(super) async fn adopt_fresh_session(
